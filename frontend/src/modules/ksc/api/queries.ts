@@ -2,6 +2,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import type {
+  Connection,
+  ConnectionIn,
   FindingDetail,
   FindingsQuery,
   FindingsResponse,
@@ -11,6 +13,7 @@ import type {
   Job,
   KscConfig,
   Overview,
+  PoliciesResponse,
   Server,
   SettingsView,
   Snapshot,
@@ -20,7 +23,7 @@ export const FINDINGS_PAGE_SIZE = 200
 export const HOSTS_PAGE_SIZE = 200
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
-  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-jobs']) {
+  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-connections', 'ksc-jobs']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -139,6 +142,48 @@ export function useDeleteSnapshot() {
   return useMutation<void, ApiRequestError, number>({
     mutationFn: (id) => api.del(`/api/ksc/snapshots/${id}`),
     onSuccess: () => invalidateAll(qc),
+  })
+}
+
+export function usePolicies(snapshotId: number | undefined) {
+  return useQuery<PoliciesResponse, ApiRequestError>({
+    queryKey: ['ksc-policies', snapshotId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies`),
+    enabled: snapshotId !== undefined,
+  })
+}
+
+export function useConnections() {
+  return useQuery<Connection[], ApiRequestError>({ queryKey: ['ksc-connections'], queryFn: () => api.get('/api/ksc/connections') })
+}
+
+export function useSaveConnection() {
+  const qc = useQueryClient()
+  return useMutation<Connection, ApiRequestError, { id?: number; body: ConnectionIn }>({
+    mutationFn: ({ id, body }) => (id ? api.put(`/api/ksc/connections/${id}`, body) : api.post('/api/ksc/connections', body)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ksc-connections'] }),
+  })
+}
+
+export function useDeleteConnection() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/ksc/connections/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ksc-connections'] }),
+  })
+}
+
+export function useTestConnection() {
+  return useMutation<{ ok: boolean; message: string }, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/ksc/connections/${id}/test`),
+  })
+}
+
+export function useCollect() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/ksc/connections/${id}/collect`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ksc-jobs'] }),
   })
 }
 

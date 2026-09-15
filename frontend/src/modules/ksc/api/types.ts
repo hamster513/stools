@@ -221,6 +221,72 @@ export interface HostDetail extends Omit<Host, 'findings'> {
   findings: { key: string; check: string; check_title: string; severity: Severity; status: FindingStatus; details: Record<string, unknown> }[]
 }
 
+export interface PolicyItem {
+  id: number
+  name: string
+  product: string
+  active: boolean
+  inherited: boolean
+  accept_parent: boolean
+  modified_at: string | null
+  modified_group: string
+}
+
+export interface TaskItem {
+  id: string
+  name: string
+  type: string
+  product: string
+  inherited: boolean
+  schedule: number
+}
+
+export interface PolicyFinding {
+  key: string
+  check: string
+  check_title: string
+  severity: Severity
+}
+
+export interface PolicyGroup {
+  id: number
+  name: string
+  path: string
+  level: number
+  hosts: number
+  policies: PolicyItem[]
+  tasks: TaskItem[]
+  findings: PolicyFinding[]
+}
+
+export interface PoliciesResponse {
+  groups: PolicyGroup[]
+}
+
+export interface Connection {
+  id: number
+  title: string
+  host: string
+  port: number
+  username: string
+  password_set: boolean
+  verify_tls: boolean
+  internal: boolean
+  domain: string
+  server_id: number | null
+}
+
+export interface ConnectionIn {
+  title: string
+  host: string
+  port: number
+  username: string
+  password: string
+  verify_tls: boolean
+  internal: boolean
+  domain: string
+}
+
 export interface KscConfig {
   agent_silent_days: number
   bases_old_days: number
