@@ -1,0 +1,11 @@
+# Профиль эталонной инсталляции: то, что подтвердил бы человек.
+# Схема именования намеренно не задана — регрессия проверяет, что
+# автоопределение находит её само.
+schema_version: 1
+tables:
+  scoping:
+    - DEMO_Critical_Hosts_by_Rule
+  watched:
+    - DEMO_User_Authentications
+    - DEMO_Critical_Hosts_by_Rule
+confirmed_by: regression-fixture

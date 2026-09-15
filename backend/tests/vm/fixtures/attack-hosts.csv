@@ -1,0 +1,3 @@
+@Host;Host.OsName;Host.@Groups;Host.@Vulners.CVEs;Host.UF_Criticality;Host.UF_Zone
+"srv01.corp.local (10.1.1.1)";"Windows Server 2019";"Servers";"CVE-2021-44228";"High";"DMZ"
+"srv02.corp.local (10.1.1.2)";"Ubuntu 22.04";"Servers";"CVE-2021-4034";"High";"Internal"

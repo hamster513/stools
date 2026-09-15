@@ -1,0 +1,91 @@
+"""Настройки проверок — то, что в прототипе лежало в AD_audit.config.json.
+
+Привилегированные группы задаются и именами (для нестандартных), и RID —
+RID не зависят от языка домена, а прототип держал списки на двух языках.
+"""
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+
+
+class UserRight(BaseModel):
+    right: str
+    severity: str
+
+
+class AdConfig(BaseModel):
+    #: Короткие имена (после «\»), которым разрешено быть в опасных местах.
+    allowlist_short: list[str] = Field(
+        default_factory=lambda: [
+            "DOMAIN ADMINS",
+            "ENTERPRISE ADMINS",
+            "ADMINISTRATORS",
+            "DOMAIN CONTROLLERS",
+            "ENTERPRISE DOMAIN CONTROLLERS",
+            "АДМИНИСТРАТОРЫ ДОМЕНА",
+            "АДМИНИСТРАТОРЫ ПРЕДПРИЯТИЯ",
+            "АДМИНИСТРАТОРЫ",
+            "КОНТРОЛЛЕРЫ ДОМЕНА",
+            "КОНТРОЛЛЕРЫ ДОМЕНА ПРЕДПРИЯТИЯ",
+            "СИСТЕМА",
+            "SYSTEM",
+        ]
+    )
+    allowlist_full: list[str] = Field(
+        default_factory=lambda: ["NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS", "BUILTIN\\АДМИНИСТРАТОРЫ"]
+    )
+    privileged_groups: list[str] = Field(
+        default_factory=lambda: [
+            "Domain Admins",
+            "Enterprise Admins",
+            "Schema Admins",
+            "Administrators",
+            "Account Operators",
+            "Backup Operators",
+            "Server Operators",
+            "Администраторы домена",
+            "Администраторы предприятия",
+            "Администраторы схемы",
+            "Администраторы",
+            "Операторы учетных записей",
+            "Операторы архива",
+            "Операторы серверов",
+        ]
+    )
+    privileged_rids: list[int] = Field(default_factory=lambda: [512, 519, 518, 544, 548, 551, 549])
+    user_rights: list[UserRight] = Field(
+        default_factory=lambda: [
+            UserRight(right="SeEnableDelegationPrivilege", severity="High"),
+            UserRight(right="SeDebugPrivilege", severity="High"),
+            UserRight(right="SeTcbPrivilege", severity="High"),
+            UserRight(right="SeBackupPrivilege", severity="Medium"),
+            UserRight(right="SeRestorePrivilege", severity="Medium"),
+        ]
+    )
+    user_inactivity_days: int = Field(default=90, ge=1)
+    krbtgt_max_age_days: int = Field(default=180, ge=1)
+    low_priv_groups: list[str] = Field(
+        default_factory=lambda: [
+            "AUTHENTICATED USERS",
+            "DOMAIN USERS",
+            "USERS",
+            "EVERYONE",
+            "NT AUTHORITY\\AUTHENTICATED USERS",
+            "BUILTIN\\USERS",
+            "ПОЛЬЗОВАТЕЛИ ДОМЕНА",
+            "ПОЛЬЗОВАТЕЛИ",
+            "АУТЕНТИФИЦИРОВАННЫЕ ПОЛЬЗОВАТЕЛИ",
+            "ВСЕ",
+        ]
+    )
+    #: Low-priv по SID: Everyone, Authenticated Users, BUILTIN\Users и RID 513/515 домена.
+    low_priv_sids: list[str] = Field(default_factory=lambda: ["S-1-1-0", "S-1-5-11", "S-1-5-32-545"])
+    low_priv_rids: list[int] = Field(default_factory=lambda: [513, 515])
+    #: OUs | Computers | Both
+    sensitive_acl_scope: str = "Both"
+    sensitive_acl_search_base: str = ""
+    sensitive_acl_exclude_ous: list[str] = Field(default_factory=list)
+    sensitive_acl_max_objects: int = Field(default=0, ge=0)
+
+
+DEFAULT_CONFIG = AdConfig()

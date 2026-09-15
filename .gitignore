@@ -1,0 +1,49 @@
+# Выгрузки базы знаний — инвентарь внутренней инфраструктуры, в git не место
+*.zip
+knowledgebase*
+correlation_defaults.json
+
+# Внутренние материалы разработки — лежат рядом с репозиторием, не в нём
+SIEM Auditor — ТЗ.txt
+парсеры/
+
+# Продукты прототипов: реальные IP, имена хостов, учётные записи
+*.wld
+
+# Хранилище снапшотов приложения
+data/
+storage/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Окружение
+.env
+.env.*
+!.env.example
+
+# ОС и редакторы
+.DS_Store
+.idea/
+.vscode/
+
+# Настройки развёртывания с настоящими секретами
+ops/.env
+
+# Указания ассистенту — принадлежат рабочему месту, а не проекту
+CLAUDE.md
+
+# Бандл ATT&CK — публичные данные MITRE, но 50 МБ в репозитории ни к чему
+enterprise-attack.json

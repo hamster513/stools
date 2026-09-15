@@ -1,0 +1,277 @@
+/**
+ * Типы запросов и ответов API модуля Vulnerability Management.
+ * Источник — спека §8 и роутеры backend/api/modules/vm/routers.
+ */
+
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical'
+
+export const LEVEL_LABELS: Record<RiskLevel, string> = {
+  low: 'низкий',
+  medium: 'средний',
+  high: 'высокий',
+  critical: 'критический',
+}
+
+export const LEVELS: RiskLevel[] = ['critical', 'high', 'medium', 'low']
+
+export type CvssSource = 'nvd_v3' | 'nvd_v2' | 'none'
+
+export const CVSS_SOURCE_LABELS: Record<CvssSource, string> = {
+  nvd_v3: 'NVD v3',
+  nvd_v2: 'NVD v2',
+  none: 'нет',
+}
+
+export interface VulnItem {
+  host_id: number
+  hostname: string
+  ip: string
+  os_name: string
+  criticality: string
+  zone: string
+  cve_id: string
+  risk: number
+  risk_raw: number
+  level: RiskLevel
+  cvss: number | null
+  cvss_source: CvssSource
+  epss: number | null
+  exploitdb_type: string | null
+  exploits_count: number
+  msf_rank: string | null
+  msf_modules: number
+}
+
+export interface VulnsFacets {
+  level: Record<RiskLevel, number>
+  criticality: Record<string, number>
+  zone: Record<string, number>
+  os: Record<string, number>
+  exploits: Record<string, number>
+  msf: Record<string, number>
+  cvss_source: Record<string, number>
+}
+
+export interface VulnsResponse {
+  total: number
+  items: VulnItem[]
+  facets: VulnsFacets | null
+}
+
+export type VulnSort =
+  | 'risk_desc'
+  | 'risk_asc'
+  | 'cvss_desc'
+  | 'epss_desc'
+  | 'exploits_desc'
+  | 'host_asc'
+  | 'cve_asc'
+
+export interface VulnsQuery {
+  q?: string
+  host?: string
+  cve?: string
+  criticality?: string
+  zone?: string
+  os?: string
+  level?: RiskLevel
+  exploits?: boolean
+  msf?: boolean
+  cvss_source?: CvssSource
+  host_id?: number
+  sort?: VulnSort
+  limit?: number
+  offset?: number
+}
+
+export interface Factor {
+  value: number
+  source: string
+  substituted: boolean
+}
+
+export interface RiskCard {
+  host: {
+    id: number
+    hostname: string
+    ip: string
+    os_name: string
+    groups: string
+    criticality: string
+    zone: string
+    zone_marked: boolean
+    internet_access: boolean
+    confidential_data: boolean
+  }
+  cve: {
+    cve_id: string
+    description: string | null
+    published: string | null
+    cvss: number | null
+    cvss_source: CvssSource
+    epss: number | null
+    epss_percentile: number | null
+    nvd_url: string
+    exploits: { exploit_id: number; type: string; verified: boolean; published: string | null }[]
+    msf_modules: { fullname: string; name: string; rank: number }[]
+  }
+  risk: {
+    score: number
+    raw: number
+    level: RiskLevel
+    level_word: string
+    threshold: number
+    epss: Factor
+    cvss: Factor
+    cve_param: Factor
+    exdb_param: Factor
+    msf_param: Factor
+    impact: Factor
+    impact_parts: { criticality: Factor; confidential: Factor; internet: Factor }
+  }
+  refs_loaded_at: Record<string, string | null>
+}
+
+export interface HostDetail {
+  host: { id: number; hostname: string; ip: string; os_name: string; groups: string; criticality: string; zone: string }
+  items: VulnItem[]
+}
+
+export interface RefOverview {
+  name: string
+  loaded_at: string | null
+  records: number
+  stale: boolean
+}
+
+export interface Overview {
+  hosts: number
+  pairs: number
+  cves: number
+  above_threshold: number
+  threshold: number
+  distribution: Record<RiskLevel, number>
+  top_cves: { cve_id: string; hosts: number; risk_sum: number; risk_max: number; cvss: number | null; epss: number | null; exploitdb_type: string | null }[]
+  top_hosts: { host_id: number; hostname: string; ip: string; zone: string; criticality: string; pairs: number; risk_sum: number; risk_max: number }[]
+  data: {
+    last_import: { finished_at: string; source: string; filename: string; hosts: number; pairs: number; cves: number } | null
+    refs: RefOverview[]
+    unmarked_zones: number
+    cves_without_epss: number
+    cves_without_nvd: number
+  }
+}
+
+export interface Zone {
+  name: string
+  internet_access: boolean
+  confidential_data: boolean
+  marked: boolean
+  hosts: number
+}
+
+export interface Weights {
+  impact: { criticality: Record<string, number>; confidential: Record<string, number>; internet: Record<string, number> }
+  cvss_v3: { av: Record<string, number>; pr: Record<string, number>; ui: Record<string, number> }
+  cvss_v2: { av: Record<string, number>; ac: Record<string, number>; au: Record<string, number> }
+  exploitdb: Record<string, number>
+  msf: Record<string, number>
+}
+
+export interface ConnectionView {
+  host: string
+  username: string
+  verify_tls: boolean
+  os_exclude: string[]
+  pdql_extra: string
+  limit: number
+  password_set: boolean
+  client_secret_set: boolean
+  configured: boolean
+}
+
+export interface SettingsView {
+  connection: ConnectionView
+  weights: Weights
+  threshold: number
+  attack_min_risk: number
+  defaults: { weights: Weights; threshold: number; attack_min_risk: number }
+}
+
+export interface SettingsUpdate {
+  connection: {
+    host: string
+    username: string
+    password: string
+    client_secret: string
+    verify_tls: boolean
+    os_exclude: string[]
+    pdql_extra: string
+    limit: number
+  }
+  weights: Weights
+  threshold: number
+  //: Необязательно: форма подключения про порог матрицы не знает, и
+  //: пропущенное поле оставляет сохранённое значение, а не умолчание.
+  attack_min_risk?: number
+}
+
+export type JobStatus = 'running' | 'done' | 'failed' | 'cancelled'
+
+export interface Job {
+  id: number
+  kind: string
+  stage: string
+  status: JobStatus
+  progress: number
+  processed: number
+  total: number | null
+  message: string
+  error: string | null
+  cancel_requested: boolean
+  started_at: string
+  finished_at: string | null
+  started_by: string
+}
+
+export const JOB_KIND_LABELS: Record<string, string> = {
+  import_vm: 'Импорт из MaxPatrol VM',
+  import_file: 'Импорт из файла',
+  ref_epss: 'Справочник EPSS',
+  ref_nvd: 'Справочник NVD',
+  ref_exploitdb: 'Справочник ExploitDB',
+  ref_msf: 'Справочник Metasploit',
+  recalculate: 'Пересчёт риска',
+}
+
+export const STAGE_LABELS: Record<string, string> = {
+  pending: 'ожидание',
+  fetching: 'экспорт из VM',
+  parsing: 'разбор',
+  writing: 'запись',
+  enriching: 'обогащение',
+  scoring: 'расчёт риска',
+  downloading: 'скачивание',
+  loading: 'загрузка',
+  cves: 'множители CVE',
+  hosts: 'Impact хостов',
+  pairs: 'риск пар',
+  done: 'готово',
+}
+
+export interface ImportState {
+  last: { id: number; finished_at: string; source: string; filename: string; hosts: number; pairs: number; cves: number; new_zones: number } | null
+  active: Job | null
+}
+
+export interface RefState {
+  name: string
+  title: string
+  url: string
+  loaded_at: string | null
+  source: string | null
+  records: number
+  detail: string
+  stale: boolean
+  active_job_id: number | null
+}

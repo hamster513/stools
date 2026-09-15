@@ -1,0 +1,68 @@
+# STools — весь стек.
+#
+# Требование «не зависеть ни от чего» трактуется буквально: после сборки
+# образов стек поднимается и работает без доступа в интернет. Проверяется
+# отключением сети у контейнеров, а не на слово.
+#
+# Запуск из корня репозитория:
+#   docker compose -f ops/docker-compose.yml up --build
+
+name: stools
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kbaudit}
+      POSTGRES_USER: ${POSTGRES_USER:-kbaudit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # API не должен стартовать раньше базы: миграции применяются
+      # на старте, и падение здесь выглядит как поломка приложения.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kbaudit} -d ${POSTGRES_DB:-kbaudit}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../backend
+    environment:
+      STOOLS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kbaudit}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kbaudit}
+      STOOLS_SESSION_SECRET: ${STOOLS_SESSION_SECRET:?задайте STOOLS_SESSION_SECRET в .env}
+      STOOLS_DATA_DIR: /data
+      # Стек по умолчанию отдаёт обычный HTTP на localhost, а cookie
+      # с флагом Secure по HTTP принимает не всякий браузер: Chrome
+      # для localhost делает исключение, Safari — нет, и вход молча
+      # не срабатывает (сервер отвечает 204, cookie выбрасывается).
+      # За TLS-терминатором обязательно переключить в true.
+      STOOLS_SESSION_COOKIE_SECURE: ${STOOLS_SESSION_COOKIE_SECURE:-false}
+    volumes:
+      # Архивы выгрузок и кэш разбора переживают пересоздание контейнера:
+      # без архива нельзя перепрогнать старый снапшот доработанным
+      # парсером, без кэша — пересчитать его при смене профиля.
+      - archives:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    # Наружу не публикуется: единственный вход — через прокси.
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "${STOOLS_PORT:-8080}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  archives:

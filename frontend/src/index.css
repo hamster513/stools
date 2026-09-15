@@ -1,0 +1,152 @@
+@import 'tailwindcss';
+
+@import '@fontsource/fira-sans/400.css';
+@import '@fontsource/fira-sans/500.css';
+@import '@fontsource/fira-sans/600.css';
+@import '@fontsource/fira-sans/700.css';
+@import '@fontsource/fira-code/400.css';
+@import '@fontsource/fira-code/500.css';
+@import '@fontsource/fira-code/600.css';
+
+/* Тёмная — по умолчанию: аналитик смотрит в экран часами. Светлая —
+   выбор пользователя (профиль, `data-theme="light"` ниже): в переговорной
+   с проектором и у окна тёмная нечитаема. */
+@theme {
+  --font-sans: 'Fira Sans', system-ui, sans-serif;
+  --font-mono: 'Fira Code', ui-monospace, monospace;
+
+  --color-app-bg: #0b1120;
+  --color-surface: #161f35;
+  --color-row-hover: #1e293b;
+  --color-row-selected: #24314d;
+  --color-grid: #2a3448;
+  --color-border: #64748b;
+  --color-focus-ring: #60a5fa;
+  --color-text: #e2e8f0;
+  --color-text-secondary: #94a3b8;
+  --color-primary: #2563eb;
+  --color-primary-text: #ffffff;
+
+  /* Классы находок: цвет + форма + слово, цвет никогда не единственный носитель смысла. */
+  --color-kind-1: #f87171;
+  --color-kind-2: #fb923c;
+  --color-kind-3: #facc15;
+  --color-kind-4: #60a5fa;
+  --color-kind-5: #94a3b8;
+  --color-kind-accepted: #4ade80;
+
+  /* Разметка ATT&CK: уверенность и источник — тоже цвет + форма + слово. */
+  --color-confidence-high: #4ade80;
+  --color-confidence-medium: #facc15;
+  --color-confidence-low: #94a3b8;
+  --color-attack-confirmed: #4ade80;
+  --color-attack-suggested: #60a5fa;
+  --color-attack-partial: #facc15;
+  --color-attack-unmapped: #94a3b8;
+
+  /* Наложение атак: насколько техника распространена. Отдельный тон,
+     не совпадающий с классами находок, — это про внешний мир, а не
+     про качество правил. Ноль уровня нет: «данных нет» цветом
+     не обозначается, иначе редкое и ненаблюдаемое сольются. */
+  --color-actor: #f43f5e;
+
+  /* Шкала риска модуля VM — те же тона, что классы находок: один язык
+     цвета на весь продукт. Уровень всегда сопровождается словом. */
+  --color-risk-low: #94a3b8;
+  --color-risk-medium: #facc15;
+  --color-risk-high: #fb923c;
+  --color-risk-critical: #f87171;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+/* Светлая тема переопределяет ровно те же переменные — ни один компонент
+   о ней не знает. Тона находок, уверенности и риска взяты на ступень
+   темнее тёмных: тот же оттенок, но читаемый на белом. */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --color-app-bg: #f5f7fb;
+  --color-surface: #ffffff;
+  --color-row-hover: #eef2f7;
+  --color-row-selected: #e3ebf7;
+  --color-grid: #d9dee8;
+  --color-border: #94a3b8;
+  --color-focus-ring: #2563eb;
+  --color-text: #0f172a;
+  --color-text-secondary: #475569;
+  --color-primary: #2563eb;
+  --color-primary-text: #ffffff;
+
+  --color-kind-1: #dc2626;
+  --color-kind-2: #ea580c;
+  --color-kind-3: #ca8a04;
+  --color-kind-4: #2563eb;
+  --color-kind-5: #64748b;
+  --color-kind-accepted: #16a34a;
+
+  --color-confidence-high: #16a34a;
+  --color-confidence-medium: #ca8a04;
+  --color-confidence-low: #64748b;
+  --color-attack-confirmed: #16a34a;
+  --color-attack-suggested: #2563eb;
+  --color-attack-partial: #ca8a04;
+  --color-attack-unmapped: #64748b;
+
+  --color-actor: #e11d48;
+
+  --color-risk-low: #64748b;
+  --color-risk-medium: #ca8a04;
+  --color-risk-high: #ea580c;
+  --color-risk-critical: #dc2626;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-app-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Подсветка ячейки матрицы под курсором. Осветлением её сделать нельзя:
+   на светлой теме ячейки почти белые, светлее уже некуда — наведение
+   становится невидимым. Поэтому там ячейку, наоборот, притемняем. */
+.cell-hover:hover {
+  filter: brightness(1.25);
+}
+
+:root[data-theme='light'] .cell-hover:hover {
+  filter: brightness(0.94);
+}
+
+/* Числовые колонки не должны дёргаться при пересортировке. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

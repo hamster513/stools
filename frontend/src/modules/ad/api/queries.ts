@@ -1,0 +1,196 @@
+/** Хуки TanStack Query модуля AD. */
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, buildQuery, ApiRequestError } from '@/api/client'
+import type {
+  AdConfig,
+  Connection,
+  ConnectionIn,
+  Domain,
+  FindingDetail,
+  FindingsQuery,
+  FindingsResponse,
+  Job,
+  Overview,
+  SettingsView,
+  Snapshot,
+} from './types'
+
+export const FINDINGS_PAGE_SIZE = 200
+
+function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
+  for (const key of ['ad-domains', 'ad-snapshots', 'ad-overview', 'ad-findings', 'ad-finding', 'ad-connections', 'ad-jobs']) {
+    qc.invalidateQueries({ queryKey: [key] })
+  }
+}
+
+export function useDomains() {
+  return useQuery<Domain[], ApiRequestError>({ queryKey: ['ad-domains'], queryFn: () => api.get('/api/ad/domains') })
+}
+
+export function useOverview(domainId: number | undefined) {
+  return useQuery<Overview, ApiRequestError>({
+    queryKey: ['ad-overview', domainId],
+    queryFn: () => api.get(`/api/ad/domains/${domainId}/overview`),
+    enabled: domainId !== undefined,
+  })
+}
+
+export function useSnapshots(domainId: number | undefined) {
+  return useQuery<Snapshot[], ApiRequestError>({
+    queryKey: ['ad-snapshots', domainId],
+    queryFn: () => api.get(`/api/ad/snapshots${buildQuery({ domain_id: domainId })}`),
+  })
+}
+
+export function useSnapshot(snapshotId: number | undefined) {
+  return useQuery<Snapshot, ApiRequestError>({
+    queryKey: ['ad-snapshots', 'one', snapshotId],
+    queryFn: () => api.get(`/api/ad/snapshots/${snapshotId}`),
+    enabled: snapshotId !== undefined,
+  })
+}
+
+export function useFindings(snapshotId: number | undefined, query: Omit<FindingsQuery, 'limit' | 'offset'>) {
+  return useInfiniteQuery<FindingsResponse, ApiRequestError>({
+    queryKey: ['ad-findings', snapshotId, query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/ad/snapshots/${snapshotId}/findings${buildQuery({ ...query, limit: FINDINGS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((sum, p) => sum + p.items.length, 0)
+      return loaded < last.total ? loaded : undefined
+    },
+    enabled: snapshotId !== undefined,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useFindingDetail(snapshotId: number | undefined, key: string | undefined) {
+  return useQuery<FindingDetail, ApiRequestError>({
+    queryKey: ['ad-finding', snapshotId, key],
+    queryFn: () => api.get(`/api/ad/snapshots/${snapshotId}/findings/${key}`),
+    enabled: snapshotId !== undefined && key !== undefined,
+  })
+}
+
+export function useSetVerdict() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, { key: string; domain_id: number; reason: string }>({
+    mutationFn: ({ key, ...body }) => api.put(`/api/ad/verdicts/${key}`, body),
+    onSuccess: () => invalidateAll(qc),
+  })
+}
+
+export function useDropVerdict() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, { key: string; domain_id: number }>({
+    mutationFn: ({ key, domain_id }) => api.del(`/api/ad/verdicts/${key}?domain_id=${domain_id}`),
+    onSuccess: () => invalidateAll(qc),
+  })
+}
+
+export function useUploadExport() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, File>({
+    mutationFn: (file) => {
+      const form = new FormData()
+      form.set('file', file)
+      return api.postForm('/api/ad/snapshots/file', form)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-jobs'] }),
+  })
+}
+
+export function useReanalyze() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/ad/snapshots/${id}/reanalyze`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-jobs'] }),
+  })
+}
+
+export function useDeleteSnapshot() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/ad/snapshots/${id}`),
+    onSuccess: () => invalidateAll(qc),
+  })
+}
+
+export function useAdSettings() {
+  return useQuery<SettingsView, ApiRequestError>({ queryKey: ['ad-settings'], queryFn: () => api.get('/api/ad/settings') })
+}
+
+export function useSaveAdSettings() {
+  const qc = useQueryClient()
+  return useMutation<{ config: AdConfig }, ApiRequestError, AdConfig>({
+    mutationFn: (cfg) => api.put('/api/ad/settings', cfg),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-settings'] }),
+  })
+}
+
+export function useConnections() {
+  return useQuery<Connection[], ApiRequestError>({ queryKey: ['ad-connections'], queryFn: () => api.get('/api/ad/connections') })
+}
+
+export function useSaveConnection() {
+  const qc = useQueryClient()
+  return useMutation<Connection, ApiRequestError, { id?: number; body: ConnectionIn }>({
+    mutationFn: ({ id, body }) => (id ? api.put(`/api/ad/connections/${id}`, body) : api.post('/api/ad/connections', body)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-connections'] }),
+  })
+}
+
+export function useDeleteConnection() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/ad/connections/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-connections'] }),
+  })
+}
+
+export function useTestConnection() {
+  return useMutation<{ ok: boolean; message: string }, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/ad/connections/${id}/test`),
+  })
+}
+
+export function useCollect() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/ad/connections/${id}/collect`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-jobs'] }),
+  })
+}
+
+export function useJobs() {
+  return useQuery<Job[], ApiRequestError>({
+    queryKey: ['ad-jobs'],
+    queryFn: () => api.get('/api/ad/jobs?limit=50'),
+    refetchInterval: (q) => (q.state.data?.some((j) => j.status === 'running') ? 1500 : 10000),
+    refetchIntervalInBackground: true,
+  })
+}
+
+export function useJob(jobId: number | undefined) {
+  const qc = useQueryClient()
+  return useQuery<Job, ApiRequestError>({
+    queryKey: ['ad-job', jobId],
+    queryFn: async () => {
+      const job = await api.get<Job>(`/api/ad/jobs/${jobId}`)
+      if (job.status !== 'running') invalidateAll(qc)
+      return job
+    },
+    enabled: jobId !== undefined,
+    refetchInterval: (q) => (q.state.data?.status === 'running' || !q.state.data ? 1000 : false),
+    refetchIntervalInBackground: true,
+  })
+}
+
+export function useCancelJob() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/ad/jobs/${id}/cancel`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-jobs'] }),
+  })
+}

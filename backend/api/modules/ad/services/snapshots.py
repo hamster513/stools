@@ -1,0 +1,191 @@
+"""Снапшоты: импорт выгрузки, анализ, сравнение с предыдущим, удаление.
+
+Выгрузка хранится файлом рядом с данными (`STOOLS_DATA_DIR/ad/<id>.json.gz`):
+находки можно пересчитать новыми правилами без повторного сбора.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import gzip
+import hashlib
+import json
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
+
+from api.jobs import JobHandle
+from api.modules.ad.core.checks import ANALYZER_VERSION, run_all
+from api.modules.ad.core.config import AdConfig
+from api.modules.ad.core.export import AdExport, ExportIndex, load_export
+from api.modules.ad.core.findings import SEVERITY_RANK, Finding
+from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot, AdVerdict
+
+
+def snapshot_path(data_dir: Path, snapshot_id: int) -> Path:
+    return data_dir / "ad" / f"{snapshot_id}.json.gz"
+
+
+def _domain_for(db: Session, export: AdExport) -> AdDomain:
+    domain = db.execute(select(AdDomain).where(AdDomain.sid == export.domain.sid)).scalars().first()
+    if domain is None:
+        domain = AdDomain(sid=export.domain.sid)
+        db.add(domain)
+    # Имена обновляются каждым снапшотом: домен могли переименовать.
+    domain.dns_root = export.domain.dns_root or domain.dns_root
+    domain.dn = export.domain.dn or domain.dn
+    domain.netbios = export.domain.netbios or domain.netbios
+    db.flush()
+    return domain
+
+
+def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding]) -> None:
+    db.execute(delete(AdFinding).where(AdFinding.snapshot_id == snapshot.id))
+    rows = [
+        {
+            "snapshot_id": snapshot.id,
+            "key": f.key,
+            "check": f.check,
+            "severity": f.severity,
+            "severity_original": f.severity_original,
+            "identity": f.identity[:512],
+            "identity_sid": f.identity_sid[:64],
+            "target": f.target[:1024],
+            "right": f.right[:255],
+            "allowlisted": f.allowlisted,
+            "details_json": json.dumps(f.details, ensure_ascii=False, default=str),
+        }
+        for f in findings
+    ]
+    if rows:
+        db.execute(AdFinding.__table__.insert(), rows)  # type: ignore[attr-defined]
+    stats: dict[str, dict[str, int]] = {}
+    for f in findings:
+        stats.setdefault(f.check, {})
+        stats[f.check][f.severity] = stats[f.check].get(f.severity, 0) + 1
+    snapshot.findings = len(findings)
+    snapshot.stats_json = json.dumps(stats, ensure_ascii=False)
+    snapshot.analyzer_version = ANALYZER_VERSION
+
+
+def analyze(export: AdExport, cfg: AdConfig) -> list[Finding]:
+    findings = run_all(ExportIndex(export), cfg)
+    findings.sort(key=lambda f: (SEVERITY_RANK.get(f.severity, 9), f.check, f.identity, f.target))
+    return findings
+
+
+def import_export(
+    db: Session,
+    handle: JobHandle | None,
+    data: bytes,
+    source: str,
+    filename: str,
+    cfg: AdConfig,
+    data_dir: Path,
+) -> AdSnapshot:
+    if handle:
+        handle.stage("parsing", message=filename)
+    export = load_export(data)
+    if handle:
+        handle.stage("analyzing", message=f"объектов {len(export.objects)}")
+    findings = analyze(export, cfg)
+    if handle:
+        handle.stage("persisting", message=f"находок {len(findings)}")
+    domain = _domain_for(db, export)
+    snapshot = AdSnapshot(
+        domain_id=domain.id,
+        collected_at=export.collected_at,
+        source=source,
+        collector=f"{export.collector.kind} {export.collector.version}".strip(),
+        filename=filename,
+        sha256=hashlib.sha256(data).hexdigest(),
+        objects=len(export.objects),
+    )
+    db.add(snapshot)
+    db.flush()
+    _store_findings(db, snapshot, findings)
+    path = snapshot_path(data_dir, snapshot.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = data if data[:2] == b"\x1f\x8b" else gzip.compress(data)
+    path.write_bytes(raw)
+    db.commit()
+    return snapshot
+
+
+def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: AdConfig, data_dir: Path) -> AdSnapshot:
+    path = snapshot_path(data_dir, snapshot.id)
+    if not path.exists():
+        raise FileNotFoundError(f"файл выгрузки снапшота #{snapshot.id} не найден — пересчитать нельзя")
+    if handle:
+        handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
+    export = load_export(path.read_bytes())
+    findings = analyze(export, cfg)
+    _store_findings(db, snapshot, findings)
+    db.commit()
+    return snapshot
+
+
+def delete_snapshot(db: Session, snapshot: AdSnapshot, data_dir: Path) -> None:
+    path = snapshot_path(data_dir, snapshot.id)
+    db.delete(snapshot)
+    db.commit()
+    if path.exists():
+        path.unlink()
+
+
+def previous_snapshot(db: Session, snapshot: AdSnapshot) -> AdSnapshot | None:
+    return db.execute(
+        select(AdSnapshot)
+        .where(AdSnapshot.domain_id == snapshot.domain_id, AdSnapshot.collected_at < snapshot.collected_at)
+        .order_by(AdSnapshot.collected_at.desc(), AdSnapshot.id.desc())
+    ).scalars().first()
+
+
+def latest_snapshot(db: Session, domain_id: int) -> AdSnapshot | None:
+    return db.execute(
+        select(AdSnapshot).where(AdSnapshot.domain_id == domain_id).order_by(AdSnapshot.collected_at.desc(), AdSnapshot.id.desc())
+    ).scalars().first()
+
+
+def finding_keys(db: Session, snapshot_id: int) -> set[str]:
+    return set(db.execute(select(AdFinding.key).where(AdFinding.snapshot_id == snapshot_id)).scalars())
+
+
+@dataclass
+class Comparison:
+    previous_id: int | None
+    previous_collected_at: dt.datetime | None
+    new_keys: set[str]
+    fixed: list[AdFinding]
+
+    @property
+    def new(self) -> int:
+        return len(self.new_keys)
+
+
+def compare(db: Session, snapshot: AdSnapshot) -> Comparison:
+    prev = previous_snapshot(db, snapshot)
+    current = finding_keys(db, snapshot.id)
+    if prev is None:
+        return Comparison(None, None, set(), [])
+    before = finding_keys(db, prev.id)
+    fixed_keys = before - current
+    fixed = (
+        list(db.execute(select(AdFinding).where(AdFinding.snapshot_id == prev.id, AdFinding.key.in_(list(fixed_keys)))).scalars())
+        if fixed_keys
+        else []
+    )
+    return Comparison(prev.id, prev.collected_at, current - before, fixed)
+
+
+def accepted_keys(db: Session, domain_id: int) -> set[str]:
+    return set(db.execute(select(AdVerdict.key).where(AdVerdict.domain_id == domain_id, AdVerdict.status == "accepted")).scalars())
+
+
+def severity_counts(db: Session, snapshot_id: int) -> Counter[str]:
+    rows = db.execute(
+        select(AdFinding.severity, func.count()).where(AdFinding.snapshot_id == snapshot_id).group_by(AdFinding.severity)
+    ).all()
+    return Counter({str(s): int(n) for s, n in rows})

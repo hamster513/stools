@@ -1,0 +1,3 @@
+{"exploit_multi/http/log4shell_header_injection": {"name": "Log4Shell HTTP Header Injection", "fullname": "exploit/multi/http/log4shell_header_injection", "rank": 600, "references": [["CVE", "2021-44228"], ["URL", "https://x"]]},
+ "auxiliary_scanner/http/log4shell_scanner": {"name": "Log4Shell scanner", "fullname": "auxiliary/scanner/http/log4shell_scanner", "rank": 300, "references": [["CVE", "2021-44228"]]},
+ "exploit_windows/rdp/cve_2019_0708_bluekeep_rce": {"name": "BlueKeep RCE", "fullname": "exploit/windows/rdp/cve_2019_0708_bluekeep_rce", "rank": 300, "references": [["CVE", "2019-0708"]]}}

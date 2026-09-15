@@ -1,0 +1,6 @@
+[
+  {"host": "srv01.corp.local (10.1.1.1)", "os_name": "Windows 2016", "groups": "", "cve": "CVE-2019-1436", "criticality": "High", "zone": "Internal"},
+  {"host": "srv01.corp.local (10.1.1.1)", "os_name": "Windows 2016", "groups": "", "cve": "CVE-2019-0884", "criticality": "High", "zone": "Internal"},
+  {"host": "srv02.corp.local (10.1.1.2)", "os_name": "Windows 2016", "groups": "", "cve": "CVE-2018-8457", "criticality": "Low", "zone": "AppDMZ"},
+  {"host": "srv01.corp.local (10.1.1.1)", "os_name": "Windows 2016", "groups": "", "cve": "CVE-2019-1436", "criticality": "High", "zone": "Internal"}
+]

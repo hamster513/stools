@@ -1,0 +1,5 @@
+{"metadata": {"attack_version": "16.1", "mapping_framework": "kev"},
+ "mapping_objects": [
+  {"capability_id": "CVE-2024-34102", "attack_object_id": "T1190", "mapping_type": "exploitation_technique"},
+  {"capability_id": "CVE-2024-34102", "attack_object_id": "T1005", "mapping_type": "primary_impact"},
+  {"capability_id": "CVE-2021-44228", "attack_object_id": "T1059", "mapping_type": "primary_impact"}]}

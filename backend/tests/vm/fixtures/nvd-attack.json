@@ -1,0 +1,8 @@
+{"vulnerabilities": [
+ {"cve": {"id": "CVE-2021-44228", "published": "2021-12-10T10:15:09.143",
+   "descriptions": [{"lang": "en", "value": "Apache Log4j2 JNDI features..."}],
+   "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 10.0, "attackVector": "NETWORK", "privilegesRequired": "NONE", "userInteraction": "NONE"}}]}}},
+ {"cve": {"id": "CVE-2021-4034", "published": "2022-01-28T19:15:09.777",
+   "descriptions": [{"lang": "en", "value": "PwnKit: local privilege escalation in polkit pkexec"}],
+   "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.8, "attackVector": "LOCAL", "privilegesRequired": "LOW", "userInteraction": "NONE"}}]}}}
+]}
