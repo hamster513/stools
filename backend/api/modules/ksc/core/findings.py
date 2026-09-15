@@ -38,7 +38,14 @@ def is_allowlisted(host: str, cfg: KscConfig) -> bool:
 
 
 def finding_key(f: Finding) -> str:
-    raw = f"{f.check}|{f.host.lower()}|{f.target.lower()}|{f.key_extra}"
+    """Хостовые находки: без `target` — группа хоста может смениться между выгрузками,
+    а ключ должен пережить переезд, иначе история находки рвётся (выглядит как
+    исправленная + новая). Находки про объекты (host пуст: политики, задачи,
+    лицензии) идентифицируются целью, так что `target` остаётся в ключе."""
+    if f.host:
+        raw = f"{f.check}|{f.host.lower()}|{f.key_extra}"
+    else:
+        raw = f"{f.check}|{f.target.lower()}|{f.key_extra}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 

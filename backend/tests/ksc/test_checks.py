@@ -65,9 +65,19 @@ def test_allowlist_lowers_to_info_and_marks() -> None:
 
 
 def test_key_is_stable_and_independent_of_severity() -> None:
-    a = {x.check + x.host: x.key for x in _findings()}
-    b = {x.check + x.host: x.key for x in _findings(cfg=KscConfig(allowlist_hosts=["*"]))}
+    a = {x.check + x.host + x.key_extra: x.key for x in _findings()}
+    b = {x.check + x.host + x.key_extra: x.key for x in _findings(cfg=KscConfig(allowlist_hosts=["*"]))}
     assert a == b and len(set(a.values())) == len(a)
+
+
+def test_host_finding_key_survives_group_move() -> None:
+    before = next(x.key for x in _findings() if x.check == "RTP_OFF" and x.host == "WS02")
+    raw = build_export()
+    for h in raw["hosts"]:
+        if h["KLHST_WKS_DN"] == "WS02":
+            h["KLHST_WKS_GROUPID"] = 3
+    after = next(x.key for x in _findings(raw) if x.check == "RTP_OFF" and x.host == "WS02")
+    assert before == after
 
 
 def test_missing_dates_do_not_fire() -> None:
