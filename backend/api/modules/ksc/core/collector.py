@@ -70,11 +70,9 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
     for g in groups:
         gid = int(g.get("id") or 0)
         try:
-            result = _ret(client.call("Policy.GetEffectivePoliciesForGroup", {"nGroupId": gid})) or []
+            effective[str(gid)] = _ret(client.call("Policy.GetEffectivePoliciesForGroup", {"nGroupId": gid})) or []
         except KscError:
             continue
-        if result:
-            effective[str(gid)] = result
 
     tasks: list[dict[str, Any]] = []
     it = client.call("Tasks.ResetTasksIterator", {"nGroupId": -1, "bGroupIdSignificant": False, "strProductName": "", "strVersion": "", "strComponentName": "", "strInstanceId": "", "strTaskName": "", "bIncludeSupergroups": False})["strTaskIteratorId"]

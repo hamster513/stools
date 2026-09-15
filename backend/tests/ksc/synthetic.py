@@ -90,6 +90,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
     policies = [pol(1, "KES workstations", "KES", 0), pol(2, "Agent", "1103", 0), pol(3, "KES lab", "KES", 4, accept_parent=False)]
     effective = {
         "0": [policies[0], policies[1]],
+        "1": [],
         "2": [dict(policies[0], KLPOL_INHERITED=True), dict(policies[1], KLPOL_INHERITED=True)],
         "3": [dict(policies[1], KLPOL_INHERITED=True)],
         "4": [policies[2], dict(policies[1], KLPOL_INHERITED=True)],
