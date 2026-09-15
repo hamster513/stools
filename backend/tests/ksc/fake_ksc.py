@@ -11,6 +11,8 @@ import json
 import re
 from typing import Any
 
+import httpx
+
 from tests.ksc.synthetic import build_export
 
 USER = "audit"
@@ -100,3 +102,17 @@ def parse_request(path: str, raw_body: bytes) -> tuple[str, dict[str, Any]]:
     method = path.rsplit("/api/v1.0/", 1)[-1]
     body = json.loads(raw_body or b"{}") if raw_body.strip() else {}
     return method, body if isinstance(body, dict) else {}
+
+
+def mock_transport(fake: FakeKsc) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        method, body = parse_request(request.url.path, request.content)
+        status, payload = fake.handle(method, body, {k.lower(): v for k, v in request.headers.items()})
+        return httpx.Response(status, json=payload)
+    return httpx.MockTransport(handler)
+
+
+def http_factory_for(fake: FakeKsc):
+    def factory(verify: bool) -> httpx.Client:
+        return httpx.Client(transport=mock_transport(fake), timeout=5)
+    return factory
