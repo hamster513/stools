@@ -110,6 +110,22 @@ def test_settings_reanalyze_with_allowlist_and_delete(auth_client: TestClient, a
     assert auth_client.get(f"/api/ksc/servers/{snap['server_id']}/overview").json()["snapshot"] is None
 
 
+def test_verdict_survives_next_snapshot(auth_client: TestClient) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    server_id = auth_client.get("/api/ksc/servers").json()[0]["id"]
+    snap1 = auth_client.get("/api/ksc/snapshots").json()[0]["id"]
+    item = auth_client.get(f"/api/ksc/snapshots/{snap1}/findings?check=RTP_OFF").json()["items"][0]
+    assert auth_client.put(f"/api/ksc/verdicts/{item['key']}", json={"server_id": server_id, "reason": "стенд разработки"}).status_code == 204
+    assert upload(auth_client, build_export(now=NOW + dt.timedelta(days=1)))["status"] == "done"
+    snap2 = auth_client.get("/api/ksc/snapshots").json()[0]["id"]
+    body = auth_client.get(f"/api/ksc/snapshots/{snap2}/findings?check=RTP_OFF").json()
+    assert body["items"][0]["status"] == "accepted" and body["facets"]["status"]["accepted"] == 1
+    detail = auth_client.get(f"/api/ksc/snapshots/{snap2}/findings/{item['key']}").json()
+    assert detail["verdict"]["reason"] == "стенд разработки" and len(detail["history"]) == 2
+    assert auth_client.delete(f"/api/ksc/verdicts/{item['key']}?server_id={server_id}").status_code == 204
+    assert auth_client.get(f"/api/ksc/snapshots/{snap2}/findings?check=RTP_OFF").json()["items"][0]["status"] == "persisting"
+
+
 def test_concurrent_job_rejected(auth_client: TestClient, db_session: Any) -> None:
     from api.modules.ksc.models import KscJob
 
