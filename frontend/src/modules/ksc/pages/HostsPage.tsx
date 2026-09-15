@@ -1,0 +1,337 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { ChevronRight, FilterX, Monitor, Search, X } from 'lucide-react'
+import { ApiRequestError } from '@/api/client'
+import { useHostDetail, useHosts, useServers } from '@/modules/ksc/api/queries'
+import {
+  AGENT_LABELS,
+  BASES_LABELS,
+  IN_AD_LABELS,
+  PROTECTION_LABELS,
+  RTP_STATE_LABELS,
+  STATUS_LABELS,
+  type Host,
+  type HostAgent,
+  type HostBases,
+  type HostProtection,
+  type HostsQuery,
+  type HostsResponse,
+} from '@/modules/ksc/api/types'
+import { SeverityBadge } from '@/modules/ksc/components/SeverityBadge'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { useSearchParams, Link } from '@/lib/router'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { ErrorState } from '@/components/ui/ErrorState'
+import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
+import { cn } from '@/lib/cn'
+
+const ROW_HEIGHT = 40
+
+const COMPONENT_STATUS_LABELS: Record<number, string> = {
+  0: 'неизвестно',
+  1: 'остановлен',
+  2: 'приостановлен',
+  3: 'запускается',
+  4: 'работает',
+  9: 'сбой',
+  10: 'не установлен',
+  11: 'нет лицензии',
+}
+
+type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status'>
+
+function isTypingTarget(el: EventTarget | null): boolean {
+  return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+}
+
+function when(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
+}
+
+function FacetRow({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')}>
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>
+    </button>
+  )
+}
+
+function FacetSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="border-b border-grid px-2 py-3">
+      <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{title}</div>
+      <div className="flex flex-col gap-0.5">{children}</div>
+    </div>
+  )
+}
+
+function HostFacetPanel({ facets, filters, onToggle, total }: { facets: HostsResponse['facets']; filters: HostFilters; onToggle: <K extends keyof HostFilters>(key: K, value: HostFilters[K]) => void; total: number }) {
+  const groups = Object.entries(facets?.group ?? {}).sort((a, b) => b[1] - a[1])
+  const products = Object.entries(facets?.product ?? {}).sort((a, b) => b[1] - a[1])
+  const hasAd = Object.keys(facets?.in_ad ?? {}).length > 0
+  return (
+    <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
+      <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Хостов <span className="font-mono tabular-nums text-text">{total}</span></div>
+      <FacetSection title="Защита">
+        {(Object.keys(PROTECTION_LABELS) as HostProtection[]).map((p) => (
+          <FacetRow key={p} active={filters.protection === p} count={facets?.protection[p]} onClick={() => onToggle('protection', filters.protection === p ? undefined : p)}>{PROTECTION_LABELS[p]}</FacetRow>
+        ))}
+      </FacetSection>
+      <FacetSection title="Агент">
+        {(Object.keys(AGENT_LABELS) as HostAgent[]).map((a) => (
+          <FacetRow key={a} active={filters.agent === a} count={facets?.agent[a]} onClick={() => onToggle('agent', filters.agent === a ? undefined : a)}>{AGENT_LABELS[a]}</FacetRow>
+        ))}
+      </FacetSection>
+      <FacetSection title="Базы">
+        {(Object.keys(BASES_LABELS) as HostBases[]).map((b) => (
+          <FacetRow key={b} active={filters.bases === b} count={facets?.bases[b]} onClick={() => onToggle('bases', filters.bases === b ? undefined : b)}>{BASES_LABELS[b]}</FacetRow>
+        ))}
+      </FacetSection>
+      {hasAd && (
+        <FacetSection title="AD">
+          {Object.entries(facets?.in_ad ?? {}).map(([k, n]) => (
+            <FacetRow key={k} active={filters.in_ad === k} count={n} onClick={() => onToggle('in_ad', filters.in_ad === k ? undefined : k)}>{IN_AD_LABELS[k] ?? k}</FacetRow>
+          ))}
+        </FacetSection>
+      )}
+      <FacetSection title="Статус KSC">
+        {(['ok', 'warning', 'critical'] as const).map((s) => (
+          <FacetRow key={s} active={filters.status === s} count={facets?.status[s]} onClick={() => onToggle('status', filters.status === s ? undefined : s)}>{s === 'ok' ? 'ок' : s === 'warning' ? 'предупреждение' : 'критично'}</FacetRow>
+        ))}
+      </FacetSection>
+      <FacetSection title="Группа">
+        {groups.map(([g, n]) => (
+          <FacetRow key={g} active={filters.group === g} count={n} onClick={() => onToggle('group', filters.group === g ? undefined : g)}>{g}</FacetRow>
+        ))}
+      </FacetSection>
+      <FacetSection title="Продукт">
+        {products.map(([p, n]) => (
+          <FacetRow key={p} active={filters.product === p} count={n} onClick={() => onToggle('product', filters.product === p ? undefined : p)}>{p}</FacetRow>
+        ))}
+      </FacetSection>
+    </div>
+  )
+}
+
+function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, serverId }: { items: Host[]; selectedIndex: number; onSelectIndex: (i: number) => void; onOpen: (i: number) => void; onReachEnd?: () => void; serverId: number }) {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 12 })
+  useEffect(() => {
+    if (selectedIndex >= 0 && selectedIndex < items.length) virtualizer.scrollToIndex(selectedIndex, { align: 'auto' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIndex])
+  const rows = virtualizer.getVirtualItems()
+  const last = rows.length ? rows[rows.length - 1].index : 0
+  useEffect(() => {
+    if (onReachEnd && items.length > 0 && last >= items.length - 20) onReachEnd()
+  }, [last, items.length, onReachEnd])
+
+  return (
+    <div ref={parentRef} className="h-full overflow-auto">
+      <div className="sticky top-0 z-10 flex min-w-[1200px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+        <div className="w-56 shrink-0 px-2 py-2">Хост</div>
+        <div className="w-40 shrink-0 px-2 py-2">Группа</div>
+        <div className="w-40 shrink-0 px-2 py-2">ОС</div>
+        <div className="w-32 shrink-0 px-2 py-2">Агент</div>
+        <div className="w-40 shrink-0 px-2 py-2">Защита</div>
+        <div className="w-32 shrink-0 px-2 py-2">Базы</div>
+        <div className="w-28 shrink-0 px-2 py-2">Полный поиск</div>
+        <div className="w-16 shrink-0 px-2 py-2 text-right">Угрозы</div>
+        <div className="w-24 shrink-0 px-2 py-2">AD</div>
+        <div className="w-20 shrink-0 px-2 py-2 text-right">Находок</div>
+      </div>
+      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {rows.map((v) => {
+          const h = items[v.index]
+          const selected = v.index === selectedIndex
+          return (
+            <div key={h.id} onClick={() => { onSelectIndex(v.index); onOpen(v.index) }} className={cn('absolute top-0 left-0 flex w-full min-w-[1200px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+              <div className="w-56 shrink-0 truncate px-2">
+                <div className="truncate text-text" title={h.name}>{h.name}</div>
+                <div className="truncate text-[10px] text-text-secondary" title={h.fqdn}>{h.fqdn}</div>
+              </div>
+              <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.group}>{h.group}</div>
+              <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.os}>{h.os}</div>
+              <div className="w-32 shrink-0 truncate px-2 text-text-secondary">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · ${h.agent_version}` : ''}</div>
+              <div className={cn('w-40 shrink-0 truncate px-2', h.protection === 'off' ? 'text-risk-high' : h.protection === 'on' ? 'text-text-secondary' : 'text-text-secondary')}>
+                {PROTECTION_LABELS[h.protection]}{h.protection === 'off' ? ` · ${RTP_STATE_LABELS[h.rtp_state] ?? h.rtp_state}` : ''}
+              </div>
+              <div className={cn('w-32 shrink-0 truncate px-2', h.bases === 'old' && 'text-risk-high')}>{h.bases_at ? new Date(h.bases_at).toLocaleDateString('ru-RU') : '—'} · {BASES_LABELS[h.bases]}</div>
+              <div className="w-28 shrink-0 truncate px-2 text-text-secondary">{h.last_fullscan_at ? new Date(h.last_fullscan_at).toLocaleDateString('ru-RU') : 'никогда'}</div>
+              <div className={cn('w-16 shrink-0 px-2 text-right font-mono tabular-nums', h.threats > 0 && 'text-risk-high')}>{h.threats}</div>
+              <div className="w-24 shrink-0 truncate px-2 text-text-secondary">{h.in_ad ? IN_AD_LABELS[h.in_ad] : '—'}</div>
+              <div className="w-20 shrink-0 px-2 text-right" onClick={(e) => e.stopPropagation()}>
+                {h.findings > 0 ? (
+                  <Link to={`/ksc/servers/${serverId}/findings?q=${encodeURIComponent(h.name)}`} className="font-mono tabular-nums text-text hover:text-primary">{h.findings}</Link>
+                ) : (
+                  <span className="font-mono tabular-nums text-text-secondary">0</span>
+                )}
+              </div>
+              <ChevronRight size={14} className="mr-2 ml-auto shrink-0 text-text-secondary/40" aria-hidden />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string | null; snapshotId: number | undefined; serverId: number; onClose: () => void }) {
+  const open = hostId !== null
+  const detail = useHostDetail(open ? snapshotId : undefined, hostId ?? undefined)
+  const closeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => { if (open) closeRef.current?.focus() }, [open, hostId])
+  const h = detail.data
+
+  return (
+    <>
+      <div className={cn('fixed inset-0 z-30 bg-black/50 transition-opacity duration-200', open ? 'opacity-100' : 'pointer-events-none opacity-0')} onClick={onClose} aria-hidden />
+      <aside role="dialog" aria-label="Хост" aria-hidden={!open} className={cn('fixed top-0 right-0 z-40 flex h-full w-[520px] flex-col border-l border-grid bg-surface transition-transform duration-200', open ? 'translate-x-0' : 'translate-x-full')}>
+        {open && (
+          <>
+            <div className="flex items-center justify-between border-b border-grid px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <Monitor size={16} className="shrink-0 text-text-secondary" aria-hidden />
+                <span className="truncate text-sm text-text">{h?.name ?? hostId}</span>
+              </div>
+              <button ref={closeRef} type="button" onClick={onClose} className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" aria-label="Свернуть (Esc)"><X size={16} aria-hidden /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
+              {detail.isLoading && <div className="flex justify-center py-8"><Spinner /></div>}
+              {h && (
+                <>
+                  <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    <dt className="text-text-secondary">ID в KSC</dt><dd className="font-mono break-all text-text">{h.host_id}</dd>
+                    <dt className="text-text-secondary">FQDN</dt><dd className="font-mono break-all text-text">{h.fqdn || '—'}</dd>
+                    <dt className="text-text-secondary">Домен</dt><dd className="font-mono break-all text-text">{h.domain || '—'}</dd>
+                    <dt className="text-text-secondary">Группа</dt><dd className="text-text">{h.group}</dd>
+                    <dt className="text-text-secondary">ОС</dt><dd className="text-text">{h.os || '—'}</dd>
+                    <dt className="text-text-secondary">IP</dt><dd className="font-mono text-text">{h.ip || '—'}</dd>
+                    <dt className="text-text-secondary">Агент</dt><dd className="text-text">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · версия ${h.agent_version}` : ''}</dd>
+                    <dt className="text-text-secondary">Виден в сети</dt><dd className="text-text">{when(h.last_seen_at)}</dd>
+                    <dt className="text-text-secondary">Продукт</dt><dd className="text-text">{h.product || '—'}{h.product_version ? ` · ${h.product_version}` : ''}</dd>
+                    <dt className="text-text-secondary">Защита</dt><dd className="text-text">{PROTECTION_LABELS[h.protection]}{h.protection === 'off' ? ` · ${RTP_STATE_LABELS[h.rtp_state] ?? h.rtp_state}` : ''}</dd>
+                    <dt className="text-text-secondary">Базы</dt><dd className="text-text">{when(h.bases_at)} · {BASES_LABELS[h.bases]}</dd>
+                    <dt className="text-text-secondary">Полный поиск</dt><dd className="text-text">{when(h.last_fullscan_at)}</dd>
+                    <dt className="text-text-secondary">Статус KSC</dt><dd className="text-text">{h.status === 'ok' ? 'ок' : h.status === 'warning' ? 'предупреждение' : 'критично'}</dd>
+                    <dt className="text-text-secondary">Угрозы</dt><dd className="text-text">{h.threats}</dd>
+                    <dt className="text-text-secondary">Без группы</dt><dd className="text-text">{h.unassigned ? 'да' : 'нет'}</dd>
+                    <dt className="text-text-secondary">AD</dt><dd className="text-text">{h.in_ad ? IN_AD_LABELS[h.in_ad] : 'нет данных'}</dd>
+                  </dl>
+
+                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Компоненты</div>
+                  <ul className="mb-4 flex flex-col gap-0.5">
+                    {h.components.length === 0 && <li className="text-text-secondary">нет данных</li>}
+                    {h.components.map(([name, code]) => (
+                      <li key={name} className="flex items-center justify-between gap-2 py-0.5">
+                        <span className="truncate text-text" title={name}>{name}</span>
+                        <span className={cn('shrink-0 text-[11px]', code === 4 ? 'text-kind-accepted' : 'text-risk-high')}>{COMPONENT_STATUS_LABELS[code] ?? code}</span>
+                      </li>
+                    ))}
+                  </ul>
+
+                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Находки хоста ({h.findings.length})</div>
+                  <ul className="flex flex-col gap-1">
+                    {h.findings.length === 0 && <li className="text-text-secondary">находок нет</li>}
+                    {h.findings.map((f) => (
+                      <li key={f.key}>
+                        <Link to={`/ksc/servers/${serverId}/findings?check=${f.check}&q=${encodeURIComponent(h.name)}`} className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-row-hover">
+                          <SeverityBadge severity={f.severity} />
+                          <span className="truncate text-text">{f.check_title}</span>
+                          <span className="ml-auto shrink-0 text-[11px] text-text-secondary">{STATUS_LABELS[f.status]}</span>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          </>
+        )}
+      </aside>
+    </>
+  )
+}
+
+/** Инвентарь хостов снапшота: по умолчанию — последнего снапшота сервера. */
+export function HostsPage({ serverId }: { serverId: number }) {
+  const params = useSearchParams()
+  const servers = useServers()
+  const server = servers.data?.find((s) => s.id === serverId)
+  const snapshotId = server?.last_snapshot_id ?? undefined
+  const [filters, setFilters] = useState<HostFilters>(() => ({
+    group: params.get('group') ?? undefined,
+    product: params.get('product') ?? undefined,
+    agent: (params.get('agent') as HostFilters['agent']) ?? undefined,
+    protection: (params.get('protection') as HostFilters['protection']) ?? undefined,
+    bases: (params.get('bases') as HostFilters['bases']) ?? undefined,
+    in_ad: params.get('in_ad') ?? undefined,
+    status: params.get('status') ?? undefined,
+  }))
+  const [searchInput, setSearchInput] = useState('')
+  const q = useDebouncedValue(searchInput, 250)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [openHostId, setOpenHostId] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const queryArgs = useMemo(() => ({ ...filters, q: q || undefined }), [filters, q])
+  const query = useHosts(snapshotId, queryArgs)
+  const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
+  const first = query.data?.pages[0]
+  const total = first?.total ?? 0
+  useEffect(() => setSelectedIndex(0), [queryArgs, snapshotId])
+  const selected: Host | null = items[selectedIndex] ?? null
+
+  function toggle<K extends keyof HostFilters>(key: K, value: HostFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
+  function clearAll() { setFilters({}); setSearchInput('') }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') { if (openHostId !== null) return setOpenHostId(null); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); return }
+      if (isTypingTarget(e.target)) return
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
+      if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
+      if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
+      if (e.key === 'Enter' && selected) { e.preventDefault(); setOpenHostId(selected.host_id) }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [items.length, selected, openHostId])
+
+  const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== ''
+  const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить хосты' : null
+  if (servers.isLoading) return <FullPageSpinner />
+  if (snapshotId === undefined) {
+    return <div className="p-6"><EmptyState icon={FilterX} title="Снапшотов нет" description="Загрузите выгрузку или запустите сбор из KSC в настройках модуля." /></div>
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+        <h1 className="text-sm font-semibold text-text">Хосты</h1>
+        <span className="font-mono text-xs text-text-secondary">снапшот #{snapshotId}</span>
+        <div className="relative max-w-sm flex-1">
+          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
+          <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, IP, ОС… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
+        </div>
+        {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
+        <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
+      </header>
+      <div className="flex min-h-0 flex-1">
+        <HostFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} />
+        <div className="min-w-0 flex-1 bg-app-bg">
+          {query.isLoading && <FullPageSpinner />}
+          {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
+          {!query.isLoading && !errorMessage && items.length === 0 && (
+            <div className="p-6"><EmptyState icon={FilterX} title={hasFilters ? 'Ничего не найдено' : 'Хостов нет'} description={hasFilters ? 'Ни один хост не подходит под фильтры.' : 'В снапшоте нет хостов.'} /></div>
+          )}
+          {!query.isLoading && !errorMessage && items.length > 0 && (
+            <HostsTable items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenHostId(items[i].host_id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }} serverId={serverId} />
+          )}
+        </div>
+      </div>
+      <HostDrawer hostId={openHostId} snapshotId={snapshotId} serverId={serverId} onClose={() => setOpenHostId(null)} />
+    </div>
+  )
+}

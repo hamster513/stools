@@ -56,13 +56,13 @@ export const MODULES: readonly ModuleSpec[] = [
     status: 'available',
   },
   {
-    id: 'av',
+    id: 'ksc',
     code: 'AV',
-    title: 'Антивирус / EDR',
+    title: 'Антивирус',
     description:
-      'Политики и покрытие антивирусной защиты: где агентов нет, где политики ослаблены, где исключения слишком широкие.',
+      'Kaspersky Security Center: покрытие относительно AD, устройства без агента и защиты, состояние компонентов, базы, политики и задачи.',
     icon: Bug,
-    status: 'planned',
+    status: 'available',
   },
   {
     id: 'fw',
