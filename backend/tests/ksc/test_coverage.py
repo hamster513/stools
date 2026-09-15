@@ -5,9 +5,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from api.modules.ad.core.export import load_export as load_ad_export
 from api.modules.ksc.core.checks import CHECK_BY_CODE, run_all
 from api.modules.ksc.core.config import KscConfig
-from api.modules.ksc.core.coverage import AdComputer, match
+from api.modules.ksc.core.coverage import AdComputer, ad_computers_from_export, match
 from api.modules.ksc.core.export import ExportIndex, load_export
 from tests.ad.synthetic import build_export as build_ad
 from tests.ksc.synthetic import export_bytes
@@ -43,6 +44,26 @@ def test_cover_checks_silent_without_ad() -> None:
     f = run_all(idx, KscConfig())
     assert not [x for x in f if x.check.startswith("COVER_")]
     assert "COVER_AD_MISSING" in CHECK_BY_CODE
+
+
+def test_ad_computers_from_export_uses_enabled_computers() -> None:
+    export = load_ad_export(json.dumps(build_ad()).encode())
+    computers = ad_computers_from_export(export)
+    assert {c.name for c in computers} == {"WS01", "SRV01"}
+    for c in computers:
+        assert c.fqdn == f"{c.name.lower()}.corp.local"
+        assert c.netbios == "CORP"
+        year, month, day = c.last_logon.split("-")
+        assert len(year) == 4 and len(month) == 2 and len(day) == 2
+    # Сборщики AD сегодня не выгружают operatingSystem — поле остаётся пустым,
+    # заполнится само, если выгрузка когда-нибудь станет его нести.
+    assert all(c.os == "" for c in computers)
+
+    raw = build_ad()
+    ws01 = next(o for o in raw["objects"] if o.get("sam") == "WS01$")
+    ws01["uac"] = 4096 | 0x2  # UAC_DISABLED
+    disabled = ad_computers_from_export(load_ad_export(json.dumps(raw).encode()))
+    assert {c.name for c in disabled} == {"SRV01"}
 
 
 def test_service_finds_latest_ad_snapshot(auth_client: TestClient, db_session: Any, app_settings: Any) -> None:
