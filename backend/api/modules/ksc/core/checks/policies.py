@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from api.modules.ksc.core.config import KscConfig
-from api.modules.ksc.core.export import PRODUCT_AGENT, PRODUCT_SERVER, ExportIndex, unwrap
+from api.modules.ksc.core.export import PRODUCT_AGENT, PRODUCT_SERVER, ExportIndex, _int, unwrap
 from api.modules.ksc.core.findings import Finding, finalize
 
 
@@ -35,9 +35,9 @@ def check_policy_inherit_broken(idx: ExportIndex, cfg: KscConfig) -> list[Findin
     """Своя политика в подгруппе с отключённым принятием родительской (KLPOL_ACCEPT_PARENT=false)."""
     out = []
     for p in idx.export.policies:
-        group_id = int(unwrap(p.get("KLPOL_GROUP_ID")) or 0)
+        group_id = _int(p.get("KLPOL_GROUP_ID"))
         group = idx.groups_by_id.get(group_id)
-        if group is None or int(unwrap(group.get("parentId")) or -1) < 0:
+        if group is None or "parentId" not in group or _int(group.get("parentId")) < 0:
             continue  # корень: наследовать не от кого
         if bool(unwrap(p.get("KLPOL_ACTIVE"))) and not bool(unwrap(p.get("KLPOL_ACCEPT_PARENT"))):
             out.append(finalize(Finding("POLICY_INHERIT_BROKEN", "Low", target=idx.group_path(group_id), details={"policy": _s(p.get("KLPOL_DN")), "product": _s(p.get("KLPOL_PRODUCT"))}, key_extra=_s(p.get("KLPOL_ID"))), cfg))

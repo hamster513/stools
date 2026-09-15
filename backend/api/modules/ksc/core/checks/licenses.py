@@ -11,7 +11,8 @@ from api.modules.ksc.core.findings import Finding, finalize
 def check_license(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
     out = []
     for lic in idx.export.licenses:
-        used = int(unwrap(lic.get("KLLIC_USED_BY_ADM_SRV")) if unwrap(lic.get("KLLIC_USED_BY_ADM_SRV")) is not None else -1)
+        used_raw = unwrap(lic.get("KLLIC_USED_BY_ADM_SRV"))
+        used = int(used_raw) if used_raw is not None else -1
         installed = bool(unwrap(lic.get("KLLICSRV_KEY_INSTALLED")))
         if used < 0 and not installed:
             continue  # ключ не используется сервером

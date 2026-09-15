@@ -24,7 +24,10 @@ def _task_groups(idx: ExportIndex, names: tuple[str, ...]) -> set[int]:
             continue
         info: dict[str, Any] = unwrap(t.get("TASK_INFO_PARAMS")) or {}
         gid_raw = info.get("PRTS_TASK_GROUPID")
-        group_id = int(gid_raw) if gid_raw is not None else -1
+        try:
+            group_id = int(gid_raw) if gid_raw is not None else -1
+        except (TypeError, ValueError):
+            group_id = -1  # значение есть, но не число: считаем, что задача группу не покрывает
         if group_id < 0:
             continue
         covered.update([group_id] if info.get("PRTS_TASK_PROHIBITED_FOR_SUBGROUPS") else idx.subtree(group_id))

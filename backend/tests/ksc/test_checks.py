@@ -144,3 +144,11 @@ def test_license_checks() -> None:
 
 def test_full_registry_count() -> None:
     assert len(CHECKS) == 16  # 11 хостов + 2 политики + 2 задачи + 1 лицензия; COVER_* добавит Task 5 → 18
+
+
+def test_group_and_task_ids_tolerate_garbage_values() -> None:
+    raw = build_export()
+    raw["policies"][2]["KLPOL_GROUP_ID"] = "garbage"
+    raw["tasks"][0]["TASK_INFO_PARAMS"]["PRTS_TASK_GROUPID"] = "x"
+    f = _findings(raw)  # не должно упасть
+    assert _targets(f, "TASK_NO_UPDATE") == {"Managed devices/Workstations", "Managed devices/Servers", "Managed devices/Workstations/Lab"}
