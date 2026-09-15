@@ -52,3 +52,6 @@ enterprise-attack.json
 docs/superpowers/
 .claude/
 .superpowers/
+
+# Журнал проекта — ведётся локально, цифры из выгрузок заказчика
+docs/journal.md
