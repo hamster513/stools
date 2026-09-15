@@ -47,3 +47,8 @@ CLAUDE.md
 
 # Бандл ATT&CK — публичные данные MITRE, но 50 МБ в репозитории ни к чему
 enterprise-attack.json
+
+# Планы и спеки ассистента, настройки рабочего места — остаются локально
+docs/superpowers/
+.claude/
+.superpowers/
