@@ -12,9 +12,12 @@ import gzip
 import json
 from functools import cached_property
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from api.modules.ksc.core.coverage import AdComputer, Coverage
 
 FORMAT = "stools-ksc/1"
 
@@ -225,6 +228,14 @@ class ExportIndex:
         self.now = export.server.collected_at
         self.groups_by_id: dict[int, dict[str, Any]] = {_int(g.get("id")): g for g in export.groups}
         self.hosts: list[HostRecord] = [HostRecord(h, export, self.group_path(_int(h.get("KLHST_WKS_GROUPID")))) for h in export.hosts]
+        #: Компьютеры AD для сверки; None — снапшота AD нет. Задаётся до первого обращения к `coverage`.
+        self.ad_computers: list[AdComputer] | None = None
+
+    @cached_property
+    def coverage(self) -> Coverage | None:
+        from api.modules.ksc.core.coverage import match
+
+        return match(self.hosts, self.ad_computers) if self.ad_computers is not None else None
 
     def group_path(self, group_id: int) -> str:
         g = self.groups_by_id.get(group_id)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from api.modules.ksc.core.checks.common import CheckSpec
+from api.modules.ksc.core.checks.coverage import check_cover_ad_missing, check_cover_ksc_only
 from api.modules.ksc.core.checks.hosts import (
     check_agent_silent,
     check_bases_old,
@@ -25,6 +26,8 @@ from api.modules.ksc.core.findings import Finding
 ANALYZER_VERSION = "1"
 
 CHECKS: list[CheckSpec] = [
+    CheckSpec("COVER_AD_MISSING", "Есть в AD, нет в KSC", "Включённая учётная запись компьютера в домене, которой нет среди устройств KSC: машина без управления и, скорее всего, без защиты. Проверяется при наличии снапшота модуля AD.", check_cover_ad_missing),
+    CheckSpec("COVER_KSC_ONLY", "Есть в KSC, нет в AD", "Устройство KSC не сопоставлено с включённым компьютером домена: рабочая группа, отключённая или удалённая учётная запись, другой домен.", check_cover_ksc_only),
     CheckSpec("NO_PROTECTION", "Нет продукта защиты", "Агент администрирования отвечает, но продукт защиты (KES) не установлен. Консоль KSC: Устройства → свойства устройства → Приложения.", check_no_protection),
     CheckSpec("RTP_OFF", "Постоянная защита не работает", "Продукт установлен, но постоянная защита остановлена, приостановлена, в состоянии сбоя или не поддерживается лицензией. Консоль KSC: свойства устройства → Защита.", check_rtp_off),
     CheckSpec("NO_AGENT", "Нет агента администрирования", "Устройство видно в сети, но агент администрирования не установлен: KSC им не управляет. Консоль KSC: Обнаружение устройств.", check_no_agent),

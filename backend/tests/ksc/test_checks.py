@@ -143,7 +143,7 @@ def test_license_checks() -> None:
 
 
 def test_full_registry_count() -> None:
-    assert len(CHECKS) == 16  # 11 хостов + 2 политики + 2 задачи + 1 лицензия; COVER_* добавит Task 5 → 18
+    assert len(CHECKS) == 18  # 11 хостов + 2 политики + 2 задачи + 1 лицензия + 2 сверки с AD
 
 
 def test_group_and_task_ids_tolerate_garbage_values() -> None:
