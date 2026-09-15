@@ -40,7 +40,11 @@ class KscClient:
         self._session: str | None = None
 
     def __enter__(self) -> Self:
-        self.login()
+        try:
+            self.login()
+        except Exception:
+            self.close()
+            raise
         return self
 
     def __exit__(self, *exc: object) -> None:

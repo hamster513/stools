@@ -32,6 +32,14 @@ def test_client_login_call_and_error(fake: FakeKsc) -> None:
         KscClient("https://ksc01:13299", USER, "wrong").login()
 
 
+def test_client_closes_http_on_failed_login(fake: FakeKsc) -> None:
+    fake.fail_login = True
+    c = KscClient("https://ksc01:13299", USER, "wrong")
+    with pytest.raises(KscError), c:
+        pass
+    assert c._http.is_closed is True
+
+
 def test_collect_matches_synthetic_export(fake: FakeKsc) -> None:
     seen: list[tuple[int, int]] = []
     with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
