@@ -98,3 +98,49 @@ def test_missing_dates_do_not_fire() -> None:
 def test_analysis_date_is_collected_at_not_wall_clock() -> None:
     old = build_export(now=NOW - dt.timedelta(days=400))
     assert not _hosts(_findings(old), "BASES_OLD") - {"WS03"}
+
+
+def _targets(findings: list[Finding], code: str) -> set[str]:
+    return {f.target for f in findings if f.check == code}
+
+
+def test_policy_checks() -> None:
+    f = _findings()
+    assert _targets(f, "POLICY_NONE") == {"Managed devices/Servers"}
+    none = next(x for x in f if x.check == "POLICY_NONE")
+    assert none.severity == "High" and none.details["product"] == "KES" and none.details["hosts"] == 1
+    assert _targets(f, "POLICY_INHERIT_BROKEN") == {"Managed devices/Workstations/Lab"}
+    assert next(x for x in f if x.check == "POLICY_INHERIT_BROKEN").details["policy"] == "KES lab"
+
+
+def test_policy_none_silent_when_group_has_no_hosts_with_product() -> None:
+    raw = build_export()
+    raw["hosts"] = [h for h in raw["hosts"] if h["KLHST_WKS_DN"] != "SRV01"]
+    assert not _targets(_findings(raw), "POLICY_NONE")
+
+
+def test_task_checks() -> None:
+    f = _findings()
+    assert _targets(f, "TASK_NO_SCAN") == {"Managed devices/Servers"}
+    assert not _targets(f, "TASK_NO_UPDATE")  # задача обновления на корне покрывает всех
+    raw = build_export()
+    raw["tasks"] = [t for t in raw["tasks"] if t["TASK_NAME"] != "Update"]
+    f = _findings(raw)
+    assert _targets(f, "TASK_NO_UPDATE") == {"Managed devices/Workstations", "Managed devices/Servers", "Managed devices/Workstations/Lab"}
+
+
+def test_license_checks() -> None:
+    f = [x for x in _findings() if x.check == "LICENSE"]
+    assert len(f) == 1 and f[0].severity == "High" and f[0].target == "AAAA-BBBB"
+    assert f[0].details["days_left"] == 15 and f[0].details["over_limit"] == 2
+    raw = build_export()
+    raw["licenses"][0]["KLLIC_LIMIT_DATE"] = {"type": "datetime", "value": "2026-01-01T00:00:00Z"}
+    f = [x for x in _findings(raw) if x.check == "LICENSE"]
+    assert f[0].severity == "Critical" and f[0].details["expired"] is True
+    raw["licenses"][0]["KLLIC_LIMIT_DATE"] = {"type": "datetime", "value": "2027-09-15T00:00:00Z"}
+    raw["licenses"][0]["KLLIC_NHOSTS_ASCURRENT"] = 5
+    assert not [x for x in _findings(raw) if x.check == "LICENSE"]
+
+
+def test_full_registry_count() -> None:
+    assert len(CHECKS) == 16  # 11 хостов + 2 политики + 2 задачи + 1 лицензия; COVER_* добавит Task 5 → 18

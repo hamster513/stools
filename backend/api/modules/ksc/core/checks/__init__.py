@@ -15,6 +15,9 @@ from api.modules.ksc.core.checks.hosts import (
     check_threats_active,
     check_unassigned,
 )
+from api.modules.ksc.core.checks.licenses import check_license
+from api.modules.ksc.core.checks.policies import check_policy_inherit_broken, check_policy_none
+from api.modules.ksc.core.checks.tasks import check_task_no_scan, check_task_no_update
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex
 from api.modules.ksc.core.findings import Finding
@@ -33,6 +36,11 @@ CHECKS: list[CheckSpec] = [
     CheckSpec("HOST_CRITICAL", "Критический статус по KSC", "Сервер KSC сам считает состояние устройства критическим; причины из маски статуса в деталях. Консоль KSC: Устройства → Статус.", check_host_critical),
     CheckSpec("NO_FULLSCAN", "Давно не было полного поиска", "Полный поиск вредоносного ПО не выполнялся дольше порога или никогда.", check_no_fullscan),
     CheckSpec("PRODUCT_OUTDATED", "Устаревшая версия продукта или агента", "Версия ниже самой новой, встреченной на этом сервере KSC: обновление версии не дошло.", check_product_outdated),
+    CheckSpec("POLICY_NONE", "Нет действующей политики", "В группе есть устройства с продуктом, но ни одна активная политика этого продукта на группу не действует: настройки защиты локальные. Консоль KSC: группа → Политики.", check_policy_none),
+    CheckSpec("POLICY_INHERIT_BROKEN", "Наследование политики отключено", "Подгруппа держит свою активную политику и не принимает настройки родительской: замки вышестоящей политики на неё не действуют.", check_policy_inherit_broken),
+    CheckSpec("TASK_NO_UPDATE", "Нет задачи обновления", "На группу с защищёнными устройствами не действует ни одна групповая задача обновления баз.", check_task_no_update),
+    CheckSpec("TASK_NO_SCAN", "Нет задачи поиска", "На группу с защищёнными устройствами не действует ни одна групповая задача поиска вредоносного ПО.", check_task_no_scan),
+    CheckSpec("LICENSE", "Лицензия", "Лицензионный ключ истёк, истекает в ближайшие дни или устройств больше, чем позволяет ключ. Консоль KSC: Лицензии.", check_license),
 ]
 
 CHECK_BY_CODE: dict[str, CheckSpec] = {c.code: c for c in CHECKS}
