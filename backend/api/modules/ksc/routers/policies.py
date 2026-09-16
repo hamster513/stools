@@ -13,7 +13,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
-from api.modules.ksc.core.export import ExportIndex, _int, _str, load_export_path, unwrap
+from api.modules.ksc.core.export import ExportIndex, _int, _str, load_export_path, parent_id, unwrap
 from api.modules.ksc.models import KscFinding, KscSnapshot
 from api.modules.ksc.services.snapshots import snapshot_path
 from api.settings import Settings, get_settings
@@ -86,12 +86,12 @@ def _ancestors(idx: ExportIndex, group_id: int) -> set[int]:
     seen = {group_id}
     cur = idx.groups_by_id.get(group_id)
     while cur is not None:
-        parent_id = _int(cur.get("parentId"))
-        if parent_id < 0 or parent_id in seen:
+        pid = parent_id(cur)
+        if pid < 0 or pid in seen:
             break
-        out.add(parent_id)
-        seen.add(parent_id)
-        cur = idx.groups_by_id.get(parent_id)
+        out.add(pid)
+        seen.add(pid)
+        cur = idx.groups_by_id.get(pid)
     return out
 
 
@@ -125,10 +125,7 @@ def _group_tasks(idx: ExportIndex, group_id: int, ancestors: set[int]) -> list[T
 
 def _is_orphan(idx: ExportIndex, g: dict[str, Any]) -> bool:
     """Группа с `parentId`, указывающим на id, отсутствующий в выгрузке (частичный/битый экспорт)."""
-    parent_id = g.get("parentId")
-    if parent_id is None:
-        return False
-    pid = _int(parent_id)
+    pid = parent_id(g)
     return pid >= 0 and pid not in idx.groups_by_id
 
 
@@ -172,7 +169,7 @@ def get_policies(
     findings_by_target: dict[str, list[KscFinding]] = {}
     for f in rows:
         findings_by_target.setdefault(f.target, []).append(f)
-    roots = sorted(gid for gid, g in idx.groups_by_id.items() if _int(g.get("parentId")) < 0)
+    roots = sorted(gid for gid, g in idx.groups_by_id.items() if parent_id(g) < 0)
     # Группы с потерянным родителем (id родителя нет в выгрузке) — тоже корни, иначе их поддерево пропадает.
     orphans = sorted(gid for gid, g in idx.groups_by_id.items() if _is_orphan(idx, g))
     out: list[GroupView] = []

@@ -79,7 +79,7 @@ GET  /collector.ps1                    PowerShell-сборщик (attachment)
 GET  /connections                      [{id, title, host, port, username, password_set,
                                         verify_tls, internal, domain, server_id}]
 POST /connections  PUT /{id}  DELETE /{id}      пустой пароль в PUT — оставить прежний
-POST /connections/{id}/test            {ok, message}
+POST /connections/{id}/test            {ok, message, server_name, version}
 POST /connections/{id}/collect         {job_id} | 400 нет логина или пароля | 409 идёт задача
 ```
 

@@ -25,6 +25,7 @@ def test_policies_tree(auth_client: TestClient) -> None:
 def test_policies_orphan_group_is_shown(auth_client: TestClient) -> None:
     raw = build_export()
     raw["groups"].append({"id": 7, "name": "Orphan", "parentId": 99, "grp_full_name": "Orphan", "level": 1})
+    raw["groups"].append({"id": 8, "name": "NoParent", "grp_full_name": "NoParent", "level": 0})  # поля parentId нет вовсе
     ws01 = next(h for h in raw["hosts"] if h["KLHST_WKS_DN"] == "WS01")
     ws01["KLHST_WKS_GROUPID"] = 7
     assert upload(auth_client, raw)["status"] == "done"
@@ -33,7 +34,8 @@ def test_policies_orphan_group_is_shown(auth_client: TestClient) -> None:
     paths = [g["path"] for g in body["groups"]]
     assert paths == [
         "Managed devices", "Managed devices/Workstations", "Managed devices/Workstations/Lab",
-        "Managed devices/Servers", "Unassigned devices", "Orphan",
+        "Managed devices/Servers", "Unassigned devices", "NoParent", "Orphan",
     ]
     orphan = next(g for g in body["groups"] if g["path"] == "Orphan")
     assert orphan["hosts"] == 1
+    assert next(g for g in body["groups"] if g["path"] == "NoParent")["level"] == 0

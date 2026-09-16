@@ -153,9 +153,16 @@ def _str(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def parent_id(group: dict[str, Any]) -> int:
+    """`parentId` группы; -1, если поля нет вовсе — это корень, а не группа 0."""
+    return _int(group.get("parentId")) if group.get("parentId") is not None else -1
+
+
 def ip_from_long(value: int) -> str:
-    """KLHST_WKS_IP_LONG — little-endian: 3232235777 → 192.168.1.1 после разворота байтов."""
-    if value <= 0:
+    """KLHST_WKS_IP_LONG → адрес; 3232235777 → 192.168.1.1. Отрицательные значения —
+    тот же адрес знаковым int32 (от 128.0.0.0). Порядок байтов принят прямым,
+    на живых данных не проверен."""
+    if value == 0:
         return ""
     b = (value & 0xFFFFFFFF).to_bytes(4, "big")
     return ".".join(str(x) for x in b)
@@ -250,7 +257,7 @@ class ExportIndex:
         while cur is not None and _int(cur.get("id")) not in seen:
             seen.add(_int(cur.get("id")))
             parts.append(_str(cur.get("name")))
-            cur = self.groups_by_id.get(_int(cur.get("parentId")))
+            cur = self.groups_by_id.get(parent_id(cur))
         return "/".join(reversed(parts))
 
     @cached_property
@@ -261,7 +268,7 @@ class ExportIndex:
         return out
 
     def children(self, group_id: int) -> list[int]:
-        return [gid for gid, g in self.groups_by_id.items() if _int(g.get("parentId")) == group_id]
+        return [gid for gid, g in self.groups_by_id.items() if parent_id(g) == group_id]
 
     def subtree(self, group_id: int) -> list[int]:
         out = [group_id]

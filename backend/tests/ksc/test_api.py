@@ -124,6 +124,7 @@ def test_verdict_survives_next_snapshot(auth_client: TestClient) -> None:
     assert detail["verdict"]["reason"] == "стенд разработки" and len(detail["history"]) == 2
     assert auth_client.delete(f"/api/ksc/verdicts/{item['key']}?server_id={server_id}").status_code == 204
     assert auth_client.get(f"/api/ksc/snapshots/{snap2}/findings?check=RTP_OFF").json()["items"][0]["status"] == "persisting"
+    assert auth_client.put(f"/api/ksc/verdicts/{item['key']}", json={"server_id": 999}).status_code == 404
 
 
 def test_concurrent_job_rejected(auth_client: TestClient, db_session: Any) -> None:

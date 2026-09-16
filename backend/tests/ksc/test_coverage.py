@@ -77,3 +77,15 @@ def test_service_finds_latest_ad_snapshot(auth_client: TestClient, db_session: A
     computers = ad_computers_for(db_session, export, app_settings.data_dir)
     assert computers is not None and {c.name for c in computers} == {"WS01", "SRV01"}
     assert all(c.domain == "corp.local" and c.netbios == "CORP" for c in computers)
+
+
+def test_broken_ad_snapshot_is_skipped(auth_client: TestClient, db_session: Any, app_settings: Any) -> None:
+    """Битый файл снапшота AD не должен ронять импорт выгрузки KSC."""
+    from api.modules.ad.services.snapshots import snapshot_path as ad_snapshot_path
+    from api.modules.ksc.services.coverage import ad_computers_for
+
+    r = auth_client.post("/api/ad/snapshots/file", files={"file": ("ad.json", json.dumps(build_ad()).encode(), "application/json")})
+    assert auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()["status"] == "done"
+    snap_id = auth_client.get("/api/ad/snapshots").json()[0]["id"]
+    ad_snapshot_path(app_settings.data_dir, snap_id).write_bytes(b"\x1f\x8b not a snapshot")
+    assert ad_computers_for(db_session, load_export(export_bytes()), app_settings.data_dir) is None

@@ -55,9 +55,9 @@ function CoverageSection({ serverId, coverage }: { serverId: number; coverage: C
           <CoverageCard title="нет данных AD" value="—" hint="Загрузите снапшот домена в модуле AD — сверка появится после пересчёта." />
         )}
         <CoverageCard title="Устройств в KSC" value={coverage.ksc_total} />
-        <CoverageCard title="С агентом" value={coverage.with_agent} to={`${hostsBase}?agent=alive`} />
-        <CoverageCard title="С защитой" value={coverage.with_protection} to={`${hostsBase}?protection=on`} />
-        <CoverageCard title="Защита работает" value={coverage.protection_on} />
+        <CoverageCard title="С агентом" value={coverage.with_agent} to={hostsBase} />
+        <CoverageCard title="С защитой" value={coverage.with_protection} to={hostsBase} />
+        <CoverageCard title="Защита работает" value={coverage.protection_on} to={`${hostsBase}?protection=on`} />
         <CoverageCard title="Базы свежие" value={coverage.bases_fresh} to={`${hostsBase}?bases=fresh`} />
         {hasAd && (
           <>

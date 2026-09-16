@@ -15,7 +15,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.findings import SEVERITIES, SEVERITY_RANK
-from api.modules.ksc.models import KscFinding, KscSnapshot, KscVerdict
+from api.modules.ksc.models import KscFinding, KscServer, KscSnapshot, KscVerdict
 from api.modules.ksc.services.snapshots import accepted_keys, compare
 
 router = APIRouter(tags=["ksc"])
@@ -141,6 +141,8 @@ class VerdictRequest(BaseModel):
 
 @router.put("/verdicts/{key}", status_code=status.HTTP_204_NO_CONTENT)
 def set_verdict(key: str, payload: VerdictRequest, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> None:
+    if db.get(KscServer, payload.server_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="сервер не найден")
     v = db.get(KscVerdict, (payload.server_id, key))
     if v is None:
         v = KscVerdict(server_id=payload.server_id, key=key)

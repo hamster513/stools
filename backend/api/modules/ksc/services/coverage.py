@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.modules.ad.core.export import load_export_path
+from api.modules.ad.core.export import ExportFormatError, load_export_path
 from api.modules.ad.models import AdDomain
 from api.modules.ad.services.snapshots import latest_snapshot, snapshot_path
 from api.modules.ksc.core.coverage import AdComputer, ad_computers_from_export
@@ -35,6 +35,9 @@ def ad_computers_for(db: Session, export: KscExport, data_dir: Path) -> list[AdC
         path = snapshot_path(data_dir, snap.id)
         if not path.exists():
             continue
+        try:
+            computers.extend(ad_computers_from_export(load_export_path(path)))
+        except (ExportFormatError, OSError, ValueError):
+            continue  # снапшот AD битый — сверяемся без этого домена, импорт KSC не роняем
         found = True
-        computers.extend(ad_computers_from_export(load_export_path(path)))
     return computers if found else None

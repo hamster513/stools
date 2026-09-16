@@ -6,7 +6,13 @@ import json
 
 import pytest
 
-from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_export, unwrap
+from api.modules.ksc.core.export import (
+    ExportFormatError,
+    ExportIndex,
+    ip_from_long,
+    load_export,
+    unwrap,
+)
 from tests.ksc.synthetic import NOW, build_export, export_bytes
 
 
@@ -16,6 +22,12 @@ def test_unwrap_typed_values() -> None:
     assert unwrap({"type": "binary", "value": "AAAA"}) == "AAAA"
     assert unwrap({"a": {"type": "long", "value": 1}, "b": [{"type": "date", "value": "2026-09-15"}]}) == {"a": 1, "b": ["2026-09-15"]}
     assert unwrap("x") == "x" and unwrap(None) is None
+
+
+def test_ip_from_long_handles_signed_values() -> None:
+    assert ip_from_long(3232235777) == "192.168.1.1"
+    assert ip_from_long(-1062731519) == "192.168.1.1"  # тот же адрес знаковым int32
+    assert ip_from_long(0) == ""
 
 
 def test_load_export_plain_and_gzip() -> None:
