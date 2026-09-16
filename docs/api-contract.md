@@ -5,7 +5,8 @@
 
 Платформенные ручки — `/api/auth/…` и `/api/settings/…`. Ручки модулей —
 `/api/<модуль>/…`; у SIEM Rules Analyzer это `/api/siem/…`, у Vulnerability
-Management — `/api/vm/…` (см. `docs/vm/api.md`). Ниже описан модуль SIEM.
+Management — `/api/vm/…` (см. `docs/vm/api.md`), у модуля Антивирус (KSC) —
+`/api/ksc/…` (см. `docs/ksc/api.md`). Ниже описан модуль SIEM.
 
 ## Общие правила
 
