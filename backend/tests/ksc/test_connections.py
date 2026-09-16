@@ -56,6 +56,21 @@ def test_collect_matches_synthetic_export(fake: FakeKsc) -> None:
     assert "ChunkAccessor.Release" in fake.calls and "GroupSyncIterator.ReleaseIterator" in fake.calls
 
 
+def test_collect_reads_typed_numbers(monkeypatch: Any) -> None:
+    """KSC отдаёт числа и как 13, и как {"type": "long", "value": 13}."""
+    data = build_export()
+    for h in data["hosts"]:
+        h["KLHST_WKS_STATUS"] = {"type": "long", "value": h["KLHST_WKS_STATUS"]}
+    for g in data["groups"]:
+        g["id"] = {"type": "long", "value": g["id"]}
+    f = FakeKsc(data)
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c)
+    assert set(raw["host_products"]) == set(build_export()["host_products"])
+    assert set(raw["effective_policies"]) == {"0", "1", "2", "3", "4"}
+
+
 def test_collect_skip_products(fake: FakeKsc) -> None:
     with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
         raw = collect(c, skip_products=True)

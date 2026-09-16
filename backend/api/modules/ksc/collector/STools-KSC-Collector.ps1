@@ -70,6 +70,11 @@ function Write-Step([string]$text) { Write-Host ("  " + $text) -ForegroundColor 
 
 function B64([string]$s) { return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
 
+# Set-StrictMode делает обращение к отсутствующему свойству ошибкой: читаем через Prop.
+function Prop($o, $n) { if ($null -ne $o -and $o.PSObject.Properties[$n]) { return $o.$n }; return $null }
+# KSC отдаёт числа и как 13, и как @{ type = "long"; value = 13 }.
+function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [int]$v } catch { return 0 } }
+
 function Invoke-Ksc([string]$method, $body = @{}) {
   $headers = @{ "Content-Type" = "application/json" }
   if ($script:session) { $headers["X-KSC-Session"] = $script:session }
@@ -97,7 +102,7 @@ function Read-Accessor([string]$accessor) {
   $start = 0
   while ($start -lt $total) {
     $chunk = Invoke-Ksc "ChunkAccessor.GetItemsChunk" @{ strAccessor = $accessor; nStart = $start; nCount = $PageSize }
-    $arr = @($chunk.pChunk.KLCSP_ITERATOR_ARRAY)
+    $arr = @((Prop (Prop $chunk "pChunk") "KLCSP_ITERATOR_ARRAY") | Where-Object { $null -ne $_ })
     if ($arr.Count -eq 0) { break }
     foreach ($i in $arr) { [void]$items.Add($i) }
     $start += $arr.Count
@@ -124,8 +129,8 @@ Write-Step "Вход"
 $script:session = (Invoke-Ksc "Session.StartSession" "{}").PxgRetVal
 try {
   Write-Step "Сервер"
-  $static = (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = @("KLADMSRV_SERVER_VERSION_ID","KLADMSRV_SERVER_HOSTNAME","KLADMSRV_PRODUCT_FULL_VERSION") }).PxgRetVal
-  $domains = @((Invoke-Ksc "HostGroup.GetDomains" "{}").PxgRetVal)
+  $static = Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = @("KLADMSRV_SERVER_VERSION_ID","KLADMSRV_SERVER_HOSTNAME","KLADMSRV_PRODUCT_FULL_VERSION") }) "PxgRetVal"
+  $domains = @((Prop (Invoke-Ksc "HostGroup.GetDomains" "{}") "PxgRetVal") | Where-Object { $null -ne $_ })
 
   Write-Step "Группы"
   $ga = (Invoke-Ksc "HostGroup.FindGroups" @{ wstrFilter = ""; vecFieldsToReturn = $GroupFields; vecFieldsToOrder = @(); lMaxLifeTime = 600 }).strAccessor
@@ -142,9 +147,9 @@ try {
     $n = 0
     foreach ($h in $hosts) {
       $n++
-      $hid = [string]$h.KLHST_WKS_HOSTNAME
+      $hid = [string](Prop $h "KLHST_WKS_HOSTNAME")
       if (-not $hid) { continue }
-      if (([int]$h.KLHST_WKS_STATUS -band 4) -eq 0) { continue }   # без агента продуктов нет
+      if (((AsInt (Prop $h "KLHST_WKS_STATUS")) -band 4) -eq 0) { continue }   # без агента продуктов нет
       try {
         $p = (Invoke-Ksc "HostGroup.GetHostProducts" @{ strHostName = $hid }).PxgRetVal
         $products[$hid] = $p
@@ -165,11 +170,11 @@ try {
   }
 
   Write-Step "Политики"
-  $policies = @((Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }).PxgRetVal)
+  $policies = @((Prop (Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ })
   $effective = @{}
   foreach ($g in $groups) {
-    $gid = [int]$g.id
-    try { $effective[[string]$gid] = @((Invoke-Ksc "Policy.GetEffectivePoliciesForGroup" @{ nGroupId = $gid }).PxgRetVal) }
+    $gid = AsInt (Prop $g "id")
+    try { $effective[[string]$gid] = @((Prop (Invoke-Ksc "Policy.GetEffectivePoliciesForGroup" @{ nGroupId = $gid }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
     catch { Write-Warning ("политики группы {0}: {1}" -f $gid, $_.Exception.Message) }
   }
 
@@ -177,9 +182,9 @@ try {
   $tasks = New-Object System.Collections.ArrayList
   $it = (Invoke-Ksc "Tasks.ResetTasksIterator" @{ nGroupId = -1; bGroupIdSignificant = $false; strProductName = ""; strVersion = ""; strComponentName = ""; strInstanceId = ""; strTaskName = ""; bIncludeSupergroups = $false }).strTaskIteratorId
   while ($true) {
-    $t = (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }).pTaskData
+    $t = Prop (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }) "pTaskData"
     if ($null -eq $t -or @($t.PSObject.Properties).Count -eq 0) { break }
-    $tid = [string]$t.TASK_UNIQUE_ID
+    $tid = [string](Prop $t "TASK_UNIQUE_ID")
     if ($tid) { try { $t | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }).PxgRetVal -Force } catch {} }
     [void]$tasks.Add($t)
   }
@@ -188,22 +193,25 @@ try {
   Write-Step "Лицензии"
   $licenses = New-Object System.Collections.ArrayList
   $lk = Invoke-Ksc "LicenseKeys.EnumKeys" @{ pFields = $LicenseFields; pFieldsToOrder = @(); pOptions = @{}; lTimeoutSec = 600 }
-  $li = $lk.wstrIterator
-  while ($true) {
-    $chunk = Invoke-Ksc "GroupSyncIterator.GetNextItems" @{ szwIterator = $li; nCount = 50 }
-    foreach ($k in @($chunk.pData.KLCSP_ITERATOR_ARRAY)) { [void]$licenses.Add($k) }
-    if ($chunk.bEOF) { break }
+  $li = [string](Prop $lk "wstrIterator")
+  if ($li) {   # ключей нет — итератора тоже нет
+    while ($true) {
+      $chunk = Invoke-Ksc "GroupSyncIterator.GetNextItems" @{ szwIterator = $li; nCount = 50 }
+      foreach ($k in @((Prop (Prop $chunk "pData") "KLCSP_ITERATOR_ARRAY") | Where-Object { $null -ne $_ })) { [void]$licenses.Add($k) }
+      $eof = Prop $chunk "bEOF"
+      if ($null -eq $eof -or $eof) { break }
+    }
+    Invoke-Ksc "GroupSyncIterator.ReleaseIterator" @{ szwIterator = $li } | Out-Null
   }
-  Invoke-Ksc "GroupSyncIterator.ReleaseIterator" @{ szwIterator = $li } | Out-Null
 } finally {
   try { Invoke-Ksc "Session.EndSession" "{}" | Out-Null } catch {}
 }
 
-$serverName = [string]$static.KLADMSRV_SERVER_HOSTNAME
+$serverName = [string](Prop $static "KLADMSRV_SERVER_HOSTNAME")
 if (-not $serverName) { $serverName = $Server }
 $export = [ordered]@{
   format = $FormatVersion
-  server = @{ name = $serverName; version = [string]$static.KLADMSRV_PRODUCT_FULL_VERSION; collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); collector = "powershell"; collector_version = $CollectorVersion; user = $User; host = $Server }
+  server = @{ name = $serverName; version = [string](Prop $static "KLADMSRV_PRODUCT_FULL_VERSION"); collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); collector = "powershell"; collector_version = $CollectorVersion; user = $User; host = $Server }
   groups = $groups; hosts = $hosts; host_products = $products; host_components = $components
   policies = $policies; effective_policies = $effective; tasks = $tasks.ToArray(); licenses = $licenses.ToArray()
   static = $static; domains = $domains

@@ -20,9 +20,20 @@ PASSWORD = "audit-pass"
 SESSION = "n4QFPNjYK2oXRMYkis5CMcg=="
 
 
+def sparse_export() -> dict[str, Any]:
+    """Тот же KSC, но скупой: у хоста нет части полей, ключей нет вовсе,
+    у сервера не сказана версия продукта. Сборщик не должен спотыкаться."""
+    d = build_export()
+    for field in ("KLHST_WKS_LAST_VISIBLE", "KLHST_WKS_RTP_AV_VERSION", "KLHST_WKS_STATUS"):
+        d["hosts"][0].pop(field, None)
+    d["licenses"] = []
+    d["static"].pop("KLADMSRV_PRODUCT_FULL_VERSION", None)
+    return d
+
+
 class FakeKsc:
-    def __init__(self, data: dict[str, Any] | None = None) -> None:
-        self.data = data or build_export()
+    def __init__(self, data: dict[str, Any] | None = None, variant: str = "") -> None:
+        self.data = data or (sparse_export() if variant == "sparse" else build_export())
         self.calls: list[str] = []
         self.accessors: dict[str, list[dict[str, Any]]] = {}
         self.iterators: dict[str, list[dict[str, Any]]] = {}
@@ -87,6 +98,8 @@ class FakeKsc:
         if method == "Tasks.GetTaskStatistics":
             return 200, {"PxgRetVal": {"1": 0, "4": 3}}
         if method == "LicenseKeys.EnumKeys":
+            if not d["licenses"]:  # ключей нет — KSC не отдаёт итератор
+                return 200, {"lKeyCount": 0, "wstrIterator": ""}
             self.iterators["l1"] = list(d["licenses"])
             return 200, {"lKeyCount": len(d["licenses"]), "wstrIterator": "l1"}
         if method == "GroupSyncIterator.GetNextItems":

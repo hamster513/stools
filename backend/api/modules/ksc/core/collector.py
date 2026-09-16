@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from api.modules.ksc.core.client import KscClient, KscError
-from api.modules.ksc.core.export import FORMAT, PRODUCT_AGENT, PRODUCT_SERVER
+from api.modules.ksc.core.export import FORMAT, PRODUCT_AGENT, PRODUCT_SERVER, _int
 
 COLLECTOR_VERSION = "1.0"
 
@@ -43,7 +43,7 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
     products: dict[str, Any] = {}
     components: dict[str, Any] = {}
     if not skip_products:
-        with_agent = [h for h in hosts if int(h.get("KLHST_WKS_STATUS") or 0) & 4 and h.get("KLHST_WKS_HOSTNAME")]
+        with_agent = [h for h in hosts if _int(h.get("KLHST_WKS_STATUS")) & 4 and h.get("KLHST_WKS_HOSTNAME")]
         for n, h in enumerate(with_agent, 1):
             hid = str(h["KLHST_WKS_HOSTNAME"])
             try:
@@ -68,7 +68,7 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
     policies = _ret(client.call("Policy.GetPoliciesForGroup", {"nGroupId": -1})) or []
     effective: dict[str, Any] = {}
     for g in groups:
-        gid = int(g.get("id") or 0)
+        gid = _int(g.get("id"))
         try:
             effective[str(gid)] = _ret(client.call("Policy.GetEffectivePoliciesForGroup", {"nGroupId": gid})) or []
         except KscError:

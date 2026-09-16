@@ -1,18 +1,20 @@
 """Поддельный KSC как HTTP-сервер — для прогона PowerShell-скрипта в контейнере.
 
-Запуск: `python -m tests.ksc.fake_ksc_http <port>`. Отвечает той же логикой,
+Запуск: `python -m tests.ksc.fake_ksc_http <port>`; `STOOLS_FAKE_VARIANT=sparse`
+переключает на выгрузку с пропущенными полями. Отвечает той же логикой,
 что и `FakeKsc.handle` (см. fake_ksc.py), но по-настоящему слушает сокет —
 скрипт внутри контейнера ходит на него как на боевой KSC Open API.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from tests.ksc.fake_ksc import FakeKsc, parse_request
 
-ksc = FakeKsc()
+ksc = FakeKsc(variant=os.environ.get("STOOLS_FAKE_VARIANT", ""))
 
 
 class Handler(BaseHTTPRequestHandler):
