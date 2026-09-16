@@ -115,5 +115,14 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
     }
 
 
+def add_ws02_twin(raw: dict[str, Any]) -> dict[str, Any]:
+    """Второе устройство с тем же отображаемым именем WS02, но в другой группе и домене:
+    KLHST_WKS_DN в KSC не уникален."""
+    ws02 = next(h for h in raw["hosts"] if h["KLHST_WKS_DN"] == "WS02")
+    raw["hosts"].append(dict(ws02, KLHST_WKS_HOSTNAME="h-ws02-dup", KLHST_WKS_GROUPID=3,
+                             KLHST_WKS_DNSDOMAIN="lab.local", KLHST_WKS_FQDN="ws02.lab.local"))
+    return raw
+
+
 def export_bytes(**kwargs: Any) -> bytes:
     return json.dumps(build_export(**kwargs), ensure_ascii=False).encode("utf-8")

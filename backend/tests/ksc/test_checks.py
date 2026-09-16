@@ -7,7 +7,7 @@ from api.modules.ksc.core.checks import CHECK_BY_CODE, CHECKS, run_all
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, load_export
 from api.modules.ksc.core.findings import Finding
-from tests.ksc.synthetic import NOW, build_export, export_bytes
+from tests.ksc.synthetic import NOW, add_ws02_twin, build_export, export_bytes
 
 
 def _findings(raw: dict | None = None, cfg: KscConfig | None = None) -> list[Finding]:
@@ -78,6 +78,13 @@ def test_host_finding_key_survives_group_move() -> None:
             h["KLHST_WKS_GROUPID"] = 3
     after = next(x.key for x in _findings(raw) if x.check == "RTP_OFF" and x.host == "WS02")
     assert before == after
+
+
+def test_same_named_hosts_get_different_keys() -> None:
+    f = [x for x in _findings(add_ws02_twin(build_export())) if x.check == "RTP_OFF"]
+    assert [x.host for x in f] == ["WS02", "WS02"]
+    assert {x.host_key for x in f} == {"ws02.corp.local", "ws02.lab.local"}
+    assert len({x.key for x in f}) == 2
 
 
 def test_missing_dates_do_not_fire() -> None:

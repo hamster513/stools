@@ -102,6 +102,8 @@ class KscFinding(Base):
     severity_original: Mapped[str] = mapped_column(String(16))
     #: Имя хоста; пусто для находок про группы и лицензии.
     host: Mapped[str] = mapped_column(String(255), default="")
+    #: FQDN хоста (иначе имя в нижнем регистре) — по нему находки связываются с хостом.
+    host_key: Mapped[str] = mapped_column(String(255), default="", index=True)
     #: Группа, политика, задача, лицензия.
     target: Mapped[str] = mapped_column(String(1024), default="")
     allowlisted: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -35,4 +35,4 @@ def host_details(h: HostRecord) -> dict[str, Any]:
 
 
 def host_finding(cfg: KscConfig, check: str, severity: str, h: HostRecord, *, key_extra: str = "", **details: Any) -> Finding:
-    return finalize(Finding(check=check, severity=severity, host=h.name, target=h.group_path, details={**host_details(h), **details}, key_extra=key_extra), cfg)
+    return finalize(Finding(check=check, severity=severity, host=h.name, host_key=h.fqdn or h.name.lower(), target=h.group_path, details={**host_details(h), **details}, key_extra=key_extra), cfg)

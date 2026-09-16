@@ -89,6 +89,7 @@ def upgrade() -> None:
         sa.Column("severity", sa.String(16), nullable=False),
         sa.Column("severity_original", sa.String(16), nullable=False),
         sa.Column("host", sa.String(255), nullable=False, server_default=""),
+        sa.Column("host_key", sa.String(255), nullable=False, server_default="", index=True),
         sa.Column("target", sa.String(1024), nullable=False, server_default=""),
         sa.Column("allowlisted", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("details_json", sa.Text(), nullable=False, server_default="{}"),

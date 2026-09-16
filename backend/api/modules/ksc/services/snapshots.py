@@ -87,7 +87,7 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
     rows = [
         {
             "snapshot_id": snapshot.id, "key": f.key, "check": f.check, "severity": f.severity, "severity_original": f.severity_original,
-            "host": f.host[:255], "target": f.target[:1024], "allowlisted": f.allowlisted,
+            "host": f.host[:255], "host_key": f.host_key[:255], "target": f.target[:1024], "allowlisted": f.allowlisted,
             "details_json": json.dumps(f.details, ensure_ascii=False, default=str),
         }
         for f in findings

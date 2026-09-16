@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from tests.ksc.synthetic import build_export
+from tests.ksc.synthetic import add_ws02_twin, build_export
 from tests.ksc.test_api import upload
 
 
@@ -34,6 +34,16 @@ def test_host_detail_has_findings_and_components(auth_client: TestClient) -> Non
     assert detail["name"] == "WS11" and ["Firewall", 1] in detail["components"]
     assert [f["check"] for f in detail["findings"]] == ["COMPONENT_OFF"] and detail["findings"][0]["status"] == "persisting"
     assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/nope").status_code == 404
+
+
+def test_same_named_hosts_keep_their_own_findings(auth_client: TestClient) -> None:
+    assert upload(auth_client, add_ws02_twin(build_export()))["status"] == "done"
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    body = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts?q=ws02").json()
+    assert {h["host_id"]: h["findings"] for h in body["items"]} == {"h-ws02": 1, "h-ws02-dup": 1}
+    for host_id in ("h-ws02", "h-ws02-dup"):
+        detail = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/{host_id}").json()
+        assert [f["check"] for f in detail["findings"]] == ["RTP_OFF"]
 
 
 def test_findings_list_and_detail(auth_client: TestClient) -> None:

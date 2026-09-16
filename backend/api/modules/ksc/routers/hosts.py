@@ -58,8 +58,13 @@ def _snapshot(db: Session, snapshot_id: int) -> KscSnapshot:
     return snap
 
 
+def _host_key(h: KscHost) -> str:
+    """Тот же ключ, что у находки: имя (KLHST_WKS_DN) не уникально."""
+    return h.fqdn or h.name.lower()
+
+
 def _findings_per_host(db: Session, snapshot_id: int) -> dict[str, int]:
-    rows = db.execute(select(KscFinding.host, func.count()).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host != "").group_by(KscFinding.host)).all()
+    rows = db.execute(select(KscFinding.host_key, func.count()).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host_key != "").group_by(KscFinding.host_key)).all()
     return {str(h): int(n) for h, n in rows}
 
 
@@ -125,7 +130,7 @@ def list_hosts(
             facets["in_ad"][h.in_ad] = facets["in_ad"].get(h.in_ad, 0) + 1
         facets["status"][h.status] = facets["status"].get(h.status, 0) + 1
     page = filtered[offset : offset + limit]
-    return {"total": len(filtered), "items": [_item(h, *derived[h.id], per_host.get(h.name, 0)) for h in page], "facets": facets if offset == 0 else None}
+    return {"total": len(filtered), "items": [_item(h, *derived[h.id], per_host.get(_host_key(h), 0)) for h in page], "facets": facets if offset == 0 else None}
 
 
 @router.get("/snapshots/{snapshot_id}/hosts/{host_id}")
@@ -137,7 +142,7 @@ def host_detail(snapshot_id: int, host_id: str, db: Session = Depends(get_db), _
     cfg = load_config(db)
     cmp_ = compare(db, snap)
     accepted = accepted_keys(db, snap.server_id)
-    findings = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host == h.name)).scalars())
+    findings = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host_key == _host_key(h))).scalars())
     items = [
         {"key": f.key, "check": f.check, "check_title": CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check, "severity": f.severity,
          "status": "accepted" if f.key in accepted else "new" if f.key in cmp_.new_keys else "persisting", "details": json.loads(f.details_json or "{}")}

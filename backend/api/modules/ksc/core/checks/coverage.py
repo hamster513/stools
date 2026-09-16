@@ -11,7 +11,7 @@ def check_cover_ad_missing(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
     cov = idx.coverage
     if cov is None:
         return []
-    return [finalize(Finding("COVER_AD_MISSING", "High", host=c.name, target=c.domain, details={"fqdn": c.fqdn, "os": c.os, "last_logon": c.last_logon}), cfg) for c in cov.ad_only]
+    return [finalize(Finding("COVER_AD_MISSING", "High", host=c.name, host_key=c.fqdn, target=c.domain, details={"fqdn": c.fqdn, "os": c.os, "last_logon": c.last_logon}), cfg) for c in cov.ad_only]
 
 
 def check_cover_ksc_only(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
