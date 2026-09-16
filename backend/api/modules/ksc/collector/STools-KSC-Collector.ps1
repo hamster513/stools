@@ -20,7 +20,10 @@
 .PARAMETER SkipProducts Не запрашивать продукты и компоненты по каждому хосту (быстрее).
 .PARAMETER PageSize    Размер страницы при чтении хостов, по умолчанию 500.
 .PARAMETER Scheme      https (по умолчанию) или http — только для тестов.
-.PARAMETER PlainPassword Пароль открытым текстом — только для тестов.
+
+.NOTES
+  Для автоматизации пароль можно передать переменной окружения
+  STOOLS_KSC_PASSWORD; в командной строке пароль не передаётся.
 
 .EXAMPLE
   .\STools-KSC-Collector.ps1 -Server ksc01.corp.local -User audit -Internal
@@ -38,8 +41,7 @@ param(
   [switch]$SkipTlsCheck,
   [switch]$SkipProducts,
   [int]$PageSize = 500,
-  [ValidateSet("https", "http")][string]$Scheme = "https",
-  [string]$PlainPassword
+  [ValidateSet("https", "http")][string]$Scheme = "https"
 )
 
 Set-StrictMode -Version Latest
@@ -48,7 +50,7 @@ $ErrorActionPreference = "Stop"
 $FormatVersion = "stools-ksc/1"
 $CollectorVersion = "1.0"
 
-if ($PlainPassword) { $plain = $PlainPassword }
+if ($env:STOOLS_KSC_PASSWORD) { $plain = $env:STOOLS_KSC_PASSWORD }
 else {
   if (-not $Password) { $Password = Read-Host -AsSecureString "Пароль $User" }
   $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)

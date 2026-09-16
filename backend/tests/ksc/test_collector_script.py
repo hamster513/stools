@@ -53,9 +53,10 @@ def _run_script(tmp_path: Path, port: int, variant: str) -> Path:
         out.mkdir()
         cmd = [
             "docker", "run", "--rm", "--add-host=host.docker.internal:host-gateway",
+            "-e", f"STOOLS_KSC_PASSWORD={PASSWORD}",
             "-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{out}:/out", IMAGE,
             "pwsh", "-File", "/script/STools-KSC-Collector.ps1", "-Server", "host.docker.internal", "-Port", str(port), "-Scheme", "http",
-            "-User", USER, "-PlainPassword", PASSWORD, "-Internal", "-OutputPath", "/out/ksc.json.gz",
+            "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz",
         ]
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
         assert run.returncode == 0, run.stdout + run.stderr
