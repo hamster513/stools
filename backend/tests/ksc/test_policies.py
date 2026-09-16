@@ -20,3 +20,20 @@ def test_policies_tree(auth_client: TestClient) -> None:
     lab = next(g for g in body["groups"] if g["name"] == "Lab")
     assert lab["level"] == 2 and lab["policies"][0]["name"] == "KES lab" and lab["policies"][0]["accept_parent"] is False
     assert auth_client.get("/api/ksc/snapshots/999/policies").status_code == 404
+
+
+def test_policies_orphan_group_is_shown(auth_client: TestClient) -> None:
+    raw = build_export()
+    raw["groups"].append({"id": 7, "name": "Orphan", "parentId": 99, "grp_full_name": "Orphan", "level": 1})
+    ws01 = next(h for h in raw["hosts"] if h["KLHST_WKS_DN"] == "WS01")
+    ws01["KLHST_WKS_GROUPID"] = 7
+    assert upload(auth_client, raw)["status"] == "done"
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    body = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/policies").json()
+    paths = [g["path"] for g in body["groups"]]
+    assert paths == [
+        "Managed devices", "Managed devices/Workstations", "Managed devices/Workstations/Lab",
+        "Managed devices/Servers", "Unassigned devices", "Orphan",
+    ]
+    orphan = next(g for g in body["groups"] if g["path"] == "Orphan")
+    assert orphan["hosts"] == 1

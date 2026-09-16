@@ -123,6 +123,15 @@ def _group_tasks(idx: ExportIndex, group_id: int, ancestors: set[int]) -> list[T
     return out
 
 
+def _is_orphan(idx: ExportIndex, g: dict[str, Any]) -> bool:
+    """Группа с `parentId`, указывающим на id, отсутствующий в выгрузке (частичный/битый экспорт)."""
+    parent_id = g.get("parentId")
+    if parent_id is None:
+        return False
+    pid = _int(parent_id)
+    return pid >= 0 and pid not in idx.groups_by_id
+
+
 def _walk(idx: ExportIndex, group_id: int, level: int, findings_by_target: dict[str, list[KscFinding]], out: list[GroupView]) -> None:
     g = idx.groups_by_id[group_id]
     path = idx.group_path(group_id)
@@ -164,7 +173,9 @@ def get_policies(
     for f in rows:
         findings_by_target.setdefault(f.target, []).append(f)
     roots = sorted(gid for gid, g in idx.groups_by_id.items() if _int(g.get("parentId")) < 0)
+    # Группы с потерянным родителем (id родителя нет в выгрузке) — тоже корни, иначе их поддерево пропадает.
+    orphans = sorted(gid for gid, g in idx.groups_by_id.items() if _is_orphan(idx, g))
     out: list[GroupView] = []
-    for r in roots:
+    for r in roots + orphans:
         _walk(idx, r, 0, findings_by_target, out)
     return PoliciesResponse(groups=out)
