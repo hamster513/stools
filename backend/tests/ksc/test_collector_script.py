@@ -151,6 +151,7 @@ def test_script_reads_through_live_params_wrappers(tmp_path: Path) -> None:
     assert set(export.effective_policies) == {"0", "1", "2", "3", "4"} and export.server.name == "ksc01"
     assert len(export.role_assignments) == 3 and len(export.internal_users) == 2
     assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
+    assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -160,4 +161,13 @@ def test_script_survives_denied_sections(tmp_path: Path) -> None:
     assert export.role_assignments == [] and export.internal_users == []
     assert export.security == {"two_factor_required_for_all": None}
     assert export.server_certs == {} and export.secondary_servers == [] and export.update_agents == []
+    assert len(export.hosts) == len(build_export()["hosts"]) and len(export.policies) == 3
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_certs_all_or_nothing_on_partial_denial(tmp_path: Path) -> None:
+    """Отказ на функции 2 сертификата не должен оставлять в файле частично собранный server_certs
+    (функция 1 успевает собраться раньше отказа на функции 2)."""
+    export = load_export(_run_script(tmp_path, 18310, "denied_cert2").read_bytes())
+    assert export.server_certs == {}
     assert len(export.hosts) == len(build_export()["hosts"]) and len(export.policies) == 3

@@ -67,7 +67,7 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
             return default
 
     static = _ret(client.call("HostGroup.GetStaticInfo", {"pValues": STATIC_FIELDS})) or {}
-    if not static:
+    if not any(k in static for k in STATIC_FIELDS):
         static = _ret(client.call("HostGroup.GetStaticInfo", {"pValues": None})) or {}
     domains = _ret(client.call("HostGroup.GetDomains")) or []
     ga = client.call("HostGroup.FindGroups", {"wstrFilter": "", "vecFieldsToReturn": GROUP_FIELDS, "vecFieldsToOrder": [], "lMaxLifeTime": 600})["strAccessor"]

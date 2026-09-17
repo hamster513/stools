@@ -75,9 +75,18 @@ DENIED_METHODS = {"SrvView.ResetIterator", "TotpGlobalSettings.Get2FaRequiredFor
 #: Имена srvview → секция синтетики.
 SRVVIEW_SECTIONS = {"AdmGroupsAclRolesSrvViewName": "role_assignments", "GlobalUsersListSrvViewName": "internal_users"}
 
+#: Фильтр, которым сборщики должны запрашивать внутренние учётки — минимум персональных данных.
+INTERNAL_USERS_FILTER = "(ul_InternalUser = 1)"
+
+#: Не внутренняя учётка — попадает в ответ только если сборщик прислал не тот фильтр (или пустой).
+#: В синтетику (build_export) не входит: это проверка на утечку фильтра, а не часть эталонных данных.
+NON_INTERNAL_USER = {"ul_llTrusteeId": 99, "ul_nSplUserId": 0, "ul_wstrDisplayName": "Петров П.П.", "ul_wstrSamAccountName": "petrov",
+                      "ul_wstrPrincipalName": "petrov@corp.local", "ul_bUser": True, "ul_Builtin": False, "ul_InternalUser": False}
+
 
 class FakeKsc:
-    def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "", deny: set[str] | None = None) -> None:
+    def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "",
+                 deny: set[str] | None = None, deny_cert_functions: set[int] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
@@ -85,11 +94,15 @@ class FakeKsc:
         self.wrap = variant == "params"
         #: Имена методов, на которые отвечать 403 (нет прав).
         self.deny: set[str] = set(deny) if deny is not None else (set(DENIED_METHODS) if variant == "denied" else set())
+        #: Номера функций CertPoolCtrl.GetCertificateInfo, на которые отвечать 403 (остальные — как обычно).
+        self.deny_cert_functions: set[int] = set(deny_cert_functions) if deny_cert_functions is not None else ({2} if variant == "denied_cert2" else set())
         #: HostGroup.GetStaticInfo с непустым pValues отдаёт пусто; полный ответ — только на pValues=null.
         self.static_needs_null = False
         #: Заголовки последнего ответа — оба транспорта отдают их клиенту.
         self.response_headers: dict[str, str] = {}
         self.calls: list[str] = []
+        #: (wstrViewName, wstrFilter) каждого SrvView.ResetIterator — проверить, что сборщик не потерял фильтр.
+        self.srvview_filters: list[tuple[str, str]] = []
         self.accessors: dict[str, list[dict[str, Any]]] = {}
         self.iterators: dict[str, list[dict[str, Any]]] = {}
         self.fail_login = False
@@ -177,9 +190,16 @@ class FakeKsc:
             task = next((t for t in d["tasks"] if t.get("TASK_UNIQUE_ID") == body.get("strTask")), None)
             return 200, {"PxgRetVal": (task or {}).get("statistics") or {"1": 0, "4": 3}}
         if method == "SrvView.ResetIterator":
-            records = d.get(SRVVIEW_SECTIONS.get(body.get("wstrViewName", ""), ""), [])
+            view = body.get("wstrViewName", "")
+            flt = body.get("wstrFilter", "")
+            self.srvview_filters.append((view, flt))
+            records = list(d.get(SRVVIEW_SECTIONS.get(view, ""), []))
+            # Фильтр потерян или не тот — учётки, кроме внутренних, тоже попадают в ответ:
+            # так тест видит, что сборщик не запросил минимум персональных данных.
+            if view == "GlobalUsersListSrvViewName" and flt != INTERNAL_USERS_FILTER:
+                records = [*records, NON_INTERNAL_USER]
             iid = f"sv{len(self.iterators)}"
-            self.iterators[iid] = list(records)
+            self.iterators[iid] = records
             return 200, {"wstrIteratorId": iid}
         if method == "SrvView.GetRecordCount":
             return 200, {"PxgRetVal": len(self.iterators[body["wstrIteratorId"]])}
@@ -192,6 +212,8 @@ class FakeKsc:
         if method == "TotpGlobalSettings.Get2FaRequiredForAll":
             return 200, {"PxgRetVal": d["security"]["two_factor_required_for_all"]}
         if method == "CertPoolCtrl.GetCertificateInfo":
+            if body.get("nFunction") in self.deny_cert_functions:
+                return 403, {}
             return 200, {"PxgRetVal": d["server_certs"].get(str(body.get("nFunction"))) or {}}
         if method == "ServerHierarchy.GetChildServers":
             return 200, {"PxgRetVal": d["secondary_servers"]}

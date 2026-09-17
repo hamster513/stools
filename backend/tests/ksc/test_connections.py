@@ -159,6 +159,26 @@ def test_collect_survives_denied_sections(monkeypatch: Any) -> None:
     assert len(export.server.warnings) == 6  # каждая из шести новых секций предупреждает отдельно
 
 
+def test_collect_certs_all_or_nothing_on_partial_denial(monkeypatch: Any) -> None:
+    """Отказ на одной из функций сертификата (2..4) не должен оставлять частично собранную секцию."""
+    f = FakeKsc(deny_cert_functions={2})
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert export.server_certs == {}  # функция 1 успела бы собраться раньше отказа на функции 2
+    assert len(export.server.warnings) == 1 and "server_certs" in export.server.warnings[0]
+
+
+def test_collect_sends_internal_users_filter(fake: FakeKsc) -> None:
+    """Минимум персональных данных: запрашиваются только внутренние учётки, фильтр не теряется."""
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    assert ("GlobalUsersListSrvViewName", "(ul_InternalUser = 1)") in fake.srvview_filters
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert export.internal_users == build_export()["internal_users"]
+
+
 def test_collect_static_info_retry_with_null(monkeypatch: Any) -> None:
     f = FakeKsc()
     f.static_needs_null = True
@@ -179,3 +199,7 @@ def test_collect_reads_through_live_params_wrappers(monkeypatch: Any) -> None:
     assert all("statistics" in t for t in raw["tasks"])
     export = load_export(__import__("json").dumps(raw).encode())
     assert len(export.hosts) == 14 and export.hosts[0]["KLHST_WKS_DN"] == "WS01" and len(export.host_components) == 10
+    expected = build_export()
+    assert export.role_assignments == expected["role_assignments"] and export.internal_users == expected["internal_users"]
+    assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
+    assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]

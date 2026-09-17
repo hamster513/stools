@@ -392,11 +392,13 @@ try {
   Write-Step "Сертификаты"
   $serverCerts = @{}
   try {
+    $certs = @{}
     for ($n = 1; $n -le 4; $n++) {
       $c = (Invoke-Ksc "CertPoolCtrl.GetCertificateInfo" @{ nVServerId = -1; nFunction = $n }).PxgRetVal
-      if ($null -ne $c -and @($c.PSObject.Properties).Count -gt 0) { $serverCerts["$n"] = $c }
+      if ($null -ne $c -and @($c.PSObject.Properties).Count -gt 0) { $certs["$n"] = $c }
     }
-  } catch { Write-Warning ("сертификаты: {0}" -f $_.Exception.Message); [void]$warnings.Add("сертификаты: $($_.Exception.Message)") }
+    $serverCerts = $certs   # целиком или никак: частичный результат при обрыве середины цикла не остаётся
+  } catch { $serverCerts = @{}; Write-Warning ("сертификаты: {0}" -f $_.Exception.Message); [void]$warnings.Add("сертификаты: $($_.Exception.Message)") }
 
   Write-Step "Подчинённые серверы"
   $secondaryServers = @()
