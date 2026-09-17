@@ -13,6 +13,14 @@
 (старая выгрузка или сборщику не хватило прав на метод) разбирается как
 раньше и не даёт находок по этим секциям.
 
+Из контейнера сертификата (`CertPoolCtrl.GetCertificateInfo`) в файл идёт
+только поле `CPublic` — приватная часть и прочие поля контейнера не
+сохраняются. Отказ в правах (HTTP 403) на этот метод считается отказом на
+весь метод: `server_certs` остаётся пустой, в `server.warnings` одна
+строка. Любая другая ошибка функции (`PxgError`, ответ без `CPublic`)
+значит, что сертификата для этого назначения нет: функция пропускается,
+остальные (1..4) собираются как обычно.
+
 Живой KSC заворачивает каждую запись списка и каждый вложенный контейнер в
 `{"type": "params", "value": {…}}`. Сборщики (PowerShell и онлайн-режим)
 читают сквозь эту обёртку, но в файл кладут ответ как пришёл — не
@@ -84,8 +92,10 @@ DELETE /verdicts/{key}?server_id=      204
 только `target` (путь группы, имя политики/задачи/ключа), `host` пуст.
 Находки про сервер (`KSC_2FA_OFF`, `KSC_INTERNAL_ADMIN`, `KSC_ADMINS`,
 `SERVER_CERT`, `SECONDARY_SERVER_STALE`) не привязаны ни к хосту, ни к
-группе: `target` — учётка, роль, сертификат или подчинённый сервер;
-находки этого вида отдаёт `GET /server` (ниже), а не `/findings`.
+группе: `target` — учётка (UPN, а если его нет — отображаемое имя),
+сертификат или подчинённый сервер. Это обычные находки: их отдаёт
+`/findings` наравне с остальными, а `GET /server` (ниже) показывает те же
+строки, отфильтрованные по коду проверки.
 
 Ключ находки про хост (`host_key`) строится из FQDN устройства
 (`KLHST_WKS_FQDN`), а не из отображаемого имени (`KLHST_WKS_DN`) — оно не
@@ -121,7 +131,6 @@ GET  /snapshots/{id}/policies          {groups: [{id, name, path, level, hosts,
 ```
 GET  /snapshots/{id}/server            {two_factor_required_for_all,
                                         admins: [{account, internal, role, group}],
-                                        internal_users: [{name, login, builtin}],
                                         certs: [{function, subject, not_after, days_left}],
                                         secondary_servers: [{name, address, version,
                                                              last_connected, status}],
@@ -133,9 +142,12 @@ GET  /snapshots/{id}/server            {two_factor_required_for_all,
 Данные из сохранённого файла выгрузки, как у `/policies` (`404`, если файл
 снапшота удалён с диска). `admins` — держатели ролей из `admin_role_patterns`
 (и внутренние, и доменные учётки), `internal` — признак внутренней учётки
-KSC (не доменной). `internal_users` — весь список внутренних учёток
-(`GlobalUsersListSrvViewName`, `ul_InternalUser = 1`), не только
-администраторы. `certs` — записи `server_certs`, у которых сертификат
+KSC (не доменной); `account` — то же значение, что `target` находок о
+ролях (UPN, иначе отображаемое имя), поэтому находки пристают к строке
+таблицы. Секция `internal_users` в выгрузке остаётся (проверка про
+административные роли читает `role_assignments`, список внутренних учёток
+пригодится дальше), но в ответе ручки её нет — на экране он не
+показывается. `certs` — записи `server_certs`, у которых сертификат
 разобран (`cryptography` читает `CPublic`); `function` — номер функции
 `CertPoolCtrl.GetCertificateInfo` (`1`..`4`) как строка, не расшифровывается.
 `secondary_servers.status` — сырой код `KLSRVH_SRV_STATUS`: перечисление не
@@ -181,6 +193,12 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 административными: по умолчанию `Main Administrator`, `Administrator`,
 `Главный администратор`, `Администратор` — используются `KSC_INTERNAL_ADMIN`
 и `KSC_ADMINS`).
+
+Границы порогов: `cert_days` — находка есть, когда дней до истечения
+**меньше или равно** порогу (60 дней → находка); `reboot_pending_days`,
+`task_stale_days`, `agent_silent_days` — находка есть, когда возраст
+**строго больше** порога (ровно 7 дней → находки нет). Возраст без даты
+вовсе («никогда») считается превышением порога.
 
 `kind` задач: `import_file | collect | reanalyze`.
 
@@ -249,6 +267,12 @@ SECONDARY_SERVER_STALE  Подчинённый сервер молчит
   (`Tasks.GetTaskStatistics`), а не по истории запусков: сколько раз задача
   проваливалась и когда — KSC этой проверке не сообщает, только текущий
   снимок счётчиков устройств.
+- **Точки распространения** (`update_agents`, `UaControl.GetUpdateAgentsList`
+  → `pUasArr`): имена полей записи (`KLUAGNT_HOST_DN`, `KLUAGNT_HOST_NAME`,
+  `KLUAGNT_GROUP_ID`) взяты из документации и на живом сервере не
+  проверены — пока это не сделано на первой выгрузке, блок «Точки
+  распространения» на экране «Сервер KSC» может показывать пустые хост и
+  группу, хотя сама секция собрана.
 - **`SecondaryServerView.status`** (`/server`) и `extra.edr_status`
   (`/hosts`) — сырые коды KSC (`KLSRVH_SRV_STATUS`, `KLHST_WKS_EDR_STATUS`):
   их перечисления не документированы в открытом Open API, поэтому STools
