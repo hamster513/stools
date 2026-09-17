@@ -9,6 +9,16 @@
   есть в один JSON (gzip). Файл загружается в STools → Антивирус →
   Настройки и данные.
 
+  Что собирается: группы, хосты (включая сборку ОС, архитектуру, тип
+  виртуализации, признак ожидающей перезагрузки), продукты и компоненты,
+  политики, задачи со статистикой, лицензии, а также роли и внутренние
+  учётные записи KSC, состояние обязательной двухэтапной проверки,
+  сертификат сервера, подчинённые серверы и точки распространения. Из
+  учётных записей — только отображаемое имя, логин, UPN и признаки
+  внутренней/встроенной учётки; весь каталог AD не выгружается. Учётке без
+  прав на отдельную секцию сбор не мешает: секция остаётся пустой, а
+  причина попадает в предупреждения (Write-Warning и server.warnings).
+
 .PARAMETER ConfigPath  Файл настроек (JSON): сервер, учётка, пароль, секрет второго фактора и остальное.
                        Параметры командной строки главнее файла. Шаблон создаёт -InitConfig.
 .PARAMETER InitConfig  Записать шаблон файла настроек по указанному пути и выйти.
@@ -242,25 +252,54 @@ function Read-Accessor([string]$accessor) {
   return ,$items.ToArray()
 }
 
+# SrvView: тот же итератор, что ChunkAccessor, но с ResetIterator/GetRecordRange (nEnd включительно) и своим ReleaseIterator.
+function Read-SrvView([string]$view, [string[]]$fields, [string]$filter = "") {
+  $it = (Invoke-Ksc "SrvView.ResetIterator" @{ wstrViewName = $view; wstrFilter = $filter; vecFieldsToReturn = $fields; vecFieldsToOrder = @(); pParams = @{}; lifetimeSec = 600 }).wstrIteratorId
+  try {
+    $total = (Invoke-Ksc "SrvView.GetRecordCount" @{ wstrIteratorId = $it }).PxgRetVal
+    $items = New-Object System.Collections.ArrayList
+    $start = 0
+    while ($start -lt $total) {
+      $end = [Math]::Min($start + 500, $total) - 1
+      $chunk = Invoke-Ksc "SrvView.GetRecordRange" @{ wstrIteratorId = $it; nStart = $start; nEnd = $end }
+      $arr = @((Prop (Prop $chunk "pRecords") "KLCSP_ITERATOR_ARRAY") | Where-Object { $null -ne $_ })
+      if ($arr.Count -eq 0) { break }
+      foreach ($i in $arr) { [void]$items.Add($i) }
+      $start += $arr.Count
+    }
+    return ,$items.ToArray()
+  } finally {
+    Invoke-Ksc "SrvView.ReleaseIterator" @{ wstrIteratorId = $it } | Out-Null
+  }
+}
+
 $HostFields = @(
   "KLHST_WKS_HOSTNAME","KLHST_WKS_DN","KLHST_WKS_WINHOSTNAME","KLHST_WKS_WINDOMAIN","KLHST_WKS_DNSDOMAIN","KLHST_WKS_DNSNAME","KLHST_WKS_FQDN",
   "KLHST_WKS_GROUPID","KLHST_WKS_OS_NAME","KLHST_WKS_OS_VER_MAJOR","KLHST_WKS_OS_VER_MINOR","KLHST_WKS_IP_LONG","KLHST_WKS_CTYPE",
   "KLHST_WKS_STATUS","KLHST_WKS_STATUS_ID","KLHST_WKS_STATUS_MASK","KLHST_WKS_STATUS_HSDP","KLHST_WKS_RTP_STATE","KLHST_WKS_RTP_ERROR_CODE",
   "KLHST_WKS_RTP_AV_VERSION","KLHST_WKS_RTP_AV_BASES_TIME","KLHST_WKS_LAST_FULLSCAN","KLHST_WKS_LAST_VISIBLE","KLHST_WKS_LAST_NAGENT_CONNECTED",
   "KLHST_WKS_LAST_UPDATE","KLHST_WKS_LAST_INFOUDATE","KLHST_WKS_NAG_VERSION","KLHST_WKS_VIRUS_COUNT","KLHST_WKS_UNCURED_COUNT",
-  "KLHST_WKS_FROM_UNASSIGNED","KLHST_WKS_RBT_REQUIRED","KLHST_WKS_LAST_SYSTEM_START","KLHST_WKS_CREATED"
+  "KLHST_WKS_FROM_UNASSIGNED","KLHST_WKS_RBT_REQUIRED","KLHST_WKS_LAST_SYSTEM_START","KLHST_WKS_CREATED",
+  "KLHST_WKS_OS_BUILD_NUMBER","KLHST_WKS_CPU_ARCH","KLHST_WKS_RBT_REQUEST_REASON","KLHST_WKS_RBT_REQUEST_TIME",
+  "HST_VM_TYPE","KLHST_MANAGED_OTHER_SERVER","KLHST_WKS_EDR_STATUS","KLHST_WKS_KEEP_CONNECTION"
 )
 $GroupFields = @("id","name","parentId","grp_full_name","level","hostsNum","childGroupsNum","creationDate","lastUpdate")
 $LicenseFields = @("KLLIC_SERIAL","KLLIC_PROD_NAME","KLLIC_KEY_TYPE","KLLIC_CREATION_DATE","KLLIC_LIMIT_DATE","KLLIC_LICENSE_PERIOD","KLLIC_LIC_COUNT",
   "KLLIC_NHOSTS_ASCURRENT","KLLIC_NHOSTS_ASNEXT","KLLIC_USED_BY_ADM_SRV","KLLICSRV_KEY_INSTALLED","KLLIC_APP_ID","KLLIC_MAJ_VER")
+$RoleFields = @("nRoleId","wstrRoleName","wstrRoleDisplayName","nInternalUserId","wstrTrusteeDisplayName","wstrUserPrincipalName","nGroupId","wstrGroupName")
+$UserFields = @("ul_llTrusteeId","ul_nSplUserId","ul_wstrDisplayName","ul_wstrSamAccountName","ul_wstrPrincipalName","ul_bUser","ul_Builtin","ul_InternalUser")
 
 Write-Host "STools KSC Collector $CollectorVersion → $base" -ForegroundColor Green
+$warnings = New-Object System.Collections.ArrayList
 Write-Step "Вход"
 $script:session = Start-KscSession
 if (-not $script:session) { throw "KSC не выдал сессию" }
 try {
   Write-Step "Сервер"
   $static = Unwrap (Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = @("KLADMSRV_SERVER_VERSION_ID","KLADMSRV_SERVER_HOSTNAME","KLADMSRV_PRODUCT_FULL_VERSION") }) "PxgRetVal")
+  if (-not (Prop $static "KLADMSRV_SERVER_HOSTNAME") -and -not (Prop $static "KLADMSRV_SERVER_VERSION_ID") -and -not (Prop $static "KLADMSRV_PRODUCT_FULL_VERSION")) {
+    $static = Unwrap (Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = $null }) "PxgRetVal")
+  }
   $domains = @((Prop (Invoke-Ksc "HostGroup.GetDomains" "{}") "PxgRetVal") | Where-Object { $null -ne $_ })
 
   Write-Step "Группы"
@@ -335,6 +374,39 @@ try {
     }
     Invoke-Ksc "GroupSyncIterator.ReleaseIterator" @{ szwIterator = $li } | Out-Null
   }
+
+  Write-Step "Роли и внутренние учётки"
+  $roleAssignments = @()
+  try { $roleAssignments = Read-SrvView "AdmGroupsAclRolesSrvViewName" $RoleFields }
+  catch { Write-Warning ("роли: {0}" -f $_.Exception.Message); [void]$warnings.Add("роли: $($_.Exception.Message)") }
+  $internalUsers = @()
+  try { $internalUsers = Read-SrvView "GlobalUsersListSrvViewName" $UserFields "(ul_InternalUser = 1)" }
+  catch { Write-Warning ("внутренние учётки: {0}" -f $_.Exception.Message); [void]$warnings.Add("внутренние учётки: $($_.Exception.Message)") }
+
+  Write-Step "Двухэтапная проверка"
+  $twoFactor = $null
+  try { $twoFactor = (Invoke-Ksc "TotpGlobalSettings.Get2FaRequiredForAll" "{}").PxgRetVal }
+  catch { Write-Warning ("2FA: {0}" -f $_.Exception.Message); [void]$warnings.Add("2FA: $($_.Exception.Message)") }
+  $security = @{ two_factor_required_for_all = $twoFactor }
+
+  Write-Step "Сертификаты"
+  $serverCerts = @{}
+  try {
+    for ($n = 1; $n -le 4; $n++) {
+      $c = (Invoke-Ksc "CertPoolCtrl.GetCertificateInfo" @{ nVServerId = -1; nFunction = $n }).PxgRetVal
+      if ($null -ne $c -and @($c.PSObject.Properties).Count -gt 0) { $serverCerts["$n"] = $c }
+    }
+  } catch { Write-Warning ("сертификаты: {0}" -f $_.Exception.Message); [void]$warnings.Add("сертификаты: $($_.Exception.Message)") }
+
+  Write-Step "Подчинённые серверы"
+  $secondaryServers = @()
+  try { $secondaryServers = @((Prop (Invoke-Ksc "ServerHierarchy.GetChildServers" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
+  catch { Write-Warning ("иерархия: {0}" -f $_.Exception.Message); [void]$warnings.Add("иерархия: $($_.Exception.Message)") }
+
+  Write-Step "Точки распространения"
+  $updateAgents = @()
+  try { $updateAgents = @((Prop (Invoke-Ksc "UaControl.GetUpdateAgentsList" "{}") "pUasArr") | Where-Object { $null -ne $_ }) }
+  catch { Write-Warning ("точки распространения: {0}" -f $_.Exception.Message); [void]$warnings.Add("точки распространения: $($_.Exception.Message)") }
 } finally {
   try { Invoke-Ksc "Session.EndSession" "{}" | Out-Null } catch {}
 }
@@ -343,10 +415,12 @@ $serverName = [string](Prop $static "KLADMSRV_SERVER_HOSTNAME")
 if (-not $serverName) { $serverName = $Server }
 $export = [ordered]@{
   format = $FormatVersion
-  server = @{ name = $serverName; version = [string](Prop $static "KLADMSRV_PRODUCT_FULL_VERSION"); collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); collector = "powershell"; collector_version = $CollectorVersion; user = $User; host = $Server }
+  server = @{ name = $serverName; version = [string](Prop $static "KLADMSRV_PRODUCT_FULL_VERSION"); collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); collector = "powershell"; collector_version = $CollectorVersion; user = $User; host = $Server; warnings = @($warnings.ToArray()) }
   groups = $groups; hosts = $hosts; host_products = $products; host_components = $components
   policies = $policies; effective_policies = $effective; tasks = $tasks.ToArray(); licenses = $licenses.ToArray()
   static = $static; domains = $domains
+  role_assignments = @($roleAssignments); internal_users = @($internalUsers); security = $security
+  server_certs = $serverCerts; secondary_servers = @($secondaryServers); update_agents = @($updateAgents)
 }
 
 $defaultName = "ksc-{0}-{1}.json.gz" -f $serverName, (Get-Date -Format "yyyyMMdd-HHmm")

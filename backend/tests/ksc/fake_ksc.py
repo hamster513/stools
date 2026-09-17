@@ -68,13 +68,25 @@ def wrap_like_live(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+#: Методы, на которые отвечает 403 в варианте "denied".
+DENIED_METHODS = {"SrvView.ResetIterator", "TotpGlobalSettings.Get2FaRequiredForAll", "CertPoolCtrl.GetCertificateInfo",
+                  "ServerHierarchy.GetChildServers", "UaControl.GetUpdateAgentsList"}
+
+#: Имена srvview → секция синтетики.
+SRVVIEW_SECTIONS = {"AdmGroupsAclRolesSrvViewName": "role_assignments", "GlobalUsersListSrvViewName": "internal_users"}
+
+
 class FakeKsc:
-    def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "") -> None:
+    def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "", deny: set[str] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
         #: variant="params" — записи в обёртках, как у живого сервера.
         self.wrap = variant == "params"
+        #: Имена методов, на которые отвечать 403 (нет прав).
+        self.deny: set[str] = set(deny) if deny is not None else (set(DENIED_METHODS) if variant == "denied" else set())
+        #: HostGroup.GetStaticInfo с непустым pValues отдаёт пусто; полный ответ — только на pValues=null.
+        self.static_needs_null = False
         #: Заголовки последнего ответа — оба транспорта отдают их клиенту.
         self.response_headers: dict[str, str] = {}
         self.calls: list[str] = []
@@ -117,12 +129,16 @@ class FakeKsc:
             return 200, {"PxgRetVal": SESSION}
         if headers.get("x-ksc-session") != SESSION:
             return 401, {}
+        if method in self.deny:
+            return 403, {}
         if self.fail_after == method:
             return 200, {"PxgError": {"code": 1, "message": "boom"}}  # KSC отдаёт ошибки метода со статусом 200
         d = self.data
         if method == "Session.EndSession":
             return 200, {}
         if method == "HostGroup.GetStaticInfo":
+            if self.static_needs_null and body.get("pValues"):
+                return 200, {"PxgRetVal": {}}
             return 200, {"PxgRetVal": d["static"]}
         if method == "HostGroup.GetDomains":
             return 200, {"PxgRetVal": d["domains"]}
@@ -158,7 +174,29 @@ class FakeKsc:
         if method == "Tasks.ReleaseTasksIterator":
             return 200, {}
         if method == "Tasks.GetTaskStatistics":
-            return 200, {"PxgRetVal": {"1": 0, "4": 3}}
+            task = next((t for t in d["tasks"] if t.get("TASK_UNIQUE_ID") == body.get("strTask")), None)
+            return 200, {"PxgRetVal": (task or {}).get("statistics") or {"1": 0, "4": 3}}
+        if method == "SrvView.ResetIterator":
+            records = d.get(SRVVIEW_SECTIONS.get(body.get("wstrViewName", ""), ""), [])
+            iid = f"sv{len(self.iterators)}"
+            self.iterators[iid] = list(records)
+            return 200, {"wstrIteratorId": iid}
+        if method == "SrvView.GetRecordCount":
+            return 200, {"PxgRetVal": len(self.iterators[body["wstrIteratorId"]])}
+        if method == "SrvView.GetRecordRange":
+            items = self.iterators[body["wstrIteratorId"]][body["nStart"] : body["nEnd"] + 1]
+            return 200, {"pRecords": {"KLCSP_ITERATOR_ARRAY": items}}
+        if method == "SrvView.ReleaseIterator":
+            self.iterators.pop(body.get("wstrIteratorId"), None)
+            return 200, {}
+        if method == "TotpGlobalSettings.Get2FaRequiredForAll":
+            return 200, {"PxgRetVal": d["security"]["two_factor_required_for_all"]}
+        if method == "CertPoolCtrl.GetCertificateInfo":
+            return 200, {"PxgRetVal": d["server_certs"].get(str(body.get("nFunction"))) or {}}
+        if method == "ServerHierarchy.GetChildServers":
+            return 200, {"PxgRetVal": d["secondary_servers"]}
+        if method == "UaControl.GetUpdateAgentsList":
+            return 200, {"pUasArr": d["update_agents"]}
         if method == "LicenseKeys.EnumKeys":
             if not d["licenses"]:  # ключей нет — KSC не отдаёт итератор
                 return 200, {"lKeyCount": 0, "wstrIterator": ""}

@@ -49,6 +49,16 @@ def test_load_export_rejects_foreign_or_broken() -> None:
         load_export(json.dumps(raw).encode())
 
 
+def test_load_export_without_new_sections_has_empty_defaults() -> None:
+    """Файл без секций блока 1 разбирается как раньше и не даёт новых находок."""
+    raw = build_export()
+    for key in ("role_assignments", "internal_users", "security", "server_certs", "secondary_servers", "update_agents"):
+        raw.pop(key, None)
+    export = load_export(json.dumps(raw).encode())
+    assert export.role_assignments == [] and export.internal_users == [] and export.security == {}
+    assert export.server_certs == {} and export.secondary_servers == [] and export.update_agents == []
+
+
 def test_index_parses_hosts() -> None:
     idx = ExportIndex(load_export(export_bytes()))
     by = {h.name: h for h in idx.hosts}

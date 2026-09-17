@@ -125,6 +125,49 @@ def test_collect_without_password_and_when_busy(auth_client: TestClient, db_sess
     assert auth_client.post(f"/api/ksc/connections/{cid}/collect").status_code == 409
 
 
+def test_collect_gathers_server_sections(fake: FakeKsc) -> None:
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    expected = build_export()
+    assert export.role_assignments == expected["role_assignments"]
+    assert export.internal_users == expected["internal_users"]
+    assert export.security == expected["security"]
+    assert "CPublic" in export.server_certs.get("1", {})
+    assert export.secondary_servers == expected["secondary_servers"]
+    assert export.update_agents == expected["update_agents"]
+    ws04 = next(h for h in export.hosts if h["KLHST_WKS_DN"] == "WS04")
+    for field in ("KLHST_WKS_OS_BUILD_NUMBER", "KLHST_WKS_CPU_ARCH", "HST_VM_TYPE", "KLHST_WKS_RBT_REQUEST_REASON", "KLHST_WKS_RBT_REQUEST_TIME"):
+        assert field in ws04
+    ws01 = next(h for h in export.hosts if h["KLHST_WKS_DN"] == "WS01")
+    assert ws01["KLHST_WKS_OS_BUILD_NUMBER"] == 22631 and ws01["KLHST_WKS_CPU_ARCH"] == 2
+    assert not export.server.warnings
+
+
+def test_collect_survives_denied_sections(monkeypatch: Any) -> None:
+    deny = {"SrvView.ResetIterator", "TotpGlobalSettings.Get2FaRequiredForAll", "CertPoolCtrl.GetCertificateInfo",
+            "ServerHierarchy.GetChildServers", "UaControl.GetUpdateAgentsList"}
+    f = FakeKsc(deny=deny)
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert export.role_assignments == [] and export.internal_users == []
+    assert export.security == {"two_factor_required_for_all": None}
+    assert export.server_certs == {} and export.secondary_servers == [] and export.update_agents == []
+    assert len(export.hosts) == 14 and len(export.policies) == 3
+    assert len(export.server.warnings) == 6  # каждая из шести новых секций предупреждает отдельно
+
+
+def test_collect_static_info_retry_with_null(monkeypatch: Any) -> None:
+    f = FakeKsc()
+    f.static_needs_null = True
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    assert raw["static"]["KLADMSRV_SERVER_HOSTNAME"] == "ksc01"
+
+
 def test_collect_reads_through_live_params_wrappers(monkeypatch: Any) -> None:
     """С обёртками, как у живого сервера, сборщик всё равно запрашивает продукты хостов и политики каждой группы."""
     f = FakeKsc(variant="params")

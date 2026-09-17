@@ -103,6 +103,7 @@ class ServerInfo(BaseModel):
     collector_version: str = ""
     user: str = ""
     host: str = ""
+    warnings: list[str] = Field(default_factory=list)
 
 
 class KscExport(BaseModel):
@@ -120,6 +121,12 @@ class KscExport(BaseModel):
     licenses: list[dict[str, Any]] = Field(default_factory=list)
     static: dict[str, Any] = Field(default_factory=dict)
     domains: list[dict[str, Any]] = Field(default_factory=list)
+    role_assignments: list[dict[str, Any]] = Field(default_factory=list)
+    internal_users: list[dict[str, Any]] = Field(default_factory=list)
+    security: dict[str, Any] = Field(default_factory=dict)
+    server_certs: dict[str, Any] = Field(default_factory=dict)
+    secondary_servers: list[dict[str, Any]] = Field(default_factory=list)
+    update_agents: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExportFormatError(ValueError):

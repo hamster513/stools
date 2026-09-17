@@ -17,6 +17,8 @@ HOST_FIELDS = [
     "KLHST_WKS_RTP_AV_VERSION", "KLHST_WKS_RTP_AV_BASES_TIME", "KLHST_WKS_LAST_FULLSCAN", "KLHST_WKS_LAST_VISIBLE", "KLHST_WKS_LAST_NAGENT_CONNECTED",
     "KLHST_WKS_LAST_UPDATE", "KLHST_WKS_LAST_INFOUDATE", "KLHST_WKS_NAG_VERSION", "KLHST_WKS_VIRUS_COUNT", "KLHST_WKS_UNCURED_COUNT",
     "KLHST_WKS_FROM_UNASSIGNED", "KLHST_WKS_RBT_REQUIRED", "KLHST_WKS_LAST_SYSTEM_START", "KLHST_WKS_CREATED",
+    "KLHST_WKS_OS_BUILD_NUMBER", "KLHST_WKS_CPU_ARCH", "KLHST_WKS_RBT_REQUEST_REASON", "KLHST_WKS_RBT_REQUEST_TIME",
+    "HST_VM_TYPE", "KLHST_MANAGED_OTHER_SERVER", "KLHST_WKS_EDR_STATUS", "KLHST_WKS_KEEP_CONNECTION",
 ]
 GROUP_FIELDS = ["id", "name", "parentId", "grp_full_name", "level", "hostsNum", "childGroupsNum", "creationDate", "lastUpdate"]
 LICENSE_FIELDS = [
@@ -24,6 +26,8 @@ LICENSE_FIELDS = [
     "KLLIC_NHOSTS_ASCURRENT", "KLLIC_NHOSTS_ASNEXT", "KLLIC_USED_BY_ADM_SRV", "KLLICSRV_KEY_INSTALLED", "KLLIC_APP_ID", "KLLIC_MAJ_VER",
 ]
 STATIC_FIELDS = ["KLADMSRV_SERVER_VERSION_ID", "KLADMSRV_SERVER_HOSTNAME", "KLADMSRV_PRODUCT_FULL_VERSION"]
+ROLE_FIELDS = ["nRoleId", "wstrRoleName", "wstrRoleDisplayName", "nInternalUserId", "wstrTrusteeDisplayName", "wstrUserPrincipalName", "nGroupId", "wstrGroupName"]
+USER_FIELDS = ["ul_llTrusteeId", "ul_nSplUserId", "ul_wstrDisplayName", "ul_wstrSamAccountName", "ul_wstrPrincipalName", "ul_bUser", "ul_Builtin", "ul_InternalUser"]
 
 Progress = Callable[[int, int], None]
 
@@ -32,8 +36,39 @@ def _ret(data: dict[str, Any]) -> Any:
     return data.get("PxgRetVal")
 
 
+def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = "") -> list[dict[str, Any]]:
+    """SrvView: итератор постранично по 500 записей, `ReleaseIterator` всегда, даже при ошибке чтения."""
+    it = client.call("SrvView.ResetIterator", {"wstrViewName": view, "wstrFilter": flt, "vecFieldsToReturn": fields, "vecFieldsToOrder": [], "pParams": {}, "lifetimeSec": 600})["wstrIteratorId"]
+    try:
+        total = _ret(client.call("SrvView.GetRecordCount", {"wstrIteratorId": it})) or 0
+        items: list[dict[str, Any]] = []
+        start = 0
+        while start < total:
+            end = min(start + 500, total) - 1
+            chunk = client.call("SrvView.GetRecordRange", {"wstrIteratorId": it, "nStart": start, "nEnd": end})
+            arr = (chunk.get("pRecords") or {}).get("KLCSP_ITERATOR_ARRAY") or []
+            if not arr:
+                break
+            items.extend(arr)
+            start += len(arr)
+        return items
+    finally:
+        client.call("SrvView.ReleaseIterator", {"wstrIteratorId": it})
+
+
 def collect(client: KscClient, *, skip_products: bool = False, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
+    warnings: list[str] = []
+
+    def _section(name: str, fn: Callable[[], Any], default: Any) -> Any:
+        try:
+            return fn()
+        except KscError as exc:
+            warnings.append(f"{name}: {exc}")
+            return default
+
     static = _ret(client.call("HostGroup.GetStaticInfo", {"pValues": STATIC_FIELDS})) or {}
+    if not static:
+        static = _ret(client.call("HostGroup.GetStaticInfo", {"pValues": None})) or {}
     domains = _ret(client.call("HostGroup.GetDomains")) or []
     ga = client.call("HostGroup.FindGroups", {"wstrFilter": "", "vecFieldsToReturn": GROUP_FIELDS, "vecFieldsToOrder": [], "lMaxLifeTime": 600})["strAccessor"]
     groups = client.read_accessor(ga)
@@ -102,11 +137,30 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
                 break
         client.call("GroupSyncIterator.ReleaseIterator", {"szwIterator": li})
 
+    role_assignments = _section("role_assignments", lambda: _read_srvview(client, "AdmGroupsAclRolesSrvViewName", ROLE_FIELDS), [])
+    internal_users = _section("internal_users", lambda: _read_srvview(client, "GlobalUsersListSrvViewName", USER_FIELDS, "(ul_InternalUser = 1)"), [])
+    two_factor = _section("security", lambda: _ret(client.call("TotpGlobalSettings.Get2FaRequiredForAll", {})), None)
+    security = {"two_factor_required_for_all": two_factor}
+
+    def _certs() -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for n in range(1, 5):
+            c = _ret(client.call("CertPoolCtrl.GetCertificateInfo", {"nVServerId": -1, "nFunction": n})) or {}
+            if c:
+                out[str(n)] = c
+        return out
+
+    server_certs = _section("server_certs", _certs, {})
+    secondary_servers = _section("secondary_servers", lambda: _ret(client.call("ServerHierarchy.GetChildServers", {"nGroupId": -1})) or [], [])
+    update_agents = _section("update_agents", lambda: client.call("UaControl.GetUpdateAgentsList", {}).get("pUasArr") or [], [])
+
     name = str(static.get("KLADMSRV_SERVER_HOSTNAME") or host or "ksc")
     return {
         "format": FORMAT,
         "server": {"name": name, "version": str(static.get("KLADMSRV_PRODUCT_FULL_VERSION") or ""), "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                   "collector": "online", "collector_version": COLLECTOR_VERSION, "user": username, "host": host},
+                   "collector": "online", "collector_version": COLLECTOR_VERSION, "user": username, "host": host, "warnings": warnings},
         "groups": groups, "hosts": hosts, "host_products": products, "host_components": components,
         "policies": policies, "effective_policies": effective, "tasks": tasks, "licenses": licenses, "static": static, "domains": domains,
+        "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
+        "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
     }

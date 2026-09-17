@@ -1,9 +1,15 @@
 """Синтетический KSC с известными ответами на все проверки (см. таблицу в плане)."""
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 from typing import Any
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 NOW = dt.datetime(2026, 9, 15, 12, 0, tzinfo=dt.UTC)
 FORMAT = "stools-ksc/1"
@@ -11,6 +17,23 @@ FORMAT = "stools-ksc/1"
 
 def dtv(value: dt.datetime) -> dict[str, str]:
     return {"type": "datetime", "value": value.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def _self_signed_cert_der(now: dt.datetime) -> bytes:
+    """Самоподписанный сертификат сервера (EC, SECP256R1): истекает через 30 дней от `now`."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "ksc01")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(days=300))
+        .not_valid_after(now + dt.timedelta(days=30))
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.DER)
 
 
 def _host(n: int, name: str, group: int, status: int, rtp: int, *, now: dt.datetime, **over: Any) -> dict[str, Any]:
@@ -27,6 +50,7 @@ def _host(n: int, name: str, group: int, status: int, rtp: int, *, now: dt.datet
         "KLHST_WKS_LAST_VISIBLE": dtv(now - dt.timedelta(hours=1)),
         "KLHST_WKS_NAG_VERSION": "15.1.0.0" if status & 4 else "",
         "KLHST_WKS_RTP_AV_VERSION": "12.0.0.0" if protected else "",
+        "KLHST_WKS_OS_BUILD_NUMBER": 22631, "KLHST_WKS_CPU_ARCH": 2, "HST_VM_TYPE": 3,
     }
     if status & 4:
         h["KLHST_WKS_LAST_NAGENT_CONNECTED"] = dtv(now - dt.timedelta(hours=1))
@@ -46,7 +70,8 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         _host(1, "WS01", 2, ok, 7, now=now),
         _host(2, "WS02", 2, ok, 1, now=now),
         _host(3, "WS03", 2, ok, 7, now=now, KLHST_WKS_RTP_AV_BASES_TIME=dtv(now - dt.timedelta(days=10))),
-        _host(4, "WS04", 2, ok, 7, now=now, KLHST_WKS_LAST_FULLSCAN=dtv(now - dt.timedelta(days=45))),
+        _host(4, "WS04", 2, ok, 7, now=now, KLHST_WKS_LAST_FULLSCAN=dtv(now - dt.timedelta(days=45)),
+              KLHST_WKS_RBT_REQUIRED=True, KLHST_WKS_RBT_REQUEST_TIME=dtv(now - dt.timedelta(days=15)), KLHST_WKS_RBT_REQUEST_REASON=4),
         _host(5, "WS05", 2, 1 | 4, 0, now=now, KLHST_WKS_LAST_NAGENT_CONNECTED=dtv(now - dt.timedelta(days=20)), KLHST_WKS_LAST_VISIBLE=dtv(now - dt.timedelta(days=20))),
         _host(6, "WS06", 2, 1, 0, now=now),
         _host(7, "WS07", 2, 1 | 4 | 8, 10, now=now),
@@ -97,13 +122,36 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
     }
     tasks = [
         {"TASK_UNIQUE_ID": "t-upd", "TASKID_PRODUCT_NAME": "KES", "TASKID_VERSION": "12.0.0.0", "TASK_NAME": "Update",
-         "TASK_INFO_PARAMS": {"DisplayName": "Обновление", "PRTS_TASK_GROUPID": 0, "TASKSCH_TYPE": 1}},
+         "TASK_INFO_PARAMS": {"DisplayName": "Обновление", "PRTS_TASK_GROUPID": 0, "TASKSCH_TYPE": 1},
+         "TASK_LAST_EXEC_TIME": dtv(now - dt.timedelta(days=1)), "statistics": {"4": 6, "8": 1, "16": 3}},
         {"TASK_UNIQUE_ID": "t-scan", "TASKID_PRODUCT_NAME": "KES", "TASKID_VERSION": "12.0.0.0", "TASK_NAME": "Scan",
-         "TASK_INFO_PARAMS": {"DisplayName": "Поиск вирусов", "PRTS_TASK_GROUPID": 2, "TASKSCH_TYPE": 1}},
+         "TASK_INFO_PARAMS": {"DisplayName": "Поиск вирусов", "PRTS_TASK_GROUPID": 2, "TASKSCH_TYPE": 1},
+         "TASK_LAST_EXEC_TIME": dtv(now - dt.timedelta(days=40)), "statistics": {"4": 5}},
     ]
     licenses = [{"KLLIC_SERIAL": "AAAA-BBBB", "KLLIC_PROD_NAME": "Kaspersky Endpoint Security для бизнеса", "KLLIC_KEY_TYPE": 1,
                  "KLLIC_LIMIT_DATE": dtv(now + dt.timedelta(days=15)), "KLLIC_LIC_COUNT": 10, "KLLIC_NHOSTS_ASCURRENT": 12,
                  "KLLIC_USED_BY_ADM_SRV": 0, "KLLICSRV_KEY_INSTALLED": True}]
+    role_assignments = [
+        {"nRoleId": 1, "wstrRoleName": "Main Administrator", "wstrRoleDisplayName": "Main Administrator",
+         "nInternalUserId": 5, "wstrTrusteeDisplayName": "kladmin", "wstrUserPrincipalName": "", "nGroupId": 0, "wstrGroupName": "Managed devices"},
+        {"nRoleId": 2, "wstrRoleName": "Administrator", "wstrRoleDisplayName": "Administrator",
+         "nInternalUserId": 0, "wstrTrusteeDisplayName": "CORP\\ivanov", "wstrUserPrincipalName": "ivanov@corp.local", "nGroupId": 0, "wstrGroupName": "Managed devices"},
+        {"nRoleId": 3, "wstrRoleName": "Auditor", "wstrRoleDisplayName": "Auditor",
+         "nInternalUserId": 0, "wstrTrusteeDisplayName": "CORP\\audit", "wstrUserPrincipalName": "audit@corp.local", "nGroupId": 0, "wstrGroupName": "Managed devices"},
+    ]
+    internal_users = [
+        {"ul_llTrusteeId": 5, "ul_nSplUserId": 5, "ul_wstrDisplayName": "kladmin", "ul_wstrSamAccountName": "kladmin",
+         "ul_wstrPrincipalName": "", "ul_bUser": True, "ul_Builtin": False, "ul_InternalUser": True},
+        {"ul_llTrusteeId": 1, "ul_nSplUserId": 1, "ul_wstrDisplayName": "KLAdmins", "ul_wstrSamAccountName": "KLAdmins",
+         "ul_wstrPrincipalName": "", "ul_bUser": False, "ul_Builtin": True, "ul_InternalUser": True},
+    ]
+    security = {"two_factor_required_for_all": False}
+    server_certs = {"1": {"CPublic": {"type": "binary", "value": base64.b64encode(_self_signed_cert_der(now)).decode("ascii")}}}
+    secondary_servers = [
+        {"KLSRVH_SRV_ID": 2, "KLSRVH_SRV_DN": "ksc02", "KLSRVH_SRV_ADDR": "ksc02.corp.local", "KLSRVH_SRV_VERSION": "15.1.0.11225",
+         "KLSRVH_SRV_STATUS": 1, "KLSRVH_SRV_LAST_CONNECTED": dtv(now - dt.timedelta(days=20)), "KLSRVH_SRV_GROUPID": 0, "KLSRVH_SRV_PASSIVE": False},
+    ]
+    update_agents = [{"KLUAGNT_HOST_NAME": "h-ws01", "KLUAGNT_GROUP_ID": 2, "KLUAGNT_HOST_DN": "WS01"}]
     return {
         "format": FORMAT,
         "server": {"name": "ksc01", "version": "15.1.0.11225", "collected_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -112,6 +160,8 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         "policies": policies, "effective_policies": effective, "tasks": tasks, "licenses": licenses,
         "static": {"KLADMSRV_SERVER_VERSION_ID": 983296, "KLADMSRV_SERVER_HOSTNAME": "ksc01", "KLADMSRV_PRODUCT_FULL_VERSION": "15.1.0.11225"},
         "domains": [{"KLHST_WKS_WINDOMAIN": "CORP", "KLHST_WKS_DNSDOMAIN": "corp.local"}],
+        "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
+        "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
     }
 
 

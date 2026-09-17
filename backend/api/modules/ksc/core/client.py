@@ -56,6 +56,8 @@ class KscClient:
         except httpx.HTTPError as exc:
             raise KscError(f"нет связи с KSC: {exc.__class__.__name__}") from exc
         if resp.status_code in (401, 403):
+            if method != "Session.StartSession" and resp.status_code == 403:
+                raise KscError(f"нет прав на {method}", resp.status_code)
             raise KscError("вход отклонён: неверные логин, пароль или тип учётной записи", resp.status_code)
         if resp.status_code != 200:
             raise KscError(f"KSC ответил {resp.status_code} на {method}", resp.status_code)

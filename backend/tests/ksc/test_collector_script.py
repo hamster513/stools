@@ -80,6 +80,11 @@ def test_script_output_matches_online_format(tmp_path: Path) -> None:
     assert set(export.effective_policies) == {"0", "1", "2", "3", "4"} and export.static["KLADMSRV_SERVER_HOSTNAME"] == "ksc01"
     raw = json.loads(gzip.decompress(path.read_bytes()))
     assert raw["hosts"][0]["KLHST_WKS_LAST_VISIBLE"]["type"] == "datetime"  # обёртки KSC сохранены как есть
+    assert export.role_assignments == expected["role_assignments"] and export.internal_users == expected["internal_users"]
+    assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
+    assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]
+    ws04 = next(h for h in export.hosts if h["KLHST_WKS_DN"] == "WS04")
+    assert ws04["KLHST_WKS_RBT_REQUEST_REASON"] == 4 and "KLHST_WKS_OS_BUILD_NUMBER" in ws04
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -144,3 +149,15 @@ def test_script_reads_through_live_params_wrappers(tmp_path: Path) -> None:
     assert len(export.hosts) == 14 and set(export.host_products) == set(expected["host_products"])
     assert set(export.host_components) == set(expected["host_components"])
     assert set(export.effective_policies) == {"0", "1", "2", "3", "4"} and export.server.name == "ksc01"
+    assert len(export.role_assignments) == 3 and len(export.internal_users) == 2
+    assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_survives_denied_sections(tmp_path: Path) -> None:
+    """Отказ в правах на секции блока 1 не роняет сбор — секции пустые, остальное на месте."""
+    export = load_export(_run_script(tmp_path, 18304, "denied").read_bytes())
+    assert export.role_assignments == [] and export.internal_users == []
+    assert export.security == {"two_factor_required_for_all": None}
+    assert export.server_certs == {} and export.secondary_servers == [] and export.update_agents == []
+    assert len(export.hosts) == len(build_export()["hosts"]) and len(export.policies) == 3
