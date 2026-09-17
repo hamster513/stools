@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import re
+import time
 from typing import Any
 
 import httpx
@@ -18,6 +21,18 @@ from tests.ksc.synthetic import build_export
 USER = "audit"
 PASSWORD = "audit-pass"
 SESSION = "n4QFPNjYK2oXRMYkis5CMcg=="
+#: Сессия, которую KSC выдаёт между паролем и вторым фактором.
+PENDING_SESSION = "pending-mfa-session"
+MFA_SECRET = "JBSWY3DPEHPK3PXP"
+
+
+def totp_code(secret: str, at: float | None = None) -> str:
+    """RFC 6238: SHA1, шаг 30 с, 6 цифр, секрет в base32."""
+    key = base64.b32decode(secret.upper() + "=" * (-len(secret) % 8))
+    counter = int((time.time() if at is None else at) // 30)
+    digest = hmac.new(key, counter.to_bytes(8, "big"), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    return f"{(int.from_bytes(digest[offset:offset + 4], 'big') & 0x7FFFFFFF) % 1_000_000:06d}"
 
 
 def sparse_export() -> dict[str, Any]:
@@ -32,8 +47,12 @@ def sparse_export() -> dict[str, Any]:
 
 
 class FakeKsc:
-    def __init__(self, data: dict[str, Any] | None = None, variant: str = "") -> None:
+    def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "") -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
+        #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
+        self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
+        #: Заголовки последнего ответа — оба транспорта отдают их клиенту.
+        self.response_headers: dict[str, str] = {}
         self.calls: list[str] = []
         self.accessors: dict[str, list[dict[str, Any]]] = {}
         self.iterators: dict[str, list[dict[str, Any]]] = {}
@@ -49,10 +68,25 @@ class FakeKsc:
         pw = base64.b64decode(m.group(2)).decode()
         return user == USER and pw == PASSWORD and not self.fail_login
 
+    def _mfa_ok(self, headers: dict[str, str]) -> bool:
+        m = re.match(r'KSCMFA totp="(\d{6})"', headers.get("authorization", ""))
+        if not m or headers.get("x-ksc-session") != PENDING_SESSION:
+            return False
+        now = time.time()
+        return m.group(1) in {totp_code(self.mfa_secret, now + shift) for shift in (-30, 0, 30)}
+
     def handle(self, method: str, body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         self.calls.append(method)
+        self.response_headers = {}
         if method == "Session.StartSession":
-            return (200, {"PxgRetVal": SESSION}) if self._auth_ok(headers) else (403, {})
+            if self.mfa_secret and headers.get("authorization", "").startswith("KSCMFA"):
+                return (200, {"PxgRetVal": SESSION}) if self._mfa_ok(headers) else (403, {})
+            if not self._auth_ok(headers):
+                return 403, {}
+            if self.mfa_secret:
+                self.response_headers = {"WWW-Authenticate": 'KSCMFA realm="KSC"', "X-KSC-Session": PENDING_SESSION}
+                return 401, {}
+            return 200, {"PxgRetVal": SESSION}
         if headers.get("x-ksc-session") != SESSION:
             return 401, {}
         if self.fail_after == method:
@@ -121,7 +155,7 @@ def mock_transport(fake: FakeKsc) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         method, body = parse_request(request.url.path, request.content)
         status, payload = fake.handle(method, body, {k.lower(): v for k, v in request.headers.items()})
-        return httpx.Response(status, json=payload)
+        return httpx.Response(status, json=payload, headers=fake.response_headers)
     return httpx.MockTransport(handler)
 
 
