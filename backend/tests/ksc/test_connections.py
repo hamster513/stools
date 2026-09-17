@@ -159,8 +159,8 @@ def test_collect_survives_denied_sections(monkeypatch: Any) -> None:
     assert len(export.server.warnings) == 6  # каждая из шести новых секций предупреждает отдельно
 
 
-def test_collect_certs_all_or_nothing_on_partial_denial(monkeypatch: Any) -> None:
-    """Отказ на одной из функций сертификата (2..4) не должен оставлять частично собранную секцию."""
+def test_collect_certs_empty_when_no_rights(monkeypatch: Any) -> None:
+    """Отказ в правах (403) на функции 2 — отказ на весь метод: секция пустая целиком, одно предупреждение."""
     f = FakeKsc(deny_cert_functions={2})
     monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
     with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
@@ -168,6 +168,56 @@ def test_collect_certs_all_or_nothing_on_partial_denial(monkeypatch: Any) -> Non
     export = load_export(__import__("json").dumps(raw).encode())
     assert export.server_certs == {}  # функция 1 успела бы собраться раньше отказа на функции 2
     assert len(export.server.warnings) == 1 and "server_certs" in export.server.warnings[0]
+
+
+def test_collect_certs_keep_other_functions_on_method_error(monkeypatch: Any) -> None:
+    """PxgError на функции 2 — для этого назначения сертификата нет: функция 1 остаётся в выгрузке."""
+    f = FakeKsc(fail_cert_functions={2})
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert set(export.server_certs) == {"1"} and "CPublic" in export.server_certs["1"]
+    assert len(export.server.warnings) == 1 and "server_certs[2]" in export.server.warnings[0]
+
+
+def test_collect_stores_only_public_part_of_certificate(fake: FakeKsc) -> None:
+    """Из контейнера сертификата в выгрузку идёт только CPublic — приватная часть остаётся на сервере."""
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    assert list(raw["server_certs"]) == ["1"] and list(raw["server_certs"]["1"]) == ["CPublic"]
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert "CPrivate" not in export.server_certs["1"]
+
+
+def test_collect_survives_srvview_without_iterator(monkeypatch: Any) -> None:
+    """`SrvView.ResetIterator` без `wstrIteratorId` — ошибка секции (KscError), а не падение сбора."""
+    class NoIterator(FakeKsc):
+        def _handle(self, method: str, body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
+            if method == "SrvView.ResetIterator":
+                return 200, {}
+            return super()._handle(method, body, headers)
+
+    f = NoIterator()
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert export.role_assignments == [] and export.internal_users == []
+    assert len(export.server.warnings) == 2 and all("итератор" in w for w in export.server.warnings)
+    assert len(export.hosts) == 14  # остальной сбор дошёл до конца
+
+
+def test_collect_reports_effective_policy_failure_in_warnings(monkeypatch: Any) -> None:
+    """Сбой эффективных политик группы виден в server.warnings, а не только в логе."""
+    f = FakeKsc()
+    f.fail_after = "Policy.GetEffectivePoliciesForGroup"
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert export.effective_policies == {}
+    assert len(export.server.warnings) == 5 and all("effective_policies" in w for w in export.server.warnings)
 
 
 def test_collect_sends_internal_users_filter(fake: FakeKsc) -> None:
@@ -196,9 +246,11 @@ def test_collect_reads_through_live_params_wrappers(monkeypatch: Any) -> None:
         raw = collect(c, username=USER)
     assert raw["hosts"][0]["type"] == "params"  # в файл записи уходят как пришли
     assert len(raw["host_products"]) == 12 and set(raw["effective_policies"]) == {"0", "1", "2", "3", "4"}
-    assert all("statistics" in t for t in raw["tasks"])
+    # задача приходит в обёртке — статистика ложится внутрь неё, обёртка остаётся обёрткой
+    assert all(set(t) == {"type", "value"} and "statistics" in t["value"] for t in raw["tasks"])
     export = load_export(__import__("json").dumps(raw).encode())
     assert len(export.hosts) == 14 and export.hosts[0]["KLHST_WKS_DN"] == "WS01" and len(export.host_components) == 10
+    assert all({"TASK_NAME", "TASK_INFO_PARAMS", "statistics"} <= set(t) for t in export.tasks)
     expected = build_export()
     assert export.role_assignments == expected["role_assignments"] and export.internal_users == expected["internal_users"]
     assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})

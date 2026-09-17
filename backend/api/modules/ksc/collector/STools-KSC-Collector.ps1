@@ -156,6 +156,15 @@ function Prop($o, $n) { if ($null -ne $o -and $o.PSObject.Properties[$n]) { retu
 function Unwrap($o) { if ($null -ne $o -and $o -is [psobject] -and $o.PSObject.Properties["type"] -and $o.PSObject.Properties["value"] -and $o.type -eq "params") { return $o.value }; return $o }
 # KSC отдаёт числа и как 13, и как @{ type = "long"; value = 13 }.
 function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [int]$v } catch { return 0 } }
+# HTTP-код отказа из исключения Invoke-WebRequest (PowerShell 5.1 — WebException, 7 — HttpResponseException);
+# 0, если ошибка не про ответ сервера (PxgError, обрыв связи).
+function HttpStatus($err) {
+  $ex = $err.Exception
+  if ($null -eq $ex -or -not $ex.PSObject.Properties["Response"]) { return 0 }
+  $resp = $ex.Response
+  if ($null -eq $resp -or -not $resp.PSObject.Properties["StatusCode"]) { return 0 }
+  try { return [int]$resp.StatusCode } catch { return 0 }
+}
 
 # RFC 6238: SHA1, шаг 30 с, 6 цифр; секрет в base32, как его показывает KSC при подключении аутентификатора.
 function Get-TotpCode([string]$secret) {
@@ -346,7 +355,7 @@ try {
   foreach ($g in $groups) {
     $gid = AsInt (Prop (Unwrap $g) "id")
     try { $effective[[string]$gid] = @((Prop (Invoke-Ksc "Policy.GetEffectivePoliciesForGroup" @{ nGroupId = $gid }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
-    catch { Write-Warning ("политики группы {0}: {1}" -f $gid, $_.Exception.Message) }
+    catch { Write-Warning ("политики группы {0}: {1}" -f $gid, $_.Exception.Message); [void]$warnings.Add("политики группы $($gid): $($_.Exception.Message)") }
   }
 
   Write-Step "Задачи"
@@ -356,7 +365,9 @@ try {
     $t = Prop (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }) "pTaskData"
     if ($null -eq $t -or @($t.PSObject.Properties).Count -eq 0) { break }
     $tid = [string](Prop (Unwrap $t) "TASK_UNIQUE_ID")
-    if ($tid) { try { $t | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }).PxgRetVal -Force } catch {} }
+    # Статистика кладётся в сам объект задачи: у живого KSC он приходит в обёртке @{ type = "params"; value = ... },
+    # и лишнее свойство рядом с type/value перестало бы быть обёрткой — задача потерялась бы при разборе.
+    if ($tid) { try { (Unwrap $t) | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Prop (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }) "PxgRetVal") -Force } catch {} }
     [void]$tasks.Add($t)
   }
   Invoke-Ksc "Tasks.ReleaseTasksIterator" @{ strTaskIteratorId = $it } | Out-Null
@@ -390,15 +401,24 @@ try {
   $security = @{ two_factor_required_for_all = $twoFactor }
 
   Write-Step "Сертификаты"
+  # Из контейнера берём только CPublic — приватная часть и прочие поля в выгрузку не идут.
+  # Отказ в правах (HTTP 403) — отказ на весь метод: секция остаётся пустой. Любая другая ошибка функции
+  # значит, что сертификата для этого назначения нет: функция пропускается, остальные собираются.
   $serverCerts = @{}
-  try {
-    $certs = @{}
-    for ($n = 1; $n -le 4; $n++) {
-      $c = (Invoke-Ksc "CertPoolCtrl.GetCertificateInfo" @{ nVServerId = -1; nFunction = $n }).PxgRetVal
-      if ($null -ne $c -and @($c.PSObject.Properties).Count -gt 0) { $certs["$n"] = $c }
+  for ($n = 1; $n -le 4; $n++) {
+    try {
+      $c = Unwrap (Prop (Invoke-Ksc "CertPoolCtrl.GetCertificateInfo" @{ nVServerId = -1; nFunction = $n }) "PxgRetVal")
+      $public = Prop $c "CPublic"
+      if ($null -ne $public) { $serverCerts["$n"] = @{ CPublic = $public } }
+    } catch {
+      if ((HttpStatus $_) -eq 403) {
+        $serverCerts = @{}
+        Write-Warning ("сертификаты: {0}" -f $_.Exception.Message); [void]$warnings.Add("сертификаты: нет прав на CertPoolCtrl.GetCertificateInfo")
+        break
+      }
+      Write-Warning ("сертификат, функция {0}: {1}" -f $n, $_.Exception.Message); [void]$warnings.Add("сертификат, функция $($n): $($_.Exception.Message)")
     }
-    $serverCerts = $certs   # целиком или никак: частичный результат при обрыве середины цикла не остаётся
-  } catch { $serverCerts = @{}; Write-Warning ("сертификаты: {0}" -f $_.Exception.Message); [void]$warnings.Add("сертификаты: $($_.Exception.Message)") }
+  }
 
   Write-Step "Подчинённые серверы"
   $secondaryServers = @()

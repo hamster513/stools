@@ -81,7 +81,9 @@ def test_script_output_matches_online_format(tmp_path: Path) -> None:
     raw = json.loads(gzip.decompress(path.read_bytes()))
     assert raw["hosts"][0]["KLHST_WKS_LAST_VISIBLE"]["type"] == "datetime"  # обёртки KSC сохранены как есть
     assert export.role_assignments == expected["role_assignments"] and export.internal_users == expected["internal_users"]
-    assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
+    assert export.security == expected["security"]
+    # из контейнера сертификата в файл идёт только CPublic — приватная часть остаётся на сервере
+    assert list(export.server_certs) == ["1"] and list(export.server_certs["1"]) == ["CPublic"]
     assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]
     ws04 = next(h for h in export.hosts if h["KLHST_WKS_DN"] == "WS04")
     assert ws04["KLHST_WKS_RBT_REQUEST_REASON"] == 4 and "KLHST_WKS_OS_BUILD_NUMBER" in ws04
@@ -150,8 +152,11 @@ def test_script_reads_through_live_params_wrappers(tmp_path: Path) -> None:
     assert set(export.host_components) == set(expected["host_components"])
     assert set(export.effective_policies) == {"0", "1", "2", "3", "4"} and export.server.name == "ksc01"
     assert len(export.role_assignments) == 3 and len(export.internal_users) == 2
-    assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
+    assert export.security == expected["security"] and list(export.server_certs["1"]) == ["CPublic"]
     assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]
+    # задача приходит в обёртке params — статистика ложится внутрь неё, задача не теряется при разборе
+    assert len(export.tasks) == 2
+    assert all({"TASK_NAME", "TASK_INFO_PARAMS", "statistics"} <= set(t) for t in export.tasks)
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -165,9 +170,19 @@ def test_script_survives_denied_sections(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
-def test_script_certs_all_or_nothing_on_partial_denial(tmp_path: Path) -> None:
-    """Отказ на функции 2 сертификата не должен оставлять в файле частично собранный server_certs
-    (функция 1 успевает собраться раньше отказа на функции 2)."""
+def test_script_certs_empty_when_no_rights(tmp_path: Path) -> None:
+    """Отказ в правах (403) на функции 2 — отказ на весь метод: секция пустая целиком,
+    хотя функция 1 успела собраться раньше отказа."""
     export = load_export(_run_script(tmp_path, 18310, "denied_cert2").read_bytes())
     assert export.server_certs == {}
+    assert len(export.server.warnings) == 1 and "сертификаты" in export.server.warnings[0]
+    assert len(export.hosts) == len(build_export()["hosts"]) and len(export.policies) == 3
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_certs_keep_other_functions_on_method_error(tmp_path: Path) -> None:
+    """PxgError на функции 2 — для этого назначения сертификата нет: сертификат функции 1 остаётся."""
+    export = load_export(_run_script(tmp_path, 18320, "failed_cert2").read_bytes())
+    assert list(export.server_certs) == ["1"] and list(export.server_certs["1"]) == ["CPublic"]
+    assert len(export.server.warnings) == 1 and "функция 2" in export.server.warnings[0]
     assert len(export.hosts) == len(build_export()["hosts"]) and len(export.policies) == 3

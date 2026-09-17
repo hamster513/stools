@@ -6,7 +6,14 @@ from collections.abc import Callable
 from typing import Any
 
 from api.modules.ksc.core.client import KscClient, KscError
-from api.modules.ksc.core.export import FORMAT, PRODUCT_AGENT, PRODUCT_SERVER, _int, strip_params
+from api.modules.ksc.core.export import (
+    FORMAT,
+    PRODUCT_AGENT,
+    PRODUCT_SERVER,
+    _int,
+    strip_params,
+    unwrap,
+)
 
 COLLECTOR_VERSION = "1.0"
 
@@ -36,11 +43,25 @@ def _ret(data: dict[str, Any]) -> Any:
     return data.get("PxgRetVal")
 
 
+def _task_body(task: dict[str, Any]) -> dict[str, Any]:
+    """Сам объект задачи: для `{"type": "params", "value": {…}}` — содержимое обёртки, иначе объект как есть."""
+    inner = task.get("value")
+    if set(task.keys()) == {"type", "value"} and task.get("type") == "params" and isinstance(inner, dict):
+        return inner
+    return task
+
+
 def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = "") -> list[dict[str, Any]]:
     """SrvView: итератор постранично по 500 записей, `ReleaseIterator` всегда, даже при ошибке чтения."""
-    it = client.call("SrvView.ResetIterator", {"wstrViewName": view, "wstrFilter": flt, "vecFieldsToReturn": fields, "vecFieldsToOrder": [], "pParams": {}, "lifetimeSec": 600})["wstrIteratorId"]
+    reset = client.call("SrvView.ResetIterator", {"wstrViewName": view, "wstrFilter": flt, "vecFieldsToReturn": fields, "vecFieldsToOrder": [], "pParams": {}, "lifetimeSec": 600})
+    it = reset.get("wstrIteratorId")
+    if not it:
+        raise KscError(f"SrvView.ResetIterator ({view}): KSC не выдал итератор")
     try:
-        total = _ret(client.call("SrvView.GetRecordCount", {"wstrIteratorId": it})) or 0
+        try:
+            total = int(unwrap(_ret(client.call("SrvView.GetRecordCount", {"wstrIteratorId": it}))) or 0)
+        except (TypeError, ValueError) as exc:
+            raise KscError(f"SrvView.GetRecordCount ({view}): KSC вернул не число") from exc
         items: list[dict[str, Any]] = []
         start = 0
         while start < total:
@@ -108,8 +129,8 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
         gid = _int(g.get("id"))
         try:
             effective[str(gid)] = _ret(client.call("Policy.GetEffectivePoliciesForGroup", {"nGroupId": gid})) or []
-        except KscError:
-            continue
+        except KscError as exc:
+            warnings.append(f"effective_policies[{gid}]: {exc}")
 
     tasks: list[dict[str, Any]] = []
     it = client.call("Tasks.ResetTasksIterator", {"nGroupId": -1, "bGroupIdSignificant": False, "strProductName": "", "strVersion": "", "strComponentName": "", "strInstanceId": "", "strTaskName": "", "bIncludeSupergroups": False})["strTaskIteratorId"]
@@ -120,9 +141,13 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
         tid = strip_params(t).get("TASK_UNIQUE_ID")
         if tid:
             try:
-                t["statistics"] = _ret(client.call("Tasks.GetTaskStatistics", {"strTask": str(tid)}))
+                stats = _ret(client.call("Tasks.GetTaskStatistics", {"strTask": str(tid)}))
             except KscError:
                 pass
+            else:
+                # Живой KSC отдаёт саму задачу в обёртке: статистику кладём внутрь неё,
+                # иначе обёртка перестаёт быть обёрткой и задача теряется при разборе.
+                _task_body(t)["statistics"] = stats
         tasks.append(t)
     client.call("Tasks.ReleaseTasksIterator", {"strTaskIteratorId": it})
 
@@ -143,11 +168,23 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
     security = {"two_factor_required_for_all": two_factor}
 
     def _certs() -> dict[str, Any]:
+        """Из контейнера сертификата берём только `CPublic` — приватная часть и прочие поля в выгрузку не идут.
+
+        Отказ в правах (HTTP 403) — это отказ на весь метод: секция остаётся пустой (KscError уходит
+        в `_section`). Любая другая ошибка функции — у сервера нет сертификата для этого назначения:
+        функция пропускается, остальные собираются."""
         out: dict[str, Any] = {}
         for n in range(1, 5):
-            c = _ret(client.call("CertPoolCtrl.GetCertificateInfo", {"nVServerId": -1, "nFunction": n})) or {}
-            if c:
-                out[str(n)] = c
+            try:
+                c = strip_params(_ret(client.call("CertPoolCtrl.GetCertificateInfo", {"nVServerId": -1, "nFunction": n})))
+            except KscError as exc:
+                if exc.code == 403:
+                    raise
+                warnings.append(f"server_certs[{n}]: {exc}")
+                continue
+            public = c.get("CPublic") if isinstance(c, dict) else None
+            if public is not None:
+                out[str(n)] = {"CPublic": public}
         return out
 
     server_certs = _section("server_certs", _certs, {})

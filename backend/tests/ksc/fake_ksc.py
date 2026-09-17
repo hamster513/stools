@@ -86,7 +86,8 @@ NON_INTERNAL_USER = {"ul_llTrusteeId": 99, "ul_nSplUserId": 0, "ul_wstrDisplayNa
 
 class FakeKsc:
     def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "",
-                 deny: set[str] | None = None, deny_cert_functions: set[int] | None = None) -> None:
+                 deny: set[str] | None = None, deny_cert_functions: set[int] | None = None,
+                 fail_cert_functions: set[int] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
@@ -96,6 +97,8 @@ class FakeKsc:
         self.deny: set[str] = set(deny) if deny is not None else (set(DENIED_METHODS) if variant == "denied" else set())
         #: Номера функций CertPoolCtrl.GetCertificateInfo, на которые отвечать 403 (остальные — как обычно).
         self.deny_cert_functions: set[int] = set(deny_cert_functions) if deny_cert_functions is not None else ({2} if variant == "denied_cert2" else set())
+        #: Номера функций сертификата, на которые отвечать PxgError — «сертификата для этого назначения нет».
+        self.fail_cert_functions: set[int] = set(fail_cert_functions) if fail_cert_functions is not None else ({2} if variant == "failed_cert2" else set())
         #: HostGroup.GetStaticInfo с непустым pValues отдаёт пусто; полный ответ — только на pValues=null.
         self.static_needs_null = False
         #: Заголовки последнего ответа — оба транспорта отдают их клиенту.
@@ -126,7 +129,13 @@ class FakeKsc:
 
     def handle(self, method: str, body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         status, payload = self._handle(method, body, headers)
-        return status, wrap_like_live(payload) if self.wrap and "PxgError" not in payload else payload
+        if not self.wrap or "PxgError" in payload:
+            return status, payload
+        out = wrap_like_live(payload)
+        if method == "Tasks.GetNextTask" and out.get("pTaskData"):
+            # Живой KSC заворачивает и сам объект задачи, а не только вложенные контейнеры.
+            out["pTaskData"] = {"type": "params", "value": out["pTaskData"]}
+        return status, out
 
     def _handle(self, method: str, body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         self.calls.append(method)
@@ -212,9 +221,14 @@ class FakeKsc:
         if method == "TotpGlobalSettings.Get2FaRequiredForAll":
             return 200, {"PxgRetVal": d["security"]["two_factor_required_for_all"]}
         if method == "CertPoolCtrl.GetCertificateInfo":
-            if body.get("nFunction") in self.deny_cert_functions:
+            fn = body.get("nFunction")
+            if fn in self.deny_cert_functions:
                 return 403, {}
-            return 200, {"PxgRetVal": d["server_certs"].get(str(body.get("nFunction"))) or {}}
+            if fn in self.fail_cert_functions:
+                return 200, {"PxgError": {"code": 1, "message": "нет сертификата"}}
+            cert = d["server_certs"].get(str(fn)) or {}
+            # Живой контейнер несёт не только CPublic: лишние поля в выгрузку попадать не должны.
+            return 200, {"PxgRetVal": {**cert, "CPrivate": "secret"} if cert else {}}
         if method == "ServerHierarchy.GetChildServers":
             return 200, {"PxgRetVal": d["secondary_servers"]}
         if method == "UaControl.GetUpdateAgentsList":
