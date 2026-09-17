@@ -6,10 +6,12 @@ import { useHostDetail, useHosts, useServers } from '@/modules/ksc/api/queries'
 import {
   AGENT_LABELS,
   BASES_LABELS,
+  CPU_ARCH_LABELS,
   IN_AD_LABELS,
   PROTECTION_LABELS,
   RTP_STATE_LABELS,
   STATUS_LABELS,
+  vmTypeLabel,
   type Host,
   type HostAgent,
   type HostBases,
@@ -39,6 +41,10 @@ const COMPONENT_STATUS_LABELS: Record<number, string> = {
 }
 
 type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status'>
+
+function edrLabel(code: number): string {
+  return code === 0 ? 'нет данных' : `код ${code}`
+}
 
 function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
@@ -218,6 +224,18 @@ function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string 
                     <dt className="text-text-secondary">Угрозы</dt><dd className="text-text">{h.threats}</dd>
                     <dt className="text-text-secondary">Без группы</dt><dd className="text-text">{h.unassigned ? 'да' : 'нет'}</dd>
                     <dt className="text-text-secondary">AD</dt><dd className="text-text">{h.in_ad ? IN_AD_LABELS[h.in_ad] : 'нет данных'}</dd>
+                  </dl>
+
+                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Система</div>
+                  <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                    <dt className="text-text-secondary">Сборка ОС</dt><dd className="font-mono text-text">{h.extra.os_build || '—'}</dd>
+                    <dt className="text-text-secondary">Архитектура</dt><dd className="text-text">{CPU_ARCH_LABELS[h.extra.cpu_arch] ?? 'неизвестно'}</dd>
+                    <dt className="text-text-secondary">Виртуализация</dt><dd className="text-text">{vmTypeLabel(h.extra.vm_type)}</dd>
+                    <dt className="text-text-secondary">Перезагрузка</dt>
+                    <dd className={cn('text-text', h.extra.reboot_required && 'text-risk-medium')}>
+                      {h.extra.reboot_required ? `требуется с ${when(h.extra.reboot_requested_at)}` : 'не требуется'}
+                    </dd>
+                    <dt className="text-text-secondary">EDR</dt><dd className="text-text">{edrLabel(h.extra.edr_status)}</dd>
                   </dl>
 
                   <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Компоненты</div>

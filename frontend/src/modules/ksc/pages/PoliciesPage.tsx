@@ -8,6 +8,10 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 
+function when(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
+}
+
 function GroupRow({ group, serverId }: { group: PolicyGroup; serverId: number }) {
   const hasPolicyNone = group.findings.some((f) => f.check === 'POLICY_NONE')
   return (
@@ -44,10 +48,18 @@ function GroupRow({ group, serverId }: { group: PolicyGroup; serverId: number })
         {group.tasks.length === 0 && <span className="text-text-secondary">—</span>}
         <ul className="flex flex-col gap-1">
           {group.tasks.map((t) => (
-            <li key={t.id} className="flex flex-wrap items-center gap-1.5">
-              <span className="text-text">{t.type}</span>
-              <span className="text-[11px] text-text-secondary">{t.name}</span>
-              {t.inherited && <span className="text-[11px] text-text-secondary">унасл.</span>}
+            <li key={t.id}>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-text">{t.type}</span>
+                <span className="text-[11px] text-text-secondary">{t.name}</span>
+                {t.inherited && <span className="text-[11px] text-text-secondary">унасл.</span>}
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-text-secondary">
+                <span>последний запуск {when(t.last_run_at)}</span>
+                <span>
+                  успех {t.ok} · предупр. {t.warning} · <span className={t.failed > 0 ? 'font-medium text-risk-high' : undefined}>провал {t.failed}</span>
+                </span>
+              </div>
             </li>
           ))}
         </ul>

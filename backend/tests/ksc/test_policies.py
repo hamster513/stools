@@ -17,6 +17,11 @@ def test_policies_tree(auth_client: TestClient) -> None:
     assert {f["check"] for f in servers["findings"]} == {"POLICY_NONE", "TASK_NO_SCAN"}
     ws = next(g for g in body["groups"] if g["name"] == "Workstations")
     assert {t["type"] for t in ws["tasks"]} == {"Update", "Scan"} and next(t for t in ws["tasks"] if t["type"] == "Update")["inherited"] is True
+    scan = next(t for t in ws["tasks"] if t["type"] == "Scan")
+    assert scan["last_run_at"] is not None and (scan["ok"], scan["warning"], scan["failed"]) == (5, 0, 0)
+    root = next(g for g in body["groups"] if g["name"] == "Managed devices")
+    upd = next(t for t in root["tasks"] if t["type"] == "Update")
+    assert upd["last_run_at"] is not None and (upd["ok"], upd["warning"], upd["failed"]) == (6, 1, 3)
     lab = next(g for g in body["groups"] if g["name"] == "Lab")
     assert lab["level"] == 2 and lab["policies"][0]["name"] == "KES lab" and lab["policies"][0]["accept_parent"] is False
     assert auth_client.get("/api/ksc/snapshots/999/policies").status_code == 404

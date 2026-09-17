@@ -163,6 +163,39 @@ export const RTP_STATE_LABELS: Record<number, string> = {
   11: 'не поддерживается лицензией',
 }
 
+/** Расширенные поля хоста (блок «Система» карточки), из `HostRecord.extra`. */
+export interface HostExtra {
+  os_build: number
+  cpu_arch: number
+  vm_type: number
+  reboot_required: boolean
+  reboot_requested_at: string | null
+  reboot_reason: number
+  edr_status: number
+  managed_by_other_server: boolean
+}
+
+/** KLHST_WKS_CPU_ARCH. */
+export const CPU_ARCH_LABELS: Record<number, string> = {
+  1: 'x86',
+  2: 'x64',
+  4: 'arm64',
+}
+
+/** HST_VM_TYPE. */
+export const VM_TYPE_LABELS: Record<number, string> = {
+  2: 'физическая машина',
+  3: 'VMware',
+  4: 'Hyper-V',
+  8: 'Xen',
+  9: 'KVM',
+  1: 'виртуальная машина',
+}
+
+export function vmTypeLabel(code: number): string {
+  return VM_TYPE_LABELS[code] ?? 'неизвестно'
+}
+
 export interface Host {
   id: number
   host_id: string
@@ -187,6 +220,7 @@ export interface Host {
   unassigned: boolean
   in_ad: 'both' | 'ksc_only' | null
   components: [string, number][]
+  extra: HostExtra
   findings: number
 }
 
@@ -239,6 +273,10 @@ export interface TaskItem {
   product: string
   inherited: boolean
   schedule: number
+  last_run_at: string | null
+  ok: number
+  warning: number
+  failed: number
 }
 
 export interface PolicyFinding {
@@ -261,6 +299,58 @@ export interface PolicyGroup {
 
 export interface PoliciesResponse {
   groups: PolicyGroup[]
+}
+
+export interface ServerAdmin {
+  account: string
+  internal: boolean
+  role: string
+  group: string
+}
+
+export interface ServerInternalUser {
+  name: string
+  login: string
+  builtin: boolean
+}
+
+export interface ServerCert {
+  function: string
+  subject: string
+  not_after: string
+  days_left: number
+}
+
+export interface ServerSecondaryServer {
+  name: string
+  address: string
+  version: string
+  last_connected: string | null
+  status: number
+}
+
+export interface ServerUpdateAgent {
+  host: string
+  group: string
+}
+
+export interface ServerFinding {
+  key: string
+  check: string
+  check_title: string
+  severity: Severity
+  target: string
+}
+
+export interface ServerData {
+  two_factor_required_for_all: boolean | null
+  admins: ServerAdmin[]
+  internal_users: ServerInternalUser[]
+  certs: ServerCert[]
+  secondary_servers: ServerSecondaryServer[]
+  update_agents: ServerUpdateAgent[]
+  warnings: string[]
+  findings: ServerFinding[]
 }
 
 export interface Connection {
@@ -294,6 +384,11 @@ export interface KscConfig {
   license_days: number
   key_components: Record<string, string[]>
   allowlist_hosts: string[]
+  task_failed_share: number
+  task_stale_days: number
+  reboot_pending_days: number
+  cert_days: number
+  admin_role_patterns: string[]
 }
 
 export interface SettingsView {

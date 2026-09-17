@@ -8,6 +8,7 @@ import { OverviewPage } from './pages/OverviewPage'
 import { HostsPage } from './pages/HostsPage'
 import { FindingsPage } from './pages/FindingsPage'
 import { PoliciesPage } from './pages/PoliciesPage'
+import { ServerPage } from './pages/ServerPage'
 import { SnapshotsPage } from './pages/SnapshotsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { JobsPage } from './pages/JobsPage'
@@ -32,6 +33,7 @@ export function KscModule() {
   else if (serverId !== null && section === 'hosts') page = <HostsPage serverId={serverId} />
   else if (serverId !== null && section === 'findings') page = <FindingsPage serverId={serverId} />
   else if (serverId !== null && section === 'policies') page = <PoliciesPage serverId={serverId} />
+  else if (serverId !== null && section === 'server') page = <ServerPage serverId={serverId} />
   else if (serverId !== null && section === 'snapshots') page = <SnapshotsPage serverId={serverId} />
   else return <Redirect to="/ksc" />
 

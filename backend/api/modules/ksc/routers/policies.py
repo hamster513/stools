@@ -13,7 +13,15 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
-from api.modules.ksc.core.export import ExportIndex, _int, _str, load_export_path, parent_id, unwrap
+from api.modules.ksc.core.export import (
+    ExportIndex,
+    _dt,
+    _int,
+    _str,
+    load_export_path,
+    parent_id,
+    unwrap,
+)
 from api.modules.ksc.models import KscFinding, KscSnapshot
 from api.modules.ksc.services.snapshots import snapshot_path
 from api.settings import Settings, get_settings
@@ -42,6 +50,10 @@ class TaskView(BaseModel):
     product: str
     inherited: bool
     schedule: int
+    last_run_at: dt.datetime | None
+    ok: int
+    warning: int
+    failed: int
 
 
 class FindingView(BaseModel):
@@ -110,6 +122,7 @@ def _group_tasks(idx: ExportIndex, group_id: int, ancestors: set[int]) -> list[T
             inherited = True
         else:
             continue
+        stats: dict[str, Any] = unwrap(t.get("statistics")) or {}
         out.append(
             TaskView(
                 id=_str(t.get("TASK_UNIQUE_ID")),
@@ -118,6 +131,10 @@ def _group_tasks(idx: ExportIndex, group_id: int, ancestors: set[int]) -> list[T
                 product=_str(t.get("TASKID_PRODUCT_NAME")),
                 inherited=inherited,
                 schedule=_int(info.get("TASKSCH_TYPE")),
+                last_run_at=_dt(t.get("TASK_LAST_EXEC_TIME")),
+                ok=_int(stats.get("4")),
+                warning=_int(stats.get("8")),
+                failed=_int(stats.get("16")),
             )
         )
     return out

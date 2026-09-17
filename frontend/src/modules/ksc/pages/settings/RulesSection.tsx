@@ -32,9 +32,17 @@ function ReadOnlyView({ config }: { config: KscConfig }) {
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Базы устарели, дней</dt><dd className="font-mono text-text">{config.bases_old_days}</dd></div>
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Нет полного поиска, дней</dt><dd className="font-mono text-text">{config.fullscan_days}</dd></div>
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Лицензия истекает, дней</dt><dd className="font-mono text-text">{config.license_days}</dd></div>
+      <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Провалы задачи → High, доля</dt><dd className="font-mono text-text">{config.task_failed_share}</dd></div>
+      <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Задача обновления не запускалась, дней</dt><dd className="font-mono text-text">{config.task_stale_days}</dd></div>
+      <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Зависла перезагрузка, дней</dt><dd className="font-mono text-text">{config.reboot_pending_days}</dd></div>
+      <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Сертификат истекает, дней</dt><dd className="font-mono text-text">{config.cert_days}</dd></div>
       <div className="sm:col-span-2">
         <dt className="text-text-secondary">Allowlist хостов</dt>
         <dd className="font-mono text-text">{config.allowlist_hosts.length ? config.allowlist_hosts.join(', ') : '—'}</dd>
+      </div>
+      <div className="sm:col-span-2">
+        <dt className="text-text-secondary">Административные роли KSC</dt>
+        <dd className="font-mono text-text">{config.admin_role_patterns.length ? config.admin_role_patterns.join(', ') : '—'}</dd>
       </div>
       <div className="sm:col-span-2">
         <dt className="mb-1 text-text-secondary">Ключевые компоненты</dt>
@@ -73,9 +81,16 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
               <Field label="Базы устарели, дней" hint="по умолчанию 3"><input className={FIELD} type="number" min={1} value={cfg.bases_old_days} onChange={(e) => patch({ bases_old_days: Number(e.target.value) })} /></Field>
               <Field label="Нет полного поиска, дней" hint="по умолчанию 30"><input className={FIELD} type="number" min={1} value={cfg.fullscan_days} onChange={(e) => patch({ fullscan_days: Number(e.target.value) })} /></Field>
               <Field label="Лицензия истекает, дней" hint="по умолчанию 30"><input className={FIELD} type="number" min={1} value={cfg.license_days} onChange={(e) => patch({ license_days: Number(e.target.value) })} /></Field>
+              <Field label="Провалы задачи → High, доля" hint="по умолчанию 0.2 (20% завершённых)"><input className={FIELD} type="number" min={0} max={1} step={0.05} value={cfg.task_failed_share} onChange={(e) => patch({ task_failed_share: Number(e.target.value) })} /></Field>
+              <Field label="Задача обновления не запускалась, дней" hint="по умолчанию 7"><input className={FIELD} type="number" min={1} value={cfg.task_stale_days} onChange={(e) => patch({ task_stale_days: Number(e.target.value) })} /></Field>
+              <Field label="Зависла перезагрузка, дней" hint="по умолчанию 7"><input className={FIELD} type="number" min={1} value={cfg.reboot_pending_days} onChange={(e) => patch({ reboot_pending_days: Number(e.target.value) })} /></Field>
+              <Field label="Сертификат истекает, дней" hint="по умолчанию 60"><input className={FIELD} type="number" min={1} value={cfg.cert_days} onChange={(e) => patch({ cert_days: Number(e.target.value) })} /></Field>
             </div>
             <Field label="Allowlist хостов" hint="Маски имён хостов: test-*, *.lab.local — находки по ним понижаются до «справочно»">
               <textarea className={AREA} value={lines(cfg.allowlist_hosts)} onChange={(e) => patch({ allowlist_hosts: parseLines(e.target.value) })} />
+            </Field>
+            <Field label="Административные роли KSC" hint="Имена ролей (wstrRoleName/wstrRoleDisplayName), которые считаются административными — по одному на строку">
+              <textarea className={AREA} value={lines(cfg.admin_role_patterns)} onChange={(e) => patch({ admin_role_patterns: parseLines(e.target.value) })} />
             </Field>
             <div className="sm:col-span-2">
               <div className="mb-1 text-xs font-medium text-text">Ключевые компоненты</div>

@@ -16,12 +16,13 @@ from api.modules.ksc.routers import (
     findings,
     hosts,
     policies,
+    server,
     settings,
     snapshots,
 )
 
 router = APIRouter(prefix="/api/ksc")
-for sub in (snapshots.router, hosts.router, findings.router, policies.router, settings.router, collector.router, connections.router, make_jobs_router(KscJob, "ksc")):
+for sub in (snapshots.router, hosts.router, findings.router, policies.router, server.router, settings.router, collector.router, connections.router, make_jobs_router(KscJob, "ksc")):
     router.include_router(sub)
 
 __all__ = ["router"]
