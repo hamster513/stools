@@ -101,3 +101,14 @@ def check_threats_active(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
 
 def check_host_critical(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
     return [host_finding(cfg, "HOST_CRITICAL", "Medium", h, reasons=h.status_reasons or ["причина не расшифрована"]) for h in idx.hosts if h.status == "critical"]
+
+
+def check_reboot_pending(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
+    out = []
+    for h in idx.hosts:
+        if not h.reboot_required:
+            continue
+        age = days_since(h.reboot_requested_at, idx.now)
+        if age is None or age > cfg.reboot_pending_days:
+            out.append(host_finding(cfg, "REBOOT_PENDING", "Low", h, requested_at=date_str(h.reboot_requested_at), age_days=age, reason=h.reboot_reason, threshold_days=cfg.reboot_pending_days))
+    return out

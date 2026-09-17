@@ -240,6 +240,27 @@ class HostRecord:
         for items in export.host_components.get(self.host_id, {}).values():
             for c in items:
                 self.components.append((_str(c.get("KLHST_PRCST_COMPONENT_DN")), _int(c.get("KLHST_PRCST_COMPONENT_STATUS"))))
+        # Расширенные поля хоста (блок 1): сборка ОС, архитектура, тип виртуализации, зависшая
+        # перезагрузка, EDR, управление другим сервером — не входят в колонки `ksc_host`, кладутся в `extra`.
+        self.os_build = _int(raw.get("KLHST_WKS_OS_BUILD_NUMBER"))
+        self.cpu_arch = _int(raw.get("KLHST_WKS_CPU_ARCH"))
+        self.vm_type = _int(raw.get("HST_VM_TYPE"))
+        self.reboot_required = bool(unwrap(raw.get("KLHST_WKS_RBT_REQUIRED")))
+        self.reboot_requested_at = _dt(raw.get("KLHST_WKS_RBT_REQUEST_TIME"))
+        self.reboot_reason = _int(raw.get("KLHST_WKS_RBT_REQUEST_REASON"))
+        self.edr_status = _int(raw.get("KLHST_WKS_EDR_STATUS"))
+        self.managed_by_other_server = bool(unwrap(raw.get("KLHST_MANAGED_OTHER_SERVER")))
+
+    @property
+    def extra(self) -> dict[str, Any]:
+        """Расширенные поля хоста для карточки и списка (не колонки `ksc_host`)."""
+        return {
+            "os_build": self.os_build, "cpu_arch": self.cpu_arch, "vm_type": self.vm_type,
+            "reboot_required": self.reboot_required,
+            "reboot_requested_at": self.reboot_requested_at.strftime("%Y-%m-%dT%H:%M:%SZ") if self.reboot_requested_at else None,
+            "reboot_reason": self.reboot_reason, "edr_status": self.edr_status,
+            "managed_by_other_server": self.managed_by_other_server,
+        }
 
     @property
     def protection(self) -> str:

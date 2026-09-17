@@ -36,6 +36,19 @@ def test_host_detail_has_findings_and_components(auth_client: TestClient) -> Non
     assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/nope").status_code == 404
 
 
+def test_host_extra_carries_reboot_and_hardware_fields(auth_client: TestClient) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    ws04 = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws04").json()
+    assert ws04["extra"]["reboot_required"] is True and ws04["extra"]["reboot_reason"] == 4
+    assert ws04["extra"]["os_build"] == 22631 and ws04["extra"]["cpu_arch"] == 2 and ws04["extra"]["vm_type"] == 3
+    assert ws04["extra"]["reboot_requested_at"] is not None and ws04["extra"]["managed_by_other_server"] is False
+    ws01 = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws01").json()
+    assert ws01["extra"]["reboot_required"] is False
+    listed = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts").json()["items"]
+    assert next(h for h in listed if h["name"] == "WS04")["extra"]["reboot_required"] is True
+
+
 def test_same_named_hosts_keep_their_own_findings(auth_client: TestClient) -> None:
     assert upload(auth_client, add_ws02_twin(build_export()))["status"] == "done"
     snap = auth_client.get("/api/ksc/snapshots").json()[0]

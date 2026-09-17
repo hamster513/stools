@@ -79,6 +79,7 @@ def upgrade() -> None:
         sa.Column("unassigned", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("in_ad", sa.String(16), nullable=True),
         sa.Column("components_json", sa.Text(), nullable=False, server_default="[]"),
+        sa.Column("extra_json", sa.Text(), nullable=False, server_default="{}"),
     )
     op.create_table(
         "ksc_finding",

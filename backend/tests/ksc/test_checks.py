@@ -1,8 +1,15 @@
 """Каждая проверка: срабатывает на своём хосте синтетики и молчит на эталонном WS01."""
 from __future__ import annotations
 
+import base64
 import datetime as dt
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
+
+from api.modules.ksc.core.certs import parse_cert
 from api.modules.ksc.core.checks import CHECK_BY_CODE, CHECKS, run_all
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, load_export
@@ -150,7 +157,7 @@ def test_license_checks() -> None:
 
 
 def test_full_registry_count() -> None:
-    assert len(CHECKS) == 18  # 11 хостов + 2 политики + 2 задачи + 1 лицензия + 2 сверки с AD
+    assert len(CHECKS) == 26  # 18 (блок 0) + 8 (блок 1: задачи х2, перезагрузка, 2FA, роли х2, сертификат, подчинённый сервер)
 
 
 def test_group_and_task_ids_tolerate_garbage_values() -> None:
@@ -167,3 +174,143 @@ def test_kes_ods_task_counts_as_scan() -> None:
         if t["TASK_NAME"] == "Scan":
             t["TASK_NAME"] = "ods"  # имя задачи поиска у KES на живом сервере
     assert _targets(_findings(raw), "TASK_NO_SCAN") == {"Managed devices/Servers"}
+
+
+# --- Блок 1: провалы и застой задач, зависшая перезагрузка, 2FA, роли, сертификат, иерархия ---
+
+
+def test_task_failed_high_on_share_over_threshold() -> None:
+    f = _findings()
+    failed = next(x for x in f if x.check == "TASK_FAILED")
+    assert failed.target == "Обновление (Managed devices)" and failed.severity == "High" and failed.key_extra == "t-upd"
+    assert failed.details["failed"] == 3 and failed.details["total"] == 10 and failed.details["share"] == 0.3
+    assert not _targets(f, "TASK_STALE")  # t-upd запускался вчера, t-scan — не задача обновления
+
+
+def test_task_failed_medium_below_threshold_and_silent_without_failures() -> None:
+    f = _findings(cfg=KscConfig(task_failed_share=0.5))
+    assert next(x for x in f if x.check == "TASK_FAILED").severity == "Medium"
+    raw = build_export()
+    raw["tasks"][0]["statistics"] = {"4": 6, "8": 1, "16": 0}
+    assert not [x for x in _findings(raw) if x.check == "TASK_FAILED"]  # без провалов не срабатывает вовсе
+
+
+def test_task_stale_fires_on_old_or_never_run_update_task() -> None:
+    raw = build_export()
+    raw["tasks"][0]["TASK_LAST_EXEC_TIME"] = {"type": "datetime", "value": (NOW - dt.timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    stale = next(x for x in _findings(raw) if x.check == "TASK_STALE")
+    assert stale.target == "Обновление (Managed devices)" and stale.severity == "Medium" and stale.details["age_days"] == 10
+    raw = build_export()
+    del raw["tasks"][0]["TASK_LAST_EXEC_TIME"]
+    never = next(x for x in _findings(raw) if x.check == "TASK_STALE")
+    assert never.details["last_exec"] == "никогда" and never.details["age_days"] is None
+
+
+def test_reboot_pending_fires_past_threshold_and_respects_config() -> None:
+    f = _findings()
+    assert _hosts(f, "REBOOT_PENDING") == {"WS04"}
+    pending = next(x for x in f if x.check == "REBOOT_PENDING")
+    assert pending.severity == "Low" and pending.details["age_days"] == 15 and pending.details["reason"] == 4
+    raw = build_export()
+    for h in raw["hosts"]:
+        if h["KLHST_WKS_DN"] == "WS04":
+            h["KLHST_WKS_RBT_REQUEST_TIME"] = {"type": "datetime", "value": (NOW - dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    assert not _hosts(_findings(raw), "REBOOT_PENDING")  # перезагрузка запрошена вчера
+    assert not _hosts(_findings(cfg=KscConfig(reboot_pending_days=20)), "REBOOT_PENDING")  # порог поднят выше 15 дней
+
+
+def test_ksc_2fa_off_and_respects_enabled() -> None:
+    f = _findings()
+    off = next(x for x in f if x.check == "KSC_2FA_OFF")
+    assert off.severity == "High" and off.target == "Двухэтапная проверка"
+    raw = build_export()
+    raw["security"]["two_factor_required_for_all"] = True
+    assert not [x for x in _findings(raw) if x.check == "KSC_2FA_OFF"]
+
+
+def test_ksc_internal_admin_only_for_internal_account_holding_admin_role() -> None:
+    f = _findings()
+    assert _targets(f, "KSC_INTERNAL_ADMIN") == {"kladmin"}  # доменная учётка ivanov с ролью Administrator не внутренняя
+    internal = next(x for x in f if x.check == "KSC_INTERNAL_ADMIN")
+    assert internal.severity == "Medium" and internal.details["role"] == "Main Administrator"
+
+
+def test_ksc_admins_lists_all_admin_role_holders_but_not_auditor() -> None:
+    f = _findings()
+    assert _targets(f, "KSC_ADMINS") == {"kladmin", "CORP\\ivanov"}
+    assert all(x.severity == "Info" for x in f if x.check == "KSC_ADMINS")
+
+
+def test_server_cert_high_when_expiring_within_threshold() -> None:
+    f = _findings()
+    cert = next(x for x in f if x.check == "SERVER_CERT")
+    assert cert.severity == "High" and cert.target == "сертификат 1: CN=ksc01" and cert.details["days_left"] == 30
+
+
+def test_server_cert_silent_when_valid_for_a_year_and_critical_when_expired() -> None:
+    raw = build_export()
+    raw["server_certs"]["1"]["CPublic"]["value"] = base64.b64encode(_gen_cert_der("ksc01", not_before_days=-30, not_after_days=365)).decode("ascii")
+    assert not [x for x in _findings(raw) if x.check == "SERVER_CERT"]
+    raw["server_certs"]["1"]["CPublic"]["value"] = base64.b64encode(_gen_cert_der("ksc01", not_before_days=-300, not_after_days=-5)).decode("ascii")
+    expired = next(x for x in _findings(raw) if x.check == "SERVER_CERT")
+    assert expired.severity == "Critical" and expired.details["days_left"] == -5
+
+
+def test_secondary_server_stale_uses_agent_silent_days() -> None:
+    f = _findings()
+    stale = next(x for x in f if x.check == "SECONDARY_SERVER_STALE")
+    assert stale.severity == "Medium" and stale.target == "ksc02" and stale.details["age_days"] == 20
+    raw = build_export()
+    raw["secondary_servers"][0]["KLSRVH_SRV_LAST_CONNECTED"] = {"type": "datetime", "value": (NOW - dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    assert not [x for x in _findings(raw) if x.check == "SECONDARY_SERVER_STALE"]
+    raw = build_export()
+    del raw["secondary_servers"][0]["KLSRVH_SRV_LAST_CONNECTED"]
+    never = next(x for x in _findings(raw) if x.check == "SECONDARY_SERVER_STALE")
+    assert never.details["age_days"] is None
+
+
+def test_block1_checks_silent_when_sections_absent() -> None:
+    """Секции role_assignments/security/server_certs/secondary_servers и статистика задач — все необязательны."""
+    raw = build_export()
+    for key in ("role_assignments", "internal_users", "security", "server_certs", "secondary_servers"):
+        raw.pop(key, None)
+    for t in raw["tasks"]:
+        t["statistics"] = {}
+    f = _findings(raw)
+    silent_codes = {"TASK_FAILED", "KSC_2FA_OFF", "KSC_INTERNAL_ADMIN", "KSC_ADMINS", "SERVER_CERT", "SECONDARY_SERVER_STALE"}
+    assert not {x.check for x in f} & silent_codes
+
+
+def _gen_cert_der(cn: str, *, not_before_days: int, not_after_days: int, now: dt.datetime = NOW) -> bytes:
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name).public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now + dt.timedelta(days=not_before_days))
+        .not_valid_after(now + dt.timedelta(days=not_after_days))
+        .sign(key, hashes.SHA256())
+    )
+    return cert.public_bytes(serialization.Encoding.DER)
+
+
+def test_parse_cert_accepts_der_pem_wrapper_and_bare_base64() -> None:
+    der = _gen_cert_der("test", not_before_days=-1, not_after_days=30)
+    b64 = base64.b64encode(der).decode("ascii")
+    from_wrapper = parse_cert({"type": "binary", "value": b64})
+    from_bare_b64 = parse_cert(b64)
+    from_der_bytes = parse_cert(der)
+    pem = x509.load_der_x509_certificate(der).public_bytes(serialization.Encoding.PEM).decode("ascii")
+    from_pem = parse_cert(pem)
+    for info in (from_wrapper, from_bare_b64, from_der_bytes, from_pem):
+        assert info is not None and info.subject == "CN=test"
+    assert from_wrapper.not_after.tzinfo is not None
+
+
+def test_parse_cert_returns_none_on_garbage() -> None:
+    assert parse_cert(None) is None
+    assert parse_cert("not a certificate") is None
+    assert parse_cert({"type": "binary", "value": "not base64!!!"}) is None
+    assert parse_cert(12345) is None
+    assert parse_cert({}) is None

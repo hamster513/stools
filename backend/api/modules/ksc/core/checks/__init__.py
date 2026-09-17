@@ -12,13 +12,26 @@ from api.modules.ksc.core.checks.hosts import (
     check_no_fullscan,
     check_no_protection,
     check_product_outdated,
+    check_reboot_pending,
     check_rtp_off,
     check_threats_active,
     check_unassigned,
 )
 from api.modules.ksc.core.checks.licenses import check_license
 from api.modules.ksc.core.checks.policies import check_policy_inherit_broken, check_policy_none
-from api.modules.ksc.core.checks.tasks import check_task_no_scan, check_task_no_update
+from api.modules.ksc.core.checks.server import (
+    check_2fa_off,
+    check_ksc_admins,
+    check_ksc_internal_admin,
+    check_secondary_server_stale,
+    check_server_cert,
+)
+from api.modules.ksc.core.checks.tasks import (
+    check_task_failed,
+    check_task_no_scan,
+    check_task_no_update,
+    check_task_stale,
+)
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex
 from api.modules.ksc.core.findings import Finding
@@ -44,6 +57,14 @@ CHECKS: list[CheckSpec] = [
     CheckSpec("TASK_NO_UPDATE", "Нет задачи обновления", "На группу с защищёнными устройствами не действует ни одна групповая задача обновления баз.", check_task_no_update),
     CheckSpec("TASK_NO_SCAN", "Нет задачи поиска", "На группу с защищёнными устройствами не действует ни одна групповая задача поиска вредоносного ПО.", check_task_no_scan),
     CheckSpec("LICENSE", "Лицензия", "Лицензионный ключ истёк, истекает в ближайшие дни или устройств больше, чем позволяет ключ. Консоль KSC: Лицензии.", check_license),
+    CheckSpec("TASK_FAILED", "Провалы в групповой задаче", "У групповой задачи обновления или поиска есть провалившиеся устройства (statistics[\"16\"]); High — если доля провалов от завершённых не ниже порога. Консоль KSC: Задачи → результаты выполнения.", check_task_failed),
+    CheckSpec("TASK_STALE", "Задача обновления давно не запускалась", "Групповая задача обновления баз не запускалась дольше порога или никогда. Консоль KSC: Задачи → последний запуск.", check_task_stale),
+    CheckSpec("REBOOT_PENDING", "Зависла запрошенная перезагрузка", "Устройству требуется перезагрузка, и запрос старше порога: пользователь или процесс не перезагружает машину. Консоль KSC: свойства устройства → Общие.", check_reboot_pending),
+    CheckSpec("KSC_2FA_OFF", "Двухэтапная проверка не обязательна для всех", "TotpGlobalSettings.Get2FaRequiredForAll вернул false: вход в консоль KSC возможен без второго фактора. Консоль KSC: Пользователи и роли → Двухэтапная проверка.", check_2fa_off),
+    CheckSpec("KSC_INTERNAL_ADMIN", "Административная роль у внутренней учётки KSC", "Внутренняя учётка KSC (не доменная) держит роль Main Administrator/Administrator: обходит контроль учётных записей домена. Консоль KSC: Пользователи и роли → Пользователи.", check_ksc_internal_admin),
+    CheckSpec("KSC_ADMINS", "Держатель административной роли", "Справочная находка: учётная запись держит роль Main Administrator/Administrator на сервере KSC. Консоль KSC: Пользователи и роли.", check_ksc_admins),
+    CheckSpec("SERVER_CERT", "Истекающий сертификат сервера", "Сертификат сервера KSC (CertPoolCtrl) истёк (Critical) или истекает в пределах порога (High). Консоль KSC: свойства сервера → Сертификаты.", check_server_cert),
+    CheckSpec("SECONDARY_SERVER_STALE", "Подчинённый сервер молчит", "Подчинённый сервер иерархии KSC не выходил на связь дольше порога агента. Консоль KSC: Иерархия серверов администрирования.", check_secondary_server_stale),
 ]
 
 CHECK_BY_CODE: dict[str, CheckSpec] = {c.code: c for c in CHECKS}

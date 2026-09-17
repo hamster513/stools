@@ -79,6 +79,7 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
             "status": h.status, "threats": h.threats, "unassigned": h.unassigned,
             "in_ad": None if cov is None else ("both" if h.host_id in cov.both else "ksc_only"),
             "components_json": json.dumps(h.components, ensure_ascii=False),
+            "extra_json": json.dumps(h.extra, ensure_ascii=False),
         }
         for h in idx.hosts
     ]

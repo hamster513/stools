@@ -47,7 +47,7 @@ def _item(h: KscHost, agent: str, bases: str, findings: int) -> dict[str, Any]:
         "bases_at": h.bases_at.isoformat() if h.bases_at else None, "bases": bases,
         "last_fullscan_at": h.last_fullscan_at.isoformat() if h.last_fullscan_at else None,
         "status": h.status, "threats": h.threats, "unassigned": h.unassigned, "in_ad": h.in_ad,
-        "components": json.loads(h.components_json or "[]"), "findings": findings,
+        "components": json.loads(h.components_json or "[]"), "extra": json.loads(h.extra_json or "{}"), "findings": findings,
     }
 
 
