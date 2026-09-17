@@ -8,7 +8,7 @@
 |---|---|---|
 | **ATT&CK** | сводная матрица техник: покрытие правилами SIEM и экспозиция из VM и AD слоями на одной матрице, разрывы, цепочки кампаний | работает |
 | **SIEM Rules Analyzer** | база знаний MaxPatrol SIEM: средовые значения в правилах, клоны, табличные списки, разметка правил по ATT&CK | работает |
-| **Антивирус** | Kaspersky Security Center: покрытие относительно AD, устройства без агента и защиты, компоненты, базы, политики и задачи; сбор скриптом или по Open API | работает |
+| **Антивирус** | Kaspersky Security Center: покрытие относительно AD, устройства без агента и защиты, компоненты, базы, политики и задачи, аудит сервера (2FA, администраторы, сертификат); сбор скриптом или по Open API | работает |
 | **Active Directory** | 20 проверок домена: DCSync, привилегированные группы, делегация, Kerberoast, ACL, AD CS; сбор скриптом или по LDAP | работает |
 | **Vulnerability Management** | хосты и CVE из MaxPatrol VM, обогащение EPSS/NVD/ExploitDB/Metasploit, риск по формуле | работает |
 | Сетевой периметр | правила межсетевых экранов и открытые сервисы | в разработке |
@@ -71,13 +71,23 @@ Impact складывается из критичности хоста и раз
 
 ## Модуль Антивирус
 
-Восемнадцать проверок состояния защиты Kaspersky Security Center: покрытие
+Двадцать шесть проверок состояния защиты Kaspersky Security Center: покрытие
 устройств (`COVER_AD_MISSING`, `COVER_KSC_ONLY`, `UNASSIGNED`, `NO_AGENT`),
 состояние защиты (`NO_PROTECTION`, `RTP_OFF`, `COMPONENT_OFF`,
-`HOST_CRITICAL`), базы и поиск (`BASES_OLD`, `THREATS_ACTIVE`,
-`NO_FULLSCAN`, `AGENT_SILENT`), версии (`PRODUCT_OUTDATED`), политики и
-задачи групп (`POLICY_NONE`, `POLICY_INHERIT_BROKEN`, `TASK_NO_UPDATE`,
-`TASK_NO_SCAN`), лицензия (`LICENSE`).
+`HOST_CRITICAL`, `REBOOT_PENDING`), базы и поиск (`BASES_OLD`,
+`THREATS_ACTIVE`, `NO_FULLSCAN`, `AGENT_SILENT`), версии
+(`PRODUCT_OUTDATED`), политики и задачи групп (`POLICY_NONE`,
+`POLICY_INHERIT_BROKEN`, `TASK_NO_UPDATE`, `TASK_NO_SCAN`, `TASK_FAILED`,
+`TASK_STALE`), лицензия (`LICENSE`).
+
+Отдельный блок проверок — аудит самого сервера KSC, не хостов: обязательна
+ли двухэтапная проверка для входа в консоль (`KSC_2FA_OFF`), не держит ли
+внутренняя (не доменная) учётка KSC административную роль
+(`KSC_INTERNAL_ADMIN`, справочно все держатели ролей — `KSC_ADMINS`), не
+истекает ли сертификат сервера (`SERVER_CERT`), не молчит ли подчинённый
+сервер иерархии (`SECONDARY_SERVER_STALE`). Экран «Сервер KSC» показывает
+эти находки вместе с администраторами, внутренними учётками, сертификатами,
+подчинёнными серверами и точками распространения обновлений.
 
 Выгрузку даёт PowerShell-скрипт на машине внутри сети
 (`docs/ksc/collector.md`) или сам модуль онлайн по Open API KSC (порт

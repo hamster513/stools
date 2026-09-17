@@ -1,7 +1,25 @@
 # API модуля Антивирус (Kaspersky Security Center)
 
 Все ручки под `/api/ksc`, требуют сессию платформы. Ошибки — `{"detail": "…"}`.
-Дизайн — `docs/superpowers/specs/2026-09-15-ksc-module-design.md`.
+Дизайн — `docs/superpowers/specs/2026-09-15-ksc-module-design.md`,
+`docs/superpowers/specs/2026-09-17-ksc-data-expansion-design.md` (блок 1:
+результаты задач, расширенные поля хостов, сервер KSC).
+
+## Формат выгрузки
+
+Файл — `stools-ksc/1` (JSON, при выгрузке скриптом — gzip). Секции
+`role_assignments`, `internal_users`, `security`, `server_certs`,
+`secondary_servers`, `update_agents` — необязательные: файл без них
+(старая выгрузка или сборщику не хватило прав на метод) разбирается как
+раньше и не даёт находок по этим секциям.
+
+Живой KSC заворачивает каждую запись списка и каждый вложенный контейнер в
+`{"type": "params", "value": {…}}`. Сборщики (PowerShell и онлайн-режим)
+читают сквозь эту обёртку, но в файл кладут ответ как пришёл — не
+разворачивая; развёртку (`strip_params` в `core/export.py`) делает
+`load_export` при загрузке файла в память. Прочие типизированные значения
+KSC (`{"type": "datetime"|"long"|"binary", "value": …}`) снимает `unwrap`
+там же.
 
 ## Серверы и снапшоты
 
@@ -32,6 +50,16 @@ GET  /snapshots/{id}/hosts             group, product, agent(none|silent|alive),
 GET  /snapshots/{id}/hosts/{host_id}   + findings[] (каждая: key, check, check_title, severity, status, details)
 ```
 
+Элемент хоста несёт `extra`: `os_build`, `cpu_arch`, `vm_type`,
+`reboot_required`, `reboot_requested_at`, `reboot_reason`, `edr_status`,
+`managed_by_other_server` — расширенные поля блока 1 (`KLHST_WKS_OS_BUILD_NUMBER`
+и другие из `docs/superpowers/specs/2026-09-17-ksc-data-expansion-design.md`).
+Они не входят в колонки таблицы `ksc_host` — хранятся в текстовой колонке
+`extra_json`, отдельной от `components_json`. `vm_type`, `edr_status` — сырые
+коды KSC (`HST_VM_TYPE`, `KLHST_WKS_EDR_STATUS`): их перечисления в открытой
+документации Open API не описаны, поэтому на экране показываются как есть,
+без расшифровки.
+
 `agent`, `bases` — фасады над `agent_silent_days` и `bases_old_days` из
 настроек: считаются на лету от `snapshot.collected_at`, в базе не хранятся.
 `in_ad` — `both`, если хост сопоставлен с включённым компьютером домена по
@@ -54,6 +82,16 @@ DELETE /verdicts/{key}?server_id=      204
 при `status=fixed`, строки берутся из предыдущего снапшота). Находки про
 хост несут `host`, находки про группу, политику, задачу или лицензию —
 только `target` (путь группы, имя политики/задачи/ключа), `host` пуст.
+Находки про сервер (`KSC_2FA_OFF`, `KSC_INTERNAL_ADMIN`, `KSC_ADMINS`,
+`SERVER_CERT`, `SECONDARY_SERVER_STALE`) не привязаны ни к хосту, ни к
+группе: `target` — учётка, роль, сертификат или подчинённый сервер;
+находки этого вида отдаёт `GET /server` (ниже), а не `/findings`.
+
+Ключ находки про хост (`host_key`) строится из FQDN устройства
+(`KLHST_WKS_FQDN`), а не из отображаемого имени (`KLHST_WKS_DN`) — оно не
+уникально в выгрузке. Если у хоста нет FQDN, используется имя в нижнем
+регистре. Этот же ключ соединяет находки с карточкой хоста в
+`/hosts/{host_id}` и со счётчиком `findings` в списке `/hosts`.
 
 ## Политики и задачи группы
 
@@ -61,7 +99,8 @@ DELETE /verdicts/{key}?server_id=      204
 GET  /snapshots/{id}/policies          {groups: [{id, name, path, level, hosts,
                                         policies: [{id, name, product, active, inherited,
                                                     accept_parent, modified_at, modified_group}],
-                                        tasks: [{id, name, type, product, inherited, schedule}],
+                                        tasks: [{id, name, type, product, inherited, schedule,
+                                                 last_run_at, ok, warning, failed}],
                                         findings: [{key, check, check_title, severity}]}]}
 ```
 
@@ -71,6 +110,41 @@ GET  /snapshots/{id}/policies          {groups: [{id, name, path, level, hosts,
 экспорт) — иначе их поддерево пропадает из ответа. `findings` группы — те
 находки `POLICY_NONE`, `POLICY_INHERIT_BROKEN`, `TASK_NO_UPDATE`,
 `TASK_NO_SCAN`, чей `target` совпадает с путём группы.
+
+У задачи `last_run_at` — `TASK_LAST_EXEC_TIME`; `ok`, `warning`, `failed` —
+счётчики устройств из последнего запуска (`statistics["4"|"8"|"16"]`,
+`Tasks.GetTaskStatistics`), а не история запусков — это тот же сырой ответ,
+что читает `TASK_FAILED` (см. «Известные оговорки»).
+
+## Сервер KSC
+
+```
+GET  /snapshots/{id}/server            {two_factor_required_for_all,
+                                        admins: [{account, internal, role, group}],
+                                        internal_users: [{name, login, builtin}],
+                                        certs: [{function, subject, not_after, days_left}],
+                                        secondary_servers: [{name, address, version,
+                                                             last_connected, status}],
+                                        update_agents: [{host, group}],
+                                        warnings: [...],
+                                        findings: [{key, check, check_title, severity, target}]}
+```
+
+Данные из сохранённого файла выгрузки, как у `/policies` (`404`, если файл
+снапшота удалён с диска). `admins` — держатели ролей из `admin_role_patterns`
+(и внутренние, и доменные учётки), `internal` — признак внутренней учётки
+KSC (не доменной). `internal_users` — весь список внутренних учёток
+(`GlobalUsersListSrvViewName`, `ul_InternalUser = 1`), не только
+администраторы. `certs` — записи `server_certs`, у которых сертификат
+разобран (`cryptography` читает `CPublic`); `function` — номер функции
+`CertPoolCtrl.GetCertificateInfo` (`1`..`4`) как строка, не расшифровывается.
+`secondary_servers.status` — сырой код `KLSRVH_SRV_STATUS`: перечисление не
+документировано в открытом Open API, значение показывается как есть.
+`warnings` — предупреждения сбора секций сервера (`server.warnings` в
+файле): отказ в правах на метод для конкретной секции, а не для всего
+сбора. `findings` — те же `KSC_2FA_OFF`, `KSC_INTERNAL_ADMIN`, `KSC_ADMINS`,
+`SERVER_CERT`, `SECONDARY_SERVER_STALE`, что лежат в базе находок снапшота,
+здесь просто отфильтрованы по коду проверки.
 
 ## Сбор
 
@@ -98,13 +172,21 @@ GET  /jobs  GET /jobs/{id}  POST /jobs/{id}/cancel
 `fullscan_days` (30), `license_days` (30), `key_components` (код компонента
 → подстроки отображаемого имени на двух языках), `allowlist_hosts` (маски
 `fnmatch` без учёта регистра — их находки понижаются до `Info` и
-помечаются `allowlisted`).
+помечаются `allowlisted`), `task_failed_share` (0.2 — доля провалов
+`statistics["16"]` от завершённых, с которой `TASK_FAILED` становится
+High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
+`REBOOT_PENDING`), `cert_days` (60 — `SERVER_CERT` становится High в
+пределах этого срока, Critical — если сертификат уже истёк),
+`admin_role_patterns` (имена ролей KSC, которые считаются
+административными: по умолчанию `Main Administrator`, `Administrator`,
+`Главный администратор`, `Администратор` — используются `KSC_INTERNAL_ADMIN`
+и `KSC_ADMINS`).
 
 `kind` задач: `import_file | collect | reanalyze`.
 
 ## Проверки
 
-18 проверок, коды латиницей:
+26 проверок, коды латиницей:
 
 ```
 COVER_AD_MISSING        Есть в AD, нет в KSC
@@ -125,7 +207,19 @@ POLICY_INHERIT_BROKEN   Наследование политики отключе
 TASK_NO_UPDATE          Нет задачи обновления
 TASK_NO_SCAN            Нет задачи поиска
 LICENSE                 Лицензия
+TASK_FAILED             Провалы в групповой задаче
+TASK_STALE              Задача обновления давно не запускалась
+REBOOT_PENDING          Зависла запрошенная перезагрузка
+KSC_2FA_OFF             Двухэтапная проверка не обязательна для всех
+KSC_INTERNAL_ADMIN      Административная роль у внутренней учётки KSC
+KSC_ADMINS              Держатель административной роли
+SERVER_CERT             Истекающий сертификат сервера
+SECONDARY_SERVER_STALE  Подчинённый сервер молчит
 ```
+
+Восемь проверок начиная с `TASK_FAILED` — блок 1 расширения (результаты
+задач, сервер KSC); их коды и описания — те же строки, что в
+`backend/api/modules/ksc/core/checks/__init__.py`.
 
 `COVER_AD_MISSING` и `COVER_KSC_ONLY` считаются, только если у сервера есть
 хотя бы один снапшот модуля AD; пересчёт снапшота KSC (`reanalyze`)
@@ -143,10 +237,24 @@ LICENSE                 Лицензия
   запуска существующей задачи проверка не обнаруживает. Сырой ответ
   `Tasks.GetTaskStatistics` сохраняется у каждой задачи в выгрузке под
   ключом `statistics` (см. `core/collector.py`) на будущее — под него
-  проверка ещё не написана.
+  написан `TASK_FAILED` (ниже).
 - **`ip_from_long`** (`core/export.py`) разворачивает `KLHST_WKS_IP_LONG`
   как little-endian. На синтетике и тестовых выгрузках это даёт верный
   адрес, но порядок байт в этом поле у живого KSC 15.1 не проверялся —
   это будет сделано на первой выгрузке заказчика; при расхождении хосты
   получат неверный `ip` (сама находка `COVER_*` от этого не пострадает,
   сверка идёт по `host_id`, а не по IP).
+- **`TASK_FAILED`** и счётчики `ok`/`warning`/`failed` в `/policies` считают
+  хосты с провалом по статистике последнего запуска задачи
+  (`Tasks.GetTaskStatistics`), а не по истории запусков: сколько раз задача
+  проваливалась и когда — KSC этой проверке не сообщает, только текущий
+  снимок счётчиков устройств.
+- **`SecondaryServerView.status`** (`/server`) и `extra.edr_status`
+  (`/hosts`) — сырые коды KSC (`KLSRVH_SRV_STATUS`, `KLHST_WKS_EDR_STATUS`):
+  их перечисления не документированы в открытом Open API, поэтому STools
+  показывает число как есть, без текстовой расшифровки.
+- **Содержимое политик KES, уязвимости и обновления ПО, события и
+  инвентарь ПО** — вне блока 1, следующие блоки дорожной карты
+  (`docs/superpowers/specs/2026-09-17-ksc-data-expansion-design.md`).
+  Наложение находок KSC на матрицу ATT&CK также остаётся вне блока 1: см.
+  «Без слоя ATT&CK» выше.
