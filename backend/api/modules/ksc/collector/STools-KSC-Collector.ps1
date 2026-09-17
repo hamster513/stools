@@ -141,6 +141,9 @@ function B64([string]$s) { return [Convert]::ToBase64String([Text.Encoding]::UTF
 
 # Set-StrictMode делает обращение к отсутствующему свойству ошибкой: читаем через Prop.
 function Prop($o, $n) { if ($null -ne $o -and $o.PSObject.Properties[$n]) { return $o.$n }; return $null }
+# Живой KSC заворачивает каждую запись и вложенный контейнер в @{ type = "params"; value = ... }:
+# читаем сквозь обёртку, в файл кладём как пришло.
+function Unwrap($o) { if ($null -ne $o -and $o -is [psobject] -and $o.PSObject.Properties["type"] -and $o.PSObject.Properties["value"] -and $o.type -eq "params") { return $o.value }; return $o }
 # KSC отдаёт числа и как 13, и как @{ type = "long"; value = 13 }.
 function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [int]$v } catch { return 0 } }
 
@@ -257,7 +260,7 @@ $script:session = Start-KscSession
 if (-not $script:session) { throw "KSC не выдал сессию" }
 try {
   Write-Step "Сервер"
-  $static = Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = @("KLADMSRV_SERVER_VERSION_ID","KLADMSRV_SERVER_HOSTNAME","KLADMSRV_PRODUCT_FULL_VERSION") }) "PxgRetVal"
+  $static = Unwrap (Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = @("KLADMSRV_SERVER_VERSION_ID","KLADMSRV_SERVER_HOSTNAME","KLADMSRV_PRODUCT_FULL_VERSION") }) "PxgRetVal")
   $domains = @((Prop (Invoke-Ksc "HostGroup.GetDomains" "{}") "PxgRetVal") | Where-Object { $null -ne $_ })
 
   Write-Step "Группы"
@@ -275,16 +278,17 @@ try {
     $n = 0
     foreach ($h in $hosts) {
       $n++
-      $hid = [string](Prop $h "KLHST_WKS_HOSTNAME")
+      $hv = Unwrap $h
+      $hid = [string](Prop $hv "KLHST_WKS_HOSTNAME")
       if (-not $hid) { continue }
-      if (((AsInt (Prop $h "KLHST_WKS_STATUS")) -band 4) -eq 0) { continue }   # без агента продуктов нет
+      if (((AsInt (Prop $hv "KLHST_WKS_STATUS")) -band 4) -eq 0) { continue }   # без агента продуктов нет
       try {
         $p = (Invoke-Ksc "HostGroup.GetHostProducts" @{ strHostName = $hid }).PxgRetVal
         $products[$hid] = $p
         $comp = @{}
-        foreach ($prod in $p.PSObject.Properties) {
+        foreach ($prod in (Unwrap $p).PSObject.Properties) {
           if ($prod.Name -in @("1103","1093")) { continue }
-          foreach ($ver in $prod.Value.PSObject.Properties) {
+          foreach ($ver in (Unwrap $prod.Value).PSObject.Properties) {
             try {
               $c = (Invoke-Ksc "HostGroup.GetComponentsForProductOnHost" @{ strHostName = $hid; strProductName = $prod.Name; strProductVersion = $ver.Name }).PxgRetVal
               $comp["{0}/{1}" -f $prod.Name, $ver.Name] = @($c)
@@ -301,7 +305,7 @@ try {
   $policies = @((Prop (Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ })
   $effective = @{}
   foreach ($g in $groups) {
-    $gid = AsInt (Prop $g "id")
+    $gid = AsInt (Prop (Unwrap $g) "id")
     try { $effective[[string]$gid] = @((Prop (Invoke-Ksc "Policy.GetEffectivePoliciesForGroup" @{ nGroupId = $gid }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
     catch { Write-Warning ("политики группы {0}: {1}" -f $gid, $_.Exception.Message) }
   }
@@ -312,7 +316,7 @@ try {
   while ($true) {
     $t = Prop (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }) "pTaskData"
     if ($null -eq $t -or @($t.PSObject.Properties).Count -eq 0) { break }
-    $tid = [string](Prop $t "TASK_UNIQUE_ID")
+    $tid = [string](Prop (Unwrap $t) "TASK_UNIQUE_ID")
     if ($tid) { try { $t | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }).PxgRetVal -Force } catch {} }
     [void]$tasks.Add($t)
   }

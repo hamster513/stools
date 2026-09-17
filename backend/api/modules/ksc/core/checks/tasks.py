@@ -12,7 +12,8 @@ from api.modules.ksc.core.export import ExportIndex, unwrap
 from api.modules.ksc.core.findings import Finding, finalize
 
 UPDATE_TASK_NAMES = ("update", "doupdate")
-SCAN_TASK_NAMES = ("scan",)
+#: `ods` (on-demand scan) — так задача поиска называется у KES на живом сервере.
+SCAN_TASK_NAMES = ("scan", "ods")
 
 
 def _task_groups(idx: ExportIndex, names: tuple[str, ...]) -> set[int]:

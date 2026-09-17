@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from api.modules.ksc.core.client import KscClient, KscError
-from api.modules.ksc.core.export import FORMAT, PRODUCT_AGENT, PRODUCT_SERVER, _int
+from api.modules.ksc.core.export import FORMAT, PRODUCT_AGENT, PRODUCT_SERVER, _int, strip_params
 
 COLLECTOR_VERSION = "1.0"
 
@@ -43,7 +43,9 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
     products: dict[str, Any] = {}
     components: dict[str, Any] = {}
     if not skip_products:
-        with_agent = [h for h in hosts if _int(h.get("KLHST_WKS_STATUS")) & 4 and h.get("KLHST_WKS_HOSTNAME")]
+        # KSC заворачивает записи в {"type": "params"}: читаем сквозь обёртку, в файл кладём как пришло.
+        plain_hosts = [strip_params(h) for h in hosts]
+        with_agent = [h for h in plain_hosts if _int(h.get("KLHST_WKS_STATUS")) & 4 and h.get("KLHST_WKS_HOSTNAME")]
         for n, h in enumerate(with_agent, 1):
             hid = str(h["KLHST_WKS_HOSTNAME"])
             try:
@@ -52,7 +54,7 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
                 p = {}
             products[hid] = p
             comp: dict[str, list[dict[str, Any]]] = {}
-            for prod, versions in p.items():
+            for prod, versions in strip_params(p).items():
                 if prod in (PRODUCT_AGENT, PRODUCT_SERVER) or not isinstance(versions, dict):
                     continue
                 for ver in versions:
@@ -67,7 +69,7 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
 
     policies = _ret(client.call("Policy.GetPoliciesForGroup", {"nGroupId": -1})) or []
     effective: dict[str, Any] = {}
-    for g in groups:
+    for g in strip_params(groups):
         gid = _int(g.get("id"))
         try:
             effective[str(gid)] = _ret(client.call("Policy.GetEffectivePoliciesForGroup", {"nGroupId": gid})) or []
@@ -80,7 +82,7 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
         t = client.call("Tasks.GetNextTask", {"strTaskIteratorId": it}).get("pTaskData") or {}
         if not t:
             break
-        tid = t.get("TASK_UNIQUE_ID")
+        tid = strip_params(t).get("TASK_UNIQUE_ID")
         if tid:
             try:
                 t["statistics"] = _ret(client.call("Tasks.GetTaskStatistics", {"strTask": str(tid)}))

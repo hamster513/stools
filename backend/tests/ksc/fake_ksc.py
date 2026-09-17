@@ -46,11 +46,35 @@ def sparse_export() -> dict[str, Any]:
     return d
 
 
+def _wrap_nested(value: Any) -> Any:
+    if isinstance(value, dict):
+        if set(value.keys()) == {"type", "value"}:
+            return value  # уже типизированное значение (datetime, long, binary)
+        return {"type": "params", "value": {k: _wrap_nested(v) for k, v in value.items()}}
+    if isinstance(value, list):
+        return [_wrap_nested(v) for v in value]
+    return value
+
+
+def wrap_like_live(payload: dict[str, Any]) -> dict[str, Any]:
+    """Как отвечает живой KSC: верхний уровень ответа плоский, а каждая запись
+    списка и каждый вложенный контейнер — `{"type": "params", "value": {…}}`."""
+    out: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, dict) and set(value.keys()) != {"type", "value"}:
+            out[key] = {k: _wrap_nested(v) for k, v in value.items()}
+        else:
+            out[key] = _wrap_nested(value)
+    return out
+
+
 class FakeKsc:
     def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "") -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
+        #: variant="params" — записи в обёртках, как у живого сервера.
+        self.wrap = variant == "params"
         #: Заголовки последнего ответа — оба транспорта отдают их клиенту.
         self.response_headers: dict[str, str] = {}
         self.calls: list[str] = []
@@ -76,6 +100,10 @@ class FakeKsc:
         return m.group(1) in {totp_code(self.mfa_secret, now + shift) for shift in (-30, 0, 30)}
 
     def handle(self, method: str, body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
+        status, payload = self._handle(method, body, headers)
+        return status, wrap_like_live(payload) if self.wrap and "PxgError" not in payload else payload
+
+    def _handle(self, method: str, body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
         self.calls.append(method)
         self.response_headers = {}
         if method == "Session.StartSession":

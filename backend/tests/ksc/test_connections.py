@@ -123,3 +123,16 @@ def test_collect_without_password_and_when_busy(auth_client: TestClient, db_sess
     db_session.add(KscJob(kind="import_file", stage="parsing", status="running", started_by="x"))
     db_session.commit()
     assert auth_client.post(f"/api/ksc/connections/{cid}/collect").status_code == 409
+
+
+def test_collect_reads_through_live_params_wrappers(monkeypatch: Any) -> None:
+    """С обёртками, как у живого сервера, сборщик всё равно запрашивает продукты хостов и политики каждой группы."""
+    f = FakeKsc(variant="params")
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    assert raw["hosts"][0]["type"] == "params"  # в файл записи уходят как пришли
+    assert len(raw["host_products"]) == 12 and set(raw["effective_policies"]) == {"0", "1", "2", "3", "4"}
+    assert all("statistics" in t for t in raw["tasks"])
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert len(export.hosts) == 14 and export.hosts[0]["KLHST_WKS_DN"] == "WS01" and len(export.host_components) == 10

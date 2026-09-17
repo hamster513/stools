@@ -60,3 +60,26 @@ def test_index_parses_hosts() -> None:
     assert by["WS03"].bases_at == NOW - dt.timedelta(days=1) * 10
     assert by["WG01"].domain == "" and by["WG01"].windomain == "WORKGROUP"
     assert idx.now == NOW
+
+
+def test_live_params_wrappers_are_stripped() -> None:
+    """Живой KSC заворачивает каждую запись в {"type": "params", "value": {…}} — разбор даёт те же хосты."""
+    from tests.ksc.fake_ksc import _wrap_nested
+
+    raw = build_export()
+    for section in ("groups", "hosts", "policies", "licenses", "domains"):
+        raw[section] = [_wrap_nested(item) for item in raw[section]]
+    raw["effective_policies"] = {k: [_wrap_nested(p) for p in v] for k, v in raw["effective_policies"].items()}
+    raw["host_products"] = {k: {prod: _wrap_nested(v) for prod, v in p.items()} for k, p in raw["host_products"].items()}
+    raw["host_components"] = {k: {pk: [_wrap_nested(c) for c in items] for pk, items in comp.items()} for k, comp in raw["host_components"].items()}
+    for t in raw["tasks"]:
+        t["TASK_INFO_PARAMS"] = _wrap_nested(t["TASK_INFO_PARAMS"])
+    wrapped = ExportIndex(load_export(json.dumps(raw).encode()))
+    plain = ExportIndex(load_export(export_bytes()))
+    assert [(h.name, h.fqdn, h.group_path, h.agent_alive, h.protection, h.product, h.components) for h in wrapped.hosts] == [
+        (h.name, h.fqdn, h.group_path, h.agent_alive, h.protection, h.product, h.components) for h in plain.hosts
+    ]
+    from api.modules.ksc.core.checks import run_all
+    from api.modules.ksc.core.config import KscConfig
+
+    assert sorted(f.key for f in run_all(wrapped, KscConfig())) == sorted(f.key for f in run_all(plain, KscConfig()))

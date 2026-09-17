@@ -159,3 +159,11 @@ def test_group_and_task_ids_tolerate_garbage_values() -> None:
     raw["tasks"][0]["TASK_INFO_PARAMS"]["PRTS_TASK_GROUPID"] = "x"
     f = _findings(raw)  # не должно упасть
     assert _targets(f, "TASK_NO_UPDATE") == {"Managed devices/Workstations", "Managed devices/Servers", "Managed devices/Workstations/Lab"}
+
+
+def test_kes_ods_task_counts_as_scan() -> None:
+    raw = build_export()
+    for t in raw["tasks"]:
+        if t["TASK_NAME"] == "Scan":
+            t["TASK_NAME"] = "ods"  # имя задачи поиска у KES на живом сервере
+    assert _targets(_findings(raw), "TASK_NO_SCAN") == {"Managed devices/Servers"}

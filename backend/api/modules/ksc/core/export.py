@@ -80,6 +80,21 @@ def unwrap(value: Any) -> Any:
     return value
 
 
+def strip_params(value: Any) -> Any:
+    """Снимает обёртки `{"type": "params", "value": {…}}` рекурсивно.
+
+    Живой KSC заворачивает в них каждую запись списка и каждый вложенный
+    контейнер; остальные типизированные значения (datetime, long, binary)
+    остаются как есть — их снимает `unwrap` при чтении поля."""
+    if isinstance(value, dict):
+        if set(value.keys()) == {"type", "value"} and value["type"] == "params":
+            return strip_params(value["value"] if value["value"] is not None else {})
+        return {k: strip_params(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [strip_params(v) for v in value]
+    return value
+
+
 class ServerInfo(BaseModel):
     name: str
     version: str = ""
@@ -125,7 +140,8 @@ def load_export(data: bytes) -> KscExport:
         found = raw.get("format") if isinstance(raw, dict) else "—"
         raise ExportFormatError(f"это не выгрузка формата {FORMAT}: в файле «{found}»")
     try:
-        return KscExport.model_validate(raw)
+        # Файл хранится как собран; обёртки контейнеров снимаются только в памяти.
+        return KscExport.model_validate(strip_params(raw))
     except ValueError as exc:
         first = str(exc).splitlines()[0][:200]
         raise ExportFormatError(f"выгрузка неполная: {first}") from exc

@@ -133,3 +133,14 @@ def test_script_explains_broken_config_and_accepts_directory_output(tmp_path: Pa
         _run_script(tmp_path, 18302, "", config).read_bytes()  # ksc.json.gz там нет — имя по умолчанию другое
     files = list((tmp_path / "default").glob("ksc-ksc01-*.json.gz"))
     assert len(files) == 1 and load_export(files[0].read_bytes()).server.name == "ksc01"
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_reads_through_live_params_wrappers(tmp_path: Path) -> None:
+    """Живой KSC заворачивает записи в {"type": "params"}: без чтения сквозь обёртку скрипт
+    не запрашивал продукты хостов и брал политики только группы 0."""
+    export = load_export(_run_script(tmp_path, 18303, "params").read_bytes())
+    expected = build_export()
+    assert len(export.hosts) == 14 and set(export.host_products) == set(expected["host_products"])
+    assert set(export.host_components) == set(expected["host_components"])
+    assert set(export.effective_policies) == {"0", "1", "2", "3", "4"} and export.server.name == "ksc01"
