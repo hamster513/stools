@@ -1,4 +1,4 @@
-"""Ручка «Сервер KSC»: 2FA, администраторы, внутренние учётки, сертификаты, иерархия, точки распространения."""
+"""Ручка «Сервер KSC»: 2FA, администраторы, сертификаты, иерархия, точки распространения."""
 from __future__ import annotations
 
 from typing import Any
@@ -16,16 +16,17 @@ def test_server_endpoint(auth_client: TestClient) -> None:
 
     assert body["two_factor_required_for_all"] is False
 
+    # account — то же значение, что target находки: UPN, если он есть
     accounts = {a["account"] for a in body["admins"]}
-    assert accounts == {"kladmin", "CORP\\ivanov"}
+    assert accounts == {"kladmin", "ivanov@corp.local"}
     kladmin = next(a for a in body["admins"] if a["account"] == "kladmin")
     assert kladmin["internal"] is True and kladmin["role"] == "Main Administrator" and kladmin["group"] == "Managed devices"
-    ivanov = next(a for a in body["admins"] if a["account"] == "CORP\\ivanov")
+    ivanov = next(a for a in body["admins"] if a["account"] == "ivanov@corp.local")
     assert ivanov["internal"] is False
+    assert "internal_users" not in body  # список внутренних учёток на экране не показывается
 
-    assert {u["name"] for u in body["internal_users"]} == {"kladmin", "KLAdmins"}
-    klad = next(u for u in body["internal_users"] if u["name"] == "KLAdmins")
-    assert klad["login"] == "KLAdmins" and klad["builtin"] is True
+    role_targets = {f["target"] for f in body["findings"] if f["check"] in ("KSC_ADMINS", "KSC_INTERNAL_ADMIN")}
+    assert role_targets == accounts  # находки пристают к строкам таблицы
 
     assert len(body["certs"]) == 1
     assert body["certs"][0]["function"] == "1" and body["certs"][0]["days_left"] == 30
@@ -55,7 +56,6 @@ def test_server_endpoint_old_file_without_sections(auth_client: TestClient) -> N
     assert body == {
         "two_factor_required_for_all": None,
         "admins": [],
-        "internal_users": [],
         "certs": [],
         "secondary_servers": [],
         "update_agents": [],

@@ -1,4 +1,4 @@
-"""Сервер KSC: 2FA, администраторы, внутренние учётки, сертификаты, иерархия, точки распространения."""
+"""Сервер KSC: 2FA, администраторы, сертификаты, иерархия, точки распространения."""
 from __future__ import annotations
 
 import datetime as dt
@@ -14,7 +14,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.certs import parse_cert
 from api.modules.ksc.core.checks import CHECK_BY_CODE
-from api.modules.ksc.core.checks.server import _is_admin_role
+from api.modules.ksc.core.checks.server import is_admin_role, role_account
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, _dt, _int, _str, load_export_path, unwrap
 from api.modules.ksc.models import KscFinding, KscSnapshot
@@ -33,12 +33,6 @@ class AdminView(BaseModel):
     internal: bool
     role: str
     group: str
-
-
-class InternalUserView(BaseModel):
-    name: str
-    login: str
-    builtin: bool
 
 
 class CertView(BaseModel):
@@ -72,7 +66,6 @@ class ServerFindingView(BaseModel):
 class ServerResponse(BaseModel):
     two_factor_required_for_all: bool | None
     admins: list[AdminView]
-    internal_users: list[InternalUserView]
     certs: list[CertView]
     secondary_servers: list[SecondaryServerView]
     update_agents: list[UpdateAgentView]
@@ -84,26 +77,16 @@ def _admins(idx: ExportIndex, cfg: KscConfig) -> list[AdminView]:
     out = []
     for r in idx.export.role_assignments:
         role, role_display = _str(r.get("wstrRoleName")), _str(r.get("wstrRoleDisplayName"))
-        if not _is_admin_role(role, role_display, cfg.admin_role_patterns):
+        if not is_admin_role(role, role_display, cfg.admin_role_patterns):
             continue
         out.append(AdminView(
-            account=_str(r.get("wstrTrusteeDisplayName")),
+            # То же значение, что в `target` находок о ролях, — иначе находки не пристанут к строке.
+            account=role_account(r),
             internal=_int(r.get("nInternalUserId")) > 0,
             role=role_display or role,
             group=_str(r.get("wstrGroupName")),
         ))
     return out
-
-
-def _internal_users(idx: ExportIndex) -> list[InternalUserView]:
-    return [
-        InternalUserView(
-            name=_str(u.get("ul_wstrDisplayName")),
-            login=_str(u.get("ul_wstrSamAccountName")),
-            builtin=bool(unwrap(u.get("ul_Builtin"))),
-        )
-        for u in idx.export.internal_users
-    ]
 
 
 def _certs(idx: ExportIndex) -> list[CertView]:
@@ -169,7 +152,6 @@ def get_server(
     return ServerResponse(
         two_factor_required_for_all=two_fa if isinstance(two_fa, bool) else None,
         admins=_admins(idx, cfg),
-        internal_users=_internal_users(idx),
         certs=_certs(idx),
         secondary_servers=_secondary_servers(idx),
         update_agents=_update_agents(idx),

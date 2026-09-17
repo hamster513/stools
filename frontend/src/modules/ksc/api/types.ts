@@ -308,12 +308,6 @@ export interface ServerAdmin {
   group: string
 }
 
-export interface ServerInternalUser {
-  name: string
-  login: string
-  builtin: boolean
-}
-
 export interface ServerCert {
   function: string
   subject: string
@@ -345,7 +339,6 @@ export interface ServerFinding {
 export interface ServerData {
   two_factor_required_for_all: boolean | null
   admins: ServerAdmin[]
-  internal_users: ServerInternalUser[]
   certs: ServerCert[]
   secondary_servers: ServerSecondaryServer[]
   update_agents: ServerUpdateAgent[]

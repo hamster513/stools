@@ -195,6 +195,15 @@ def test_task_failed_medium_below_threshold_and_silent_without_failures() -> Non
     assert not [x for x in _findings(raw) if x.check == "TASK_FAILED"]  # без провалов не срабатывает вовсе
 
 
+def test_task_failed_survives_non_numeric_statistics() -> None:
+    """Счётчики statistics — значения KSC: строка или контейнер вместо числа не роняют проверку."""
+    raw = build_export()
+    raw["tasks"][0]["statistics"] = {"16": "abc", "4": {"x": 1}}
+    f = _findings(raw)
+    assert not [x for x in f if x.check == "TASK_FAILED"]
+    assert f  # run_all дошёл до конца, остальные проверки на месте
+
+
 def test_task_stale_fires_on_old_or_never_run_update_task() -> None:
     raw = build_export()
     raw["tasks"][0]["TASK_LAST_EXEC_TIME"] = {"type": "datetime", "value": (NOW - dt.timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -228,17 +237,43 @@ def test_ksc_2fa_off_and_respects_enabled() -> None:
     assert not [x for x in _findings(raw) if x.check == "KSC_2FA_OFF"]
 
 
+def test_ksc_2fa_off_silent_on_non_boolean_value() -> None:
+    """Не-логическое значение — это «нет данных» (ручка /server показывает null), а не выключенная 2FA."""
+    for value in (0, ""):
+        raw = build_export()
+        raw["security"]["two_factor_required_for_all"] = value
+        assert not [x for x in _findings(raw) if x.check == "KSC_2FA_OFF"]
+
+
 def test_ksc_internal_admin_only_for_internal_account_holding_admin_role() -> None:
     f = _findings()
     assert _targets(f, "KSC_INTERNAL_ADMIN") == {"kladmin"}  # доменная учётка ivanov с ролью Administrator не внутренняя
     internal = next(x for x in f if x.check == "KSC_INTERNAL_ADMIN")
     assert internal.severity == "Medium" and internal.details["role"] == "Main Administrator"
+    assert internal.details["display_name"] == "kladmin"  # UPN у внутренней учётки пуст — цель по имени
 
 
 def test_ksc_admins_lists_all_admin_role_holders_but_not_auditor() -> None:
     f = _findings()
-    assert _targets(f, "KSC_ADMINS") == {"kladmin", "CORP\\ivanov"}
+    # цель — UPN, если он есть: устойчивее и менее личный, чем отображаемое имя
+    assert _targets(f, "KSC_ADMINS") == {"kladmin", "ivanov@corp.local"}
     assert all(x.severity == "Info" for x in f if x.check == "KSC_ADMINS")
+    ivanov = next(x for x in f if x.check == "KSC_ADMINS" and x.target == "ivanov@corp.local")
+    assert ivanov.details["display_name"] == "CORP\\ivanov" and ivanov.key_extra == "2|0"
+
+
+def test_role_findings_keys_are_unique_per_role_and_group() -> None:
+    """Одно и то же отображаемое имя в двух группах и две роли у одной учётки — разные находки."""
+    raw = build_export()
+    admin = raw["role_assignments"][0]
+    raw["role_assignments"] = [
+        admin,
+        dict(admin, nGroupId=2, wstrGroupName="Workstations"),          # та же роль, другая группа
+        dict(admin, nRoleId=7, wstrRoleName="Administrator", wstrRoleDisplayName="Administrator"),  # другая роль
+    ]
+    f = [x for x in _findings(raw) if x.check == "KSC_INTERNAL_ADMIN"]
+    assert len(f) == 3 and len({x.key for x in f}) == 3
+    assert {x.key_extra for x in f} == {"1|0", "1|2", "7|0"}
 
 
 def test_server_cert_high_when_expiring_within_threshold() -> None:
@@ -306,6 +341,15 @@ def test_parse_cert_accepts_der_pem_wrapper_and_bare_base64() -> None:
     for info in (from_wrapper, from_bare_b64, from_der_bytes, from_pem):
         assert info is not None and info.subject == "CN=test"
     assert from_wrapper.not_after.tzinfo is not None
+
+
+def test_parse_cert_accepts_base64_wrapped_in_lines() -> None:
+    """KSC переносит base64 по строкам — переводы строк и пробелы не должны ломать разбор."""
+    der = _gen_cert_der("test", not_before_days=-1, not_after_days=30)
+    b64 = base64.b64encode(der).decode("ascii")
+    wrapped = "\n".join(b64[i : i + 64] for i in range(0, len(b64), 64)) + "\n"
+    info = parse_cert({"type": "binary", "value": wrapped})
+    assert info is not None and info.subject == "CN=test"
 
 
 def test_parse_cert_returns_none_on_garbage() -> None:

@@ -46,7 +46,8 @@ def parse_cert(cpublic: Any) -> CertInfo | None:
             data = text.encode("ascii", errors="ignore")
         else:
             try:
-                data = base64.b64decode(text, validate=True)
+                # KSC переносит base64 по строкам: пробелы и переводы строк убираем, иначе validate=True их не примет.
+                data = base64.b64decode("".join(text.split()), validate=True)
             except (binascii.Error, ValueError):
                 return None
     elif isinstance(value, bytes):

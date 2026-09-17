@@ -9,7 +9,7 @@ from typing import Any
 
 from api.modules.ksc.core.checks.common import date_str, days_since
 from api.modules.ksc.core.config import KscConfig
-from api.modules.ksc.core.export import ExportIndex, _dt, _str, unwrap
+from api.modules.ksc.core.export import ExportIndex, _dt, _int, _str, unwrap
 from api.modules.ksc.core.findings import Finding, finalize
 
 UPDATE_TASK_NAMES = ("update", "doupdate")
@@ -57,13 +57,13 @@ def check_task_failed(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
         if group_id < 0:
             continue
         stats: dict[str, Any] = unwrap(t.get("statistics")) or {}
-        failed = int(stats.get("16") or 0)
+        failed = _int(stats.get("16"))
         if failed <= 0:
             continue
-        success = int(stats.get("4") or 0)
-        warning = int(stats.get("8") or 0)
+        success = _int(stats.get("4"))
+        warning = _int(stats.get("8"))
         total = failed + success + warning
-        share = failed / total if total else 1.0
+        share = failed / total
         severity = "High" if share >= cfg.task_failed_share else "Medium"
         out.append(finalize(Finding(
             "TASK_FAILED", severity, target=_task_target(idx, t, info, group_id),
