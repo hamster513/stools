@@ -29,6 +29,8 @@ class LockSummaryView(BaseModel):
     total: int
     locked: int
     share: float
+    #: Настройки с признаком замка; 0 — замки в политике не распознаны.
+    with_lock_flag: int
 
 
 class SettingView(BaseModel):
@@ -89,7 +91,7 @@ def get_policy_contents(
         )
     return PolicyContentsResponse(
         policy=header,
-        summary=LockSummaryView(total=summary.total, locked=summary.locked, share=summary.share),
+        summary=LockSummaryView(total=summary.total, locked=summary.locked, share=summary.share, with_lock_flag=summary.with_lock_flag),
         sections=[SectionView(name=name, settings=items) for name, items in by_section.items()],
         errors=[str(e) for e in (content.get("errors") or [])],
     )

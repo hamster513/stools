@@ -38,18 +38,20 @@ def _target_details(idx: ExportIndex, policy_id: str, policies: dict[str, dict[s
 
 def _summary_details(idx: ExportIndex, policy_id: str, policies: dict[str, dict[str, Any]], content: dict[str, Any], summary: LockSummary) -> tuple[str, dict[str, Any]]:
     target, details = _target_details(idx, policy_id, policies, content)
-    details.update(total=summary.total, locked=summary.locked, share=summary.share)
+    details.update(total=summary.total, locked=summary.locked, with_lock_flag=summary.with_lock_flag, share=summary.share)
     return target, details
 
 
 def check_policy_no_locks(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
     """Активная политика продукта защиты, в которой ни одна настройка не замкнута:
-    любую из них можно переопределить локально на устройстве."""
+    любую из них можно переопределить локально на устройстве. Считаются только настройки с
+    признаком замка (`KLPRSS_Mnd`); политика без единого признака — формат замков не распознан,
+    проверка молчит."""
     out = []
     policies = _policies_by_id(idx)
     for policy_id, content in idx.export.policy_contents.items():
         summary = lock_summary(walk_settings(content.get("sections", {})))
-        if summary.total > 0 and summary.locked == 0:
+        if summary.with_lock_flag > 0 and summary.locked == 0:
             target, details = _summary_details(idx, policy_id, policies, content, summary)
             out.append(finalize(Finding(check="POLICY_NO_LOCKS", severity="High", target=target, details=details, key_extra=policy_id), cfg))
     return out
@@ -57,12 +59,13 @@ def check_policy_no_locks(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
 
 def check_policy_weak_locks(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
     """Доля замкнутых настроек политики ниже порога `policy_lock_share`, но не нулевая
-    (нулевая доля — это `POLICY_NO_LOCKS`)."""
+    (нулевая доля — это `POLICY_NO_LOCKS`). Доля — среди настроек с признаком замка; политика без
+    единого признака молчит."""
     out = []
     policies = _policies_by_id(idx)
     for policy_id, content in idx.export.policy_contents.items():
         summary = lock_summary(walk_settings(content.get("sections", {})))
-        if summary.total > 0 and summary.locked > 0 and summary.share < cfg.policy_lock_share:
+        if summary.with_lock_flag > 0 and summary.locked > 0 and summary.share < cfg.policy_lock_share:
             target, details = _summary_details(idx, policy_id, policies, content, summary)
             out.append(finalize(Finding(check="POLICY_WEAK_LOCKS", severity="Medium", target=target, details=details, key_extra=policy_id), cfg))
     return out

@@ -73,6 +73,23 @@ def test_walk_settings_plain_container_without_val_is_descended() -> None:
     assert set(out) == {"Wrapper.A", "Wrapper.B"}
 
 
+def test_walk_settings_locked_container_with_plain_children_is_one_setting() -> None:
+    """`KLPRSS_Val` — словарь, но среди детей нет контейнеров `KLPRSS_Val`: это значение, а не
+    вложенность. Одна замкнутая настройка со всем словарём в значении — не «ни одного замка»."""
+    sections = {"Sec": {"Scan": {"KLPRSS_Val": {"Enabled": True, "Level": 2}, "KLPRSS_Mnd": True}}}
+    out = walk_settings(sections)
+    assert len(out) == 1
+    assert out[0].path == "Scan" and out[0].value == {"Enabled": True, "Level": 2} and out[0].locked is True
+    summary = lock_summary(out)
+    assert summary.total == 1 and summary.locked == 1 and summary.with_lock_flag == 1 and summary.share == 1.0
+
+
+def test_walk_settings_descends_when_any_child_is_container() -> None:
+    """Хотя бы один ребёнок — контейнер `KLPRSS_Val`: спуск; простые значения рядом не настройки."""
+    sections = {"Sec": {"Group": {"KLPRSS_Val": {"A": _lock(True, locked=True), "Note": "x"}, "KLPRSS_Mnd": False}}}
+    assert [(s.path, s.locked) for s in walk_settings(sections)] == [("Group.A", True)]
+
+
 def test_walk_settings_ignores_bare_scalars_and_lists() -> None:
     """Значения без контейнера `KLPRSS_Val` (голая строка, список) — не настройки, не спускаются."""
     sections = {"Sec": {"PlainString": "hunter2", "PlainList": ["a", "b"], "A": _lock(True, locked=True)}}
@@ -111,10 +128,10 @@ def test_walk_settings_on_synthetic_policy_contents() -> None:
         ("KLPRSS_Components", "FileThreatProtection.Enabled"), ("KLPRSS_Components", "Firewall.Enabled"),
     }
     summary = lock_summary(locked_settings)
-    assert summary.total == 5 and summary.locked == 3 and summary.share == 0.6
+    assert summary.total == 5 and summary.locked == 3 and summary.with_lock_flag == 5 and summary.share == 0.6
     unlocked_settings = walk_settings(contents["3"]["sections"])
     unlocked_summary = lock_summary(unlocked_settings)
-    assert unlocked_summary.total == 5 and unlocked_summary.locked == 0 and unlocked_summary.share == 0.0
+    assert unlocked_summary.total == 5 and unlocked_summary.locked == 0 and unlocked_summary.with_lock_flag == 5 and unlocked_summary.share == 0.0
 
 
 # --- lock_summary ---
@@ -122,7 +139,13 @@ def test_walk_settings_on_synthetic_policy_contents() -> None:
 
 def test_lock_summary_empty_is_zero_share_no_division_error() -> None:
     s = lock_summary([])
-    assert s.total == 0 and s.locked == 0 and s.share == 0.0
+    assert s.total == 0 and s.locked == 0 and s.share == 0.0 and s.with_lock_flag == 0
+
+
+def test_lock_summary_share_counts_only_settings_with_lock_flag() -> None:
+    sections = {"Sec": {"A": _lock(True, locked=True), "B": _lock(True, locked=False), "C": _lock(True, locked=None), "D": _lock(True, locked=None)}}
+    s = lock_summary(walk_settings(sections))
+    assert s.total == 4 and s.locked == 1 and s.with_lock_flag == 2 and s.share == 0.5
 
 
 # --- truncate_value ---
@@ -148,7 +171,7 @@ def test_check_policy_no_locks_fires_on_policy_without_any_lock() -> None:
     assert {x.target for x in f} == {"KES lab"}
     finding = f[0]
     assert finding.severity == "High" and finding.key_extra == "3"
-    assert finding.details["total"] == 5 and finding.details["locked"] == 0 and finding.details["share"] == 0.0
+    assert finding.details["total"] == 5 and finding.details["locked"] == 0 and finding.details["with_lock_flag"] == 5 and finding.details["share"] == 0.0
     assert finding.details["product"] == "KES" and finding.details["group"] == "Managed devices/Workstations/Lab"
 
 
@@ -161,7 +184,7 @@ def test_check_policy_weak_locks_fires_below_threshold() -> None:
     f = _run(check_policy_weak_locks, cfg=cfg)
     assert {x.target for x in f} == {"KES workstations"}
     assert f[0].severity == "Medium" and f[0].key_extra == "1"
-    assert f[0].details["share"] == 0.6
+    assert f[0].details["share"] == 0.6 and f[0].details["with_lock_flag"] == 5
 
 
 def test_check_policy_weak_locks_silent_at_default_threshold() -> None:
@@ -172,6 +195,47 @@ def test_check_policy_weak_locks_does_not_fire_on_policy_with_zero_locks() -> No
     """Нулевая доля — это `POLICY_NO_LOCKS`, не `POLICY_WEAK_LOCKS`."""
     f = _run(check_policy_weak_locks, cfg=KscConfig(policy_lock_share=1.0))
     assert "KES lab" not in {x.target for x in f}
+
+
+def _no_lock_flags(raw: dict[str, Any]) -> dict[str, Any]:
+    """Убирает `KLPRSS_Mnd` из всех контейнеров — формат замков, который обход не распознаёт."""
+    if isinstance(raw, dict):
+        return {k: _no_lock_flags(v) for k, v in raw.items() if k != "KLPRSS_Mnd"}
+    if isinstance(raw, list):
+        return [_no_lock_flags(v) for v in raw]
+    return raw
+
+
+def test_lock_checks_silent_when_no_setting_has_lock_flag() -> None:
+    """Ни одной настройки с `KLPRSS_Mnd` — замки не распознаны: ни High «нет замков», ни Medium,
+    хотя настроек много и ни одна не замкнута."""
+    raw = build_export()
+    for content in raw["policy_contents"].values():
+        content["sections"] = _no_lock_flags(content["sections"])
+    idx = _idx(raw)
+    cfg = KscConfig(policy_lock_share=1.0)
+    summary = lock_summary(walk_settings(idx.export.policy_contents["3"]["sections"]))
+    assert summary.total == 5 and summary.with_lock_flag == 0 and summary.share == 0.0
+    assert not check_policy_no_locks(idx, cfg)
+    assert not check_policy_weak_locks(idx, cfg)
+
+
+def test_check_policy_no_locks_not_fired_by_locked_container_with_plain_children() -> None:
+    """Сценарий ревью: единственная настройка — замкнутый контейнер со словарём простых значений.
+    Раньше обход спускался в словарь, терял замок и давал ложную High."""
+    raw = build_export()
+    raw["policy_contents"]["3"]["sections"] = {"Sec": {"Scan": {"KLPRSS_Val": {"Enabled": True, "Level": 2}, "KLPRSS_Mnd": True}, "Other": _lock(True, locked=False)}}
+    assert not [x for x in _run(check_policy_no_locks, raw) if x.target == "KES lab"]
+    weak = _run(check_policy_weak_locks, raw, KscConfig(policy_lock_share=0.9))
+    assert [(x.target, x.details["locked"], x.details["with_lock_flag"]) for x in weak if x.target == "KES lab"] == [("KES lab", 1, 2)]
+
+
+def test_check_policy_content_missing_shows_policy_limit_reason() -> None:
+    """Политика, пропущенная сборщиком по лимиту, приходит с `errors == ["лимит политик"]`."""
+    raw = build_export()
+    raw["policy_contents"]["3"] = {"product": "KES", "version": "12.0.0.0", "sections": {}, "errors": ["лимит политик"]}
+    f = _run(check_policy_content_missing, raw)
+    assert [(x.target, x.details["case"], x.details["reason"]) for x in f] == [("KES lab", "empty", "лимит политик")]
 
 
 def test_check_policy_content_missing_fires_when_section_present_but_policy_absent() -> None:

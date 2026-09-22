@@ -38,7 +38,7 @@ function GroupRow({ group, serverId }: { group: PolicyGroup; serverId: number })
               </div>
               {p.has_contents && (
                 <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-secondary">
-                  {p.locks && <span>замков {p.locks.locked} из {p.locks.total}</span>}
+                  {p.locks && (p.locks.with_lock_flag > 0 ? <span>замков {p.locks.locked} из {p.locks.with_lock_flag}</span> : <span>замки не распознаны</span>)}
                   <Link to={`/ksc/servers/${serverId}/policies/${p.id}`} className="text-primary hover:underline">содержимое</Link>
                 </div>
               )}

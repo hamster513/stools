@@ -97,7 +97,12 @@ export function PolicyContentsPage({ serverId, policyId }: { serverId: number; p
         <p className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-text-secondary">
           <span>{policy.product}{policy.version ? ` ${policy.version}` : ''}</span>
           <span>группа {policy.group || '—'}</span>
-          {summary && <span>замков {summary.locked} из {summary.total} ({Math.round(summary.share * 100)}%)</span>}
+          {summary && summary.with_lock_flag > 0 && (
+            <span>замков {summary.locked} из {summary.with_lock_flag} ({Math.round(summary.share * 100)}%)</span>
+          )}
+          {summary && summary.with_lock_flag > 0 && summary.with_lock_flag < summary.total && (
+            <span>без признака замка {summary.total - summary.with_lock_flag}</span>
+          )}
         </p>
       </div>
 
@@ -105,6 +110,11 @@ export function PolicyContentsPage({ serverId, policyId }: { serverId: number; p
         <EmptyState icon={FileWarning} title="Содержимого нет" description={errors[0] ?? 'Содержимое этой политики не собрано.'} />
       ) : (
         <>
+          {summary.with_lock_flag === 0 && (
+            <div className="mb-3 rounded border border-grid bg-surface px-3 py-2 text-xs text-text-secondary">
+              Замки в этой политике не распознаны: ни у одной настройки нет признака замка, проверки замков её не оценивают.
+            </div>
+          )}
           {errors.length > 0 && (
             <div className="mb-3 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-xs text-text">
               Не прочитались секции: {errors.join('; ')}

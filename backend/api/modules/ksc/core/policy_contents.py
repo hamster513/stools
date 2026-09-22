@@ -1,11 +1,13 @@
 """Дерево настроек политики: обход контейнеров `KLPRSS_Val` с замками, свод по замкам.
 
 Формат настройки: контейнер `{"KLPRSS_Val": …, "KLPRSS_Mnd": …, "KLPRSS_ValLck": …,
-"KLPRSS_ValLckPolicy": …, "KLPRSS_ValLckGroup": …}`. Если сам `KLPRSS_Val` — словарь
-дальнейших контейнеров, это не значение, а вложенность: спуск внутрь с накоплением `path`
-(`a.b.c`), без узла-листа на этом уровне. Обычные контейнеры без `KLPRSS_Val` — просто
-спуск. Списки и скаляры не спускаются (в лист превращаются как есть, если сами лежат в
-`KLPRSS_Val`; как значения секции верхнего уровня — просто игнорируются)."""
+"KLPRSS_ValLckPolicy": …, "KLPRSS_ValLckGroup": …}`. Если `KLPRSS_Val` — словарь, среди
+детей которого есть хотя бы один такой контейнер (словарь с `KLPRSS_Val`), это не значение, а
+вложенность: спуск внутрь с накоплением `path` (`a.b.c`), без узла-листа на этом уровне.
+Иначе контейнер — лист-настройка со своим замком, значение — весь `KLPRSS_Val` (например,
+`{"Enabled": true, "Level": 2}`). Обычные словари без `KLPRSS_Val` — просто спуск. Списки и
+скаляры не спускаются (в лист превращаются как есть, если сами лежат в `KLPRSS_Val`; как
+значения вне контейнера — просто игнорируются)."""
 from __future__ import annotations
 
 import json
@@ -30,7 +32,14 @@ class Setting:
 class LockSummary:
     total: int
     locked: int
+    #: Доля замкнутых среди настроек с признаком замка (`locked / with_lock_flag`), 0 — если таких нет.
     share: float
+    #: Настройки, в контейнере которых есть `KLPRSS_Mnd`; 0 — замки в политике не распознаны.
+    with_lock_flag: int
+
+
+def _is_container(node: Any) -> bool:
+    return isinstance(node, dict) and "KLPRSS_Val" in node
 
 
 def _walk(section: str, path: str, node: Any, out: list[Setting]) -> None:
@@ -38,7 +47,7 @@ def _walk(section: str, path: str, node: Any, out: list[Setting]) -> None:
         return
     if "KLPRSS_Val" in node:
         value = node.get("KLPRSS_Val")
-        if isinstance(value, dict):
+        if isinstance(value, dict) and any(_is_container(child) for child in value.values()):
             for key, child in value.items():
                 _walk(section, f"{path}.{key}" if path else key, child, out)
             return
@@ -64,10 +73,13 @@ def walk_settings(sections: dict[str, Any]) -> list[Setting]:
 
 
 def lock_summary(settings: list[Setting]) -> LockSummary:
+    """Свод по замкам. Доля считается только по настройкам с признаком замка (`KLPRSS_Mnd`):
+    настройка без признака — неизвестно, замкнута ли она, в знаменатель не идёт."""
     total = len(settings)
     locked = sum(1 for s in settings if s.locked)
-    share = locked / total if total else 0.0
-    return LockSummary(total, locked, share)
+    with_lock_flag = sum(1 for s in settings if s.locked is not None)
+    share = locked / with_lock_flag if with_lock_flag else 0.0
+    return LockSummary(total, locked, share, with_lock_flag)
 
 
 def truncate_value(value: Any, limit: int = 200) -> str:

@@ -36,6 +36,8 @@ GROUP_CHECKS = {"POLICY_NONE", "POLICY_INHERIT_BROKEN", "TASK_NO_UPDATE", "TASK_
 class LockCountView(BaseModel):
     total: int
     locked: int
+    #: Настройки с признаком замка; 0 — замки в политике не распознаны.
+    with_lock_flag: int
 
 
 class PolicyView(BaseModel):
@@ -87,13 +89,18 @@ class PoliciesResponse(BaseModel):
     groups: list[GroupView]
 
 
-def _policy_view(p: dict[str, Any], policy_contents: dict[str, dict[str, Any]]) -> PolicyView:
+def _policy_view(p: dict[str, Any], policy_contents: dict[str, dict[str, Any]], locks_cache: dict[str, LockCountView]) -> PolicyView:
+    """`locks_cache` — свод замков по `KLPOL_ID` на один запрос: политика действует во многих
+    группах, дерево её настроек обходится один раз."""
     modified = unwrap(p.get("KLPOL_MODIFIED"))
-    content = policy_contents.get(_str(p.get("KLPOL_ID")))
+    policy_id = _str(p.get("KLPOL_ID"))
+    content = policy_contents.get(policy_id)
     locks = None
     if content is not None:
-        summary = lock_summary(walk_settings(content.get("sections", {})))
-        locks = LockCountView(total=summary.total, locked=summary.locked)
+        if policy_id not in locks_cache:
+            summary = lock_summary(walk_settings(content.get("sections", {})))
+            locks_cache[policy_id] = LockCountView(total=summary.total, locked=summary.locked, with_lock_flag=summary.with_lock_flag)
+        locks = locks_cache[policy_id]
     return PolicyView(
         id=_int(p.get("KLPOL_ID")),
         name=_str(p.get("KLPOL_DN")),
@@ -162,7 +169,7 @@ def _is_orphan(idx: ExportIndex, g: dict[str, Any]) -> bool:
     return pid >= 0 and pid not in idx.groups_by_id
 
 
-def _walk(idx: ExportIndex, group_id: int, level: int, findings_by_target: dict[str, list[KscFinding]], out: list[GroupView]) -> None:
+def _walk(idx: ExportIndex, group_id: int, level: int, findings_by_target: dict[str, list[KscFinding]], out: list[GroupView], locks_cache: dict[str, LockCountView]) -> None:
     g = idx.groups_by_id[group_id]
     path = idx.group_path(group_id)
     out.append(
@@ -172,7 +179,7 @@ def _walk(idx: ExportIndex, group_id: int, level: int, findings_by_target: dict[
             path=path,
             level=level,
             hosts=len(idx.hosts_by_group.get(group_id, [])),
-            policies=[_policy_view(p, idx.export.policy_contents) for p in idx.export.effective_policies.get(str(group_id), [])],
+            policies=[_policy_view(p, idx.export.policy_contents, locks_cache) for p in idx.export.effective_policies.get(str(group_id), [])],
             tasks=_group_tasks(idx, group_id, _ancestors(idx, group_id)),
             findings=[
                 FindingView(key=f.key, check=f.check, check_title=CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check, severity=f.severity)
@@ -181,7 +188,7 @@ def _walk(idx: ExportIndex, group_id: int, level: int, findings_by_target: dict[
         )
     )
     for child in idx.children(group_id):
-        _walk(idx, child, level + 1, findings_by_target, out)
+        _walk(idx, child, level + 1, findings_by_target, out, locks_cache)
 
 
 @router.get("/snapshots/{snapshot_id}/policies", response_model=PoliciesResponse)
@@ -206,6 +213,7 @@ def get_policies(
     # Группы с потерянным родителем (id родителя нет в выгрузке) — тоже корни, иначе их поддерево пропадает.
     orphans = sorted(gid for gid, g in idx.groups_by_id.items() if _is_orphan(idx, g))
     out: list[GroupView] = []
+    locks_cache: dict[str, LockCountView] = {}
     for r in roots + orphans:
-        _walk(idx, r, 0, findings_by_target, out)
+        _walk(idx, r, 0, findings_by_target, out, locks_cache)
     return PoliciesResponse(groups=out)

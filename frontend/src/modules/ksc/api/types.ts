@@ -258,6 +258,8 @@ export interface HostDetail extends Omit<Host, 'findings'> {
 export interface LockCount {
   total: number
   locked: number
+  /** Настройки с признаком замка; 0 — замки в политике не распознаны. */
+  with_lock_flag: number
 }
 
 export interface PolicyItem {
@@ -319,7 +321,10 @@ export interface PolicyHeader {
 export interface LockSummary {
   total: number
   locked: number
+  /** Доля замкнутых среди настроек с признаком замка. */
   share: number
+  /** Настройки с признаком замка; 0 — замки в политике не распознаны. */
+  with_lock_flag: number
 }
 
 export interface PolicySetting {
