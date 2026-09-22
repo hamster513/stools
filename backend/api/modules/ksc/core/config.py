@@ -41,6 +41,11 @@ class KscConfig(BaseModel):
     cert_days: int = Field(default=60, ge=1)
     #: Имена ролей (wstrRoleName/wstrRoleDisplayName), которые считаются административными.
     admin_role_patterns: list[str] = Field(default_factory=_default_admin_role_patterns)
+    #: Доля замкнутых настроек политики, ниже которой — POLICY_WEAK_LOCKS.
+    policy_lock_share: float = Field(default=0.5, ge=0.0, le=1.0)
+    #: Не больше стольки политик собирает онлайн-сборщик за один сбор (справочно для API/UI;
+    #: сам предел применяется в core.collector.collect через этот же параметр).
+    policy_contents_max_policies: int = Field(default=200, ge=1)
 
 
 DEFAULT_CONFIG = KscConfig()

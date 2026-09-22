@@ -19,6 +19,11 @@ from api.modules.ksc.core.checks.hosts import (
 )
 from api.modules.ksc.core.checks.licenses import check_license
 from api.modules.ksc.core.checks.policies import check_policy_inherit_broken, check_policy_none
+from api.modules.ksc.core.checks.policy_contents import (
+    check_policy_content_missing,
+    check_policy_no_locks,
+    check_policy_weak_locks,
+)
 from api.modules.ksc.core.checks.server import (
     check_2fa_off,
     check_ksc_admins,
@@ -65,6 +70,9 @@ CHECKS: list[CheckSpec] = [
     CheckSpec("KSC_ADMINS", "Держатель административной роли", "Справочная находка: учётная запись держит роль Main Administrator/Administrator на сервере KSC. Консоль KSC: Пользователи и роли.", check_ksc_admins),
     CheckSpec("SERVER_CERT", "Истекающий сертификат сервера", "Сертификат сервера KSC (CertPoolCtrl) истёк (Critical) или истекает в пределах порога (High). Консоль KSC: свойства сервера → Сертификаты.", check_server_cert),
     CheckSpec("SECONDARY_SERVER_STALE", "Подчинённый сервер молчит", "Подчинённый сервер иерархии KSC не выходил на связь дольше порога агента. Консоль KSC: Иерархия серверов администрирования.", check_secondary_server_stale),
+    CheckSpec("POLICY_NO_LOCKS", "В политике нет ни одного замка", "Активная политика продукта защиты, в которой ни одна настройка не замкнута: любую из них можно переопределить локально на устройстве. Консоль KSC: политика → раздел настроек → значок замка.", check_policy_no_locks),
+    CheckSpec("POLICY_WEAK_LOCKS", "Мало замкнутых настроек в политике", "Доля замкнутых настроек политики ниже порога `policy_lock_share`: большая часть защиты не защищена от локального переопределения. Консоль KSC: политика → раздел настроек → значок замка.", check_policy_weak_locks),
+    CheckSpec("POLICY_CONTENT_MISSING", "Содержимое политики не собрано", "Политика активна и относится к продукту защиты, но её содержимого нет в выгрузке (нет прав или ошибка сбора) — справочная находка, чтобы отсутствие данных не выглядело как отсутствие проблем с замками.", check_policy_content_missing),
 ]
 
 CHECK_BY_CODE: dict[str, CheckSpec] = {c.code: c for c in CHECKS}

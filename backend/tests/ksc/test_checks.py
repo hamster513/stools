@@ -157,7 +157,7 @@ def test_license_checks() -> None:
 
 
 def test_full_registry_count() -> None:
-    assert len(CHECKS) == 26  # 18 (блок 0) + 8 (блок 1: задачи х2, перезагрузка, 2FA, роли х2, сертификат, подчинённый сервер)
+    assert len(CHECKS) == 29  # 18 (блок 0) + 8 (блок 1) + 3 (блок 2, этап A: замки содержимого политик)
 
 
 def test_group_and_task_ids_tolerate_garbage_values() -> None:

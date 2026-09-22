@@ -95,7 +95,7 @@ def test_settings_reanalyze_with_allowlist_and_delete(auth_client: TestClient, a
     assert upload(auth_client, build_export())["status"] == "done"
     snap = auth_client.get("/api/ksc/snapshots").json()[0]
     settings = auth_client.get("/api/ksc/settings").json()
-    assert len(settings["checks"]) == 26 and settings["config"]["bases_old_days"] == 3 and settings["defaults"]["license_days"] == 30
+    assert len(settings["checks"]) == 29 and settings["config"]["bases_old_days"] == 3 and settings["defaults"]["license_days"] == 30
     cfg = settings["config"]
     cfg["allowlist_hosts"] = ["ws02"]
     assert auth_client.put("/api/ksc/settings", json=cfg).status_code == 200

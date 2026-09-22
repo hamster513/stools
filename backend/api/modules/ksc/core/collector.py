@@ -129,11 +129,14 @@ def _hide_secrets(section_name: str, raw: Any) -> Any:
     return out
 
 
-def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
+def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings: list[str], *, max_policies: int | None = None) -> dict[str, Any]:
     """Содержимое активных политик продуктов защиты: `Policy.GetPolicyContents` →
     `SsContents.SS_GetNames`/`Ss_Read` по каждой секции, `Ss_Release` в finally. Каждая политика в
     своём try: ошибка открытия — политики нет в результате, строка в `warnings`; ошибка секции — она
-    в `errors` этой политики, остальные секции остаются."""
+    в `errors` этой политики, остальные секции остаются. `max_policies=None` — берётся
+    `POLICY_CONTENTS_MAX_POLICIES` (константа сборщика; `KscConfig.policy_contents_max_policies` для
+    онлайн-сбора передаётся явно через `collect`)."""
+    limit = POLICY_CONTENTS_MAX_POLICIES if max_policies is None else max_policies
     out: dict[str, Any] = {}
     count = 0
     for raw_policy in policies:
@@ -144,8 +147,8 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
         if product in (PRODUCT_AGENT, PRODUCT_SERVER):
             continue
         count += 1
-        if count > POLICY_CONTENTS_MAX_POLICIES:
-            warnings.append(f"policy_contents: политик больше лимита {POLICY_CONTENTS_MAX_POLICIES}, часть пропущена")
+        if count > limit:
+            warnings.append(f"policy_contents: политик больше лимита {limit}, часть пропущена")
             break
         npolicy = _int(policy.get("KLPOL_ID"))
         version = _str(policy.get("KLPOL_VERSION"))
@@ -174,7 +177,7 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
     return out
 
 
-def collect(client: KscClient, *, skip_products: bool = False, skip_policy_contents: bool = False, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
+def collect(client: KscClient, *, skip_products: bool = False, skip_policy_contents: bool = False, max_policies: int | None = None, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
     warnings: list[str] = []
 
     def _section(name: str, fn: Callable[[], Any], default: Any) -> Any:
@@ -259,7 +262,7 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
                 break
         client.call("GroupSyncIterator.ReleaseIterator", {"szwIterator": li})
 
-    policy_contents: dict[str, Any] = {} if skip_policy_contents else _policy_contents(client, policies, warnings)
+    policy_contents: dict[str, Any] = {} if skip_policy_contents else _policy_contents(client, policies, warnings, max_policies=max_policies)
 
     role_assignments = _section("role_assignments", lambda: _read_srvview(client, "AdmGroupsAclRolesSrvViewName", ROLE_FIELDS), [])
     internal_users = _section("internal_users", lambda: _read_srvview(client, "GlobalUsersListSrvViewName", USER_FIELDS, "(ul_InternalUser = 1)"), [])
