@@ -73,9 +73,10 @@ $ErrorActionPreference = "Stop"
 
 $FormatVersion = "stools-ksc/1"
 $CollectorVersion = "1.0"
-#: Имя секции или ключ верхнего уровня её параметров с одним из этих слов (целиком, без учёта
-#: регистра) — значение "<скрыто>", ключ остаётся. Не больше стольки политик и байт на секцию.
-$SecretMarkers = @("PASSWORD", "PASSWD", "SECRET", "CRYPTED")
+#: Имя секции или ключ на любой глубине её параметров с одним из этих слов (подстрокой, без учёта
+#: регистра) — всё поддерево под ним в режиме скрытия: строки и двоичные значения → "<скрыто>",
+#: ключи остаются (см. Hide-Value). Не больше стольки политик и байт на секцию.
+$SecretMarkers = @("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE")
 $PolicyContentsMaxPolicies = 200
 $PolicyContentsSectionMaxBytes = 2097152
 
@@ -167,47 +168,60 @@ function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and 
 # KSC отдаёт булевы и как $true/$false, и как @{ type = "boolean"; value = $false } — типизированный
 # ноль не должен читаться как безусловная правда.
 function AsBool($v) { if ($null -eq $v) { return $false }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [bool]$v } catch { return $false } }
-# Типизированное значение KSC вида @{ type = <kind>; value = ... } — ровно два свойства, type/value.
-function Test-TypedWrapper($v, [string]$kind) {
-  if ($null -eq $v -or $v -isnot [psobject]) { return $false }
-  $names = @($v.PSObject.Properties.Name)
-  return ($names.Count -eq 2) -and ($names -contains "type") -and ($names -contains "value") -and ($v.type -eq $kind)
-}
 # SecretMarkers подстрокой в имени, без учёта регистра: PASSWORD_HASH, KLPRSS_Password, AdminPassword — да.
 function Test-SecretMarker([string]$name) {
   $upper = $name.ToUpper()
   foreach ($m in $SecretMarkers) { if ($upper.Contains($m)) { return $true } }
   return $false
 }
-# Двоичное типизированное значение KSC: @{ type = "binary"; value = ... }, ровно два свойства.
-function Test-BinaryWrapper($v) { return Test-TypedWrapper $v "binary" }
-# Обёртка контейнера, как заворачивает живой KSC: @{ type = "params"; value = ... }.
-function Test-ParamsWrapper($v) { return Test-TypedWrapper $v "params" }
-# Прячем только строки и двоичные данные: булевы и числа секретом быть не могут, даже если имя
-# настройки содержит один из SecretMarkers (например, EnablePasswordProtection).
-function Test-SecretValue($v) {
-  return ($v -is [string]) -or (Test-BinaryWrapper $v)
+# Типизированное значение KSC: @{ type = <вид>; value = ... } — ровно два свойства, type — строка.
+function Test-TypedWrapper($v) {
+  if ($null -eq $v -or $v -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+  $names = @($v.PSObject.Properties.Name)
+  return ($names.Count -eq 2) -and ($names -contains "type") -and ($names -contains "value") -and ($v.type -is [string])
 }
-# Секреты в содержимом политики: имя секции или ключ верхнего уровня params с признаком секрета →
-# значение "<скрыто>" (ключ остаётся), только если само значение строка или двоичные данные.
-# Секция хранится как пришла: обёртки не снимаются, кроме собственно секретного значения; секция
-# целиком в обёртке @{ type = "params"; value = ... } (так приходит с живого сервера) обрабатывается
-# через её value, обёртка остаётся.
+# Обход поддерева с режимом скрытия. Ключ с признаком секрета включает режим для всего, что под ним.
+# В режиме строки и двоичные значения (@{ type = "binary"; ... }) → "<скрыто>"; булевы, числа и прочие
+# типизированные значения остаются. Обёртки params проходятся насквозь и остаются на месте, списки —
+# поэлементно. Значения под ключами без признака не проверяются, если выше нет признака.
+# Списки возвращаются через ",": иначе конвейер разворачивает список из одного элемента в скаляр,
+# а пустой — в $null. По той же причине результат присваивается переменной, а не выражением if.
+function Hide-Value($v, [bool]$hide) {
+  if ($null -eq $v) { return $null }
+  if (Test-TypedWrapper $v) {
+    if ($v.type -eq "params") {
+      $inner = Hide-Value $v.value $hide
+      return [ordered]@{ type = "params"; value = $inner }
+    }
+    if ($hide -and $v.type -eq "binary") { return "<скрыто>" }
+    return $v
+  }
+  if ($v -is [System.Management.Automation.PSCustomObject]) {
+    $out = [ordered]@{}
+    foreach ($p in $v.PSObject.Properties) {
+      $childHide = $hide -or (Test-SecretMarker $p.Name)
+      $child = Hide-Value $p.Value $childHide
+      $out[$p.Name] = $child
+    }
+    return $out
+  }
+  if ($v -is [array]) {
+    $items = New-Object System.Collections.ArrayList
+    foreach ($item in $v) {
+      $child = Hide-Value $item $hide
+      [void]$items.Add($child)
+    }
+    return ,($items.ToArray())
+  }
+  if ($hide -and (($v -is [string]) -or ($v -is [datetime]))) { return "<скрыто>" }
+  return $v
+}
+# Секреты в содержимом политики: имя секции или ключ на любой глубине с признаком секрета —
+# всё поддерево под ним в режиме скрытия (Hide-Value). Секция хранится как пришла: меняются только
+# скрытые значения, обёртки остаются.
 function Hide-Secrets([string]$sectionName, $params) {
-  $hideAll = Test-SecretMarker $sectionName
-  if ($null -eq $params) { return $params }
-  if (Test-ParamsWrapper $params) { return @{ type = "params"; value = (Hide-Secrets $sectionName $params.value) } }
-  if (Test-BinaryWrapper $params) { if ($hideAll) { return "<скрыто>" }; return $params }
-  if ($params -isnot [System.Management.Automation.PSCustomObject]) {
-    if ($hideAll -and ($params -is [string])) { return "<скрыто>" }
-    return $params
-  }
-  $out = [ordered]@{}
-  foreach ($p in $params.PSObject.Properties) {
-    $marker = $hideAll -or (Test-SecretMarker $p.Name)
-    $out[$p.Name] = if ($marker -and (Test-SecretValue $p.Value)) { "<скрыто>" } else { $p.Value }
-  }
-  return $out
+  $hidden = Hide-Value $params (Test-SecretMarker $sectionName)
+  return ,$hidden
 }
 # HTTP-код отказа из исключения Invoke-WebRequest (PowerShell 5.1 — WebException, 7 — HttpResponseException);
 # 0, если ошибка не про ответ сервера (PxgError, обрыв связи).
@@ -421,13 +435,17 @@ try {
       $product = [string](Prop $pv "KLPOL_PRODUCT")
       if ($product -in @("1103", "1093")) { continue }   # не продукт защиты (агент, сервер)
       $policyCount++
-      if ($policyCount -gt $PolicyContentsMaxPolicies) {
-        Write-Warning ("содержимое политик: больше лимита {0}, часть пропущена" -f $PolicyContentsMaxPolicies)
-        [void]$warnings.Add("policy_contents: политик больше лимита $($PolicyContentsMaxPolicies), часть пропущена")
-        break
-      }
       $npolicy = AsInt (Prop $pv "KLPOL_ID")
       $version = [string](Prop $pv "KLPOL_VERSION")
+      if ($policyCount -gt $PolicyContentsMaxPolicies) {
+        # Пропущенная по лимиту политика остаётся в секции с причиной — POLICY_CONTENT_MISSING её покажет.
+        if ($policyCount -eq $PolicyContentsMaxPolicies + 1) {
+          Write-Warning ("содержимое политик: больше лимита {0}, часть пропущена" -f $PolicyContentsMaxPolicies)
+          [void]$warnings.Add("policy_contents: политик больше лимита $($PolicyContentsMaxPolicies), часть пропущена")
+        }
+        $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = @{}; errors = @("лимит политик") }
+        continue
+      }
       try {
         $ssid = (Invoke-Ksc "Policy.GetPolicyContents" @{ nPolicy = $npolicy; nRevisionId = 0; nLifeTime = 0 }).PxgRetVal
         try {
@@ -438,7 +456,7 @@ try {
             try {
               $raw = (Invoke-Ksc "SsContents.Ss_Read" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version; wstrSection = $sectionName }).PxgRetVal
               $hidden = Hide-Secrets $sectionName $raw
-              $bytes = [Text.Encoding]::UTF8.GetByteCount(($hidden | ConvertTo-Json -Depth 20 -Compress))
+              $bytes = [Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $hidden -Depth 100 -Compress))
               if ($bytes -gt $PolicyContentsSectionMaxBytes) { [void]$errors.Add("$($sectionName): секция больше лимита") }
               else { $sections[$sectionName] = $hidden }
             } catch { [void]$errors.Add("$($sectionName): $($_.Exception.Message)") }
@@ -548,7 +566,7 @@ if (-not $OutputPath) { $OutputPath = $defaultName }
 elseif ($OutputPath -match '[\\/]$' -or (Test-Path -LiteralPath $OutputPath -PathType Container)) { $OutputPath = Join-Path $OutputPath $defaultName }
 if (-not [System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $PWD.ProviderPath $OutputPath }
 Write-Step "Запись $OutputPath"
-$json = $export | ConvertTo-Json -Depth 20 -Compress
+$json = $export | ConvertTo-Json -Depth 100 -Compress
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 $out = [System.IO.File]::Create($OutputPath)
 try {

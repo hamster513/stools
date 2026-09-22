@@ -6,7 +6,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from api.modules.ksc.services.snapshots import snapshot_path
-from tests.ksc.synthetic import build_export, expected_policy_contents
+from tests.ksc.synthetic import SECRET_VALUES, build_export, expected_policy_contents
 from tests.ksc.test_api import upload
 
 
@@ -19,25 +19,32 @@ def test_policy_contents_summary_sections_locks(auth_client: TestClient) -> None
     raw["policy_contents"] = expected_policy_contents()
     assert upload(auth_client, raw)["status"] == "done"
     snap = _snapshot_id(auth_client)
-    body = auth_client.get(f"/api/ksc/snapshots/{snap}/policies/1/contents").json()
+    r = auth_client.get(f"/api/ksc/snapshots/{snap}/policies/1/contents")
+    body = r.json()
 
     assert body["policy"] == {"id": 1, "name": "KES workstations", "product": "KES", "version": "12.0.0.0", "group": "Managed devices"}
-    assert body["summary"] == {"total": 5, "locked": 3, "share": 0.6, "with_lock_flag": 5}
+    assert body["summary"] == {"total": 12, "locked": 6, "share": 6 / 11, "with_lock_flag": 11}
     assert body["errors"] == []
 
     section_names = {s["name"] for s in body["sections"]}
-    # Секции-секреты целиком (KLPRSS_Password, KLPRSS_Secret) и голый AdminPassword внутри
-    # KLPRSS_Basic не дают ни одной настройки walk_settings — секреты не попадают в ответ.
-    assert section_names == {"KLPRSS_Basic", "KLPRSS_Components"}
+    # KLPRSS_Password, KLPRSS_Secret и KLPRSS_Deep не дают ни одной настройки walk_settings.
+    assert section_names == {"KLPRSS_Basic", "KLPRSS_Components", "KLPRSS_Passwords"}
     basic = next(s for s in body["sections"] if s["name"] == "KLPRSS_Basic")
-    paths = {s["path"] for s in basic["settings"]}
-    assert paths == {"EnableSelfProtection", "EnablePasswordProtection", "ReportsMaxSize"}
-    assert "AdminPassword" not in paths
+    by_path = {s["path"]: s for s in basic["settings"]}
+    assert set(by_path) == {"EnableSelfProtection", "EnablePasswordProtection", "ReportsMaxSize", "AdminPassword", "ProxyPassword",
+                            "PasswordProtection", "Exclusions", "TrustedApps"}
+    # секреты скрыты сборщиком — в ответ не попадает ни одно значение, булевы под признаком видны
+    text = r.text
+    assert not [v for v in SECRET_VALUES if v in text]
+    assert by_path["AdminPassword"]["value"] == '"<скрыто>"' and by_path["AdminPassword"]["locked"] is True
+    assert by_path["PasswordProtection"]["value"] == '{"PasswordHash": "<скрыто>", "Enabled": true}'
+    assert by_path["EnablePasswordProtection"]["value"] == "true" and by_path["EnablePasswordProtection"]["locked"] is True
+    assert by_path["TrustedApps"]["locked"] is None
 
-    inherited = next(s for s in basic["settings"] if s["path"] == "EnablePasswordProtection")
+    inherited = by_path["EnableSelfProtection"]
     assert inherited["locked"] is True and inherited["inherited_lock"] is True and inherited["lock_from"] == "KES root (Managed devices)"
-    plain = next(s for s in basic["settings"] if s["path"] == "EnableSelfProtection")
-    assert plain["locked"] is True and plain["inherited_lock"] is False and plain["lock_from"] == ""
+    plain = by_path["AdminPassword"]
+    assert plain["inherited_lock"] is False
 
     components = next(s for s in body["sections"] if s["name"] == "KLPRSS_Components")
     comp_paths = {s["path"] for s in components["settings"]}
@@ -49,7 +56,7 @@ def test_policy_contents_without_locks(auth_client: TestClient) -> None:
     snap = _snapshot_id(auth_client)
     body = auth_client.get(f"/api/ksc/snapshots/{snap}/policies/3/contents").json()
     assert body["policy"]["name"] == "KES lab" and body["policy"]["group"] == "Managed devices/Workstations/Lab"
-    assert body["summary"] == {"total": 5, "locked": 0, "share": 0.0, "with_lock_flag": 5}
+    assert body["summary"] == {"total": 12, "locked": 0, "share": 0.0, "with_lock_flag": 11}
 
 
 def test_policy_contents_without_lock_flags(auth_client: TestClient) -> None:
@@ -108,7 +115,7 @@ def test_policies_endpoint_reports_locks_and_has_contents(auth_client: TestClien
     body = auth_client.get(f"/api/ksc/snapshots/{snap}/policies").json()
     root = next(g for g in body["groups"] if g["name"] == "Managed devices")
     ws_policy = next(p for p in root["policies"] if p["name"] == "KES workstations")
-    assert ws_policy["has_contents"] is True and ws_policy["locks"] == {"total": 5, "locked": 3, "with_lock_flag": 5}
+    assert ws_policy["has_contents"] is True and ws_policy["locks"] == {"total": 12, "locked": 6, "with_lock_flag": 11}
     # та же политика, унаследованная группой Workstations, — тот же свод из кэша запроса
     ws_group = next(g for g in body["groups"] if g["name"] == "Workstations")
     assert next(p for p in ws_group["policies"] if p["name"] == "KES workstations")["locks"] == ws_policy["locks"]

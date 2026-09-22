@@ -11,7 +11,13 @@ from api.modules.ksc.core.client import KscClient, KscError
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.export import load_export
 from tests.ksc.fake_ksc import PASSWORD, USER, FakeKsc, http_factory_for
-from tests.ksc.synthetic import add_inactive_policy, build_export, expected_policy_contents
+from tests.ksc.synthetic import (
+    add_inactive_policy,
+    assert_secrets_hidden,
+    assert_storage_shapes,
+    build_export,
+    expected_policy_contents,
+)
 
 
 @pytest.fixture
@@ -259,6 +265,8 @@ def test_collect_reads_through_live_params_wrappers(monkeypatch: Any) -> None:
     assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
     assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]
     assert export.policy_contents == expected_policy_contents()
+    assert_secrets_hidden(raw["policy_contents"])  # в сыром виде, с обёртками params
+    assert_storage_shapes(raw["policy_contents"])
 
 
 def test_collect_policy_contents_matches_synthetic(fake: FakeKsc) -> None:
@@ -269,11 +277,10 @@ def test_collect_policy_contents_matches_synthetic(fake: FakeKsc) -> None:
     assert "2" not in export.policy_contents  # политика агента не собирается
     assert not export.server.warnings
     assert "SsContents.Ss_Release" in fake.calls
-    basic = export.policy_contents["1"]["sections"]["KLPRSS_Basic"]
-    # секрет по подстроке в имени, но прячем только строки/двоичные значения — не булевы контейнеры замков
-    assert basic["EnablePasswordProtection"]["KLPRSS_Mnd"] is True and basic["AdminPassword"] == "<скрыто>"
-    assert export.policy_contents["1"]["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] == "<скрыто>"
-    assert export.policy_contents["1"]["sections"]["KLPRSS_Secret"] == "<скрыто>"
+    # признак в имени ключа или секции на любой глубине: строки и двоичные значения под ним скрыты,
+    # булевы и числа (EnablePasswordProtection, Required, Attempts) остаются
+    assert_secrets_hidden(raw["policy_contents"])
+    assert_storage_shapes(raw["policy_contents"])
 
 
 def test_collect_policy_contents_denied_policy_and_section_error(monkeypatch: Any) -> None:
@@ -286,11 +293,8 @@ def test_collect_policy_contents_denied_policy_and_section_error(monkeypatch: An
     assert any("policy_contents[3]" in w for w in export.server.warnings)
     pol1 = export.policy_contents["1"]
     assert pol1["errors"] and pol1["errors"][0].startswith("KLPRSS_Components:")
-    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Secret"}
-    assert pol1["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] == "<скрыто>"
-    assert pol1["sections"]["KLPRSS_Basic"]["AdminPassword"] == "<скрыто>"
-    assert pol1["sections"]["KLPRSS_Basic"]["EnablePasswordProtection"] != "<скрыто>"
-    assert pol1["sections"]["KLPRSS_Secret"] == "<скрыто>"
+    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Passwords", "KLPRSS_Secret", "KLPRSS_Deep"}
+    assert_secrets_hidden(raw["policy_contents"])
 
 
 def test_collect_skip_policy_contents(fake: FakeKsc) -> None:
@@ -305,8 +309,26 @@ def test_collect_policy_contents_respects_max_policies_limit(fake: FakeKsc, monk
     with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
         raw = collect(c, username=USER)
     export = load_export(__import__("json").dumps(raw).encode())
-    assert set(export.policy_contents) == {"1"}
-    assert any("политик больше лимита" in w for w in export.server.warnings)
+    assert set(export.policy_contents) == {"1", "3"}
+    # пропущенная по лимиту политика записана с причиной — POLICY_CONTENT_MISSING её покажет
+    assert export.policy_contents["3"] == {"product": "KES", "version": "12.0.0.0", "sections": {}, "errors": ["лимит политик"]}
+    assert export.policy_contents["1"]["sections"]
+    assert sum("политик больше лимита" in w for w in export.server.warnings) == 1
+    assert fake.calls.count("Policy.GetPolicyContents") == 1
+
+
+def test_collect_policy_contents_section_size_is_compact_json(fake: FakeKsc, monkeypatch: Any) -> None:
+    """Размер секции меряется по компактному JSON (как `-Compress` в скрипте): секция ровно в лимит
+    сохраняется, хотя с пробелами после `:` и `,` она бы в него не влезла."""
+    compact = __import__("json").dumps({"PASSWORD_HASH": "<скрыто>"}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    monkeypatch.setattr(collector_mod, "POLICY_CONTENTS_SECTION_MAX_BYTES", len(compact))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    pol1 = raw["policy_contents"]["1"]
+    assert pol1["sections"]["KLPRSS_Password"] == {"PASSWORD_HASH": "<скрыто>"}
+    assert "KLPRSS_Password: секция больше лимита" not in pol1["errors"]
+    assert len(__import__("json").dumps({"PASSWORD_HASH": "<скрыто>"}, ensure_ascii=False).encode("utf-8")) > len(compact)
+    assert "KLPRSS_Basic: секция больше лимита" in pol1["errors"]
 
 
 def test_collect_policy_contents_section_over_limit(fake: FakeKsc, monkeypatch: Any) -> None:

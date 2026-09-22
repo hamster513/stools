@@ -16,7 +16,12 @@ from fastapi.testclient import TestClient
 
 from api.modules.ksc.core.export import load_export
 from tests.ksc.fake_ksc import MFA_SECRET, PASSWORD, USER, totp_code
-from tests.ksc.synthetic import build_export, expected_policy_contents
+from tests.ksc.synthetic import (
+    assert_secrets_hidden,
+    assert_storage_shapes,
+    build_export,
+    expected_policy_contents,
+)
 
 SCRIPT = Path("api/modules/ksc/collector/STools-KSC-Collector.ps1")
 IMAGE = "mcr.microsoft.com/powershell:lts-alpine-3.20"
@@ -38,11 +43,11 @@ def _image_present() -> bool:
     return subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True, check=False).returncode == 0
 
 
-def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, object] | None = None) -> Path:
+def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, object] | None = None, script_dir: Path | None = None) -> Path:
     """Поднимает поддельный KSC на порту и прогоняет скрипт в контейнере; отдаёт файл выгрузки.
 
     С `config` скрипт получает только `-ConfigPath`: сервер, учётка, пароль и секрет
-    второго фактора берутся из файла."""
+    второго фактора берутся из файла. `script_dir` — каталог с изменённой копией скрипта."""
     env = {**os.environ, "STOOLS_FAKE_VARIANT": variant}
     server = subprocess.Popen([sys.executable, "-m", "tests.ksc.fake_ksc_http", str(port)], cwd=Path.cwd(), env=env)
     try:
@@ -55,7 +60,7 @@ def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, objec
         out = tmp_path / (variant or "default")
         out.mkdir()
         docker = ["docker", "run", "--rm", "--add-host=host.docker.internal:host-gateway"]
-        mounts = ["-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{out}:/out", IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1"]
+        mounts = ["-v", f"{(script_dir or SCRIPT.resolve().parent)}:/script:ro", "-v", f"{out}:/out", IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1"]
         if config is None:
             cmd = [*docker, "-e", f"STOOLS_KSC_PASSWORD={PASSWORD}", *mounts, "-Server", "host.docker.internal", "-Port", str(port),
                    "-Scheme", "http", "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz"]
@@ -222,6 +227,9 @@ def test_script_and_online_policy_contents_match(tmp_path: Path) -> None:
         server.terminate()
     assert set(script_export.policy_contents) == {"1", "3"}
     assert script_export.policy_contents == online_export.policy_contents == expected_policy_contents()
+    script_raw = json.loads(gzip.decompress((out / "ksc.json.gz").read_bytes()))["policy_contents"]
+    assert_secrets_hidden(script_raw)
+    assert_storage_shapes(script_raw)
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -259,6 +267,11 @@ def test_script_and_online_policy_contents_match_raw_shape_with_params_wrappers(
         server.terminate()
     assert set(script_raw) == {"1", "3"} and "9" not in script_raw
     assert script_raw == online_raw
+    # секреты скрыты на месте, сквозь обёртки params; списки из одного элемента и пустые остаются
+    # списками, вложенность глубже 20 уровней не обрезана
+    assert_secrets_hidden(script_raw)
+    assert_storage_shapes(script_raw)
+    assert script_raw["1"]["sections"]["KLPRSS_Basic"]["type"] == "params"  # обёртки на месте
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -269,4 +282,19 @@ def test_script_policy_contents_survives_denied_policy_and_section(tmp_path: Pat
     assert any("policy_contents[3]" in w for w in export.server.warnings)
     pol1 = export.policy_contents["1"]
     assert pol1["errors"] and pol1["errors"][0].startswith("KLPRSS_Components:")
-    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Secret"}
+    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Passwords", "KLPRSS_Secret", "KLPRSS_Deep"}
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_records_policies_skipped_by_limit(tmp_path: Path) -> None:
+    """Копия скрипта с лимитом 1 политика: вторая записывается с `errors == ["лимит политик"]`
+    и пустыми секциями (как у онлайн-сборщика), предупреждение одно."""
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    assert text.count("$PolicyContentsMaxPolicies = 200") == 1
+    (script_dir / SCRIPT.name).write_text(text.replace("$PolicyContentsMaxPolicies = 200", "$PolicyContentsMaxPolicies = 1"), encoding="utf-8-sig")
+    export = load_export(_run_script(tmp_path, 18340, "", script_dir=script_dir).read_bytes())
+    assert set(export.policy_contents) == {"1", "3"} and export.policy_contents["1"]["sections"]
+    assert export.policy_contents["3"] == {"product": "KES", "version": "12.0.0.0", "sections": {}, "errors": ["лимит политик"]}
+    assert sum("политик больше лимита" in w for w in export.server.warnings) == 1

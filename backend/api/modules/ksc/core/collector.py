@@ -19,9 +19,11 @@ from api.modules.ksc.core.export import (
 
 COLLECTOR_VERSION = "1.0"
 
-#: Имя секции или ключ верхнего уровня её параметров, содержащий одно из этих слов (без учёта
-#: регистра), в выгрузку не идёт — значение заменяется на "<скрыто>", ключ остаётся.
-SECRET_MARKERS = ("PASSWORD", "PASSWD", "SECRET", "CRYPTED")
+#: Имя секции или ключ на любой глубине её параметров, содержащий одно из этих слов подстрокой (без
+#: учёта регистра), включает «режим скрытия» для всего поддерева под ним: каждая строка и каждое
+#: двоичное значение становятся "<скрыто>", ключи остаются (см. `_hide_secrets`).
+SECRET_MARKERS = ("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE")
+HIDDEN = "<скрыто>"
 #: Не больше стольки политик собираем за один сбор — предупреждение при превышении.
 POLICY_CONTENTS_MAX_POLICIES = 200
 #: Ответ секции больше этого размера не сохраняется (в errors — "секция больше лимита").
@@ -94,46 +96,45 @@ def _has_secret_marker(name: str) -> bool:
     return any(marker in upper for marker in SECRET_MARKERS)
 
 
-def _is_binary_wrapper(value: Any) -> bool:
-    return isinstance(value, dict) and set(value.keys()) == {"type", "value"} and value.get("type") == "binary"
+def _is_typed_wrapper(value: Any) -> bool:
+    """Типизированное значение KSC: `{"type": <вид>, "value": …}`, ровно два ключа."""
+    return isinstance(value, dict) and set(value.keys()) == {"type", "value"} and isinstance(value.get("type"), str)
 
 
-def _is_secret_value(value: Any) -> bool:
-    """Прячем только строки и двоичные значения: булевы и числа секретом быть не могут, даже если
-    имя настройки содержит одно из `SECRET_MARKERS` (например, `EnablePasswordProtection`)."""
-    return isinstance(value, str) or _is_binary_wrapper(value)
-
-
-def _is_params_wrapper(value: Any) -> bool:
-    return isinstance(value, dict) and set(value.keys()) == {"type", "value"} and value.get("type") == "params"
+def _hide(value: Any, hide: bool) -> Any:
+    """Обход поддерева с «режимом скрытия». Ключ с одним из `SECRET_MARKERS` включает режим для
+    всего, что под ним. В режиме строки и двоичные значения (`{"type": "binary", …}`) →
+    "<скрыто>"; булевы, числа и прочие типизированные значения (datetime, long) остаются.
+    Обёртки `{"type": "params", "value": …}` проходятся насквозь и остаются на месте, списки —
+    поэлементно. Значения под ключами без признака не проверяются, если выше нет признака."""
+    if _is_typed_wrapper(value):
+        if value["type"] == "params":
+            return {"type": "params", "value": _hide(value["value"], hide)}
+        if value["type"] == "binary" and hide:
+            return HIDDEN
+        return value
+    if isinstance(value, dict):
+        return {k: _hide(v, hide or _has_secret_marker(str(k))) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_hide(v, hide) for v in value]
+    if isinstance(value, str) and hide:
+        return HIDDEN
+    return value
 
 
 def _hide_secrets(section_name: str, raw: Any) -> Any:
-    """Секреты в содержимом политики: имя секции или ключ верхнего уровня её параметров с одним из
-    `SECRET_MARKERS` (подстрокой, без учёта регистра) — значение "<скрыто>", ключ остаётся, но
-    только если само значение строка или двоичные данные (`{"type": "binary", "value": …}`).
-    Секция хранится как пришла — меняются только значения секретных ключей, обёртки не снимаются
-    (кроме собственно секретного значения); секция целиком в обёртке `{"type": "params", "value": …}`
-    (так приходит с живого сервера) обрабатывается через её `value`, обёртка остаётся."""
-    hide_all = _has_secret_marker(section_name)
-    if _is_params_wrapper(raw):
-        return {"type": "params", "value": _hide_secrets(section_name, raw["value"])}
-    if _is_binary_wrapper(raw):
-        return "<скрыто>" if hide_all else raw
-    if not isinstance(raw, dict):
-        return "<скрыто>" if (hide_all and isinstance(raw, str)) else raw
-    out: dict[str, Any] = {}
-    for k, v in raw.items():
-        hide = (hide_all or _has_secret_marker(str(k))) and _is_secret_value(v)
-        out[k] = "<скрыто>" if hide else v
-    return out
+    """Секреты в содержимом политики: имя секции или ключ на любой глубине с одним из
+    `SECRET_MARKERS` (подстрокой, без учёта регистра) — всё поддерево под ним в режиме скрытия
+    (`_hide`). Секция хранится как пришла: меняются только скрытые значения, обёртки остаются."""
+    return _hide(raw, _has_secret_marker(section_name))
 
 
 def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings: list[str], *, max_policies: int | None = None) -> dict[str, Any]:
     """Содержимое активных политик продуктов защиты: `Policy.GetPolicyContents` →
     `SsContents.SS_GetNames`/`Ss_Read` по каждой секции, `Ss_Release` в finally. Каждая политика в
     своём try: ошибка открытия — политики нет в результате, строка в `warnings`; ошибка секции — она
-    в `errors` этой политики, остальные секции остаются. `max_policies=None` — берётся
+    в `errors` этой политики, остальные секции остаются. Политики сверх лимита не читаются, но
+    записываются с пустыми `sections` и `errors == ["лимит политик"]`. `max_policies=None` — берётся
     `POLICY_CONTENTS_MAX_POLICIES` (константа сборщика; `KscConfig.policy_contents_max_policies` для
     онлайн-сбора передаётся явно через `collect`)."""
     limit = POLICY_CONTENTS_MAX_POLICIES if max_policies is None else max_policies
@@ -147,11 +148,14 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
         if product in (PRODUCT_AGENT, PRODUCT_SERVER):
             continue
         count += 1
-        if count > limit:
-            warnings.append(f"policy_contents: политик больше лимита {limit}, часть пропущена")
-            break
         npolicy = _int(policy.get("KLPOL_ID"))
         version = _str(policy.get("KLPOL_VERSION"))
+        if count > limit:
+            # Пропущенная по лимиту политика остаётся в секции с причиной — POLICY_CONTENT_MISSING её покажет.
+            if count == limit + 1:
+                warnings.append(f"policy_contents: политик больше лимита {limit}, часть пропущена")
+            out[str(npolicy)] = {"product": product, "version": version, "sections": {}, "errors": ["лимит политик"]}
+            continue
         try:
             ssid = _ret(client.call("Policy.GetPolicyContents", {"nPolicy": npolicy, "nRevisionId": 0, "nLifeTime": 0}))
             try:
@@ -165,7 +169,8 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
                         errors.append(f"{section_name}: {exc}")
                         continue
                     value = _hide_secrets(section_name, section_raw)
-                    if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > POLICY_CONTENTS_SECTION_MAX_BYTES:
+                    # Компактный JSON — как `ConvertTo-Json -Compress` в скрипте.
+                    if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > POLICY_CONTENTS_SECTION_MAX_BYTES:
                         errors.append(f"{section_name}: секция больше лимита")
                         continue
                     sections[section_name] = value

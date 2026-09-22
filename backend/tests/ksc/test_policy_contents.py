@@ -117,21 +117,25 @@ def test_walk_settings_binary_section_wrapper_yields_no_settings() -> None:
 
 
 def test_walk_settings_on_synthetic_policy_contents() -> None:
-    """Синтетика: `KLPRSS_Basic` (2 замкнутых контейнера-настройки + `ReportsMaxSize` +
-    голый `AdminPassword`, который не настройка), `KLPRSS_Components` (вложенный `KLPRSS_Val`,
-    2 листа), `KLPRSS_Password`/`KLPRSS_Secret` без настроек."""
+    """Синтетика: `KLPRSS_Basic` — 8 контейнеров-настроек (среди них `TrustedApps` без признака
+    замка и `PasswordProtection` со словарём без контейнеров в значении — лист), `KLPRSS_Components`
+    (вложенный `KLPRSS_Val`, 2 листа), `KLPRSS_Passwords` (2 контейнера); `KLPRSS_Password`,
+    `KLPRSS_Secret` и `KLPRSS_Deep` без настроек."""
     contents = expected_policy_contents()
     locked_settings = walk_settings(contents["1"]["sections"])
     # section несёт имя секции (KLPRSS_Components) отдельно — в path оно не дублируется.
     assert {(s.section, s.path) for s in locked_settings} == {
         ("KLPRSS_Basic", "EnableSelfProtection"), ("KLPRSS_Basic", "EnablePasswordProtection"), ("KLPRSS_Basic", "ReportsMaxSize"),
+        ("KLPRSS_Basic", "AdminPassword"), ("KLPRSS_Basic", "ProxyPassword"), ("KLPRSS_Basic", "PasswordProtection"),
+        ("KLPRSS_Basic", "Exclusions"), ("KLPRSS_Basic", "TrustedApps"),
         ("KLPRSS_Components", "FileThreatProtection.Enabled"), ("KLPRSS_Components", "Firewall.Enabled"),
+        ("KLPRSS_Passwords", "Uninstall"), ("KLPRSS_Passwords", "Exit"),
     }
     summary = lock_summary(locked_settings)
-    assert summary.total == 5 and summary.locked == 3 and summary.with_lock_flag == 5 and summary.share == 0.6
+    assert summary.total == 12 and summary.locked == 6 and summary.with_lock_flag == 11 and summary.share == 6 / 11
     unlocked_settings = walk_settings(contents["3"]["sections"])
     unlocked_summary = lock_summary(unlocked_settings)
-    assert unlocked_summary.total == 5 and unlocked_summary.locked == 0 and unlocked_summary.with_lock_flag == 5 and unlocked_summary.share == 0.0
+    assert unlocked_summary.total == 12 and unlocked_summary.locked == 0 and unlocked_summary.with_lock_flag == 11 and unlocked_summary.share == 0.0
 
 
 # --- lock_summary ---
@@ -171,7 +175,7 @@ def test_check_policy_no_locks_fires_on_policy_without_any_lock() -> None:
     assert {x.target for x in f} == {"KES lab"}
     finding = f[0]
     assert finding.severity == "High" and finding.key_extra == "3"
-    assert finding.details["total"] == 5 and finding.details["locked"] == 0 and finding.details["with_lock_flag"] == 5 and finding.details["share"] == 0.0
+    assert finding.details["total"] == 12 and finding.details["locked"] == 0 and finding.details["with_lock_flag"] == 11 and finding.details["share"] == 0.0
     assert finding.details["product"] == "KES" and finding.details["group"] == "Managed devices/Workstations/Lab"
 
 
@@ -184,7 +188,7 @@ def test_check_policy_weak_locks_fires_below_threshold() -> None:
     f = _run(check_policy_weak_locks, cfg=cfg)
     assert {x.target for x in f} == {"KES workstations"}
     assert f[0].severity == "Medium" and f[0].key_extra == "1"
-    assert f[0].details["share"] == 0.6 and f[0].details["with_lock_flag"] == 5
+    assert f[0].details["share"] == 6 / 11 and f[0].details["with_lock_flag"] == 11
 
 
 def test_check_policy_weak_locks_silent_at_default_threshold() -> None:
@@ -215,7 +219,7 @@ def test_lock_checks_silent_when_no_setting_has_lock_flag() -> None:
     idx = _idx(raw)
     cfg = KscConfig(policy_lock_share=1.0)
     summary = lock_summary(walk_settings(idx.export.policy_contents["3"]["sections"]))
-    assert summary.total == 5 and summary.with_lock_flag == 0 and summary.share == 0.0
+    assert summary.total == 12 and summary.with_lock_flag == 0 and summary.share == 0.0
     assert not check_policy_no_locks(idx, cfg)
     assert not check_policy_weak_locks(idx, cfg)
 

@@ -64,26 +64,47 @@ def _host(n: int, name: str, group: int, status: int, rtp: int, *, now: dt.datet
 COMPONENTS = ["File Threat Protection", "Behavior Detection", "Exploit Prevention", "Firewall", "Network Threat Protection", "Web Control", "Device Control"]
 
 
-def _lock(value: Any, *, locked: bool = False, inherited: bool = False, lock_policy: str = "", lock_group: str = "") -> dict[str, Any]:
-    return {"KLPRSS_Val": value, "KLPRSS_Mnd": locked, "KLPRSS_ValLck": inherited,
-            "KLPRSS_ValLckPolicy": lock_policy, "KLPRSS_ValLckGroup": lock_group}
+def _lock(value: Any, *, locked: bool | None = False, inherited: bool = False, lock_policy: str = "", lock_group: str = "") -> dict[str, Any]:
+    """Контейнер настройки; `locked=None` — без признака замка `KLPRSS_Mnd`."""
+    node: dict[str, Any] = {"KLPRSS_Val": value, "KLPRSS_ValLck": inherited, "KLPRSS_ValLckPolicy": lock_policy, "KLPRSS_ValLckGroup": lock_group}
+    if locked is not None:
+        node["KLPRSS_Mnd"] = locked
+    return node
+
+
+#: Глубина вложенности `KLPRSS_Deep` — больше 20 (старый `-Depth 20` скрипта обрезал бы её).
+DEEP_LEVELS = 25
+
+
+def _deep(levels: int) -> dict[str, Any]:
+    node: dict[str, Any] = {"Leaf": "deep-value"}
+    for n in range(levels, 0, -1):
+        node = {f"L{n}": node}
+    return node
 
 
 def _policy_sections(*, locked: bool) -> dict[str, Any]:
-    """Четыре секции содержимого политики — проверяют все случаи скрытия секретов (подстрока в
-    имени, но прячем только строки и двоичные значения): `KLPRSS_Basic` (`EnableSelfProtection` и
-    `EnablePasswordProtection` — обычные замкнутые настройки-контейнеры, `EnablePasswordProtection`
-    с наследованным замком; `AdminPassword` — голая строка с признаком секрета в имени, должна
-    скрыться, хотя лежит в несекретной секции); `KLPRSS_Components` (вложенный контейнер
-    `KLPRSS_Val`); `KLPRSS_Password` (ключ `PASSWORD_HASH` — строка, скрывается); `KLPRSS_Secret`
-    (вся секция — двоичное значение, скрывается целиком по имени секции)."""
+    """Секции содержимого политики. Секреты (признак в имени ключа или секции на любой глубине —
+    всё поддерево под ним: строки и двоичные значения скрываются, булевы и числа остаются):
+    `AdminPassword` — контейнер в документированной форме (строка в `KLPRSS_Val`);
+    `ProxyPassword` — контейнер в обёртке params; `PasswordProtection` — вложенный двоичный
+    `PasswordHash` внутри `KLPRSS_Val`; `KLPRSS_Password` — ключ `PASSWORD_HASH` (строка);
+    `KLPRSS_Passwords` — секция с признаком, внутри контейнеры; `KLPRSS_Secret` — секция целиком
+    двоичное значение. `EnablePasswordProtection` — булев контейнер с тем же словом в имени:
+    значение и замок остаются. Для формы хранения: `Exclusions` — список из одного элемента,
+    `TrustedApps` — пустой список и без признака замка, `KLPRSS_Deep` — вложенность глубже 20.
+    Замки: `EnableSelfProtection` — наследованный, `KLPRSS_Components` — вложенный `KLPRSS_Val`."""
     return {
         "KLPRSS_Basic": {
-            "EnableSelfProtection": _lock(True, locked=locked),
-            "EnablePasswordProtection": _lock(True, locked=locked, inherited=locked,
-                                               lock_policy="KES root" if locked else "", lock_group="Managed devices" if locked else ""),
+            "EnableSelfProtection": _lock(True, locked=locked, inherited=locked,
+                                          lock_policy="KES root" if locked else "", lock_group="Managed devices" if locked else ""),
+            "EnablePasswordProtection": _lock(True, locked=locked),
             "ReportsMaxSize": _lock(1024, locked=False),
-            "AdminPassword": "hunter2",
+            "AdminPassword": _lock("hunter2", locked=locked),
+            "ProxyPassword": {"type": "params", "value": _lock("proxy-secret", locked=False)},
+            "PasswordProtection": _lock({"PasswordHash": {"type": "binary", "value": "aGFzaC1ibG9i"}, "Enabled": True}, locked=locked),
+            "Exclusions": _lock(["C:\\Tools\\a.exe"], locked=False),
+            "TrustedApps": _lock([], locked=None),
         },
         "KLPRSS_Components": {
             "KLPRSS_Val": {
@@ -92,8 +113,17 @@ def _policy_sections(*, locked: bool) -> dict[str, Any]:
             }
         },
         "KLPRSS_Password": {"PASSWORD_HASH": "e10adc3949ba59abbe56e057f20f883e"},
+        "KLPRSS_Passwords": {
+            "Uninstall": _lock("uninstall-secret", locked=locked),
+            "Exit": _lock({"Value": "exit-secret", "Required": True, "Attempts": 3}, locked=False),
+        },
         "KLPRSS_Secret": {"type": "binary", "value": "c2VjcmV0LWJsb2I="},
+        "KLPRSS_Deep": _deep(DEEP_LEVELS),
     }
+
+
+#: Значения-секреты синтетики: ни одно не должно попасть в выгрузку ни одного сборщика.
+SECRET_VALUES = ("hunter2", "proxy-secret", "aGFzaC1ibG9i", "e10adc3949ba59abbe56e057f20f883e", "uninstall-secret", "exit-secret", "c2VjcmV0LWJsb2I=")
 
 
 def _policy_contents() -> dict[str, Any]:
@@ -208,16 +238,58 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
 
 
 def expected_policy_contents() -> dict[str, Any]:
-    """`_policy_contents()` как должны отдать оба сборщика: `PASSWORD_HASH` и `AdminPassword`
-    (строки) и `KLPRSS_Secret` (двоичное значение) скрыты; `EnablePasswordProtection` (контейнер
-    замка, не строка и не двоичное значение) остаётся видимой, несмотря на то же слово в имени."""
+    """`_policy_contents()` как должны отдать оба сборщика (после разбора, без обёрток params):
+    каждая строка и каждое двоичное значение под ключом или секцией с признаком секрета —
+    "<скрыто>", булевы и числа остаются; `EnablePasswordProtection` видима и замкнута (кроме
+    строк замка — они тоже под признаком)."""
     out = json.loads(json.dumps(_policy_contents()))
+    hidden_lock = {"KLPRSS_ValLckPolicy": "<скрыто>", "KLPRSS_ValLckGroup": "<скрыто>"}
     for pid in ("1", "3"):
         sections = out[pid]["sections"]
+        basic = sections["KLPRSS_Basic"]
+        basic["EnablePasswordProtection"].update(hidden_lock)
+        basic["AdminPassword"].update(hidden_lock, KLPRSS_Val="<скрыто>")
+        basic["ProxyPassword"] = {**basic["ProxyPassword"]["value"], **hidden_lock, "KLPRSS_Val": "<скрыто>"}
+        basic["PasswordProtection"].update(hidden_lock)
+        basic["PasswordProtection"]["KLPRSS_Val"]["PasswordHash"] = "<скрыто>"
         sections["KLPRSS_Password"]["PASSWORD_HASH"] = "<скрыто>"
-        sections["KLPRSS_Basic"]["AdminPassword"] = "<скрыто>"
+        passwords = sections["KLPRSS_Passwords"]
+        passwords["Uninstall"].update(hidden_lock, KLPRSS_Val="<скрыто>")
+        passwords["Exit"].update(hidden_lock)
+        passwords["Exit"]["KLPRSS_Val"]["Value"] = "<скрыто>"
         sections["KLPRSS_Secret"] = "<скрыто>"
     return out
+
+
+def assert_secrets_hidden(policy_contents: dict[str, Any]) -> None:
+    """Секреты синтетики скрыты в секции `policy_contents` сборщика — как пришла (с обёртками
+    params) или разобранная: ни одно значение из `SECRET_VALUES` не попало в неё, каждый случай
+    скрыт на своём месте, `EnablePasswordProtection` осталась видимой и замкнутой (политика 1)."""
+    from api.modules.ksc.core.export import strip_params
+
+    text = json.dumps(policy_contents, ensure_ascii=False)
+    assert not [v for v in SECRET_VALUES if v in text]
+    sections = strip_params(policy_contents)["1"]["sections"]
+    basic = sections["KLPRSS_Basic"]
+    assert basic["AdminPassword"]["KLPRSS_Val"] == "<скрыто>" and basic["AdminPassword"]["KLPRSS_Mnd"] is True
+    assert basic["ProxyPassword"]["KLPRSS_Val"] == "<скрыто>"
+    assert basic["PasswordProtection"]["KLPRSS_Val"] == {"PasswordHash": "<скрыто>", "Enabled": True}
+    assert sections["KLPRSS_Password"]["PASSWORD_HASH"] == "<скрыто>"
+    assert sections["KLPRSS_Passwords"]["Uninstall"]["KLPRSS_Val"] == "<скрыто>"
+    assert sections["KLPRSS_Passwords"]["Exit"]["KLPRSS_Val"] == {"Value": "<скрыто>", "Required": True, "Attempts": 3}
+    assert sections["KLPRSS_Secret"] == "<скрыто>"
+    assert basic["EnablePasswordProtection"]["KLPRSS_Val"] is True and basic["EnablePasswordProtection"]["KLPRSS_Mnd"] is True
+
+
+def assert_storage_shapes(policy_contents: dict[str, Any]) -> None:
+    """Форма хранения переживает сборщик: список из одного элемента остаётся списком, пустой —
+    пустым списком, вложенность `KLPRSS_Deep` не обрезана."""
+    from api.modules.ksc.core.export import strip_params
+
+    sections = strip_params(policy_contents)["1"]["sections"]
+    assert sections["KLPRSS_Basic"]["Exclusions"]["KLPRSS_Val"] == ["C:\\Tools\\a.exe"]
+    assert sections["KLPRSS_Basic"]["TrustedApps"]["KLPRSS_Val"] == []
+    assert sections["KLPRSS_Deep"] == _deep(DEEP_LEVELS)
 
 
 def add_inactive_policy(raw: dict[str, Any]) -> dict[str, Any]:
