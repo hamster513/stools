@@ -14,6 +14,7 @@ import type {
   KscConfig,
   Overview,
   PoliciesResponse,
+  PolicyContents,
   Server,
   ServerData,
   SettingsView,
@@ -24,7 +25,7 @@ export const FINDINGS_PAGE_SIZE = 200
 export const HOSTS_PAGE_SIZE = 200
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
-  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-server', 'ksc-connections', 'ksc-jobs']) {
+  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-server', 'ksc-connections', 'ksc-jobs']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -151,6 +152,14 @@ export function usePolicies(snapshotId: number | undefined) {
     queryKey: ['ksc-policies', snapshotId],
     queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies`),
     enabled: snapshotId !== undefined,
+  })
+}
+
+export function usePolicyContents(snapshotId: number | undefined, policyId: number | undefined) {
+  return useQuery<PolicyContents, ApiRequestError>({
+    queryKey: ['ksc-policy-contents', snapshotId, policyId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}/contents`),
+    enabled: snapshotId !== undefined && policyId !== undefined,
   })
 }
 

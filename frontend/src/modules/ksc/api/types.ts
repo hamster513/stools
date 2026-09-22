@@ -255,6 +255,11 @@ export interface HostDetail extends Omit<Host, 'findings'> {
   findings: { key: string; check: string; check_title: string; severity: Severity; status: FindingStatus; details: Record<string, unknown> }[]
 }
 
+export interface LockCount {
+  total: number
+  locked: number
+}
+
 export interface PolicyItem {
   id: number
   name: string
@@ -264,6 +269,8 @@ export interface PolicyItem {
   accept_parent: boolean
   modified_at: string | null
   modified_group: string
+  locks: LockCount | null
+  has_contents: boolean
 }
 
 export interface TaskItem {
@@ -299,6 +306,40 @@ export interface PolicyGroup {
 
 export interface PoliciesResponse {
   groups: PolicyGroup[]
+}
+
+export interface PolicyHeader {
+  id: number
+  name: string
+  product: string
+  version: string
+  group: string
+}
+
+export interface LockSummary {
+  total: number
+  locked: number
+  share: number
+}
+
+export interface PolicySetting {
+  path: string
+  value: string
+  locked: boolean | null
+  inherited_lock: boolean
+  lock_from: string
+}
+
+export interface PolicySection {
+  name: string
+  settings: PolicySetting[]
+}
+
+export interface PolicyContents {
+  policy: PolicyHeader
+  summary: LockSummary | null
+  sections: PolicySection[]
+  errors: string[]
 }
 
 export interface ServerAdmin {
@@ -357,6 +398,7 @@ export interface Connection {
   internal: boolean
   domain: string
   server_id: number | null
+  skip_policy_contents: boolean
 }
 
 export interface ConnectionIn {
@@ -368,6 +410,7 @@ export interface ConnectionIn {
   verify_tls: boolean
   internal: boolean
   domain: string
+  skip_policy_contents: boolean
 }
 
 export interface KscConfig {
@@ -382,6 +425,8 @@ export interface KscConfig {
   reboot_pending_days: number
   cert_days: number
   admin_role_patterns: string[]
+  policy_lock_share: number
+  policy_contents_max_policies: number
 }
 
 export interface SettingsView {

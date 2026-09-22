@@ -22,6 +22,7 @@ from api.modules.ksc.core.export import (
     parent_id,
     unwrap,
 )
+from api.modules.ksc.core.policy_contents import lock_summary, walk_settings
 from api.modules.ksc.models import KscFinding, KscSnapshot
 from api.modules.ksc.services.snapshots import snapshot_path
 from api.settings import Settings, get_settings
@@ -30,6 +31,11 @@ router = APIRouter(tags=["ksc"])
 
 #: Находки, которые относятся к группе (target — её путь), а не к хосту.
 GROUP_CHECKS = {"POLICY_NONE", "POLICY_INHERIT_BROKEN", "TASK_NO_UPDATE", "TASK_NO_SCAN"}
+
+
+class LockCountView(BaseModel):
+    total: int
+    locked: int
 
 
 class PolicyView(BaseModel):
@@ -41,6 +47,9 @@ class PolicyView(BaseModel):
     accept_parent: bool
     modified_at: dt.datetime | None
     modified_group: str
+    #: Замки содержимого политики (`policy_lock_share`/`POLICY_*`); `None` — содержимого нет в выгрузке.
+    locks: LockCountView | None
+    has_contents: bool
 
 
 class TaskView(BaseModel):
@@ -78,8 +87,13 @@ class PoliciesResponse(BaseModel):
     groups: list[GroupView]
 
 
-def _policy_view(p: dict[str, Any]) -> PolicyView:
+def _policy_view(p: dict[str, Any], policy_contents: dict[str, dict[str, Any]]) -> PolicyView:
     modified = unwrap(p.get("KLPOL_MODIFIED"))
+    content = policy_contents.get(_str(p.get("KLPOL_ID")))
+    locks = None
+    if content is not None:
+        summary = lock_summary(walk_settings(content.get("sections", {})))
+        locks = LockCountView(total=summary.total, locked=summary.locked)
     return PolicyView(
         id=_int(p.get("KLPOL_ID")),
         name=_str(p.get("KLPOL_DN")),
@@ -89,6 +103,8 @@ def _policy_view(p: dict[str, Any]) -> PolicyView:
         accept_parent=bool(unwrap(p.get("KLPOL_ACCEPT_PARENT"))),
         modified_at=modified if isinstance(modified, dt.datetime) else None,
         modified_group=_str(p.get("KLPOL_GROUP_NAME")),
+        locks=locks,
+        has_contents=content is not None,
     )
 
 
@@ -156,7 +172,7 @@ def _walk(idx: ExportIndex, group_id: int, level: int, findings_by_target: dict[
             path=path,
             level=level,
             hosts=len(idx.hosts_by_group.get(group_id, [])),
-            policies=[_policy_view(p) for p in idx.export.effective_policies.get(str(group_id), [])],
+            policies=[_policy_view(p, idx.export.policy_contents) for p in idx.export.effective_policies.get(str(group_id), [])],
             tasks=_group_tasks(idx, group_id, _ancestors(idx, group_id)),
             findings=[
                 FindingView(key=f.key, check=f.check, check_title=CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check, severity=f.severity)

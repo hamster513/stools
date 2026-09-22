@@ -36,6 +36,12 @@ function GroupRow({ group, serverId }: { group: PolicyGroup; serverId: number })
                 <span className="text-[11px] text-text-secondary">{p.inherited ? 'унаследована' : 'своя'}</span>
                 {!p.active && <span className="text-[11px] text-text-secondary">неактивна</span>}
               </div>
+              {p.has_contents && (
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-secondary">
+                  {p.locks && <span>замков {p.locks.locked} из {p.locks.total}</span>}
+                  <Link to={`/ksc/servers/${serverId}/policies/${p.id}`} className="text-primary hover:underline">содержимое</Link>
+                </div>
+              )}
               {p.accept_parent === false && (
                 <div className="flex items-center gap-1 text-[11px] text-risk-medium"><AlertTriangle size={11} aria-hidden /> не принимает родительскую</div>
               )}

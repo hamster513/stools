@@ -36,6 +36,8 @@ function ReadOnlyView({ config }: { config: KscConfig }) {
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Задача обновления не запускалась, дней</dt><dd className="font-mono text-text">{config.task_stale_days}</dd></div>
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Зависла перезагрузка, дней</dt><dd className="font-mono text-text">{config.reboot_pending_days}</dd></div>
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Сертификат истекает, дней</dt><dd className="font-mono text-text">{config.cert_days}</dd></div>
+      <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Мало замков в политике, доля</dt><dd className="font-mono text-text">{config.policy_lock_share}</dd></div>
+      <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Содержимое политик, максимум</dt><dd className="font-mono text-text">{config.policy_contents_max_policies}</dd></div>
       <div className="sm:col-span-2">
         <dt className="text-text-secondary">Allowlist хостов</dt>
         <dd className="font-mono text-text">{config.allowlist_hosts.length ? config.allowlist_hosts.join(', ') : '—'}</dd>
@@ -85,6 +87,8 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
               <Field label="Задача обновления не запускалась, дней" hint="по умолчанию 7"><input className={FIELD} type="number" min={1} value={cfg.task_stale_days} onChange={(e) => patch({ task_stale_days: Number(e.target.value) })} /></Field>
               <Field label="Зависла перезагрузка, дней" hint="по умолчанию 7"><input className={FIELD} type="number" min={1} value={cfg.reboot_pending_days} onChange={(e) => patch({ reboot_pending_days: Number(e.target.value) })} /></Field>
               <Field label="Сертификат истекает, дней" hint="по умолчанию 60"><input className={FIELD} type="number" min={1} value={cfg.cert_days} onChange={(e) => patch({ cert_days: Number(e.target.value) })} /></Field>
+              <Field label="Мало замков в политике, доля" hint="по умолчанию 0.5 — ниже порога POLICY_WEAK_LOCKS"><input className={FIELD} type="number" min={0} max={1} step={0.05} value={cfg.policy_lock_share} onChange={(e) => patch({ policy_lock_share: Number(e.target.value) })} /></Field>
+              <Field label="Содержимое политик, максимум" hint="по умолчанию 200 — не больше стольки политик собирает онлайн-сборщик"><input className={FIELD} type="number" min={1} value={cfg.policy_contents_max_policies} onChange={(e) => patch({ policy_contents_max_policies: Number(e.target.value) })} /></Field>
             </div>
             <Field label="Allowlist хостов" hint="Маски имён хостов: test-*, *.lab.local — находки по ним понижаются до «справочно»">
               <textarea className={AREA} value={lines(cfg.allowlist_hosts)} onChange={(e) => patch({ allowlist_hosts: parseLines(e.target.value) })} />

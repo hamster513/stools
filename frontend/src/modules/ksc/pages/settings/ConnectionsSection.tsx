@@ -8,7 +8,7 @@ import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Field, FIELD, Section } from './ui'
 
-const EMPTY: ConnectionIn = { title: '', host: '', port: 13299, username: '', password: '', verify_tls: true, internal: true, domain: '' }
+const EMPTY: ConnectionIn = { title: '', host: '', port: 13299, username: '', password: '', verify_tls: true, internal: true, domain: '', skip_policy_contents: false }
 
 function Form({ initial, onDone, onCancel }: { initial: ConnectionIn & { id?: number }; onDone: () => void; onCancel: () => void }) {
   const save = useSaveConnection()
@@ -27,6 +27,8 @@ function Form({ initial, onDone, onCancel }: { initial: ConnectionIn & { id?: nu
           <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={f.internal} onChange={(e) => patch({ internal: e.target.checked })} /> Внутренняя учётная запись KSC</label>
           <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={f.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} /> Проверять сертификат</label>
           {!f.verify_tls && <span className="text-[11px] text-risk-medium">Сертификат сервера проверяться не будет: подключение уязвимо к подмене. Выключайте только для внутреннего CA, которому контейнер не доверяет.</span>}
+          <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={!f.skip_policy_contents} onChange={(e) => patch({ skip_policy_contents: !e.target.checked })} /> Собирать содержимое политик</label>
+          {f.skip_policy_contents && <span className="text-[11px] text-text-secondary">Содержимое политик (замки, настройки) собираться не будет — файл выгрузки заметно меньше.</span>}
         </div>
       </div>
       <div className="mt-3 flex items-center gap-2">
