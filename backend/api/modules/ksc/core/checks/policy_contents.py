@@ -69,17 +69,27 @@ def check_policy_weak_locks(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
 
 
 def check_policy_content_missing(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
-    """Активная политика продукта защиты, содержимого которой нет в секции `policy_contents`
-    (нет прав или ошибка сбора) — справочно, чтобы отсутствие данных не выглядело как
-    отсутствие проблем. Молчит целиком на файле без секции (старый сборщик)."""
+    """Активная политика продукта защиты, содержимого которой нет в секции `policy_contents`,
+    или оно есть, но ни одна секция не прочиталась (все — в `errors`) — оба случая неотличимы
+    от «проблем нет», поэтому справочная находка. Молчит целиком на файле без секции (старый
+    сборщик) — саму секцию `policy_contents == {}` от «поля не было в JSON» не отличить."""
     if not idx.export.policy_contents:
         return []
     out = []
     policies = _policies_by_id(idx)
+    contents = idx.export.policy_contents
+    for policy_id, content in contents.items():
+        if content.get("sections"):
+            continue
+        target, details = _target_details(idx, policy_id, policies, content)
+        errors = [str(e) for e in (content.get("errors") or [])]
+        details.update(case="empty", reason="; ".join(errors[:3]))
+        out.append(finalize(Finding(check="POLICY_CONTENT_MISSING", severity="Info", target=target, details=details, key_extra=policy_id), cfg))
     for policy in _protection_policies(idx):
         policy_id = _str(policy.get("KLPOL_ID"))
-        if policy_id in idx.export.policy_contents:
+        if policy_id in contents:
             continue
         target, details = _target_details(idx, policy_id, policies, {})
+        details.update(case="missing", reason="")
         out.append(finalize(Finding(check="POLICY_CONTENT_MISSING", severity="Info", target=target, details=details, key_extra=policy_id), cfg))
     return out

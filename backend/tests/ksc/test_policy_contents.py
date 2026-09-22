@@ -200,6 +200,32 @@ def test_policy_content_checks_silent_on_old_file_without_section() -> None:
     assert not check_policy_content_missing(idx, cfg)
 
 
+def test_check_policy_content_missing_fires_when_all_sections_failed() -> None:
+    """Политика присутствует в `policy_contents`, но все секции не прочитались (`sections == {}`,
+    `errors` непусто) — та же «данных нет» ситуация, что и полное отсутствие политики в секции."""
+    raw = build_export()
+    raw["policy_contents"]["1"]["sections"] = {}
+    raw["policy_contents"]["1"]["errors"] = ["KLPRSS_Basic: boom"]
+    idx = _idx(raw)
+    cfg = KscConfig()
+    missing = check_policy_content_missing(idx, cfg)
+    assert {x.target for x in missing} == {"KES workstations"}
+    finding = next(x for x in missing if x.target == "KES workstations")
+    assert finding.key_extra == "1" and finding.details["case"] == "empty" and finding.details["reason"] == "KLPRSS_Basic: boom"
+    assert not [x for x in check_policy_no_locks(idx, cfg) if x.target == "KES workstations"]
+
+
+def test_check_policy_content_missing_distinguishes_missing_from_empty_case() -> None:
+    raw = build_export()
+    raw["policy_contents"]["1"]["sections"] = {}
+    raw["policy_contents"]["1"]["errors"] = []
+    del raw["policy_contents"]["3"]
+    missing = _run(check_policy_content_missing, raw)
+    by_target = {x.target: x for x in missing}
+    assert by_target["KES workstations"].details["case"] == "empty" and by_target["KES workstations"].details["reason"] == ""
+    assert by_target["KES lab"].details["case"] == "missing"
+
+
 def test_registry_has_three_policy_content_checks() -> None:
     for code, severity in (("POLICY_NO_LOCKS", "High"), ("POLICY_WEAK_LOCKS", "Medium"), ("POLICY_CONTENT_MISSING", "Info")):
         spec = CHECK_BY_CODE[code]
