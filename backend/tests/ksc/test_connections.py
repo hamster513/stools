@@ -6,11 +6,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.modules.ksc.core import client as client_mod
+from api.modules.ksc.core import collector as collector_mod
 from api.modules.ksc.core.client import KscClient, KscError
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.export import load_export
 from tests.ksc.fake_ksc import PASSWORD, USER, FakeKsc, http_factory_for
-from tests.ksc.synthetic import build_export
+from tests.ksc.synthetic import build_export, expected_policy_contents
 
 
 @pytest.fixture
@@ -82,9 +83,11 @@ def test_connection_crud_hides_password(auth_client: TestClient) -> None:
     assert r.status_code == 201
     body = r.json()
     assert body["password_set"] is True and "password" not in body and body["port"] == 13299 and body["internal"] is True
+    assert body["skip_policy_contents"] is False
     cid = body["id"]
-    r = auth_client.put(f"/api/ksc/connections/{cid}", json={"host": "ksc02.corp.local", "username": USER, "password": "", "internal": False, "domain": "CORP"})
+    r = auth_client.put(f"/api/ksc/connections/{cid}", json={"host": "ksc02.corp.local", "username": USER, "password": "", "internal": False, "domain": "CORP", "skip_policy_contents": True})
     assert r.json()["host"] == "ksc02.corp.local" and r.json()["password_set"] is True and r.json()["domain"] == "CORP"
+    assert r.json()["skip_policy_contents"] is True
     assert auth_client.delete(f"/api/ksc/connections/{cid}").status_code == 204
     assert auth_client.get("/api/ksc/connections").json() == []
 
@@ -255,3 +258,54 @@ def test_collect_reads_through_live_params_wrappers(monkeypatch: Any) -> None:
     assert export.role_assignments == expected["role_assignments"] and export.internal_users == expected["internal_users"]
     assert export.security == expected["security"] and "CPublic" in export.server_certs.get("1", {})
     assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]
+    assert export.policy_contents == expected_policy_contents()
+
+
+def test_collect_policy_contents_matches_synthetic(fake: FakeKsc) -> None:
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert export.policy_contents == expected_policy_contents()
+    assert "2" not in export.policy_contents  # политика агента не собирается
+    assert not export.server.warnings
+    assert "SsContents.Ss_Release" in fake.calls
+
+
+def test_collect_policy_contents_denied_policy_and_section_error(monkeypatch: Any) -> None:
+    f = FakeKsc(variant="policy_denied")
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert "3" not in export.policy_contents
+    assert any("policy_contents[3]" in w for w in export.server.warnings)
+    pol1 = export.policy_contents["1"]
+    assert pol1["errors"] and pol1["errors"][0].startswith("KLPRSS_Components:")
+    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password"}
+    assert pol1["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] == "<скрыто>"
+
+
+def test_collect_skip_policy_contents(fake: FakeKsc) -> None:
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, skip_policy_contents=True, username=USER)
+    assert raw["policy_contents"] == {}
+    assert "Policy.GetPolicyContents" not in fake.calls
+
+
+def test_collect_policy_contents_respects_max_policies_limit(fake: FakeKsc, monkeypatch: Any) -> None:
+    monkeypatch.setattr(collector_mod, "POLICY_CONTENTS_MAX_POLICIES", 1)
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert set(export.policy_contents) == {"1"}
+    assert any("политик больше лимита" in w for w in export.server.warnings)
+
+
+def test_collect_policy_contents_section_over_limit(fake: FakeKsc, monkeypatch: Any) -> None:
+    monkeypatch.setattr(collector_mod, "POLICY_CONTENTS_SECTION_MAX_BYTES", 10)
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    pol1 = export.policy_contents["1"]
+    assert pol1["sections"] == {}
+    assert all("секция больше лимита" in e for e in pol1["errors"])

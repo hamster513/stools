@@ -84,10 +84,17 @@ NON_INTERNAL_USER = {"ul_llTrusteeId": 99, "ul_nSplUserId": 0, "ul_wstrDisplayNa
                       "ul_wstrPrincipalName": "petrov@corp.local", "ul_bUser": True, "ul_Builtin": False, "ul_InternalUser": False}
 
 
+def _policy_id_from_ss(ssid: Any) -> str:
+    """`"ss-<KLPOL_ID>"` (как отдаёт `Policy.GetPolicyContents`) → `"<KLPOL_ID>"`, ключ `policy_contents`."""
+    text = str(ssid or "")
+    return text.split("-", 1)[1] if text.startswith("ss-") else ""
+
+
 class FakeKsc:
     def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "",
                  deny: set[str] | None = None, deny_cert_functions: set[int] | None = None,
-                 fail_cert_functions: set[int] | None = None) -> None:
+                 fail_cert_functions: set[int] | None = None, deny_policy_contents: set[int] | None = None,
+                 fail_policy_sections: dict[int, set[str]] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
@@ -99,6 +106,10 @@ class FakeKsc:
         self.deny_cert_functions: set[int] = set(deny_cert_functions) if deny_cert_functions is not None else ({2} if variant == "denied_cert2" else set())
         #: Номера функций сертификата, на которые отвечать PxgError — «сертификата для этого назначения нет».
         self.fail_cert_functions: set[int] = set(fail_cert_functions) if fail_cert_functions is not None else ({2} if variant == "failed_cert2" else set())
+        #: KLPOL_ID политик, на которые Policy.GetPolicyContents отвечает 403 (нет прав).
+        self.deny_policy_contents: set[int] = set(deny_policy_contents) if deny_policy_contents is not None else ({3} if variant == "policy_denied" else set())
+        #: KLPOL_ID → имена секций, на которые Ss_Read отвечает PxgError (секция не читается, остальные — как обычно).
+        self.fail_policy_sections: dict[int, set[str]] = fail_policy_sections if fail_policy_sections is not None else ({1: {"KLPRSS_Components"}} if variant == "policy_denied" else {})
         #: HostGroup.GetStaticInfo с непустым pValues отдаёт пусто; полный ответ — только на pValues=null.
         self.static_needs_null = False
         #: Заголовки последнего ответа — оба транспорта отдают их клиенту.
@@ -233,6 +244,24 @@ class FakeKsc:
             return 200, {"PxgRetVal": d["secondary_servers"]}
         if method == "UaControl.GetUpdateAgentsList":
             return 200, {"pUasArr": d["update_agents"]}
+        if method == "Policy.GetPolicyContents":
+            npolicy = body.get("nPolicy")
+            if npolicy in self.deny_policy_contents:
+                return 403, {}
+            return 200, {"PxgRetVal": f"ss-{npolicy}"}
+        if method == "SsContents.SS_GetNames":
+            sections = d.get("policy_contents", {}).get(_policy_id_from_ss(body.get("wstrID")), {}).get("sections", {})
+            return 200, {"PxgRetVal": list(sections.keys())}
+        if method == "SsContents.Ss_Read":
+            npolicy = _policy_id_from_ss(body.get("wstrID"))
+            section = body.get("wstrSection")
+            fail_sections = self.fail_policy_sections.get(int(npolicy), set()) if npolicy.isdigit() else set()
+            if section in fail_sections:
+                return 200, {"PxgError": {"code": 1, "message": "boom"}}
+            sections = d.get("policy_contents", {}).get(npolicy, {}).get("sections", {})
+            return 200, {"PxgRetVal": sections.get(section, {})}
+        if method == "SsContents.Ss_Release":
+            return 200, {}
         if method == "LicenseKeys.EnumKeys":
             if not d["licenses"]:  # ключей нет — KSC не отдаёт итератор
                 return 200, {"lKeyCount": 0, "wstrIterator": ""}

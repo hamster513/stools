@@ -31,7 +31,8 @@ def collect_snapshot(db: Session, handle: JobHandle, conn: KscConnection, cfg: K
     handle.stage("connecting", message=conn.host)
     with _client(conn) as c:
         handle.stage("collecting", message="группы, хосты, продукты, политики, задачи")
-        raw = collect(c, progress=lambda done, total: handle.tick(done, total=total, message=f"продукты хостов {done} из {total}"), username=conn.username, host=conn.host)
+        raw = collect(c, skip_policy_contents=conn.skip_policy_contents,
+                      progress=lambda done, total: handle.tick(done, total=total, message=f"продукты хостов {done} из {total}"), username=conn.username, host=conn.host)
     data = json.dumps(raw, ensure_ascii=False).encode("utf-8")
     snap = import_export(db, handle, data, "online", f"{conn.host} ({conn.title or conn.username})", cfg, data_dir)
     conn.server_id = snap.server_id

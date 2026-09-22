@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -11,11 +13,20 @@ from api.modules.ksc.core.export import (
     PRODUCT_AGENT,
     PRODUCT_SERVER,
     _int,
+    _str,
     strip_params,
     unwrap,
 )
 
 COLLECTOR_VERSION = "1.0"
+
+#: Имя секции или ключ верхнего уровня её параметров, содержащий одно из этих слов (без учёта
+#: регистра), в выгрузку не идёт — значение заменяется на "<скрыто>", ключ остаётся.
+SECRET_MARKERS = ("PASSWORD", "PASSWD", "SECRET", "CRYPTED")
+#: Не больше стольки политик собираем за один сбор — предупреждение при превышении.
+POLICY_CONTENTS_MAX_POLICIES = 200
+#: Ответ секции больше этого размера не сохраняется (в errors — "секция больше лимита").
+POLICY_CONTENTS_SECTION_MAX_BYTES = 2 * 1024 * 1024
 
 HOST_FIELDS = [
     "KLHST_WKS_HOSTNAME", "KLHST_WKS_DN", "KLHST_WKS_WINHOSTNAME", "KLHST_WKS_WINDOMAIN", "KLHST_WKS_DNSDOMAIN", "KLHST_WKS_DNSNAME", "KLHST_WKS_FQDN",
@@ -77,7 +88,73 @@ def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = ""
         client.call("SrvView.ReleaseIterator", {"wstrIteratorId": it})
 
 
-def collect(client: KscClient, *, skip_products: bool = False, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
+def _has_secret_marker(name: str) -> bool:
+    """`name` содержит один из `SECRET_MARKERS` как целое слово (разделители — не буквы и не цифры),
+    без учёта регистра: `PASSWORD_HASH` и `KLPRSS_Password` — да, `EnablePasswordProtection` — нет
+    (это обычная настройка, не секрет, хоть и содержит ту же подстроку слитно)."""
+    words = re.split(r"[^A-Za-z0-9]+", name.upper())
+    return any(w in SECRET_MARKERS for w in words if w)
+
+
+def _hide_secrets(section_name: str, params: Any) -> Any:
+    """Секреты в содержимом политики: имя секции или ключ верхнего уровня её параметров с одним из
+    `SECRET_MARKERS` (целым словом, без учёта регистра) → значение "<скрыто>", ключ остаётся."""
+    hide_all = _has_secret_marker(section_name)
+    if not isinstance(params, dict):
+        return "<скрыто>" if hide_all else params
+    out: dict[str, Any] = {}
+    for k, v in params.items():
+        hide = hide_all or _has_secret_marker(str(k))
+        out[k] = "<скрыто>" if hide else v
+    return out
+
+
+def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings: list[str]) -> dict[str, Any]:
+    """Содержимое активных политик продуктов защиты: `Policy.GetPolicyContents` →
+    `SsContents.SS_GetNames`/`Ss_Read` по каждой секции, `Ss_Release` в finally. Каждая политика в
+    своём try: ошибка открытия — политики нет в результате, строка в `warnings`; ошибка секции — она
+    в `errors` этой политики, остальные секции остаются."""
+    out: dict[str, Any] = {}
+    count = 0
+    for raw_policy in policies:
+        policy = strip_params(raw_policy)
+        if not policy.get("KLPOL_ACTIVE"):
+            continue
+        product = _str(policy.get("KLPOL_PRODUCT"))
+        if product in (PRODUCT_AGENT, PRODUCT_SERVER):
+            continue
+        count += 1
+        if count > POLICY_CONTENTS_MAX_POLICIES:
+            warnings.append(f"policy_contents: политик больше лимита {POLICY_CONTENTS_MAX_POLICIES}, часть пропущена")
+            break
+        npolicy = _int(policy.get("KLPOL_ID"))
+        version = _str(policy.get("KLPOL_VERSION"))
+        try:
+            ssid = _ret(client.call("Policy.GetPolicyContents", {"nPolicy": npolicy, "nRevisionId": 0, "nLifeTime": 0}))
+            try:
+                names = _ret(client.call("SsContents.SS_GetNames", {"wstrID": ssid, "wstrProduct": product, "wstrVersion": version})) or []
+                sections: dict[str, Any] = {}
+                errors: list[str] = []
+                for section_name in names:
+                    try:
+                        section_raw = _ret(client.call("SsContents.Ss_Read", {"wstrID": ssid, "wstrProduct": product, "wstrVersion": version, "wstrSection": section_name}))
+                    except KscError as exc:
+                        errors.append(f"{section_name}: {exc}")
+                        continue
+                    value = _hide_secrets(section_name, strip_params(section_raw))
+                    if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > POLICY_CONTENTS_SECTION_MAX_BYTES:
+                        errors.append(f"{section_name}: секция больше лимита")
+                        continue
+                    sections[section_name] = value
+                out[str(npolicy)] = {"product": product, "version": version, "sections": sections, "errors": errors}
+            finally:
+                client.call("SsContents.Ss_Release", {"wstrID": ssid})
+        except KscError as exc:
+            warnings.append(f"policy_contents[{npolicy}]: {exc}")
+    return out
+
+
+def collect(client: KscClient, *, skip_products: bool = False, skip_policy_contents: bool = False, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
     warnings: list[str] = []
 
     def _section(name: str, fn: Callable[[], Any], default: Any) -> Any:
@@ -162,6 +239,8 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
                 break
         client.call("GroupSyncIterator.ReleaseIterator", {"szwIterator": li})
 
+    policy_contents: dict[str, Any] = {} if skip_policy_contents else _policy_contents(client, policies, warnings)
+
     role_assignments = _section("role_assignments", lambda: _read_srvview(client, "AdmGroupsAclRolesSrvViewName", ROLE_FIELDS), [])
     internal_users = _section("internal_users", lambda: _read_srvview(client, "GlobalUsersListSrvViewName", USER_FIELDS, "(ul_InternalUser = 1)"), [])
     two_factor = _section("security", lambda: _ret(client.call("TotpGlobalSettings.Get2FaRequiredForAll", {})), None)
@@ -200,4 +279,5 @@ def collect(client: KscClient, *, skip_products: bool = False, progress: Progres
         "policies": policies, "effective_policies": effective, "tasks": tasks, "licenses": licenses, "static": static, "domains": domains,
         "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
+        "policy_contents": policy_contents,
     }

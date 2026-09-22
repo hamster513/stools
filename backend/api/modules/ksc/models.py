@@ -36,6 +36,8 @@ class KscConnection(Base):
     internal: Mapped[bool] = mapped_column(Boolean, default=True)
     domain: Mapped[str] = mapped_column(String(255), default="")
     server_id: Mapped[int | None] = mapped_column(ForeignKey("ksc_server.id", ondelete="SET NULL"), nullable=True)
+    #: Не собирать содержимое политик (секция policy_contents) — файл заметно больше.
+    skip_policy_contents: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class KscSnapshot(Base):

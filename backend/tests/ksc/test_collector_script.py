@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from api.modules.ksc.core.export import load_export
 from tests.ksc.fake_ksc import MFA_SECRET, PASSWORD, USER, totp_code
-from tests.ksc.synthetic import build_export
+from tests.ksc.synthetic import build_export, expected_policy_contents
 
 SCRIPT = Path("api/modules/ksc/collector/STools-KSC-Collector.ps1")
 IMAGE = "mcr.microsoft.com/powershell:lts-alpine-3.20"
@@ -87,6 +87,7 @@ def test_script_output_matches_online_format(tmp_path: Path) -> None:
     assert export.secondary_servers == expected["secondary_servers"] and export.update_agents == expected["update_agents"]
     ws04 = next(h for h in export.hosts if h["KLHST_WKS_DN"] == "WS04")
     assert ws04["KLHST_WKS_RBT_REQUEST_REASON"] == 4 and "KLHST_WKS_OS_BUILD_NUMBER" in ws04
+    assert export.policy_contents == expected_policy_contents()
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -123,7 +124,7 @@ def test_script_writes_config_template(tmp_path: Path) -> None:
     run = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     assert run.returncode == 0, run.stdout + run.stderr
     template = json.loads((tmp_path / "ksc-config.json").read_text(encoding="utf-8-sig"))
-    assert set(template) == {"server", "port", "user", "password", "internal", "domain", "totp_secret", "skip_tls_check", "skip_products", "page_size", "output_path"}
+    assert set(template) == {"server", "port", "user", "password", "internal", "domain", "totp_secret", "skip_tls_check", "skip_products", "skip_policy_contents", "page_size", "output_path"}
     assert template["port"] == 13299 and template["password"] == "" and template["totp_secret"] == ""
 
 
@@ -186,3 +187,38 @@ def test_script_certs_keep_other_functions_on_method_error(tmp_path: Path) -> No
     assert list(export.server_certs) == ["1"] and list(export.server_certs["1"]) == ["CPublic"]
     assert len(export.server.warnings) == 1 and "функция 2" in export.server.warnings[0]
     assert len(export.hosts) == len(build_export()["hosts"]) and len(export.policies) == 3
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_and_online_policy_contents_match(tmp_path: Path) -> None:
+    """PowerShell в контейнере и онлайн-Python против одного и того же поддельного KSC собирают
+    одинаковую секцию policy_contents — оба сборщика читают содержимое политик одинаково."""
+    port = 18330
+    env = {**os.environ, "STOOLS_FAKE_VARIANT": ""}
+    server = subprocess.Popen([sys.executable, "-m", "tests.ksc.fake_ksc_http", str(port)], cwd=Path.cwd(), env=env)
+    try:
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        out = tmp_path / "policy_contents"
+        out.mkdir()
+        docker = ["docker", "run", "--rm", "--add-host=host.docker.internal:host-gateway", "-e", f"STOOLS_KSC_PASSWORD={PASSWORD}",
+                  "-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{out}:/out", IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1",
+                  "-Server", "host.docker.internal", "-Port", str(port), "-Scheme", "http", "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz"]
+        run = subprocess.run(docker, capture_output=True, text=True, timeout=300, check=False)
+        assert run.returncode == 0, run.stdout + run.stderr
+        script_export = load_export((out / "ksc.json.gz").read_bytes())
+
+        from api.modules.ksc.core.client import KscClient
+        from api.modules.ksc.core.collector import collect
+
+        with KscClient(f"http://127.0.0.1:{port}", USER, PASSWORD) as c:
+            raw = collect(c, username=USER)
+        online_export = load_export(json.dumps(raw).encode())
+    finally:
+        server.terminate()
+    assert set(script_export.policy_contents) == {"1", "3"}
+    assert script_export.policy_contents == online_export.policy_contents == expected_policy_contents()

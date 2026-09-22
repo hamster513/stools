@@ -64,6 +64,41 @@ def _host(n: int, name: str, group: int, status: int, rtp: int, *, now: dt.datet
 COMPONENTS = ["File Threat Protection", "Behavior Detection", "Exploit Prevention", "Firewall", "Network Threat Protection", "Web Control", "Device Control"]
 
 
+def _lock(value: Any, *, locked: bool = False, inherited: bool = False, lock_policy: str = "", lock_group: str = "") -> dict[str, Any]:
+    return {"KLPRSS_Val": value, "KLPRSS_Mnd": locked, "KLPRSS_ValLck": inherited,
+            "KLPRSS_ValLckPolicy": lock_policy, "KLPRSS_ValLckGroup": lock_group}
+
+
+def _policy_sections(*, locked: bool) -> dict[str, Any]:
+    """Три секции содержимого политики: `KLPRSS_Basic` (три настройки, часть замкнута, одна с
+    наследованным замком), `KLPRSS_Components` (вложенный контейнер `KLPRSS_Val`), `KLPRSS_Password`
+    (ключ с признаком секрета — сборщики должны скрыть его значение)."""
+    return {
+        "KLPRSS_Basic": {
+            "EnableSelfProtection": _lock(True, locked=locked),
+            "EnablePasswordProtection": _lock(True, locked=locked, inherited=locked,
+                                               lock_policy="KES root" if locked else "", lock_group="Managed devices" if locked else ""),
+            "ReportsMaxSize": _lock(1024, locked=False),
+        },
+        "KLPRSS_Components": {
+            "KLPRSS_Val": {
+                "FileThreatProtection": {"KLPRSS_Val": {"Enabled": _lock(True, locked=locked)}},
+                "Firewall": {"KLPRSS_Val": {"Enabled": _lock(True, locked=False)}},
+            }
+        },
+        "KLPRSS_Password": {"PASSWORD_HASH": "e10adc3949ba59abbe56e057f20f883e"},
+    }
+
+
+def _policy_contents() -> dict[str, Any]:
+    """Содержимое активных политик защиты: «KES workstations» (id 1, часть настроек замкнута) и
+    «KES lab» (id 3, без единого замка). Политика агента (id 2) сюда не входит: она не собирается."""
+    return {
+        "1": {"product": "KES", "version": "12.0.0.0", "sections": _policy_sections(locked=True), "errors": []},
+        "3": {"product": "KES", "version": "12.0.0.0", "sections": _policy_sections(locked=False), "errors": []},
+    }
+
+
 def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
     ok = 1 | 4 | 8 | 16
     hosts = [
@@ -162,7 +197,16 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         "domains": [{"KLHST_WKS_WINDOMAIN": "CORP", "KLHST_WKS_DNSDOMAIN": "corp.local"}],
         "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
+        "policy_contents": _policy_contents(),
     }
+
+
+def expected_policy_contents() -> dict[str, Any]:
+    """`_policy_contents()` как должны отдать оба сборщика: с `PASSWORD_HASH` скрытым."""
+    out = json.loads(json.dumps(_policy_contents()))
+    out["1"]["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] = "<скрыто>"
+    out["3"]["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] = "<скрыто>"
+    return out
 
 
 def add_ws02_twin(raw: dict[str, Any]) -> dict[str, Any]:

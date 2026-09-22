@@ -33,6 +33,8 @@ class ConnectionIn(BaseModel):
     #: Внутренняя учётка KSC (internal="1") или доменная с именем домена.
     internal: bool = True
     domain: str = ""
+    #: Не собирать содержимое политик (секция policy_contents) — файл заметно больше.
+    skip_policy_contents: bool = False
 
 
 class ConnectionView(BaseModel):
@@ -46,12 +48,14 @@ class ConnectionView(BaseModel):
     internal: bool
     domain: str
     server_id: int | None
+    skip_policy_contents: bool
 
 
 def _view(c: KscConnection) -> ConnectionView:
     return ConnectionView(
         id=c.id, title=c.title, host=c.host, port=c.port, username=c.username, password_set=bool(c.password),
         verify_tls=c.verify_tls, internal=c.internal, domain=c.domain, server_id=c.server_id,
+        skip_policy_contents=c.skip_policy_contents,
     )
 
 

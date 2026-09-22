@@ -127,6 +127,8 @@ class KscExport(BaseModel):
     server_certs: dict[str, Any] = Field(default_factory=dict)
     secondary_servers: list[dict[str, Any]] = Field(default_factory=list)
     update_agents: list[dict[str, Any]] = Field(default_factory=list)
+    #: {"<KLPOL_ID>": {"product", "version", "sections": {...}, "errors": [...]}}; необязательная секция.
+    policy_contents: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class ExportFormatError(ValueError):

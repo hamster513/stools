@@ -31,6 +31,7 @@
 .PARAMETER OutputPath  Куда писать файл; по умолчанию ksc-<сервер>-<дата>.json.gz.
 .PARAMETER SkipTlsCheck Не проверять сертификат сервера (самоподписанный).
 .PARAMETER SkipProducts Не запрашивать продукты и компоненты по каждому хосту (быстрее).
+.PARAMETER SkipPolicyContents Не собирать содержимое политик (секция policy_contents; файл заметно больше).
 .PARAMETER PageSize    Размер страницы при чтении хостов, по умолчанию 500.
 .PARAMETER Scheme      https (по умолчанию) или http — только для тестов.
 
@@ -62,6 +63,7 @@ param(
   [string]$OutputPath,
   [switch]$SkipTlsCheck,
   [switch]$SkipProducts,
+  [switch]$SkipPolicyContents,
   [int]$PageSize = 500,
   [ValidateSet("https", "http")][string]$Scheme = "https"
 )
@@ -71,12 +73,17 @@ $ErrorActionPreference = "Stop"
 
 $FormatVersion = "stools-ksc/1"
 $CollectorVersion = "1.0"
+#: Имя секции или ключ верхнего уровня её параметров с одним из этих слов (целиком, без учёта
+#: регистра) — значение "<скрыто>", ключ остаётся. Не больше стольки политик и байт на секцию.
+$SecretMarkers = @("PASSWORD", "PASSWD", "SECRET", "CRYPTED")
+$PolicyContentsMaxPolicies = 200
+$PolicyContentsSectionMaxBytes = 2097152
 
 if ($InitConfig) {
   if (-not [System.IO.Path]::IsPathRooted($InitConfig)) { $InitConfig = Join-Path $PWD.ProviderPath $InitConfig }
   $template = [ordered]@{
     server = ""; port = 13299; user = ""; password = ""; internal = $false; domain = ""; totp_secret = ""
-    skip_tls_check = $false; skip_products = $false; page_size = 500; output_path = ""
+    skip_tls_check = $false; skip_products = $false; skip_policy_contents = $false; page_size = 500; output_path = ""
   }
   [System.IO.File]::WriteAllText($InitConfig, ($template | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
   Write-Host "Шаблон записан: $InitConfig" -ForegroundColor Green
@@ -102,6 +109,7 @@ if (-not $bound.ContainsKey("Domain") -and (Cfg "domain")) { $Domain = [string](
 if (-not $bound.ContainsKey("OutputPath") -and (Cfg "output_path")) { $OutputPath = [string](Cfg "output_path") }
 if (-not $bound.ContainsKey("SkipTlsCheck") -and (Cfg "skip_tls_check")) { $SkipTlsCheck = [bool](Cfg "skip_tls_check") }
 if (-not $bound.ContainsKey("SkipProducts") -and (Cfg "skip_products")) { $SkipProducts = [bool](Cfg "skip_products") }
+if (-not $bound.ContainsKey("SkipPolicyContents") -and (Cfg "skip_policy_contents")) { $SkipPolicyContents = [bool](Cfg "skip_policy_contents") }
 if (-not $bound.ContainsKey("PageSize") -and (Cfg "page_size")) { $PageSize = [int](Cfg "page_size") }
 if (-not $bound.ContainsKey("Scheme") -and (Cfg "scheme")) { $Scheme = [string](Cfg "scheme") }
 if (-not $Server) { $Server = Read-Host "Сервер KSC" }
@@ -156,6 +164,23 @@ function Prop($o, $n) { if ($null -ne $o -and $o.PSObject.Properties[$n]) { retu
 function Unwrap($o) { if ($null -ne $o -and $o -is [psobject] -and $o.PSObject.Properties["type"] -and $o.PSObject.Properties["value"] -and $o.type -eq "params") { return $o.value }; return $o }
 # KSC отдаёт числа и как 13, и как @{ type = "long"; value = 13 }.
 function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [int]$v } catch { return 0 } }
+# Слово (без букв/цифр по краям) из SecretMarkers встречается в имени целиком, без учёта регистра:
+# PASSWORD_HASH и KLPRSS_Password — да, EnablePasswordProtection — нет (обычная настройка).
+function Test-SecretMarker([string]$name) {
+  foreach ($word in ($name.ToUpper() -split "[^A-Z0-9]+")) { if ($word -in $SecretMarkers) { return $true } }
+  return $false
+}
+# Секреты в содержимом политики: имя секции или ключ верхнего уровня params с признаком секрета →
+# значение "<скрыто>", ключ остаётся, чтобы было видно, что настройка есть.
+function Hide-Secrets([string]$sectionName, $params) {
+  $hideAll = Test-SecretMarker $sectionName
+  if ($params -isnot [System.Management.Automation.PSCustomObject]) { if ($hideAll) { return "<скрыто>" }; return $params }
+  $out = [ordered]@{}
+  foreach ($p in $params.PSObject.Properties) {
+    $out[$p.Name] = if ($hideAll -or (Test-SecretMarker $p.Name)) { "<скрыто>" } else { $p.Value }
+  }
+  return $out
+}
 # HTTP-код отказа из исключения Invoke-WebRequest (PowerShell 5.1 — WebException, 7 — HttpResponseException);
 # 0, если ошибка не про ответ сервера (PxgError, обрыв связи).
 function HttpStatus($err) {
@@ -300,6 +325,7 @@ $UserFields = @("ul_llTrusteeId","ul_nSplUserId","ul_wstrDisplayName","ul_wstrSa
 
 Write-Host "STools KSC Collector $CollectorVersion → $base" -ForegroundColor Green
 $warnings = New-Object System.Collections.ArrayList
+$policyContents = [ordered]@{}
 Write-Step "Вход"
 $script:session = Start-KscSession
 if (-not $script:session) { throw "KSC не выдал сессию" }
@@ -356,6 +382,48 @@ try {
     $gid = AsInt (Prop (Unwrap $g) "id")
     try { $effective[[string]$gid] = @((Prop (Invoke-Ksc "Policy.GetEffectivePoliciesForGroup" @{ nGroupId = $gid }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
     catch { Write-Warning ("политики группы {0}: {1}" -f $gid, $_.Exception.Message); [void]$warnings.Add("политики группы $($gid): $($_.Exception.Message)") }
+  }
+
+  if (-not $SkipPolicyContents) {
+    Write-Step "Содержимое политик"
+    $policyCount = 0
+    foreach ($p in $policies) {
+      $pv = Unwrap $p
+      if (-not (Prop $pv "KLPOL_ACTIVE")) { continue }
+      $product = [string](Prop $pv "KLPOL_PRODUCT")
+      if ($product -in @("1103", "1093")) { continue }   # не продукт защиты (агент, сервер)
+      $policyCount++
+      if ($policyCount -gt $PolicyContentsMaxPolicies) {
+        Write-Warning ("содержимое политик: больше лимита {0}, часть пропущена" -f $PolicyContentsMaxPolicies)
+        [void]$warnings.Add("policy_contents: политик больше лимита $($PolicyContentsMaxPolicies), часть пропущена")
+        break
+      }
+      $npolicy = AsInt (Prop $pv "KLPOL_ID")
+      $version = [string](Prop $pv "KLPOL_VERSION")
+      try {
+        $ssid = (Invoke-Ksc "Policy.GetPolicyContents" @{ nPolicy = $npolicy; nRevisionId = 0; nLifeTime = 0 }).PxgRetVal
+        try {
+          $names = @((Prop (Invoke-Ksc "SsContents.SS_GetNames" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version }) "PxgRetVal") | Where-Object { $null -ne $_ })
+          $sections = [ordered]@{}
+          $errors = New-Object System.Collections.ArrayList
+          foreach ($sectionName in $names) {
+            try {
+              $raw = (Invoke-Ksc "SsContents.Ss_Read" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version; wstrSection = $sectionName }).PxgRetVal
+              $hidden = Hide-Secrets $sectionName $raw
+              $bytes = [Text.Encoding]::UTF8.GetByteCount(($hidden | ConvertTo-Json -Depth 20 -Compress))
+              if ($bytes -gt $PolicyContentsSectionMaxBytes) { [void]$errors.Add("$($sectionName): секция больше лимита") }
+              else { $sections[$sectionName] = $hidden }
+            } catch { [void]$errors.Add("$($sectionName): $($_.Exception.Message)") }
+          }
+          $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = $sections; errors = @($errors.ToArray()) }
+        } finally {
+          Invoke-Ksc "SsContents.Ss_Release" @{ wstrID = $ssid } | Out-Null
+        }
+      } catch {
+        Write-Warning ("содержимое политики {0}: {1}" -f $npolicy, $_.Exception.Message)
+        [void]$warnings.Add("policy_contents[$($npolicy)]: $($_.Exception.Message)")
+      }
+    }
   }
 
   Write-Step "Задачи"
@@ -443,6 +511,7 @@ $export = [ordered]@{
   static = $static; domains = $domains
   role_assignments = @($roleAssignments); internal_users = @($internalUsers); security = $security
   server_certs = $serverCerts; secondary_servers = @($secondaryServers); update_agents = @($updateAgents)
+  policy_contents = $policyContents
 }
 
 $defaultName = "ksc-{0}-{1}.json.gz" -f $serverName, (Get-Date -Format "yyyyMMdd-HHmm")

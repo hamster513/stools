@@ -52,11 +52,12 @@ def test_load_export_rejects_foreign_or_broken() -> None:
 def test_load_export_without_new_sections_has_empty_defaults() -> None:
     """Файл без секций блока 1 разбирается как раньше и не даёт новых находок."""
     raw = build_export()
-    for key in ("role_assignments", "internal_users", "security", "server_certs", "secondary_servers", "update_agents"):
+    for key in ("role_assignments", "internal_users", "security", "server_certs", "secondary_servers", "update_agents", "policy_contents"):
         raw.pop(key, None)
     export = load_export(json.dumps(raw).encode())
     assert export.role_assignments == [] and export.internal_users == [] and export.security == {}
     assert export.server_certs == {} and export.secondary_servers == [] and export.update_agents == []
+    assert export.policy_contents == {}
 
 
 def test_index_parses_hosts() -> None:

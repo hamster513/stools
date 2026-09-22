@@ -37,6 +37,7 @@ def upgrade() -> None:
         sa.Column("internal", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("domain", sa.String(255), nullable=False, server_default=""),
         sa.Column("server_id", sa.Integer(), sa.ForeignKey("ksc_server.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("skip_policy_contents", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
     op.create_table(
         "ksc_snapshot",
