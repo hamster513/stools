@@ -104,17 +104,26 @@ def _is_secret_value(value: Any) -> bool:
     return isinstance(value, str) or _is_binary_wrapper(value)
 
 
-def _hide_secrets(section_name: str, params: Any) -> Any:
+def _is_params_wrapper(value: Any) -> bool:
+    return isinstance(value, dict) and set(value.keys()) == {"type", "value"} and value.get("type") == "params"
+
+
+def _hide_secrets(section_name: str, raw: Any) -> Any:
     """Секреты в содержимом политики: имя секции или ключ верхнего уровня её параметров с одним из
     `SECRET_MARKERS` (подстрокой, без учёта регистра) — значение "<скрыто>", ключ остаётся, но
-    только если само значение строка или двоичные данные (`{"type": "binary", "value": …}`)."""
+    только если само значение строка или двоичные данные (`{"type": "binary", "value": …}`).
+    Секция хранится как пришла — меняются только значения секретных ключей, обёртки не снимаются
+    (кроме собственно секретного значения); секция целиком в обёртке `{"type": "params", "value": …}`
+    (так приходит с живого сервера) обрабатывается через её `value`, обёртка остаётся."""
     hide_all = _has_secret_marker(section_name)
-    if _is_binary_wrapper(params):
-        return "<скрыто>" if hide_all else params
-    if not isinstance(params, dict):
-        return "<скрыто>" if (hide_all and isinstance(params, str)) else params
+    if _is_params_wrapper(raw):
+        return {"type": "params", "value": _hide_secrets(section_name, raw["value"])}
+    if _is_binary_wrapper(raw):
+        return "<скрыто>" if hide_all else raw
+    if not isinstance(raw, dict):
+        return "<скрыто>" if (hide_all and isinstance(raw, str)) else raw
     out: dict[str, Any] = {}
-    for k, v in params.items():
+    for k, v in raw.items():
         hide = (hide_all or _has_secret_marker(str(k))) and _is_secret_value(v)
         out[k] = "<скрыто>" if hide else v
     return out
@@ -129,7 +138,7 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
     count = 0
     for raw_policy in policies:
         policy = strip_params(raw_policy)
-        if not policy.get("KLPOL_ACTIVE"):
+        if not bool(unwrap(policy.get("KLPOL_ACTIVE"))):
             continue
         product = _str(policy.get("KLPOL_PRODUCT"))
         if product in (PRODUCT_AGENT, PRODUCT_SERVER):
@@ -152,7 +161,7 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
                     except KscError as exc:
                         errors.append(f"{section_name}: {exc}")
                         continue
-                    value = _hide_secrets(section_name, strip_params(section_raw))
+                    value = _hide_secrets(section_name, section_raw)
                     if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > POLICY_CONTENTS_SECTION_MAX_BYTES:
                         errors.append(f"{section_name}: секция больше лимита")
                         continue

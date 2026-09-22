@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from tests.ksc.synthetic import build_export
+from tests.ksc.synthetic import add_inactive_policy, build_export
 
 USER = "audit"
 PASSWORD = "audit-pass"
@@ -96,6 +96,9 @@ class FakeKsc:
                  fail_cert_functions: set[int] | None = None, deny_policy_contents: set[int] | None = None,
                  fail_policy_sections: dict[int, set[str]] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
+        if data is None and variant == "params":
+            # KLPOL_ACTIVE как типизированный ноль — сборщики не должны читать его как безусловную правду.
+            self.data = add_inactive_policy(self.data)
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
         #: variant="params" — записи в обёртках, как у живого сервера.
@@ -146,6 +149,9 @@ class FakeKsc:
         if method == "Tasks.GetNextTask" and out.get("pTaskData"):
             # Живой KSC заворачивает и сам объект задачи, а не только вложенные контейнеры.
             out["pTaskData"] = {"type": "params", "value": out["pTaskData"]}
+        if method == "SsContents.Ss_Read" and isinstance(out.get("PxgRetVal"), dict) and set(out["PxgRetVal"].keys()) != {"type", "value"}:
+            # Живой KSC заворачивает и саму секцию целиком, а не только настройки внутри неё.
+            out["PxgRetVal"] = {"type": "params", "value": out["PxgRetVal"]}
         return status, out
 
     def _handle(self, method: str, body: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:

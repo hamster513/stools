@@ -11,7 +11,7 @@ from api.modules.ksc.core.client import KscClient, KscError
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.export import load_export
 from tests.ksc.fake_ksc import PASSWORD, USER, FakeKsc, http_factory_for
-from tests.ksc.synthetic import build_export, expected_policy_contents
+from tests.ksc.synthetic import add_inactive_policy, build_export, expected_policy_contents
 
 
 @pytest.fixture
@@ -317,3 +317,16 @@ def test_collect_policy_contents_section_over_limit(fake: FakeKsc, monkeypatch: 
     pol1 = export.policy_contents["1"]
     assert pol1["sections"] == {}
     assert all("секция больше лимита" in e for e in pol1["errors"])
+
+
+def test_collect_policy_contents_skips_inactive_typed_bool_policy(monkeypatch: Any) -> None:
+    """KLPOL_ACTIVE как {"type": "boolean", "value": false} — типизированный ноль, а не безусловная
+    правда (наивная проверка `if policy["KLPOL_ACTIVE"]` считала бы такой словарь истинным)."""
+    data = add_inactive_policy(build_export())
+    f = FakeKsc(data)
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(f))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert set(export.policy_contents) == {"1", "3"}
+    assert "9" not in export.policy_contents

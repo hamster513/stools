@@ -222,3 +222,51 @@ def test_script_and_online_policy_contents_match(tmp_path: Path) -> None:
         server.terminate()
     assert set(script_export.policy_contents) == {"1", "3"}
     assert script_export.policy_contents == online_export.policy_contents == expected_policy_contents()
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_and_online_policy_contents_match_raw_shape_with_params_wrappers(tmp_path: Path) -> None:
+    """Вариант params: секции приходят обёрнутыми ({"type": "params", "value": …}, как у живого
+    сервера) — сверяем сырой (несобранный) JSON policy_contents между скриптом и онлайн-сборщиком,
+    а не разобранную форму (`load_export` снимает обёртки через strip_params и различие бы скрыла).
+    Тем же прогоном проверяется политика с KLPOL_ACTIVE-типизированным нулём (fake_ksc.FakeKsc
+    добавляет её в данные варианта params) — её быть не должно ни у скрипта, ни онлайн."""
+    port = 18331
+    env = {**os.environ, "STOOLS_FAKE_VARIANT": "params"}
+    server = subprocess.Popen([sys.executable, "-m", "tests.ksc.fake_ksc_http", str(port)], cwd=Path.cwd(), env=env)
+    try:
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        out = tmp_path / "policy_contents_params"
+        out.mkdir()
+        docker = ["docker", "run", "--rm", "--add-host=host.docker.internal:host-gateway", "-e", f"STOOLS_KSC_PASSWORD={PASSWORD}",
+                  "-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{out}:/out", IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1",
+                  "-Server", "host.docker.internal", "-Port", str(port), "-Scheme", "http", "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz"]
+        run = subprocess.run(docker, capture_output=True, text=True, timeout=300, check=False)
+        assert run.returncode == 0, run.stdout + run.stderr
+        script_raw = json.loads(gzip.decompress((out / "ksc.json.gz").read_bytes()))["policy_contents"]
+
+        from api.modules.ksc.core.client import KscClient
+        from api.modules.ksc.core.collector import collect
+
+        with KscClient(f"http://127.0.0.1:{port}", USER, PASSWORD) as c:
+            online_raw = collect(c, username=USER)["policy_contents"]
+    finally:
+        server.terminate()
+    assert set(script_raw) == {"1", "3"} and "9" not in script_raw
+    assert script_raw == online_raw
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_policy_contents_survives_denied_policy_and_section(tmp_path: Path) -> None:
+    """Отказ (403) на политику 3 и PxgError на одну секцию политики 1 не роняют сбор остального."""
+    export = load_export(_run_script(tmp_path, 18332, "policy_denied").read_bytes())
+    assert "3" not in export.policy_contents
+    assert any("policy_contents[3]" in w for w in export.server.warnings)
+    pol1 = export.policy_contents["1"]
+    assert pol1["errors"] and pol1["errors"][0].startswith("KLPRSS_Components:")
+    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Secret"}

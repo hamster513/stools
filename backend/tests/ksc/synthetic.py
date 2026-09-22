@@ -220,6 +220,16 @@ def expected_policy_contents() -> dict[str, Any]:
     return out
 
 
+def add_inactive_policy(raw: dict[str, Any]) -> dict[str, Any]:
+    """Политика продукта защиты с `KLPOL_ACTIVE` типизированным нулём
+    (`{"type": "boolean", "value": false}`) — типизированная ложь, не безусловная правда: не должна
+    попасть в `policy_contents`."""
+    base = raw["policies"][0]
+    inactive = {**base, "KLPOL_ID": 9, "KLPOL_DN": "KES retired", "KLPOL_ACTIVE": {"type": "boolean", "value": False}}
+    raw["policies"].append(inactive)
+    return raw
+
+
 def add_ws02_twin(raw: dict[str, Any]) -> dict[str, Any]:
     """Второе устройство с тем же отображаемым именем WS02, но в другой группе и домене:
     KLHST_WKS_DN в KSC не уникален."""

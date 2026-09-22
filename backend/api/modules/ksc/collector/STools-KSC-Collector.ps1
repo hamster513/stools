@@ -164,16 +164,25 @@ function Prop($o, $n) { if ($null -ne $o -and $o.PSObject.Properties[$n]) { retu
 function Unwrap($o) { if ($null -ne $o -and $o -is [psobject] -and $o.PSObject.Properties["type"] -and $o.PSObject.Properties["value"] -and $o.type -eq "params") { return $o.value }; return $o }
 # KSC отдаёт числа и как 13, и как @{ type = "long"; value = 13 }.
 function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [int]$v } catch { return 0 } }
+# KSC отдаёт булевы и как $true/$false, и как @{ type = "boolean"; value = $false } — типизированный
+# ноль не должен читаться как безусловная правда.
+function AsBool($v) { if ($null -eq $v) { return $false }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [bool]$v } catch { return $false } }
+# Типизированное значение KSC вида @{ type = <kind>; value = ... } — ровно два свойства, type/value.
+function Test-TypedWrapper($v, [string]$kind) {
+  if ($null -eq $v -or $v -isnot [psobject]) { return $false }
+  $names = @($v.PSObject.Properties.Name)
+  return ($names.Count -eq 2) -and ($names -contains "type") -and ($names -contains "value") -and ($v.type -eq $kind)
+}
 # SecretMarkers подстрокой в имени, без учёта регистра: PASSWORD_HASH, KLPRSS_Password, AdminPassword — да.
 function Test-SecretMarker([string]$name) {
   $upper = $name.ToUpper()
   foreach ($m in $SecretMarkers) { if ($upper.Contains($m)) { return $true } }
   return $false
 }
-# Двоичное типизированное значение KSC: @{ type = "binary"; value = ... }.
-function Test-BinaryWrapper($v) {
-  return ($v -is [psobject]) -and $v.PSObject.Properties["type"] -and $v.PSObject.Properties["value"] -and $v.type -eq "binary"
-}
+# Двоичное типизированное значение KSC: @{ type = "binary"; value = ... }, ровно два свойства.
+function Test-BinaryWrapper($v) { return Test-TypedWrapper $v "binary" }
+# Обёртка контейнера, как заворачивает живой KSC: @{ type = "params"; value = ... }.
+function Test-ParamsWrapper($v) { return Test-TypedWrapper $v "params" }
 # Прячем только строки и двоичные данные: булевы и числа секретом быть не могут, даже если имя
 # настройки содержит один из SecretMarkers (например, EnablePasswordProtection).
 function Test-SecretValue($v) {
@@ -181,9 +190,13 @@ function Test-SecretValue($v) {
 }
 # Секреты в содержимом политики: имя секции или ключ верхнего уровня params с признаком секрета →
 # значение "<скрыто>" (ключ остаётся), только если само значение строка или двоичные данные.
+# Секция хранится как пришла: обёртки не снимаются, кроме собственно секретного значения; секция
+# целиком в обёртке @{ type = "params"; value = ... } (так приходит с живого сервера) обрабатывается
+# через её value, обёртка остаётся.
 function Hide-Secrets([string]$sectionName, $params) {
   $hideAll = Test-SecretMarker $sectionName
   if ($null -eq $params) { return $params }
+  if (Test-ParamsWrapper $params) { return @{ type = "params"; value = (Hide-Secrets $sectionName $params.value) } }
   if (Test-BinaryWrapper $params) { if ($hideAll) { return "<скрыто>" }; return $params }
   if ($params -isnot [System.Management.Automation.PSCustomObject]) {
     if ($hideAll -and ($params -is [string])) { return "<скрыто>" }
@@ -404,7 +417,7 @@ try {
     $policyCount = 0
     foreach ($p in $policies) {
       $pv = Unwrap $p
-      if (-not (Prop $pv "KLPOL_ACTIVE")) { continue }
+      if (-not (AsBool (Prop $pv "KLPOL_ACTIVE"))) { continue }
       $product = [string](Prop $pv "KLPOL_PRODUCT")
       if ($product -in @("1103", "1093")) { continue }   # не продукт защиты (агент, сервер)
       $policyCount++
@@ -535,7 +548,7 @@ if (-not $OutputPath) { $OutputPath = $defaultName }
 elseif ($OutputPath -match '[\\/]$' -or (Test-Path -LiteralPath $OutputPath -PathType Container)) { $OutputPath = Join-Path $OutputPath $defaultName }
 if (-not [System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $PWD.ProviderPath $OutputPath }
 Write-Step "Запись $OutputPath"
-$json = $export | ConvertTo-Json -Depth 12 -Compress
+$json = $export | ConvertTo-Json -Depth 20 -Compress
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
 $out = [System.IO.File]::Create($OutputPath)
 try {
