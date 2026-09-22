@@ -71,14 +71,19 @@ Impact складывается из критичности хоста и раз
 
 ## Модуль Антивирус
 
-Двадцать шесть проверок состояния защиты Kaspersky Security Center: покрытие
-устройств (`COVER_AD_MISSING`, `COVER_KSC_ONLY`, `UNASSIGNED`, `NO_AGENT`),
-состояние защиты (`NO_PROTECTION`, `RTP_OFF`, `COMPONENT_OFF`,
+Двадцать девять проверок состояния защиты Kaspersky Security Center:
+покрытие устройств (`COVER_AD_MISSING`, `COVER_KSC_ONLY`, `UNASSIGNED`,
+`NO_AGENT`), состояние защиты (`NO_PROTECTION`, `RTP_OFF`, `COMPONENT_OFF`,
 `HOST_CRITICAL`, `REBOOT_PENDING`), базы и поиск (`BASES_OLD`,
 `THREATS_ACTIVE`, `NO_FULLSCAN`, `AGENT_SILENT`), версии
 (`PRODUCT_OUTDATED`), политики и задачи групп (`POLICY_NONE`,
 `POLICY_INHERIT_BROKEN`, `TASK_NO_UPDATE`, `TASK_NO_SCAN`, `TASK_FAILED`,
 `TASK_STALE`), лицензия (`LICENSE`).
+
+Содержимое политик продуктов защиты собирается отдельно и проверяется на
+замки (`POLICY_NO_LOCKS`, `POLICY_WEAK_LOCKS`, `POLICY_CONTENT_MISSING`) —
+экран «Политики и задачи» показывает долю замкнутых настроек каждой
+политики и ссылку на её содержимое с деревом секций.
 
 Отдельный блок проверок — аудит самого сервера KSC, не хостов: обязательна
 ли двухэтапная проверка для входа в консоль (`KSC_2FA_OFF`), не держит ли
