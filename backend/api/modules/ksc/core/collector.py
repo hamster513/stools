@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import re
 from collections.abc import Callable
 from typing import Any
 
@@ -89,22 +88,34 @@ def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = ""
 
 
 def _has_secret_marker(name: str) -> bool:
-    """`name` содержит один из `SECRET_MARKERS` как целое слово (разделители — не буквы и не цифры),
-    без учёта регистра: `PASSWORD_HASH` и `KLPRSS_Password` — да, `EnablePasswordProtection` — нет
-    (это обычная настройка, не секрет, хоть и содержит ту же подстроку слитно)."""
-    words = re.split(r"[^A-Za-z0-9]+", name.upper())
-    return any(w in SECRET_MARKERS for w in words if w)
+    """`name` содержит один из `SECRET_MARKERS` подстрокой, без учёта регистра: `PASSWORD_HASH`,
+    `KLPRSS_Password` и `AdminPassword` — да."""
+    upper = str(name).upper()
+    return any(marker in upper for marker in SECRET_MARKERS)
+
+
+def _is_binary_wrapper(value: Any) -> bool:
+    return isinstance(value, dict) and set(value.keys()) == {"type", "value"} and value.get("type") == "binary"
+
+
+def _is_secret_value(value: Any) -> bool:
+    """Прячем только строки и двоичные значения: булевы и числа секретом быть не могут, даже если
+    имя настройки содержит одно из `SECRET_MARKERS` (например, `EnablePasswordProtection`)."""
+    return isinstance(value, str) or _is_binary_wrapper(value)
 
 
 def _hide_secrets(section_name: str, params: Any) -> Any:
     """Секреты в содержимом политики: имя секции или ключ верхнего уровня её параметров с одним из
-    `SECRET_MARKERS` (целым словом, без учёта регистра) → значение "<скрыто>", ключ остаётся."""
+    `SECRET_MARKERS` (подстрокой, без учёта регистра) — значение "<скрыто>", ключ остаётся, но
+    только если само значение строка или двоичные данные (`{"type": "binary", "value": …}`)."""
     hide_all = _has_secret_marker(section_name)
-    if not isinstance(params, dict):
+    if _is_binary_wrapper(params):
         return "<скрыто>" if hide_all else params
+    if not isinstance(params, dict):
+        return "<скрыто>" if (hide_all and isinstance(params, str)) else params
     out: dict[str, Any] = {}
     for k, v in params.items():
-        hide = hide_all or _has_secret_marker(str(k))
+        hide = (hide_all or _has_secret_marker(str(k))) and _is_secret_value(v)
         out[k] = "<скрыто>" if hide else v
     return out
 

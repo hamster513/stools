@@ -164,20 +164,35 @@ function Prop($o, $n) { if ($null -ne $o -and $o.PSObject.Properties[$n]) { retu
 function Unwrap($o) { if ($null -ne $o -and $o -is [psobject] -and $o.PSObject.Properties["type"] -and $o.PSObject.Properties["value"] -and $o.type -eq "params") { return $o.value }; return $o }
 # KSC отдаёт числа и как 13, и как @{ type = "long"; value = 13 }.
 function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [int]$v } catch { return 0 } }
-# Слово (без букв/цифр по краям) из SecretMarkers встречается в имени целиком, без учёта регистра:
-# PASSWORD_HASH и KLPRSS_Password — да, EnablePasswordProtection — нет (обычная настройка).
+# SecretMarkers подстрокой в имени, без учёта регистра: PASSWORD_HASH, KLPRSS_Password, AdminPassword — да.
 function Test-SecretMarker([string]$name) {
-  foreach ($word in ($name.ToUpper() -split "[^A-Z0-9]+")) { if ($word -in $SecretMarkers) { return $true } }
+  $upper = $name.ToUpper()
+  foreach ($m in $SecretMarkers) { if ($upper.Contains($m)) { return $true } }
   return $false
 }
+# Двоичное типизированное значение KSC: @{ type = "binary"; value = ... }.
+function Test-BinaryWrapper($v) {
+  return ($v -is [psobject]) -and $v.PSObject.Properties["type"] -and $v.PSObject.Properties["value"] -and $v.type -eq "binary"
+}
+# Прячем только строки и двоичные данные: булевы и числа секретом быть не могут, даже если имя
+# настройки содержит один из SecretMarkers (например, EnablePasswordProtection).
+function Test-SecretValue($v) {
+  return ($v -is [string]) -or (Test-BinaryWrapper $v)
+}
 # Секреты в содержимом политики: имя секции или ключ верхнего уровня params с признаком секрета →
-# значение "<скрыто>", ключ остаётся, чтобы было видно, что настройка есть.
+# значение "<скрыто>" (ключ остаётся), только если само значение строка или двоичные данные.
 function Hide-Secrets([string]$sectionName, $params) {
   $hideAll = Test-SecretMarker $sectionName
-  if ($params -isnot [System.Management.Automation.PSCustomObject]) { if ($hideAll) { return "<скрыто>" }; return $params }
+  if ($null -eq $params) { return $params }
+  if (Test-BinaryWrapper $params) { if ($hideAll) { return "<скрыто>" }; return $params }
+  if ($params -isnot [System.Management.Automation.PSCustomObject]) {
+    if ($hideAll -and ($params -is [string])) { return "<скрыто>" }
+    return $params
+  }
   $out = [ordered]@{}
   foreach ($p in $params.PSObject.Properties) {
-    $out[$p.Name] = if ($hideAll -or (Test-SecretMarker $p.Name)) { "<скрыто>" } else { $p.Value }
+    $marker = $hideAll -or (Test-SecretMarker $p.Name)
+    $out[$p.Name] = if ($marker -and (Test-SecretValue $p.Value)) { "<скрыто>" } else { $p.Value }
   }
   return $out
 }

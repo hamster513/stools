@@ -269,6 +269,11 @@ def test_collect_policy_contents_matches_synthetic(fake: FakeKsc) -> None:
     assert "2" not in export.policy_contents  # политика агента не собирается
     assert not export.server.warnings
     assert "SsContents.Ss_Release" in fake.calls
+    basic = export.policy_contents["1"]["sections"]["KLPRSS_Basic"]
+    # секрет по подстроке в имени, но прячем только строки/двоичные значения — не булевы контейнеры замков
+    assert basic["EnablePasswordProtection"]["KLPRSS_Mnd"] is True and basic["AdminPassword"] == "<скрыто>"
+    assert export.policy_contents["1"]["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] == "<скрыто>"
+    assert export.policy_contents["1"]["sections"]["KLPRSS_Secret"] == "<скрыто>"
 
 
 def test_collect_policy_contents_denied_policy_and_section_error(monkeypatch: Any) -> None:
@@ -281,8 +286,11 @@ def test_collect_policy_contents_denied_policy_and_section_error(monkeypatch: An
     assert any("policy_contents[3]" in w for w in export.server.warnings)
     pol1 = export.policy_contents["1"]
     assert pol1["errors"] and pol1["errors"][0].startswith("KLPRSS_Components:")
-    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password"}
+    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Secret"}
     assert pol1["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] == "<скрыто>"
+    assert pol1["sections"]["KLPRSS_Basic"]["AdminPassword"] == "<скрыто>"
+    assert pol1["sections"]["KLPRSS_Basic"]["EnablePasswordProtection"] != "<скрыто>"
+    assert pol1["sections"]["KLPRSS_Secret"] == "<скрыто>"
 
 
 def test_collect_skip_policy_contents(fake: FakeKsc) -> None:

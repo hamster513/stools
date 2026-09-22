@@ -70,15 +70,20 @@ def _lock(value: Any, *, locked: bool = False, inherited: bool = False, lock_pol
 
 
 def _policy_sections(*, locked: bool) -> dict[str, Any]:
-    """Три секции содержимого политики: `KLPRSS_Basic` (три настройки, часть замкнута, одна с
-    наследованным замком), `KLPRSS_Components` (вложенный контейнер `KLPRSS_Val`), `KLPRSS_Password`
-    (ключ с признаком секрета — сборщики должны скрыть его значение)."""
+    """Четыре секции содержимого политики — проверяют все случаи скрытия секретов (подстрока в
+    имени, но прячем только строки и двоичные значения): `KLPRSS_Basic` (`EnableSelfProtection` и
+    `EnablePasswordProtection` — обычные замкнутые настройки-контейнеры, `EnablePasswordProtection`
+    с наследованным замком; `AdminPassword` — голая строка с признаком секрета в имени, должна
+    скрыться, хотя лежит в несекретной секции); `KLPRSS_Components` (вложенный контейнер
+    `KLPRSS_Val`); `KLPRSS_Password` (ключ `PASSWORD_HASH` — строка, скрывается); `KLPRSS_Secret`
+    (вся секция — двоичное значение, скрывается целиком по имени секции)."""
     return {
         "KLPRSS_Basic": {
             "EnableSelfProtection": _lock(True, locked=locked),
             "EnablePasswordProtection": _lock(True, locked=locked, inherited=locked,
                                                lock_policy="KES root" if locked else "", lock_group="Managed devices" if locked else ""),
             "ReportsMaxSize": _lock(1024, locked=False),
+            "AdminPassword": "hunter2",
         },
         "KLPRSS_Components": {
             "KLPRSS_Val": {
@@ -87,6 +92,7 @@ def _policy_sections(*, locked: bool) -> dict[str, Any]:
             }
         },
         "KLPRSS_Password": {"PASSWORD_HASH": "e10adc3949ba59abbe56e057f20f883e"},
+        "KLPRSS_Secret": {"type": "binary", "value": "c2VjcmV0LWJsb2I="},
     }
 
 
@@ -202,10 +208,15 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
 
 
 def expected_policy_contents() -> dict[str, Any]:
-    """`_policy_contents()` как должны отдать оба сборщика: с `PASSWORD_HASH` скрытым."""
+    """`_policy_contents()` как должны отдать оба сборщика: `PASSWORD_HASH` и `AdminPassword`
+    (строки) и `KLPRSS_Secret` (двоичное значение) скрыты; `EnablePasswordProtection` (контейнер
+    замка, не строка и не двоичное значение) остаётся видимой, несмотря на то же слово в имени."""
     out = json.loads(json.dumps(_policy_contents()))
-    out["1"]["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] = "<скрыто>"
-    out["3"]["sections"]["KLPRSS_Password"]["PASSWORD_HASH"] = "<скрыто>"
+    for pid in ("1", "3"):
+        sections = out[pid]["sections"]
+        sections["KLPRSS_Password"]["PASSWORD_HASH"] = "<скрыто>"
+        sections["KLPRSS_Basic"]["AdminPassword"] = "<скрыто>"
+        sections["KLPRSS_Secret"] = "<скрыто>"
     return out
 
 
