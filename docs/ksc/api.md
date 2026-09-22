@@ -20,18 +20,34 @@
 Собирается только на этапе выгрузки (PowerShell-флаг `-SkipPolicyContents`
 или поле подключения `skip_policy_contents` выключают сбор целиком — файл
 заметно больше с этой секцией). Ограничения сборщика: не больше
-`policy_contents_max_policies` (200) политик и 2 МБ на секцию — за
-пределами лимита политика или секция не попадает в файл, причина — в
-`server.warnings` (лимит политик) или в `errors` этой политики (лимит
-секции). Секции и ключи верхнего уровня их параметров, чьё имя содержит
-подстроку `PASSWORD`, `PASSWD`, `SECRET`, `CRYPTED` (без учёта регистра),
-прячутся — но только если сохранённое значение строка или двоичные данные:
-логические и числовые значения (`EnablePasswordProtection = true`) секретом
-быть не могут и остаются как есть. Скрытое значение — строка `"<скрыто>"`,
-ключ остаётся на месте. Секция хранится как пришла от KSC (те же обёртки
-типов `{"type": "params"|"binary"|…, "value": …}`, что и в остальных
-секциях файла) — правило скрытия меняет только значения секретных ключей,
-обёртки не разворачивает.
+`policy_contents_max_policies` (200) политик и 2 МБ на секцию (размер —
+компактный JSON без пробелов в обоих сборщиках). Политика за лимитом не
+читается, но попадает в файл записью `{"product", "version", "sections": {},
+"errors": ["лимит политик"]}` (и одна строка в `server.warnings`) — так
+`POLICY_CONTENT_MISSING` показывает причину; секция за лимитом не попадает
+в файл, причина — в `errors` этой политики.
+
+Секреты: если имя секции или ключ на **любой** глубине её параметров
+содержит подстроку `PASSWORD`, `PASSWD`, `PWD`, `SECRET`, `CRYPTED`,
+`TOKEN`, `CREDENTIAL` или `PRIVATE` (без учёта регистра), всё поддерево под
+ним скрывается: каждая строка и каждое двоичное значение
+(`{"type": "binary", …}`) становятся `"<скрыто>"`, ключи остаются на месте.
+Так скрываются и документированная форма настройки
+(`{"AdminPassword": {"KLPRSS_Val": "…", "KLPRSS_Mnd": true}}` — строка в
+`KLPRSS_Val`), и секрет в обёртке `params`, и вложенный
+`PasswordProtection → KLPRSS_Val → PasswordHash`, и контейнеры внутри
+секции с признаком в имени. Логические и числовые значения под признаком
+остаются (`EnablePasswordProtection = true`, `KLPRSS_Mnd` — видны), прочие
+типизированные значения (`datetime`, `long`) тоже; строки замка под
+признаком (`KLPRSS_ValLckPolicy`, `KLPRSS_ValLckGroup`) скрываются вместе с
+остальными строками. Чего правило не делает: значения под ключами без
+признака (и без признака выше по пути) не проверяются — секрет под
+нейтральным именем (`Value`, `Data`) сохранится как есть; и наоборот,
+несекретная строка под ключом с признаком тоже станет `"<скрыто>"`. Секция
+хранится как пришла от KSC (те же обёртки типов
+`{"type": "params"|"binary"|…, "value": …}`, что и в остальных секциях
+файла) — обёртки `params` проходятся насквозь и остаются на месте, списки
+проверяются поэлементно и остаются списками.
 
 Из контейнера сертификата (`CertPoolCtrl.GetCertificateInfo`) в файл идёт
 только поле `CPublic` — приватная часть и прочие поля контейнера не
@@ -129,13 +145,14 @@ DELETE /verdicts/{key}?server_id=      204
 GET  /snapshots/{id}/policies          {groups: [{id, name, path, level, hosts,
                                         policies: [{id, name, product, active, inherited,
                                                     accept_parent, modified_at, modified_group,
-                                                    locks: {total, locked}|null, has_contents}],
+                                                    locks: {total, locked, with_lock_flag}|null,
+                                                    has_contents}],
                                         tasks: [{id, name, type, product, inherited, schedule,
                                                  last_run_at, ok, warning, failed}],
                                         findings: [{key, check, check_title, severity}]}]}
 GET  /snapshots/{id}/policies/{policy_id}/contents
                                         {policy: {id, name, product, version, group},
-                                        summary: {total, locked, share}|null,
+                                        summary: {total, locked, share, with_lock_flag}|null,
                                         sections: [{name, settings: [{path, value, locked,
                                                                        inherited_lock, lock_from}]}],
                                         errors: [...]}
@@ -154,22 +171,30 @@ GET  /snapshots/{id}/policies/{policy_id}/contents
 что читает `TASK_FAILED` (см. «Известные оговорки»).
 
 У политики продукта защиты `locks` — свод по замкам её содержимого
-(`total`, `locked` — из `walk_settings`/`lock_summary`, `core/policy_contents.py`);
-`null`, если содержимого нет в секции `policy_contents` (нет прав, ошибка
-сбора или лимит политик/секции — см. «Формат выгрузки»). `has_contents` —
-есть ли у политики запись в `policy_contents` вообще (`true` и тогда, когда
-все её секции провалились и `sections` пуст — `locks` при этом не `null`,
-а `{total: 0, locked: 0}`). Для политик агента и сервера (`KLPOL_PRODUCT`
+(`total`, `locked`, `with_lock_flag` — из `walk_settings`/`lock_summary`,
+`core/policy_contents.py`; `with_lock_flag` — сколько настроек несут
+признак замка `KLPRSS_Mnd`, `0` — замки в политике не распознаны, экран
+пишет «замки не распознаны»); свод считается один раз на политику за
+запрос, сколько бы групп её ни получали. `null`, если содержимого нет в
+секции `policy_contents` (нет прав или ошибка сбора — см. «Формат
+выгрузки»). `has_contents` — есть ли у политики запись в `policy_contents`
+вообще (`true` и тогда, когда все её секции провалились или политика
+пропущена по лимиту и `sections` пуст — `locks` при этом не `null`, а
+`{total: 0, locked: 0, with_lock_flag: 0}`). Для политик агента и сервера (`KLPOL_PRODUCT`
 `1103`/`1093`) содержимое не собирается — `locks` всегда `null`,
 `has_contents` всегда `false`.
 
 `GET /policies/{policy_id}/contents` берёт данные из того же сохранённого
-файла выгрузки (`404`, если файл или политика не найдены). Значения длиннее
+файла выгрузки (`404`, если файл или политика не найдены). `summary.share` —
+доля замкнутых среди настроек с признаком замка (`locked / with_lock_flag`,
+`0`, если таких нет); при `with_lock_flag == 0` страница показывает «замки в
+этой политике не распознаны». Значения длиннее
 200 символов (JSON-представление) обрезаются с пометкой «… (обрезано)»
 (`truncate_value`). Если политики нет в `policy_contents` — `summary: null`,
 `sections: []`, `errors: ["содержимое не собрано"]`; это отдельный случай от
 ситуации, когда запись есть, но пуста (`summary` тогда `{total: 0, locked: 0,
-share: 0}`, `errors` несёт причины из сборщика) — обе неотличимы от «замков
+share: 0, with_lock_flag: 0}`, `errors` несёт причины из сборщика, в том
+числе «лимит политик») — обе неотличимы от «замков
 нет» на экране, поэтому за них отвечает справочная `POLICY_CONTENT_MISSING`
 (см. «Проверки»), не сама ручка.
 
@@ -244,9 +269,9 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 `admin_role_patterns` (имена ролей KSC, которые считаются
 административными: по умолчанию `Main Administrator`, `Administrator`,
 `Главный администратор`, `Администратор` — используются `KSC_INTERNAL_ADMIN`
-и `KSC_ADMINS`), `policy_lock_share` (0.5 — доля замкнутых настроек
-политики, ниже которой срабатывает `POLICY_WEAK_LOCKS`; `0` не в счёт — это
-`POLICY_NO_LOCKS`), `policy_contents_max_policies` (200 — сколько активных
+и `KSC_ADMINS`), `policy_lock_share` (0.5 — доля замкнутых среди настроек
+политики с признаком замка, ниже которой срабатывает `POLICY_WEAK_LOCKS`;
+`0` не в счёт — это `POLICY_NO_LOCKS`), `policy_contents_max_policies` (200 — сколько активных
 политик продуктов защиты собирает онлайн-сбор; PowerShell-сборщик несёт
 тот же предел своей константой независимо от `KscConfig`).
 
@@ -256,8 +281,8 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 **строго больше** порога (ровно 7 дней → находки нет). Возраст без даты
 вовсе («никогда») считается превышением порога. `policy_lock_share` —
 `POLICY_WEAK_LOCKS` срабатывает при доле замкнутых настроек **строго
-меньше** порога (ровно 0.5 → находки нет); доля `0` при наличии настроек —
-не `POLICY_WEAK_LOCKS`, а `POLICY_NO_LOCKS`.
+меньше** порога (ровно 0.5 → находки нет); доля `0` при наличии настроек с
+признаком замка — не `POLICY_WEAK_LOCKS`, а `POLICY_NO_LOCKS`.
 
 `kind` задач: `import_file | collect | reanalyze`.
 
@@ -304,7 +329,13 @@ POLICY_CONTENT_MISSING  Содержимое политики не собран�
 
 `POLICY_NO_LOCKS`, `POLICY_WEAK_LOCKS` разбирают только секцию
 `policy_contents` и молчат на файле без неё (старый сборщик или
-`skip_policy_contents`). `POLICY_CONTENT_MISSING` молчит тоже, если секции
+`skip_policy_contents`). Считают они только настройки с признаком замка
+(`KLPRSS_Mnd`): настройка без признака в знаменатель доли не идёт, а
+политика, где признака нет ни у одной настройки (`with_lock_flag == 0`,
+формат замков не распознан), не оценивается вовсе — ни `High`, ни
+`Medium`. Настройка — контейнер с `KLPRSS_Val`; внутрь `KLPRSS_Val` обход
+спускается, только если среди его детей есть такой же контейнер, иначе весь
+словарь — значение одной настройки с замком этого контейнера. `POLICY_CONTENT_MISSING` молчит тоже, если секции
 нет вовсе — иначе отсутствие данных было бы неотличимо на экране от
 «проверка прошла» на каждом файле без `policy_contents`; она срабатывает,
 только когда секция в файле есть, а у конкретной активной политики продукта
