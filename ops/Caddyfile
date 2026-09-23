@@ -4,9 +4,18 @@
 # происхождения, иначе сессионная cookie с SameSite=Strict не доедет.
 # Сюда же позже встанет ATT&CK Navigator, и по той же причине —
 # iframe с ним должен быть same-origin, чтобы навязать ему тему.
-
-:80 {
+#
+# Адрес — из STOOLS_SITE_ADDRESS (ops/.env, прокинута в compose): пустое
+# значение или его отсутствие даёт голый ":80" (лаборатория без TLS, как
+# сейчас); настоящее имя хоста ("stools.example.ru") — Caddy сам заводит
+# сертификат и слушает 443 с автоматическим HTTPS (см. README «Запуск»).
+{$STOOLS_SITE_ADDRESS::80} {
 	encode gzip
+
+	# HSTS только когда соединение и правда https: под голым :80 заголовок
+	# был бы ложью и заставил бы браузер требовать TLS, которого нет.
+	@https expression `{scheme} == "https"`
+	header @https Strict-Transport-Security "max-age=31536000"
 
 	# API проксируется как есть, префикс сохраняется.
 	# Потолок тела — наибольший из лимитов API (500 МБ у VM) с запасом
@@ -47,6 +56,13 @@
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		-Server
+		# script-src без unsafe-inline: сборка Vite не эмитит inline-скриптов
+		# (frontend/dist/index.html — только внешний <script type=module>),
+		# так что ослаблять незачем. style-src с unsafe-inline остаётся:
+		# компоненты задают style={{...}} инлайново (виртуализация списков,
+		# цвета находок), и это не статический файл — hash/nonce сюда не
+		# подставить.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 	}
 
 	log {

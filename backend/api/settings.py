@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json"
     )
 
+    #: /docs, /redoc, /openapi.json закрыты по умолчанию (инструмент хранит
+    #: инвентарь инфраструктуры, схема API наружу не нужна). Включать только
+    #: для локальной отладки: STOOLS_EXPOSE_DOCS=true.
+    expose_docs: bool = False
+
     @property
     def archive_dir(self) -> Path:
         return self.data_dir / "archives"

@@ -22,6 +22,12 @@ tests/api/test_auth_boundary.py перебирает `app.routes` и прове�
 `BodyLimitMiddleware` (`api/limits.py`) подключена последней, то есть
 снаружи всех: лимит тела срабатывает до маршрутизации и до проверки сессии,
 потому что FastAPI читает тело раньше зависимостей.
+
+Сборка вынесена в `create_app()`, а не сделана прямо на уровне модуля,
+потому что `docs_url`/`redoc_url`/`openapi_url` (см. `Settings.expose_docs`)
+задаются в конструкторе `FastAPI` один раз при создании приложения — тестам
+нужно собрать второй экземпляр с другим значением флага, не трогая тот,
+что уже импортирован как `app`.
 """
 from __future__ import annotations
 
@@ -46,15 +52,30 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="STools API", lifespan=_lifespan)
-app.add_middleware(AuditMiddleware)
-#: Последней — значит, снаружи всех остальных.
-app.add_middleware(BodyLimitMiddleware)
+def create_app() -> FastAPI:
+    settings = get_settings()
+    #: Вне режима отладки схема API и её интерактивные страницы не отдаются
+    #: (H4/L10 аудита) — сервис хранит инвентарь инфраструктуры.
+    expose_docs = settings.expose_docs
+    app = FastAPI(
+        title="STools API",
+        lifespan=_lifespan,
+        docs_url="/docs" if expose_docs else None,
+        redoc_url="/redoc" if expose_docs else None,
+        openapi_url="/openapi.json" if expose_docs else None,
+    )
+    app.add_middleware(AuditMiddleware)
+    #: Последней — значит, снаружи всех остальных.
+    app.add_middleware(BodyLimitMiddleware)
 
-app.include_router(auth.public_router)
-#: Тоже без сессии: вход через провайдера как раз её и выдаёт.
-app.include_router(oidc.router)
-app.include_router(auth.router, dependencies=[Depends(require_access)])
-app.include_router(settings_router, dependencies=[Depends(require_access)])
-for module_router in MODULE_ROUTERS:
-    app.include_router(module_router, dependencies=[Depends(require_access)])
+    app.include_router(auth.public_router)
+    #: Тоже без сессии: вход через провайдера как раз её и выдаёт.
+    app.include_router(oidc.router)
+    app.include_router(auth.router, dependencies=[Depends(require_access)])
+    app.include_router(settings_router, dependencies=[Depends(require_access)])
+    for module_router in MODULE_ROUTERS:
+        app.include_router(module_router, dependencies=[Depends(require_access)])
+    return app
+
+
+app = create_app()

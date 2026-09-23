@@ -5,11 +5,25 @@ FROM node:24-alpine AS build
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci || npm install
+# Только по локфайлу: `|| npm install` тихо ставил бы версии мимо
+# package-lock.json при рассинхроне, а собранный образ должен быть
+# воспроизводим из зафиксированных зависимостей, не из того, что
+# резолвится на момент сборки.
+RUN npm ci
 
 COPY frontend/ ./
 RUN npm run build
 
+# Caddy остаётся от root. Автоматический HTTPS (см. ops/Caddyfile,
+# `{$STOOLS_SITE_ADDRESS::80}`: с именем хоста Caddy сам получает сертификат
+# и слушает 443) требует бинда портов 80 и 443 — непривилегированному
+# пользователю это недоступно без CAP_NET_BIND_SERVICE, а образ caddy:2-alpine
+# не содержит готового пользователя (`id caddy` → unknown user, проверено).
+# Перенос на порт 8080 внутри снял бы это ограничение, но тогда сломал бы
+# автоматический HTTPS по STOOLS_SITE_ADDRESS — то есть ровно то поведение,
+# которое эта задача заводит. Раз порт 80 (и с ним root) обязателен для
+# заявленного поведения, отдельно решать между непривилегированным
+# пользователем и автоматическим HTTPS незачем — оставляем root.
 FROM caddy:2-alpine
 COPY --from=build /app/dist /srv
 COPY ops/Caddyfile /etc/caddy/Caddyfile

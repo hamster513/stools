@@ -110,6 +110,17 @@ cp ops/.env.example ops/.env
 docker compose -f ops/docker-compose.yml up --build
 ```
 
+По умолчанию сессионная cookie требует TLS (`STOOLS_SESSION_COOKIE_SECURE=true`
+в `ops/.env.example`). Два варианта:
+
+- **С TLS** — задайте `STOOLS_SITE_ADDRESS` в `ops/.env` (имя хоста, например
+  `stools.example.ru`): Caddy сам получит сертификат и включит HTTPS
+  (`ops/Caddyfile`). Порт 443 нужно опубликовать дополнительно — по
+  умолчанию стек публикует только `STOOLS_PORT`/80.
+- **Лаборатория по HTTP** — оставьте `STOOLS_SITE_ADDRESS` пустым и явно
+  поставьте `STOOLS_SESSION_COOKIE_SECURE=false`; иначе Safari выбрасывает
+  cookie по HTTP, и вход молча не срабатывает.
+
 Интерфейс — `http://localhost:8080`. Первый пользователь заводится
 вручную, регистрации в интерфейсе нет:
 
@@ -269,6 +280,16 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev]"
   сохранённые секреты нечитаемыми — их нужно ввести заново** (проверка
   подключения ответит «секрет зашифрован другим ключом — введите его
   заново»).
+- Cookie сессии по умолчанию Secure (см. «Запуск» про `STOOLS_SITE_ADDRESS`
+  и `STOOLS_SESSION_COOKIE_SECURE`); Caddy добавляет `Strict-Transport-Security`
+  под TLS и `Content-Security-Policy` (`default-src 'self'`, `script-src 'self'`,
+  `style-src` — с `'unsafe-inline'` под инлайновые `style={{...}}` React,
+  `frame-ancestors 'none'`) — `ops/Caddyfile`.
+- `/docs`, `/redoc`, `/openapi.json` выключены по умолчанию
+  (`Settings.expose_docs`, `STOOLS_EXPOSE_DOCS=true` — только для отладки).
+- Контейнеры API и БД — от непривилегированного пользователя (кроме Caddy:
+  обоснование в `frontend/Dockerfile` — порт 80/443 для автоматического
+  HTTPS требует root или `CAP_NET_BIND_SERVICE`).
 - Исходящего трафика нет.
 
 ## Документы

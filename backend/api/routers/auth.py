@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
@@ -113,12 +113,13 @@ def login(
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    stools_session: str | None = Cookie(default=None),
     _user: AppUser = Depends(get_current_user),
 ) -> None:
+    stools_session = request.cookies.get(settings.session_cookie_name)
     if stools_session:
         row = db.get(SessionRow, hash_token(stools_session))
         if row is not None:
@@ -152,9 +153,10 @@ def patch_me(payload: MePatch, db: Session = Depends(get_db), user: AppUser = De
 @router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
 def change_password(
     payload: PasswordChange,
+    request: Request,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     user: AppUser = Depends(get_current_user),
-    stools_session: str | None = Cookie(default=None),
 ) -> None:
     """Смена своего пароля: текущий обязателен. Другие сессии этого
     пользователя сбрасываются, текущая остаётся."""
@@ -163,5 +165,6 @@ def change_password(
     if not verify_password(payload.current, user.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="текущий пароль неверен")
     user.password_hash = hash_password(payload.new)
+    stools_session = request.cookies.get(settings.session_cookie_name)
     db.execute(delete(SessionRow).where(SessionRow.user_id == user.id, SessionRow.token != hash_token(stools_session or "")))
     db.commit()

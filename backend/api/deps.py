@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from api.crypto import hash_token
@@ -16,9 +16,9 @@ get_db = _get_db
 
 
 def get_current_user(
+    request: Request,
     session: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    stools_session: str | None = Cookie(default=None),
 ) -> AppUser:
     """Требует валидную сессионную cookie. 401 без неё или при истёкшем сроке.
 
@@ -26,7 +26,12 @@ def get_current_user(
     все роутеры, кроме /api/auth/login, зависят от неё (см. api/main.py,
     где зависимость навешана на уровне приложения, а не роутера, чтобы
     новый роутер нельзя было забыть защитить).
+
+    Имя cookie берётся из настроек (`settings.session_cookie_name`), а не
+    фиксируется параметром `Cookie(...)` — иначе смена имени в настройках
+    молчаливо переставала бы работать здесь же.
     """
+    stools_session = request.cookies.get(settings.session_cookie_name)
     if not stools_session:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="нет сессии")
     #: В базе — хеш токена (api/crypto.py): дамп таблицы не даёт войти.

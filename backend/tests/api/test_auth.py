@@ -95,3 +95,20 @@ def test_hash_migration_ends_all_sessions() -> None:
     source = next(versions.glob("*_секреты_и_хеш_сессий.py")).read_text(encoding="utf-8")
     assert 'down_revision: str | Sequence[str] | None = "d5e6f7a8b9c0"' in source
     assert 'op.execute("DELETE FROM session")' in source
+
+
+def test_cookie_name_from_settings_is_honoured(client: TestClient, test_user: Any, monkeypatch: Any) -> None:
+    """`session_cookie_name` не зашит в `Cookie(...)` — login/me/logout читают
+    и ставят cookie по имени из настроек (deps.py, routers/auth.py)."""
+    monkeypatch.setenv("STOOLS_SESSION_COOKIE_NAME", "other")
+
+    login = client.post("/api/auth/login", json={"login": TEST_LOGIN, "password": TEST_PASSWORD})
+    assert login.status_code == 204
+    assert "other" in login.cookies
+    assert "stools_session" not in login.cookies
+
+    assert client.get("/api/auth/me").status_code == 200
+
+    logout = client.post("/api/auth/logout")
+    assert logout.status_code == 204
+    assert client.get("/api/auth/me").status_code == 401
