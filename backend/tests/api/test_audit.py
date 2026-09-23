@@ -96,8 +96,8 @@ def test_csv_export_does_not_lose_rows_on_a_long_journal(
 
 
 def test_old_events_are_purged_at_login(client: TestClient, auth_client: TestClient, db_session: Any) -> None:
-    auth_client.put("/api/settings/security", json={"audit_retention_days": 1})
-    old = AuditEvent(at=dt.datetime.now(dt.UTC) - dt.timedelta(days=2), login="x", method="PUT", path="/p", status=204)
+    auth_client.put("/api/settings/security", json={"audit_retention_days": 7})
+    old = AuditEvent(at=dt.datetime.now(dt.UTC) - dt.timedelta(days=8), login="x", method="PUT", path="/p", status=204)
     db_session.add(old)
     db_session.commit()
     TestClient(client.app).post("/api/auth/login", json={"login": TEST_LOGIN, "password": TEST_PASSWORD})
@@ -131,11 +131,71 @@ def test_csv_export_escapes_formula_injection(auth_client: TestClient) -> None:
     assert any(cell.startswith("'=HYPERLINK") for row in rows for cell in row)
 
 
-def test_over_long_login_is_truncated_and_still_recorded(client: TestClient, db_session: Any) -> None:
+def test_over_long_login_is_still_recorded_but_hidden(client: TestClient, db_session: Any) -> None:
     """Логин длиннее колонки не должен уносить с собой всю запись:
     `String(255)` без обрезки отверг бы вставку, и попытка входа исчезла бы
-    из журнала целиком."""
+    из журнала целиком. Длиннее 64 символов — скорее пароль, чем логин
+    (L5), поэтому вместо него «—»."""
     client.post("/api/auth/login", json={"login": "a" * 300, "password": "wrong"})
     last = _events(db_session)[-1]
-    assert (last.path, last.status) == ("/api/auth/login", 401)
-    assert len(last.login) == 255
+    assert (last.path, last.status, last.login) == ("/api/auth/login", 401, "—")
+
+
+@pytest.mark.parametrize(
+    ("login", "recorded"),
+    [("my secret pass", "—"), ("a" * 65, "—"), ("a" * 64, "a" * 64), ("ivanov", "ivanov")],
+)
+def test_password_typed_into_login_is_not_recorded(
+    client: TestClient, db_session: Any, login: str, recorded: str
+) -> None:
+    client.post("/api/auth/login", json={"login": login, "password": "wrong"})
+    assert _events(db_session)[-1].login == recorded
+
+
+def test_anonymous_noise_is_not_recorded(client: TestClient, db_session: Any) -> None:
+    """422/404 без сессии — не действие пользователя (L1)."""
+    bad_json = client.put("/api/settings/security", content=b"{bad", headers={"Content-Type": "application/json"})
+    assert bad_json.status_code == 422
+    assert client.post("/api/nothing-here").status_code == 404
+    assert _events(db_session) == []
+
+
+def test_anonymous_failed_login_is_still_recorded(client: TestClient, db_session: Any) -> None:
+    assert client.post("/api/auth/login", json={"login": "nobody"}).status_code == 422
+    client.post("/api/auth/login", json={"login": "nobody", "password": "wrong"})
+    assert [(e.path, e.status) for e in _events(db_session)] == [
+        ("/api/auth/login", 422),
+        ("/api/auth/login", 401),
+    ]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/settings/audit/export.csv",
+        "/api/vm/export",
+        "/api/ksc/snapshots/999/policies/999/contents",
+    ],
+)
+def test_exports_and_policy_contents_are_recorded(auth_client: TestClient, db_session: Any, path: str) -> None:
+    """Чтение, которое уносит данные из системы, пишется в журнал (L5)."""
+    status = auth_client.get(path).status_code
+    last = _events(db_session)[-1]
+    assert (last.method, last.path, last.status) == ("GET", path, status)
+
+
+def test_retention_below_a_week_is_rejected(auth_client: TestClient) -> None:
+    """Иначе администратор стирает историю, поставив срок в один день (L5)."""
+    assert auth_client.put("/api/settings/security", json={"audit_retention_days": 1}).status_code == 422
+    assert auth_client.put("/api/settings/security", json={"audit_retention_days": 6}).status_code == 422
+    assert auth_client.put("/api/settings/security", json={"audit_retention_days": 7}).status_code == 204
+
+
+def test_stored_short_retention_is_raised_to_a_week(auth_client: TestClient, db_session: Any) -> None:
+    """Значение, сохранённое до появления минимума, не ломает вход и не
+    сокращает журнал: читается как 7."""
+    from api.db.models import AppSetting
+
+    db_session.merge(AppSetting(key="security", value_json='{"audit_retention_days": 1}'))
+    db_session.commit()
+    assert auth_client.get("/api/settings/security").json()["audit_retention_days"] == 7

@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import json
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from api.db.models import AppSetting
 from api.llm_settings import read_setting
 
 SECURITY_KEY = "security"
+#: Короче недели журнал не хранится: иначе администратор стирает историю
+#: своих действий, поставив срок в один день (аудит L5).
+MIN_AUDIT_RETENTION_DAYS = 7
 
 
 class SecuritySettings(BaseModel):
@@ -24,13 +27,20 @@ class SecuritySettings(BaseModel):
     idle_timeout_minutes: int = Field(default=0, ge=0, le=24 * 60)
     audit_retention_days: int = Field(default=90, ge=1, le=3650)
 
+    @field_validator("audit_retention_days")
+    @classmethod
+    def _at_least_min_retention(cls, value: int) -> int:
+        """Срок, сохранённый до появления минимума, читается как минимум:
+        вход не ломается, а журнал не чистится быстрее недели."""
+        return max(value, MIN_AUDIT_RETENTION_DAYS)
+
 
 class SecuritySettingsIn(BaseModel):
     """PUT: любое поле можно опустить — остальные сохраняют значение."""
 
     session_ttl_hours: int | None = Field(default=None, ge=1, le=24 * 30)
     idle_timeout_minutes: int | None = Field(default=None, ge=0, le=24 * 60)
-    audit_retention_days: int | None = Field(default=None, ge=1, le=3650)
+    audit_retention_days: int | None = Field(default=None, ge=MIN_AUDIT_RETENTION_DAYS, le=3650)
 
 
 def load_security(db: Session) -> SecuritySettings:

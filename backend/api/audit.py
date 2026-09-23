@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from typing import Any
 from typing import cast as typing_cast
 
@@ -33,6 +34,13 @@ SESSION_PATHS = frozenset({
     OIDC_PREFIX + "callback",
 })
 MAX_SUMMARY = 200
+#: Чтение, которое уносит данные из системы, пишется как действие (аудит L5):
+#: выгрузки и просмотр содержимого политик.
+RECORDED_READS = (
+    re.compile(r"/api/settings/audit/export\.csv$"),
+    re.compile(r"/api/vm/.*export"),
+    re.compile(r"/api/ksc/snapshots/[^/]+/policies/[^/]+/contents$"),
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +94,8 @@ def _should_record(method: str, path: str, status: int, summary: str) -> bool:
         return False
     if status == 403:
         return True
+    if method == "GET" and any(pattern.match(path) for pattern in RECORDED_READS):
+        return True
     return method in WRITE_METHODS or path in SESSION_PATHS
 
 
@@ -107,6 +117,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
         if not _should_record(request.method, path, response.status_code, summary):
             return response
         user: AppUser | None = getattr(request.state, "user", None)
+        #: Без пользователя пишутся только вход и выход и отказ по источнику
+        #: запроса (api/origin.py): анонимные 422 и 404 — не действия, а шум (L1).
+        if user is None and path not in SESSION_PATHS and not getattr(request.state, "audit_anonymous", False):
+            return response
         login = user.login if user else str(getattr(request.state, "audit_login", "") or "")
         if not login and response.status_code == 401:
             return response  # анонимный запрос без сессии — не действие

@@ -19,6 +19,10 @@ tests/api/test_auth_boundary.py перебирает `app.routes` и прове�
 подводит, потому что чтение состояния происходит уже после `call_next`,
 когда зависимости роутера отработали.
 
+`OriginMiddleware` (`api/origin.py`) стоит внутри неё: запрос с изменением
+состояния с чужого сайта получает 403 до маршрутизации, и журнал этот отказ
+видит.
+
 `BodyLimitMiddleware` (`api/limits.py`) подключена последней, то есть
 снаружи всех: лимит тела срабатывает до маршрутизации и до проверки сессии,
 потому что FastAPI читает тело раньше зависимостей.
@@ -40,6 +44,7 @@ from api.audit import AuditMiddleware
 from api.crypto import check_session_secret
 from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
+from api.origin import OriginMiddleware
 from api.platform import router as settings_router
 from api.rbac import require_access
 from api.routers import auth, oidc
@@ -64,6 +69,8 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if expose_docs else None,
         openapi_url="/openapi.json" if expose_docs else None,
     )
+    #: Внутри журнала: отказ по источнику запроса тоже пишется как 403.
+    app.add_middleware(OriginMiddleware)
     app.add_middleware(AuditMiddleware)
     #: Последней — значит, снаружи всех остальных.
     app.add_middleware(BodyLimitMiddleware)
