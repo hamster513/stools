@@ -108,6 +108,8 @@ class AuditEvent(Base):
     """
 
     __tablename__ = "audit_event"
+    #: Троттлинг входа считает неудачи по (path, status, at) — api/routers/auth.py.
+    __table_args__ = (Index("ix_audit_event_path_status_at", "path", "status", "at"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)

@@ -38,7 +38,7 @@ MAX_SUMMARY = 200
 #: выгрузки и просмотр содержимого политик.
 RECORDED_READS = (
     re.compile(r"/api/settings/audit/export\.csv$"),
-    re.compile(r"/api/vm/.*export"),
+    re.compile(r"/api/vm/.*export$"),
     re.compile(r"/api/ksc/snapshots/[^/]+/policies/[^/]+/contents$"),
 )
 

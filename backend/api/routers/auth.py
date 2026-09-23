@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime as dt
 import secrets
+import threading
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -34,6 +35,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 LOGIN_PATH = "/api/auth/login"
 #: Троттлинг входа (аудит M1): неудачные попытки считаются по журналу
 #: действий — отдельно по логину и по адресу клиента — за скользящее окно.
+#: Адрес — `request.client.host`, который uvicorn (`--forwarded-allow-ips '*'`)
+#: берёт из `X-Forwarded-For`. Доверять ему можно только за Caddy из
+#: ops/Caddyfile: там `header_up X-Forwarded-For {client_ip}` затирает
+#: присланный клиентом заголовок. Без такого прокси адрес подделывается
+#: и счётчик по IP обходится; счётчик по логину от этого не зависит.
 LOGIN_WINDOW = dt.timedelta(minutes=15)
 LOGIN_MAX_FAILURES = 10
 #: Логин длиннее этого или с пробелами — скорее пароль, введённый не в то
@@ -43,6 +49,10 @@ MAX_PLAIN_LOGIN = 64
 #: и OIDC-пользователь проверяются против него, чтобы ответ шёл столько же,
 #: сколько с настоящей учёткой, — иначе время выдаёт, есть ли локальный логин.
 _DUMMY_HASH = hash_password(secrets.token_hex(16))
+#: Потолок одновременных проверок пароля: журнал видит попытку только после
+#: ответа, и параллельный всплеск входов иначе целиком ушёл бы в Argon2
+#: (64 МиБ на проверку). Лишние сразу получают 429, не дожидаясь очереди.
+_PASSWORD_CHECKS = threading.BoundedSemaphore(8)
 
 
 class LoginRequest(BaseModel):
@@ -146,7 +156,18 @@ def login(
         else None
     )
     #: Argon2 выполняется всегда, в том числе без учётки, — см. _DUMMY_HASH.
-    password_ok = verify_password(payload.password, password_hash or _DUMMY_HASH)
+    #: Семафор берётся из модуля при каждом входе, чтобы тест мог его подменить.
+    checks = _PASSWORD_CHECKS
+    if not checks.acquire(blocking=False):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="слишком много одновременных попыток входа",
+            headers={"Retry-After": "5"},
+        )
+    try:
+        password_ok = verify_password(payload.password, password_hash or _DUMMY_HASH)
+    finally:
+        checks.release()
     if user is None or password_hash is None or not password_ok:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="неверный логин или пароль")
 

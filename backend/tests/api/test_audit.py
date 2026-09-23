@@ -199,3 +199,18 @@ def test_stored_short_retention_is_raised_to_a_week(auth_client: TestClient, db_
     db_session.merge(AppSetting(key="security", value_json='{"audit_retention_days": 1}'))
     db_session.commit()
     assert auth_client.get("/api/settings/security").json()["audit_retention_days"] == 7
+
+
+@pytest.mark.parametrize(
+    ("path", "recorded"),
+    [("/api/vm/export", True), ("/api/vm/zones/export", True), ("/api/vm/export/status", False), ("/api/vm/exports", False)],
+)
+def test_vm_export_pattern_is_anchored(path: str, recorded: bool) -> None:
+    assert audit_module._should_record("GET", path, 200, "") is recorded
+
+
+def test_throttle_index_exists(migrated_database: Any) -> None:
+    from sqlalchemy import inspect
+
+    indexes = {ix["name"]: ix["column_names"] for ix in inspect(migrated_database).get_indexes("audit_event")}
+    assert indexes["ix_audit_event_path_status_at"] == ["path", "status", "at"]

@@ -24,7 +24,14 @@
 		request_body {
 			max_size 600MB
 		}
-		reverse_proxy api:8000
+		# Адрес клиента — только тот, кто подключился к Caddy: присланный
+		# снаружи X-Forwarded-For затирается. API (uvicorn с
+		# --forwarded-allow-ips '*') берёт адрес из этого заголовка, по нему
+		# журнал пишет ip и считает неудачные входы (api/routers/auth.py).
+		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Real-IP {client_ip}
+		}
 	}
 
 	# Ресурсы с хешем в имени неизменяемы: имя меняется вместе

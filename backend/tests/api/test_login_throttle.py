@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import statistics
+import threading
 import time
 from typing import Any
 
@@ -72,6 +73,33 @@ def test_login_after_nine_failures_works(client: TestClient, test_user: Any) -> 
 def test_password_longer_than_1024_is_422(client: TestClient, test_user: Any) -> None:
     assert client.post(LOGIN, json={"login": TEST_LOGIN, "password": "x" * 1025}).status_code == 422
     assert client.post(LOGIN, json={"login": TEST_LOGIN, "password": "x" * 1024}).status_code == 401
+
+
+@pytest.mark.parametrize(("login", "password", "after"), [
+    (TEST_LOGIN, TEST_PASSWORD, 204),
+    (TEST_LOGIN, "wrong", 401),
+    ("nobody", "wrong", 401),
+])
+def test_concurrent_password_checks_are_capped(
+    client: TestClient, test_user: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch,
+    login: str, password: str, after: int,
+) -> None:
+    """Счётчик по журналу не видит попыток, которые ещё идут, — поэтому
+    одновременных проверок пароля не больше потолка, лишние сразу 429."""
+    gate = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(auth_module, "_PASSWORD_CHECKS", gate)
+    gate.acquire()
+    response = client.post(LOGIN, json={"login": login, "password": password})
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "5"
+    assert response.json() == {"detail": "слишком много одновременных попыток входа"}
+    db_session.expire_all()
+    last = db_session.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
+    assert (last.path, last.status) == (LOGIN, 429)
+    gate.release()
+    assert client.post(LOGIN, json={"login": login, "password": password}).status_code == after
+    #: Семафор отпущен и после неудачи, и после успеха.
+    assert gate.acquire(blocking=False)
 
 
 def test_unknown_login_takes_as_long_as_wrong_password(
