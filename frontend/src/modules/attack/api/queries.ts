@@ -245,10 +245,11 @@ export function useAttackJob(jobId: number | undefined) {
   })
 }
 
+// Задания ATT&CK запускает и отменяет администратор — отмена в общих настройках.
 export function useCancelAttackJob() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, number>({
-    mutationFn: (id) => api.post(`/api/attack/jobs/${id}/cancel`),
+    mutationFn: (id) => api.post(`/api/settings/attack/jobs/${id}/cancel`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['attack-jobs'] }),
   })
 }

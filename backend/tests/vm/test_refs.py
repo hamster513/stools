@@ -5,6 +5,8 @@ import gzip
 from pathlib import Path
 from typing import Any
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -16,6 +18,7 @@ from api.modules.vm.core.refs import (
     parse_nvd,
 )
 from api.modules.vm.models import VmCve, VmRefNvd
+from api.modules.vm.services import refs as refs_service
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -90,3 +93,42 @@ def test_unknown_ref_and_year_validation(auth_client: TestClient) -> None:
     assert auth_client.post("/api/vm/refs/foo/download").status_code == 404
     r = auth_client.post("/api/vm/refs/nvd/download", json={"years": [1990]})
     assert r.status_code == 422
+
+
+class _Handle:
+    def stage(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def tick(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+
+def _client(response: httpx.Response) -> httpx.Client:
+    return httpx.Client(transport=httpx.MockTransport(lambda request: response))
+
+
+def test_feed_download_stops_at_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Аудит L6: лента больше 512 МБ не докачивается до конца диска — отказ с понятной причиной.
+    Заявленный Content-Length больше лимита — отказ до чтения; без длины — счётчик при чтении."""
+    monkeypatch.setattr(refs_service, "MAX_FEED_BYTES", 1000)
+    out = tmp_path / "feed"
+    with pytest.raises(ValueError, match="больше лимита"):
+        refs_service.download("https://feed.example/a.csv", out, _Handle(), _client(httpx.Response(200, content=b"x" * 2000)))  # type: ignore[arg-type]
+    chunked = httpx.Response(200, content=iter([b"x" * 600, b"x" * 600]))
+    with pytest.raises(ValueError, match="больше лимита"):
+        refs_service.download("https://feed.example/a.csv", out, _Handle(), _client(chunked))  # type: ignore[arg-type]
+    assert refs_service.download("https://feed.example/a.csv", out, _Handle(), _client(httpx.Response(200, content=b"x" * 900))) == 900  # type: ignore[arg-type]
+    assert out.stat().st_size == 900
+
+
+def test_feed_download_closes_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Клиент загрузки справочника закрывается и после ошибки."""
+    clients: list[httpx.Client] = []
+
+    def factory() -> httpx.Client:
+        clients.append(_client(httpx.Response(500)))
+        return clients[-1]
+
+    with pytest.raises(ValueError, match="HTTP 500"):
+        refs_service.run_ref_download(None, _Handle(), "epss", None, http_factory=factory)  # type: ignore[arg-type]
+    assert len(clients) == 1 and clients[0].is_closed

@@ -133,8 +133,23 @@ def run_job(model: type[Any], job_id: int, fn: Callable[[Session, JobHandle], No
 # ---- Роутер задач: одинаков для всех модулей ------------------------------
 
 
-def make_jobs_router(model: type[Any], tag: str) -> Any:
-    """`GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel` для таблицы модуля."""
+def cancel_job(db: Session, model: type[Any], job_id: int) -> None:
+    """Попросить идущую задачу остановиться: 404 — задачи нет, 409 — уже завершена."""
+    from fastapi import HTTPException, status
+
+    job = db.get(model, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="задача не найдена")
+    if job.status != "running":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="задача уже завершена")
+    job.cancel_requested = True
+    db.commit()
+
+
+def make_jobs_router(model: type[Any], tag: str, *, cancel: bool = True) -> Any:
+    """`GET /jobs`, `GET /jobs/{id}` и (`cancel=True`) `POST /jobs/{id}/cancel` для таблицы модуля.
+    `cancel=False` — отмена живёт в другом месте (задания ATT&CK: их запускает и отменяет
+    администратор в общих настройках)."""
     import datetime as _dt
 
     from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -180,14 +195,9 @@ def make_jobs_router(model: type[Any], tag: str) -> Any:
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail="задача не найдена")
         return job
 
-    @router.post("/{job_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
-    def cancel_job(job_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> None:
-        job = db.get(model, job_id)
-        if job is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="задача не найдена")
-        if job.status != "running":
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="задача уже завершена")
-        job.cancel_requested = True
-        db.commit()
+    if cancel:
+        @router.post("/{job_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+        def cancel_running(job_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> None:
+            cancel_job(db, model, job_id)
 
     return router

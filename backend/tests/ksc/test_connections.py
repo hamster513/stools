@@ -48,6 +48,31 @@ def test_client_closes_http_on_failed_login(fake: FakeKsc) -> None:
     assert c._http.is_closed is True
 
 
+def test_client_refuses_oversized_response(monkeypatch: Any) -> None:
+    """Аудит L6: ответ KSC больше лимита (64 МБ) не читается в память — по Content-Length сразу,
+    без длины — счётчиком при чтении; под лимитом всё как раньше."""
+    import json
+
+    import httpx
+
+    monkeypatch.setattr(client_mod, "MAX_API_RESPONSE", 1000)
+    big = json.dumps({"PxgRetVal": "x" * 2000}).encode()
+
+    def serve(content: Any) -> None:
+        monkeypatch.setattr(client_mod, "http_factory", lambda verify: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=content))))
+
+    serve(big)
+    with pytest.raises(KscError, match="больше лимита"):
+        KscClient("https://ksc01:13299", USER, PASSWORD).login()
+    serve(iter([big[:900], big[900:]]))
+    with pytest.raises(KscError, match="больше лимита"):
+        KscClient("https://ksc01:13299", USER, PASSWORD).login()
+    serve(json.dumps({"PxgRetVal": "session"}).encode())
+    c = KscClient("https://ksc01:13299", USER, PASSWORD)
+    c.login()
+    assert c._session == "session"
+
+
 def test_collect_matches_synthetic_export(fake: FakeKsc) -> None:
     seen: list[tuple[int, int]] = []
     with KscClient("https://ksc01:13299", USER, PASSWORD) as c:

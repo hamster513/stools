@@ -206,3 +206,17 @@ def test_module_paths_of_the_matrix_are_gone(auth_client: TestClient, method: st
     """Матрица переехала в общие настройки (/api/settings/attack): старые
     адреса модуля не должны отвечать даже администратору."""
     assert auth_client.request(method, path).status_code == 404
+
+
+def test_attack_job_cancel_is_an_admin_setting(auth_client: TestClient, client_as: Any, db_session: Any) -> None:
+    """Аудит L3: задания ATT&CK запускает только администратор (общие настройки), он же их и
+    отменяет — под /api/settings/attack. Ход заданий по-прежнему видят все."""
+    job_id = start_job(db_session, AttackJob, "translate", "tester")
+    analyst = client_as("analyst")
+    assert analyst.get("/api/attack/jobs").status_code == 200
+    assert analyst.get(f"/api/attack/jobs/{job_id}").status_code == 200
+    assert analyst.post(f"/api/settings/attack/jobs/{job_id}/cancel").status_code == 403
+    assert auth_client.post(f"/api/attack/jobs/{job_id}/cancel").status_code == 404  # старого адреса нет
+    assert auth_client.post(f"/api/settings/attack/jobs/{job_id}/cancel").status_code == 204
+    assert auth_client.get(f"/api/attack/jobs/{job_id}").json()["cancel_requested"] is True
+    assert auth_client.post("/api/settings/attack/jobs/999999/cancel").status_code == 404

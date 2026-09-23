@@ -1,10 +1,16 @@
 """Таблица пар, карточка, обзор, экспорт и пересчёт через API."""
 from __future__ import annotations
 
+import csv
+import io
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from api.modules.vm.models import VmHost
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -93,6 +99,19 @@ def test_export_csv(loaded: TestClient) -> None:
     lines = [line for line in text.splitlines() if line]
     assert len(lines) == 1 + 3
     assert lines[1].split(";")[4] == "CVE-2021-44228"
+
+
+def test_export_csv_neutralises_formulas(loaded: TestClient, db_session: Any) -> None:
+    """Аудит L2: имя хоста и ОС приходят из выгрузки MaxPatrol — Excel не должен исполнить их как
+    формулу. Строки с =, +, -, @ получают апостроф; числа идут как есть."""
+    host = db_session.execute(select(VmHost).where(VmHost.hostname == "srv01.corp.local")).scalar_one()
+    host.hostname = '=HYPERLINK("http://evil.example","x")'
+    host.os_name = "@SUM(1+1)"
+    db_session.commit()
+    text = loaded.get("/api/vm/export?cve=CVE-2021-44228").content.decode("utf-8")
+    row = next(csv.reader(io.StringIO(text.splitlines()[1]), delimiter=";"))
+    assert row[2] == "'=HYPERLINK(\"http://evil.example\",\"x\")" and row[13] == "'@SUM(1+1)"
+    assert row[0] == "100" and row[4] == "CVE-2021-44228" and float(row[5]) == 10.0
 
 
 def test_empty_overview(auth_client: TestClient) -> None:

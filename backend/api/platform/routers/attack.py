@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
-from api.jobs import active_job, run_job, start_job
+from api.jobs import active_job, cancel_job, run_job, start_job
 from api.limits import ATTACK_BUNDLE_UPLOAD, check_upload_size
 from api.llm_settings import load_llm
 from api.modules.attack.models import AttackJob
@@ -146,6 +146,15 @@ def download_bundle(
     job_id = start_job(db, AttackJob, "download", user.login, message="скачивание бандла ATT&CK")
     background_tasks.add_task(run_job, AttackJob, job_id, download_job.run_download)
     return {"job_id": job_id}
+
+
+@router.post("/jobs/{job_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_attack_job(
+    job_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)
+) -> None:
+    """Остановить задание ATT&CK (скачивание бандла, перевод). Задания запускаются здесь же,
+    в общих настройках, поэтому и отмена — дело администратора (аудит L3)."""
+    cancel_job(db, AttackJob, job_id)
 
 
 @router.get("/pending")

@@ -6,13 +6,15 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import quote
 
 import httpx
 
 from api.hosts import url_host
+from api.limits import MAX_API_RESPONSE, ResponseTooLarge, read_limited
 
 
 class ConnectionLike(Protocol):
@@ -79,6 +81,17 @@ class MpVmClient:
             return host
         return f"https://{url_host(host)}"
 
+    @staticmethod
+    def _body(r: httpx.Response) -> bytes:
+        """Тело ответа API в память — не больше `MAX_API_RESPONSE` (аудит L6)."""
+        try:
+            return read_limited(r, MAX_API_RESPONSE)
+        except ResponseTooLarge as exc:
+            raise MpVmError(f"MaxPatrol VM: {exc}") from exc
+
+    def _json(self, r: httpx.Response) -> Any:
+        return json.loads(self._body(r))
+
     def token(self) -> str:
         if self._token:
             return self._token
@@ -94,12 +107,13 @@ class MpVmClient:
             "scope": "offline_access mpx.api",
         }
         try:
-            r = self.http.post(url, data=data)
+            with self.http.stream("POST", url, data=data) as r:
+                if r.status_code != 200:
+                    raise MpVmLoginError(f"токен не выдан: HTTP {r.status_code}", r.status_code)
+                body = self._json(r)
         except httpx.HTTPError as exc:
             raise MpVmError(f"нет связи с {host}:3334 — {exc.__class__.__name__}") from exc
-        if r.status_code != 200:
-            raise MpVmLoginError(f"токен не выдан: HTTP {r.status_code}", r.status_code)
-        token = r.json().get("access_token")
+        token = body.get("access_token")
         if not token:
             raise MpVmLoginError("ответ без access_token — проверьте client secret")
         self._token = str(token)
@@ -110,13 +124,16 @@ class MpVmClient:
 
     def export_token(self, pdql: str) -> str:
         url = f"{self.base}/api/assets_temporal_readmodel/v1/assets_grid"
+        headers = self._headers()
         try:
-            r = self.http.post(url, json={"pdql": pdql, "includeNestedGroups": False}, headers=self._headers())
+            with self.http.stream("POST", url, json={"pdql": pdql, "includeNestedGroups": False}, headers=headers) as r:
+                if r.status_code != 200:
+                    text = self._body(r).decode("utf-8", errors="replace")
+                    raise MpVmError(f"PDQL отклонён: HTTP {r.status_code} {text[:200]}", r.status_code)
+                body = self._json(r)
         except httpx.HTTPError as exc:
             raise MpVmError(f"запрос PDQL не прошёл — {exc.__class__.__name__}") from exc
-        if r.status_code != 200:
-            raise MpVmError(f"PDQL отклонён: HTTP {r.status_code} {r.text[:200]}", r.status_code)
-        token = r.json().get("token")
+        token = body.get("token")
         if not token:
             raise MpVmError("ответ без токена экспорта")
         return str(token)
@@ -151,7 +168,8 @@ class MpVmClient:
             f"{self.base}/api/assets_temporal_readmodel/v1/assets_grid/export"
             f"?pdqlToken={quote(token, safe='')}"
         )
-        r = self.http.get(url, headers=self._headers())
-        if r.status_code != 200:
-            raise MpVmError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
-        return r.text[:200]
+        headers = self._headers()
+        with self.http.stream("GET", url, headers=headers) as r:
+            if r.status_code != 200:
+                raise MpVmError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
+            return self._body(r).decode("utf-8", errors="replace")[:200]

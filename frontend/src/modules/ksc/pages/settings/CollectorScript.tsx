@@ -12,7 +12,7 @@ export function CollectorScript() {
         <li>Скачайте скрипт и перенесите на машину с доступом к серверу KSC.</li>
         <li>
           Запустите в PowerShell: <code className="rounded border border-grid bg-app-bg px-1.5 py-0.5 font-mono text-[11px] text-text">.\STools-KSC-Collector.ps1 -Server ksc01.corp.local -User audit</code>
-          {' '}(параметры: <span className="font-mono">-Port</span>, <span className="font-mono">-OutputPath</span>, <span className="font-mono">-SkipTlsCheck</span>, <span className="font-mono">-SkipProducts</span>; пароль спросит сам). Все параметры, пароль и секрет второго фактора можно держать в файле: шаблон создаёт <span className="font-mono">-InitConfig</span>, запуск по нему — <span className="font-mono">-ConfigPath</span>.
+          {' '}(параметры: <span className="font-mono">-Port</span>, <span className="font-mono">-OutputPath</span>, <span className="font-mono">-SkipTlsCheck</span>, <span className="font-mono">-SkipProducts</span>; пароль спросит сам). Все параметры, пароль и секрет второго фактора можно держать в файле: шаблон создаёт <span className="font-mono">-InitConfig</span>, запуск по нему — <span className="font-mono">-ConfigPath</span>, удалить файл после сбора — <span className="font-mono">-DeleteConfigAfterRun</span>.
         </li>
         <li>Загрузите полученный файл в блоке ниже. Один и тот же файл можно загружать повторно — будет второй снапшот.</li>
       </ol>

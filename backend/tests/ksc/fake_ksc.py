@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from tests.ksc.synthetic import add_inactive_policy, build_export
+from tests.ksc.synthetic import add_inactive_policy, add_secret_bait, build_export
 
 USER = "audit"
 PASSWORD = "audit-pass"
@@ -99,6 +99,9 @@ class FakeKsc:
         if data is None and variant == "params":
             # KLPOL_ACTIVE как типизированный ноль — сборщики не должны читать его как безусловную правду.
             self.data = add_inactive_policy(self.data)
+        if data is None and variant == "secrets":
+            # Секреты под новыми маркерами, двоичное значение, параметры задач, имя сервера с «/».
+            self.data = add_secret_bait(self.data)
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
         #: variant="params" — записи в обёртках, как у живого сервера.

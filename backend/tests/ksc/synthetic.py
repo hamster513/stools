@@ -302,6 +302,50 @@ def add_inactive_policy(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+#: Имя сервера с косой чертой и пробелом: в имя файла выгрузки оно идёт только очищенным (аудит L8).
+BAIT_SERVER_NAME = "ksc 01/lab"
+#: Значения-секреты `add_secret_bait`: новые маркеры, двоичное значение под обычным ключом,
+#: параметры задач (аудит M4). Ни одно не должно попасть в выгрузку или в разобранный файл.
+BAIT_VALUES = ("pp-secret", "ak-secret", "ak2-secret", "auth-secret", "pin-secret", "key-secret", "YmluLWJsb2I=",
+               "task-pass-secret", "task-apikey-secret", "dGFzay1ibG9i", "task-auth-secret")
+
+
+def add_secret_bait(raw: dict[str, Any]) -> dict[str, Any]:
+    """Секреты, которые старые маркеры пропускали: `Passphrase`, `ApiKey`, `API_KEY`, `AuthCode`,
+    `PIN`, `EncryptionKey`, двоичный `Certificate` под ключом без признака — в секции `KLPRSS_Extra`
+    политики 1; учётные данные в `TASK_ADDITIONAL_PARAMS` и `TASK_INFO_PARAMS` задачи обновления;
+    имя сервера с `/` и пробелом. Рядом — то, что должно остаться видимым (`assert_bait_hidden`)."""
+    raw["static"]["KLADMSRV_SERVER_HOSTNAME"] = BAIT_SERVER_NAME
+    raw["policy_contents"]["1"]["sections"]["KLPRSS_Extra"] = {
+        "Passphrase": "pp-secret", "ApiKey": "ak-secret", "API_KEY": "ak2-secret", "AuthCode": "auth-secret",
+        "PIN": "pin-secret", "EncryptionKey": "key-secret", "Certificate": {"type": "binary", "value": "YmluLWJsb2I="},
+        "Comment": "visible-text", "Enabled": True, "Timeout": 30,
+    }
+    task = raw["tasks"][0]
+    task["TASK_ADDITIONAL_PARAMS"] = {
+        "KLTSK_ACCOUNT_PASSWORD": "task-pass-secret", "Mode": "full",
+        "ServerSettings": {"ApiKey": "task-apikey-secret", "Port": 8080, "Blob": {"type": "binary", "value": "dGFzay1ibG9i"}},
+    }
+    task["TASK_INFO_PARAMS"]["AuthCode"] = "task-auth-secret"
+    return raw
+
+
+def assert_bait_hidden(export: Any) -> None:
+    """Разобранная выгрузка (`KscExport`) с `add_secret_bait`: секреты скрыты, соседние значения видны."""
+    hidden = "<скрыто>"
+    text = json.dumps(export.model_dump(mode="json"), ensure_ascii=False)
+    assert not [v for v in BAIT_VALUES + SECRET_VALUES if v in text]
+    assert export.policy_contents["1"]["sections"]["KLPRSS_Extra"] == {
+        "Passphrase": hidden, "ApiKey": hidden, "API_KEY": hidden, "AuthCode": hidden, "PIN": hidden, "EncryptionKey": hidden,
+        "Certificate": hidden, "Comment": "visible-text", "Enabled": True, "Timeout": 30,
+    }
+    task = next(t for t in export.tasks if t["TASK_UNIQUE_ID"] == "t-upd")
+    assert task["TASK_ADDITIONAL_PARAMS"] == {
+        "KLTSK_ACCOUNT_PASSWORD": hidden, "Mode": "full", "ServerSettings": {"ApiKey": hidden, "Port": 8080, "Blob": hidden},
+    }
+    assert task["TASK_INFO_PARAMS"] == {"DisplayName": "Обновление", "PRTS_TASK_GROUPID": 0, "TASKSCH_TYPE": 1, "AuthCode": hidden}
+
+
 def add_ws02_twin(raw: dict[str, Any]) -> dict[str, Any]:
     """Второе устройство с тем же отображаемым именем WS02, но в другой группе и домене:
     KLHST_WKS_DN в KSC не уникален."""

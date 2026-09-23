@@ -17,8 +17,8 @@ function duration(job: AttackJob): string {
 }
 
 export function JobsPage() {
-  // Ход задач аудитор видит целиком; останавливает их тот, кто запускает.
-  const { write } = useCan()
+  // Ход задач видят все; останавливает их тот, кто запускает, — администратор.
+  const { admin } = useCan()
   const jobs = useAttackJobs()
   const cancel = useCancelAttackJob()
   if (jobs.isLoading) return <FullPageSpinner />
@@ -49,7 +49,7 @@ export function JobsPage() {
                   <td className="max-w-[360px] px-3 py-2 text-text-secondary">{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-text-secondary">{new Date(j.started_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} <span className="font-mono">{j.started_by}</span></td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap text-text-secondary">{duration(j)}</td>
-                  <td className="px-3 py-2 text-right">{write && j.status === 'running' && !j.cancel_requested && <Button variant="ghost" onClick={() => cancel.mutate(j.id)} aria-label={`Отменить задачу ${j.id}`}><XCircle size={13} aria-hidden /></Button>}</td>
+                  <td className="px-3 py-2 text-right">{admin && j.status === 'running' && !j.cancel_requested && <Button variant="ghost" onClick={() => cancel.mutate(j.id)} aria-label={`Отменить задачу ${j.id}`}><XCircle size={13} aria-hidden /></Button>}</td>
                 </tr>
               ))}
             </tbody>

@@ -144,10 +144,11 @@ GET  /jobs?limit≤200(50)   идущие сверху, затем послед�
 GET  /jobs/{id}            {id, kind, stage, status, progress, processed, total,
                             message, error, cancel_requested, started_at,
                             finished_at, started_by}
-POST /jobs/{id}/cancel     204 | 404 | 409 уже завершена
 ```
 
-`kind`: `translate`, `download`.
+`kind`: `translate`, `download`. Задания запускаются в общих настройках, и
+отменяет их администратор там же: `POST /api/settings/attack/jobs/{id}/cancel`
+(204 | 404 | 409 уже завершена).
 
 ## Слои
 

@@ -16,14 +16,10 @@ from api.modules.ksc.core.export import (
     strip_params,
     unwrap,
 )
+from api.modules.ksc.core.secrets import hide_secrets, hide_task_params
 
 COLLECTOR_VERSION = "1.0"
 
-#: Имя секции или ключ на любой глубине её параметров, содержащий одно из этих слов подстрокой (без
-#: учёта регистра), включает «режим скрытия» для всего поддерева под ним: каждая строка и каждое
-#: двоичное значение становятся "<скрыто>", ключи остаются (см. `_hide_secrets`).
-SECRET_MARKERS = ("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE")
-HIDDEN = "<скрыто>"
 #: Не больше стольки политик собираем за один сбор — предупреждение при превышении.
 POLICY_CONTENTS_MAX_POLICIES = 200
 #: Ответ секции больше этого размера не сохраняется (в errors — "секция больше лимита").
@@ -89,46 +85,6 @@ def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = ""
         client.call("SrvView.ReleaseIterator", {"wstrIteratorId": it})
 
 
-def _has_secret_marker(name: str) -> bool:
-    """`name` содержит один из `SECRET_MARKERS` подстрокой, без учёта регистра: `PASSWORD_HASH`,
-    `KLPRSS_Password` и `AdminPassword` — да."""
-    upper = str(name).upper()
-    return any(marker in upper for marker in SECRET_MARKERS)
-
-
-def _is_typed_wrapper(value: Any) -> bool:
-    """Типизированное значение KSC: `{"type": <вид>, "value": …}`, ровно два ключа."""
-    return isinstance(value, dict) and set(value.keys()) == {"type", "value"} and isinstance(value.get("type"), str)
-
-
-def _hide(value: Any, hide: bool) -> Any:
-    """Обход поддерева с «режимом скрытия». Ключ с одним из `SECRET_MARKERS` включает режим для
-    всего, что под ним. В режиме строки и двоичные значения (`{"type": "binary", …}`) →
-    "<скрыто>"; булевы, числа и прочие типизированные значения (datetime, long) остаются.
-    Обёртки `{"type": "params", "value": …}` проходятся насквозь и остаются на месте, списки —
-    поэлементно. Значения под ключами без признака не проверяются, если выше нет признака."""
-    if _is_typed_wrapper(value):
-        if value["type"] == "params":
-            return {"type": "params", "value": _hide(value["value"], hide)}
-        if value["type"] == "binary" and hide:
-            return HIDDEN
-        return value
-    if isinstance(value, dict):
-        return {k: _hide(v, hide or _has_secret_marker(str(k))) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_hide(v, hide) for v in value]
-    if isinstance(value, str) and hide:
-        return HIDDEN
-    return value
-
-
-def _hide_secrets(section_name: str, raw: Any) -> Any:
-    """Секреты в содержимом политики: имя секции или ключ на любой глубине с одним из
-    `SECRET_MARKERS` (подстрокой, без учёта регистра) — всё поддерево под ним в режиме скрытия
-    (`_hide`). Секция хранится как пришла: меняются только скрытые значения, обёртки остаются."""
-    return _hide(raw, _has_secret_marker(section_name))
-
-
 def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings: list[str], *, max_policies: int | None = None) -> dict[str, Any]:
     """Содержимое активных политик продуктов защиты: `Policy.GetPolicyContents` →
     `SsContents.SS_GetNames`/`Ss_Read` по каждой секции, `Ss_Release` в finally. Каждая политика в
@@ -168,7 +124,7 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
                     except KscError as exc:
                         errors.append(f"{section_name}: {exc}")
                         continue
-                    value = _hide_secrets(section_name, section_raw)
+                    value = hide_secrets(section_raw, section_name)
                     # Компактный JSON — как `ConvertTo-Json -Compress` в скрипте.
                     if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > POLICY_CONTENTS_SECTION_MAX_BYTES:
                         errors.append(f"{section_name}: секция больше лимита")
@@ -253,6 +209,8 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
                 # Живой KSC отдаёт саму задачу в обёртке: статистику кладём внутрь неё,
                 # иначе обёртка перестаёт быть обёрткой и задача теряется при разборе.
                 _task_body(t)["statistics"] = stats
+        # Параметры задачи несут и учётные данные запуска: то же скрытие, что у содержимого политик.
+        hide_task_params(_task_body(t))
         tasks.append(t)
     client.call("Tasks.ReleaseTasksIterator", {"strTaskIteratorId": it})
 

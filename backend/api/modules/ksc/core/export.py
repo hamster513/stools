@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.modules.ksc.core.secrets import hide_secrets, hide_task_params
 from kbaudit.safe_io import MB, decompress_gzip
 
 if TYPE_CHECKING:
@@ -139,6 +140,24 @@ class ExportFormatError(ValueError):
     pass
 
 
+def _hide_export_secrets(raw: dict[str, Any]) -> None:
+    """Повторное скрытие секретов (аудит M4) в содержимом политик и параметрах задач уже
+    разобранного файла: файл старого сборщика или поправленный руками не должен показать то,
+    что нынешний сборщик скрыл бы. Меняет `raw` на месте; нестандартные формы пропускает — их
+    отвергнет проверка схемы."""
+    contents = raw.get("policy_contents")
+    if isinstance(contents, dict):
+        for policy in contents.values():
+            sections = policy.get("sections") if isinstance(policy, dict) else None
+            if isinstance(sections, dict):
+                policy["sections"] = {name: hide_secrets(value, str(name)) for name, value in sections.items()}
+    tasks = raw.get("tasks")
+    if isinstance(tasks, list):
+        for task in tasks:
+            if isinstance(task, dict):
+                hide_task_params(task)
+
+
 def load_export(data: bytes) -> KscExport:
     if data[:2] == b"\x1f\x8b":
         try:
@@ -155,8 +174,10 @@ def load_export(data: bytes) -> KscExport:
         found = raw.get("format") if isinstance(raw, dict) else "—"
         raise ExportFormatError(f"это не выгрузка формата {FORMAT}: в файле «{found}»")
     try:
-        # Файл хранится как собран; обёртки контейнеров снимаются только в памяти.
-        return KscExport.model_validate(strip_params(raw))
+        # Файл хранится как собран; обёртки контейнеров снимаются и секреты скрываются только в памяти.
+        plain = strip_params(raw)
+        _hide_export_secrets(plain)
+        return KscExport.model_validate(plain)
     except ValueError as exc:
         first = str(exc).splitlines()[0][:200]
         raise ExportFormatError(f"выгрузка неполная: {first}") from exc

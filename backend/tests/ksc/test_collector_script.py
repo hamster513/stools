@@ -4,6 +4,7 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -17,6 +18,8 @@ from fastapi.testclient import TestClient
 from api.modules.ksc.core.export import load_export
 from tests.ksc.fake_ksc import MFA_SECRET, PASSWORD, USER, totp_code
 from tests.ksc.synthetic import (
+    BAIT_VALUES,
+    assert_bait_hidden,
     assert_secrets_hidden,
     assert_storage_shapes,
     build_export,
@@ -43,11 +46,13 @@ def _image_present() -> bool:
     return subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True, check=False).returncode == 0
 
 
-def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, object] | None = None, script_dir: Path | None = None) -> Path:
+def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, object] | None = None, script_dir: Path | None = None,
+                extra_args: tuple[str, ...] = (), expect_ok: bool = True) -> Path:
     """Поднимает поддельный KSC на порту и прогоняет скрипт в контейнере; отдаёт файл выгрузки.
 
-    С `config` скрипт получает только `-ConfigPath`: сервер, учётка, пароль и секрет
-    второго фактора берутся из файла. `script_dir` — каталог с изменённой копией скрипта."""
+    С `config` скрипт получает только `-ConfigPath` (и `extra_args`): сервер, учётка, пароль и
+    секрет второго фактора берутся из файла `<каталог прогона>/config.json`. `script_dir` —
+    каталог с изменённой копией скрипта. `expect_ok=False` — прогон должен завершиться ошибкой."""
     env = {**os.environ, "STOOLS_FAKE_VARIANT": variant}
     server = subprocess.Popen([sys.executable, "-m", "tests.ksc.fake_ksc_http", str(port)], cwd=Path.cwd(), env=env)
     try:
@@ -66,9 +71,9 @@ def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, objec
                    "-Scheme", "http", "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz"]
         else:
             (out / "config.json").write_text(json.dumps({**config, "port": port}), encoding="utf-8")
-            cmd = [*docker, *mounts, "-ConfigPath", "/out/config.json"]
+            cmd = [*docker, *mounts, "-ConfigPath", "/out/config.json", *extra_args]
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
-        assert run.returncode == 0, run.stdout + run.stderr
+        assert (run.returncode == 0) is expect_ok, run.stdout + run.stderr
     finally:
         server.terminate()
     return out / "ksc.json.gz"
@@ -120,6 +125,7 @@ def test_script_passes_second_factor_with_config_file(tmp_path: Path) -> None:
     assert export.server.name == "ksc01" and len(export.hosts) == len(build_export()["hosts"])
     raw = gzip.decompress((tmp_path / "mfa" / "ksc.json.gz").read_bytes()).decode()
     assert PASSWORD not in raw and MFA_SECRET not in raw  # секреты в выгрузку не попадают
+    assert (tmp_path / "mfa" / "config.json").exists()  # без -DeleteConfigAfterRun файл настроек остаётся
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -129,8 +135,11 @@ def test_script_writes_config_template(tmp_path: Path) -> None:
     run = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
     assert run.returncode == 0, run.stdout + run.stderr
     template = json.loads((tmp_path / "ksc-config.json").read_text(encoding="utf-8-sig"))
-    assert set(template) == {"server", "port", "user", "password", "internal", "domain", "totp_secret", "skip_tls_check", "skip_products", "skip_policy_contents", "page_size", "output_path"}
-    assert template["port"] == 13299 and template["password"] == "" and template["totp_secret"] == ""
+    assert set(template) == {"server", "port", "user", "password", "internal", "domain", "totp_secret", "skip_tls_check", "skip_products",
+                             "skip_policy_contents", "page_size", "output_path", "delete_after_run"}
+    assert template["port"] == 13299 and template["password"] == "" and template["totp_secret"] == "" and template["delete_after_run"] is False
+    # Аудит M5: в файл лягут пароль и секрет второго фактора — доступ только владельцу (вне Windows — 600).
+    assert (tmp_path / "ksc-config.json").stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -138,8 +147,9 @@ def test_script_explains_broken_config_and_accepts_directory_output(tmp_path: Pa
     script = ["-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{tmp_path}:/out", IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1"]
     # Одиночная обратная черта перед кавычкой ломает JSON — скрипт должен сказать об этом по-человечески.
     (tmp_path / "bad.json").write_text('{"server": "x", "output_path": ".\\"}'.replace("\\\\", "\\"), encoding="utf-8")
-    run = subprocess.run(["docker", "run", "--rm", *script, "-ConfigPath", "/out/bad.json"], capture_output=True, text=True, timeout=120, check=False)
+    run = subprocess.run(["docker", "run", "--rm", *script, "-ConfigPath", "/out/bad.json", "-DeleteConfigAfterRun"], capture_output=True, text=True, timeout=120, check=False)
     assert run.returncode != 0 and "не разобран как JSON" in (run.stdout + run.stderr) and "удваивать" in (run.stdout + run.stderr)
+    assert (tmp_path / "bad.json").exists()  # сбор не состоялся — файл настроек не удаляется
     # Каталог вместо файла: выгрузка ложится в него под именем по умолчанию.
     config = {"server": "host.docker.internal", "scheme": "http", "user": USER, "password": PASSWORD, "internal": True, "output_path": "/out/"}  # /out — каталог прогона
     with pytest.raises(FileNotFoundError):
@@ -298,3 +308,121 @@ def test_script_records_policies_skipped_by_limit(tmp_path: Path) -> None:
     assert set(export.policy_contents) == {"1", "3"} and export.policy_contents["1"]["sections"]
     assert export.policy_contents["3"] == {"product": "KES", "version": "12.0.0.0", "sections": {}, "errors": ["лимит политик"]}
     assert sum("политик больше лимита" in w for w in export.server.warnings) == 1
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_hides_secrets_sanitises_file_name_and_deletes_config(tmp_path: Path) -> None:
+    """Аудит M4, L8, M5 одним прогоном: секреты под новыми маркерами, двоичное значение под обычным
+    ключом и параметры задач скрыты; имя сервера «ksc 01/lab» идёт в имя файла как «ksc_01_lab»;
+    ключ `delete_after_run` в файле настроек удаляет его после успешного сбора."""
+    config = {"server": "host.docker.internal", "scheme": "http", "user": USER, "password": PASSWORD, "internal": True,
+              "output_path": "/out/", "delete_after_run": True}
+    run_dir = _run_script(tmp_path, 18350, "secrets", config).parent
+    files = sorted(p.name for p in run_dir.iterdir())
+    assert len(files) == 1 and re.fullmatch(r"ksc-ksc_01_lab-\d{8}-\d{4}\.json\.gz", files[0]), files  # config.json удалён
+    data = (run_dir / files[0]).read_bytes()
+    raw = gzip.decompress(data).decode("utf-8")
+    assert not [v for v in BAIT_VALUES if v in raw]
+    export = load_export(data)
+    assert export.server.name == "ksc 01/lab"  # в самой выгрузке имя сервера как есть
+    assert_bait_hidden(export)
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_delete_config_switch_only_after_success(tmp_path: Path) -> None:
+    """-DeleteConfigAfterRun: вход отклонён — файл настроек остаётся; сбор прошёл — удалён."""
+    base = {"server": "host.docker.internal", "scheme": "http", "user": USER, "internal": True, "output_path": "/out/ksc.json.gz"}
+    (tmp_path / "bad").mkdir()
+    failed = _run_script(tmp_path / "bad", 18351, "", {**base, "password": "wrong"}, extra_args=("-DeleteConfigAfterRun",), expect_ok=False).parent
+    assert (failed / "config.json").exists() and not (failed / "ksc.json.gz").exists()
+    (tmp_path / "ok").mkdir()
+    done = _run_script(tmp_path / "ok", 18352, "", {**base, "password": PASSWORD}, extra_args=("-DeleteConfigAfterRun",))
+    assert done.exists() and not (done.parent / "config.json").exists()
+
+
+def _tls_type_source() -> str:
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    m = re.search(r'Add-Type -TypeDefinition @"\n(.*?)\n"@', text, re.DOTALL)
+    assert m is not None
+    return m.group(1)
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_tls_callback_trusts_only_the_ksc_host(tmp_path: Path) -> None:
+    """Аудит M3: обработчик сертификата для Windows PowerShell 5.1 (компилируется тот же код, что в
+    скрипте) пропускает без проверки только адрес KSC, остальные — прежнему обработчику или
+    стандартной проверке; Restore возвращает прежний обработчик."""
+    (tmp_path / "KscTls.cs").write_text(_tls_type_source(), encoding="utf-8")
+    probe = r"""
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition (Get-Content -Raw /t/KscTls.cs)
+$bad = [System.Net.Security.SslPolicyErrors]::RemoteCertificateChainErrors
+$ok = [System.Net.Security.SslPolicyErrors]::None
+$ksc = [System.Net.WebRequest]::Create("https://KSC01.corp.local:13299/api/v1.0/")
+$other = [System.Net.WebRequest]::Create("https://evil.example/")
+$prev = [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+[STools.KscTls]::Enable("ksc01.corp.local")
+$r = [ordered]@{
+  hooked = $null -ne [System.Net.ServicePointManager]::ServerCertificateValidationCallback
+  ksc = [STools.KscTls]::Validate($ksc, $null, $null, $bad)
+  ksc_name = [STools.KscTls]::Validate("ksc01.corp.local", $null, $null, $bad)
+  other_bad = [STools.KscTls]::Validate($other, $null, $null, $bad)
+  other_ok = [STools.KscTls]::Validate($other, $null, $null, $ok)
+  unknown_sender = [STools.KscTls]::Validate($null, $null, $null, $bad)
+}
+[STools.KscTls]::Restore()
+$r.restored = [object]::ReferenceEquals($prev, [System.Net.ServicePointManager]::ServerCertificateValidationCallback)
+$r | ConvertTo-Json -Compress
+"""
+    (tmp_path / "probe.ps1").write_text(probe, encoding="utf-8")
+    run = subprocess.run(["docker", "run", "--rm", "-v", f"{tmp_path}:/t:ro", IMAGE, "pwsh", "-File", "/t/probe.ps1"],
+                         capture_output=True, text=True, timeout=120, check=False)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert json.loads(run.stdout.strip().splitlines()[-1]) == {
+        "hooked": True, "ksc": True, "ksc_name": True, "other_bad": False, "other_ok": True, "unknown_sender": False, "restored": True,
+    }
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_restores_tls_callback_after_success_and_failure(tmp_path: Path) -> None:
+    """Ветка Windows PowerShell 5.1 (включена в копии скрипта): после сбора и после отказа во входе
+    в процессе остаётся прежний обработчик сертификата, а не обработчик скрипта."""
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    hook = "$tlsHook = $SkipTlsCheck -and $PSVersionTable.PSVersion.Major -lt 6"
+    assert text.count(hook) == 1
+    (script_dir / SCRIPT.name).write_text(text.replace(hook, "$tlsHook = [bool]$SkipTlsCheck"), encoding="utf-8-sig")
+    port = 18353
+    server = subprocess.Popen([sys.executable, "-m", "tests.ksc.fake_ksc_http", str(port)], cwd=Path.cwd(), env={**os.environ, "STOOLS_FAKE_VARIANT": ""})
+    try:
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        out = tmp_path / "out"
+        out.mkdir()
+        args = f"-Server host.docker.internal -Port {port} -Scheme http -User {USER} -Internal -SkipTlsCheck"
+        probe = f"""
+$prev = [System.Net.Security.RemoteCertificateValidationCallback]{{ param($s, $c, $ch, $e) $false }}
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = $prev
+$env:STOOLS_KSC_PASSWORD = "{PASSWORD}"
+& /script/{SCRIPT.name} {args} -OutputPath /out/ok.json.gz *> $null
+$afterOk = [object]::ReferenceEquals($prev, [System.Net.ServicePointManager]::ServerCertificateValidationCallback)
+$env:STOOLS_KSC_PASSWORD = "wrong"
+$failed = $false
+try {{ & /script/{SCRIPT.name} {args} -OutputPath /out/bad.json.gz *> $null }} catch {{ $failed = $true }}
+$afterFail = [object]::ReferenceEquals($prev, [System.Net.ServicePointManager]::ServerCertificateValidationCallback)
+[ordered]@{{ compiled = [bool]("STools.KscTls" -as [type]); after_ok = $afterOk; failed = $failed; after_fail = $afterFail }} | ConvertTo-Json -Compress
+"""
+        docker = ["docker", "run", "--rm", "--add-host=host.docker.internal:host-gateway", "-v", f"{script_dir}:/script:ro", "-v", f"{out}:/out",
+                  IMAGE, "pwsh", "-Command", probe]
+        run = subprocess.run(docker, capture_output=True, text=True, timeout=300, check=False)
+    finally:
+        server.terminate()
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert json.loads(run.stdout.strip().splitlines()[-1]) == {"compiled": True, "after_ok": True, "failed": True, "after_fail": True}
+    assert (out / "ok.json.gz").exists() and not (out / "bad.json.gz").exists()

@@ -40,6 +40,7 @@ from api.modules.vm.services.query import (
 )
 from api.modules.vm.services.settings import load_settings
 from api.modules.vm.services.stats import load_stats
+from api.platform.routers.audit import _csv_safe
 
 router = APIRouter(tags=["vm"])
 
@@ -239,7 +240,14 @@ def export_csv(
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    """CSV с BOM и `;` — так его открывает Excel в русской локали без вопросов."""
+    """CSV с BOM и `;` — так его открывает Excel в русской локали без вопросов. Строки (имя хоста,
+    ОС, зона — из выгрузки MaxPatrol) проходят `_csv_safe`: ячейка с =, +, -, @ в начале не станет
+    формулой (аудит L2); числа идут как есть."""
+
+    def cell(value: Any) -> Any:
+        if value is None:
+            return ""
+        return _csv_safe(value) if isinstance(value, str) else value
 
     def gen() -> Iterator[bytes]:
         buf = io.StringIO()
@@ -250,7 +258,7 @@ def export_csv(
             item = row_to_item(row)
             buf.seek(0)
             buf.truncate()
-            writer.writerow([item.get(key, "") if item.get(key) is not None else "" for key, _ in EXPORT_COLUMNS])
+            writer.writerow([cell(item.get(key)) for key, _ in EXPORT_COLUMNS])
             yield buf.getvalue().encode("utf-8")
 
     return StreamingResponse(

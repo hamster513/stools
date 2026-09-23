@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import Callable
 from typing import Any, Self
 
 import httpx
+
+from api.limits import MAX_API_RESPONSE, ResponseTooLarge, read_limited
 
 TIMEOUT = 60.0
 
@@ -57,17 +60,21 @@ class KscClient:
 
     def _post(self, method: str, body: dict[str, Any] | None, headers: dict[str, str]) -> dict[str, Any]:
         try:
-            resp = self._http.post(self.base_url + method, json=body or {}, headers={"Content-Type": "application/json", **headers})
+            with self._http.stream("POST", self.base_url + method, json=body or {}, headers={"Content-Type": "application/json", **headers}) as resp:
+                if resp.status_code in (401, 403):
+                    if method != "Session.StartSession" and resp.status_code == 403:
+                        raise KscError(f"нет прав на {method}", resp.status_code, kind="forbidden")
+                    raise KscError("вход отклонён: неверные логин, пароль или тип учётной записи", resp.status_code, kind="auth")
+                if resp.status_code != 200:
+                    raise KscError(f"KSC ответил {resp.status_code} на {method}", resp.status_code, kind="http")
+                # Ответ читается в память целиком, поэтому с потолком (аудит L6).
+                content = read_limited(resp, MAX_API_RESPONSE)
         except httpx.HTTPError as exc:
             raise KscError(f"нет связи с KSC: {exc.__class__.__name__}", kind="link") from exc
-        if resp.status_code in (401, 403):
-            if method != "Session.StartSession" and resp.status_code == 403:
-                raise KscError(f"нет прав на {method}", resp.status_code, kind="forbidden")
-            raise KscError("вход отклонён: неверные логин, пароль или тип учётной записи", resp.status_code, kind="auth")
-        if resp.status_code != 200:
-            raise KscError(f"KSC ответил {resp.status_code} на {method}", resp.status_code, kind="http")
+        except ResponseTooLarge as exc:
+            raise KscError(f"KSC на {method}: {exc}") from exc
         try:
-            data = resp.json() if resp.content else {}
+            data = json.loads(content) if content else {}
         except ValueError as exc:
             raise KscError(f"KSC вернул не JSON на {method}") from exc
         if not isinstance(data, dict):

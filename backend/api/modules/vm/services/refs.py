@@ -60,6 +60,8 @@ URLS = {
 }
 NVD_FIRST_YEAR = 2002
 BATCH = 20_000
+#: Потолок одной скачиваемой ленты (аудит L6): крупнейшая, NVD за год в gzip, — десятки мегабайт.
+MAX_FEED_BYTES = 512 * 1024 * 1024
 
 EPSS_T = cast(Table, VmRefEpss.__table__)
 NVD_T = cast(Table, VmRefNvd.__table__)
@@ -74,17 +76,23 @@ def nvd_years_default() -> list[int]:
     return list(range(NVD_FIRST_YEAR, dt.datetime.now(dt.UTC).year + 1))
 
 
-def download(url: str, to_path: Path, handle: JobHandle, http: httpx.Client | None = None) -> int:
-    client = http or httpx.Client(timeout=600.0, follow_redirects=True)
+def download(url: str, to_path: Path, handle: JobHandle, http: httpx.Client) -> int:
+    """Скачать ленту в файл потоком. Больше `MAX_FEED_BYTES` — отказ: по заявленной длине сразу,
+    без неё — на куске, который перешёл лимит (недокачанный файл удаляет вызывающий)."""
+    too_large = ValueError(f"{url}: лента больше лимита ({MAX_FEED_BYTES // (1024 * 1024)} МБ), загрузка прервана")
     size = 0
-    with client.stream("GET", url) as r:
+    with http.stream("GET", url) as r:
         if r.status_code != 200:
             raise ValueError(f"{url}: HTTP {r.status_code}")
         total = int(r.headers.get("content-length") or 0) or None
+        if total is not None and total > MAX_FEED_BYTES:
+            raise too_large
         with to_path.open("wb") as out:
             for chunk in r.iter_bytes():
-                out.write(chunk)
                 size += len(chunk)
+                if size > MAX_FEED_BYTES:
+                    raise too_large
+                out.write(chunk)
                 handle.tick(size, total=total, message=f"скачано {size // 1_000_000} МБ")
     return size
 
@@ -308,26 +316,26 @@ def run_ref_download(
     years: list[int] | None = None,
     http_factory: Callable[[], httpx.Client] | None = None,
 ) -> None:
-    http = http_factory() if http_factory else None
     if name == "nvd":
         urls = [URLS["nvd"].format(year=y) for y in (years or nvd_years_default())]
     elif name == "attack":
         urls = list(ATTACK_URLS)
     else:
         urls = [URLS[name]]
-    for i, url in enumerate(urls, 1):
-        suffix = ".gz" if url.endswith(".gz") else Path(url).suffix or ".dat"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            temp = Path(tmp.name)
-        try:
-            handle.stage("downloading", message=f"{i}/{len(urls)} {url.rsplit('/', 1)[-1]}")
-            download(url, temp, handle, http)
-            load_ref(
-                db, handle, name, temp, "network",
-                detail=re.sub(r"\?.*$", "", url.rsplit("/", 1)[-1]),
-                append=i > 1,
-            )
-        finally:
-            if temp.exists():
-                os.unlink(temp)
+    with http_factory() if http_factory else httpx.Client(timeout=600.0, follow_redirects=True) as http:
+        for i, url in enumerate(urls, 1):
+            suffix = ".gz" if url.endswith(".gz") else Path(url).suffix or ".dat"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                temp = Path(tmp.name)
+            try:
+                handle.stage("downloading", message=f"{i}/{len(urls)} {url.rsplit('/', 1)[-1]}")
+                download(url, temp, handle, http)
+                load_ref(
+                    db, handle, name, temp, "network",
+                    detail=re.sub(r"\?.*$", "", url.rsplit("/", 1)[-1]),
+                    append=i > 1,
+                )
+            finally:
+                if temp.exists():
+                    os.unlink(temp)
     rebuild_after_ref(db, handle, name, weights)

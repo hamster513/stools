@@ -21,15 +21,18 @@
 
 .PARAMETER ConfigPath  Файл настроек (JSON): сервер, учётка, пароль, секрет второго фактора и остальное.
                        Параметры командной строки главнее файла. Шаблон создаёт -InitConfig.
-.PARAMETER InitConfig  Записать шаблон файла настроек по указанному пути и выйти.
+.PARAMETER InitConfig  Записать шаблон файла настроек по указанному пути и выйти. Доступ к файлу — только
+                       у текущей учётной записи (Windows: icacls, иначе chmod 600).
+.PARAMETER DeleteConfigAfterRun Удалить файл настроек после успешного сбора (то же — ключ delete_after_run в файле).
 .PARAMETER Server      Адрес сервера KSC.
 .PARAMETER Port        Порт Open API, по умолчанию 13299.
 .PARAMETER User        Учётная запись KSC.
 .PARAMETER Password    Пароль (SecureString); если не задан — будет запрошен.
 .PARAMETER Internal    Внутренняя учётная запись KSC (иначе — доменная, см. -Domain).
 .PARAMETER Domain      Домен доменной учётной записи.
-.PARAMETER OutputPath  Куда писать файл; по умолчанию ksc-<сервер>-<дата>.json.gz.
-.PARAMETER SkipTlsCheck Не проверять сертификат сервера (самоподписанный).
+.PARAMETER OutputPath  Куда писать файл; по умолчанию ksc-<сервер>-<дата>.json.gz (в имени сервера всё,
+                       кроме латиницы, цифр, точки, дефиса и подчёркивания, заменяется на _).
+.PARAMETER SkipTlsCheck Не проверять сертификат сервера KSC (самоподписанный); остальные адреса проверяются как обычно.
 .PARAMETER SkipProducts Не запрашивать продукты и компоненты по каждому хосту (быстрее).
 .PARAMETER SkipPolicyContents Не собирать содержимое политик (секция policy_contents; файл заметно больше).
 .PARAMETER PageSize    Размер страницы при чтении хостов, по умолчанию 500.
@@ -41,14 +44,14 @@
   затем из файла настроек (password, totp_secret); пароль, которого нет нигде,
   запрашивается. Если сервер требует второй фактор, а секрета нет, скрипт
   спросит шестизначный код из приложения-аутентификатора.
-  Файл настроек содержит секреты: держите его доступным только себе и удалите
-  после сбора.
+  Файл настроек содержит секреты: -InitConfig закрывает к нему доступ всем,
+  кроме вас; удалите его после сбора или запускайте с -DeleteConfigAfterRun.
 
 .EXAMPLE
   .\STools-KSC-Collector.ps1 -Server ksc01.corp.local -User audit -Internal
   .\STools-KSC-Collector.ps1 -Server 10.0.0.5 -User audit -Domain CORP -SkipTlsCheck -OutputPath C:\Temp\ksc.json.gz
   .\STools-KSC-Collector.ps1 -InitConfig .\ksc-config.json    # шаблон; заполнить и запустить:
-  .\STools-KSC-Collector.ps1 -ConfigPath .\ksc-config.json
+  .\STools-KSC-Collector.ps1 -ConfigPath .\ksc-config.json -DeleteConfigAfterRun
 #>
 [CmdletBinding()]
 param(
@@ -64,6 +67,7 @@ param(
   [switch]$SkipTlsCheck,
   [switch]$SkipProducts,
   [switch]$SkipPolicyContents,
+  [switch]$DeleteConfigAfterRun,
   [int]$PageSize = 500,
   [ValidateSet("https", "http")][string]$Scheme = "https"
 )
@@ -74,9 +78,10 @@ $ErrorActionPreference = "Stop"
 $FormatVersion = "stools-ksc/1"
 $CollectorVersion = "1.0"
 #: Имя секции или ключ на любой глубине её параметров с одним из этих слов (подстрокой, без учёта
-#: регистра) — всё поддерево под ним в режиме скрытия: строки и двоичные значения → "<скрыто>",
-#: ключи остаются (см. Hide-Value). Не больше стольки политик и байт на секцию.
-$SecretMarkers = @("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE")
+#: регистра) — всё поддерево под ним в режиме скрытия: строки → "<скрыто>", ключи остаются; двоичные
+#: значения скрываются всегда (см. Hide-Value). Список совпадает с SECRET_MARKERS в
+#: api/modules/ksc/core/secrets.py (сверяет тест). Не больше стольки политик и байт на секцию.
+$SecretMarkers = @("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE", "PASSPHRASE", "APIKEY", "API_KEY", "AUTH", "PIN", "KEY")
 $PolicyContentsMaxPolicies = 200
 $PolicyContentsSectionMaxBytes = 2097152
 
@@ -85,10 +90,18 @@ if ($InitConfig) {
   $template = [ordered]@{
     server = ""; port = 13299; user = ""; password = ""; internal = $false; domain = ""; totp_secret = ""
     skip_tls_check = $false; skip_products = $false; skip_policy_contents = $false; page_size = 500; output_path = ""
+    delete_after_run = $false
   }
   [System.IO.File]::WriteAllText($InitConfig, ($template | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
+  # В файл лягут пароль и секрет второго фактора: читать и менять его может только текущая учётная запись.
+  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    & icacls $InitConfig /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+  } else {
+    & chmod 600 -- $InitConfig
+  }
+  if ($LASTEXITCODE -ne 0) { throw "Не удалось закрыть доступ к файлу настроек: $InitConfig" }
   Write-Host "Шаблон записан: $InitConfig" -ForegroundColor Green
-  Write-Host "В файле будут пароль и секрет второго фактора: закройте к нему доступ и удалите после сбора."
+  Write-Host "Доступ к файлу — только у вас. В нём будут пароль и секрет второго фактора: удалите его после сбора или задайте delete_after_run = true (или -DeleteConfigAfterRun)."
   Write-Host "Пути в JSON пишутся с удвоенной обратной чертой (C:\\Temp) или с прямой (C:/Temp); output_path можно оставить пустым."
   exit 0
 }
@@ -113,6 +126,7 @@ if (-not $bound.ContainsKey("SkipProducts") -and (Cfg "skip_products")) { $SkipP
 if (-not $bound.ContainsKey("SkipPolicyContents") -and (Cfg "skip_policy_contents")) { $SkipPolicyContents = [bool](Cfg "skip_policy_contents") }
 if (-not $bound.ContainsKey("PageSize") -and (Cfg "page_size")) { $PageSize = [int](Cfg "page_size") }
 if (-not $bound.ContainsKey("Scheme") -and (Cfg "scheme")) { $Scheme = [string](Cfg "scheme") }
+if (-not $bound.ContainsKey("DeleteConfigAfterRun") -and (Cfg "delete_after_run")) { $DeleteConfigAfterRun = [bool](Cfg "delete_after_run") }
 if (-not $Server) { $Server = Read-Host "Сервер KSC" }
 if (-not $User) { $User = Read-Host "Учётная запись" }
 
@@ -128,26 +142,43 @@ else {
   try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
-if ($SkipTlsCheck) {
-  # Windows PowerShell 5.1: глобальный обработчик; PowerShell 7: параметр -SkipCertificateCheck ниже.
-  if ($PSVersionTable.PSVersion.Major -lt 6) {
-    # Делегат из скриптблока вызывается в потоке без runspace и роняет соединение,
-    # поэтому обработчик компилируется.
-    if (-not ("STools.TrustAll" -as [type])) {
-      Add-Type -TypeDefinition @"
+# -SkipTlsCheck. PowerShell 7: параметр -SkipCertificateCheck у каждого запроса (Send-Login, Invoke-Ksc).
+# Windows PowerShell 5.1 такого параметра не знает, и проверку заменяет обработчик ServicePointManager —
+# общий на весь процесс PowerShell. Поэтому он пропускает без проверки только адрес KSC (-Server),
+# остальные адреса отдаёт прежнему обработчику или стандартной проверке, а в конце скрипта (finally)
+# прежний обработчик возвращается на место. Делегат из скриптблока вызывается в потоке без runspace
+# и роняет соединение, поэтому обработчик компилируется.
+$tlsHook = $SkipTlsCheck -and $PSVersionTable.PSVersion.Major -lt 6
+if ($tlsHook -and -not ("STools.KscTls" -as [type])) {
+  Add-Type -TypeDefinition @"
+using System;
 using System.Net;
 using System.Net.Security;
 using System.Security.Cryptography.X509Certificates;
 namespace STools {
-  public static class TrustAll {
-    public static bool Validate(object s, X509Certificate c, X509Chain ch, SslPolicyErrors e) { return true; }
-    public static void Enable() { ServicePointManager.ServerCertificateValidationCallback = Validate; }
+  public static class KscTls {
+    static string host;
+    static RemoteCertificateValidationCallback previous;
+    public static bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
+      HttpWebRequest request = sender as HttpWebRequest;
+      string target = request != null ? request.RequestUri.Host : sender as string;
+      if (host != null && target != null && string.Equals(target, host, StringComparison.OrdinalIgnoreCase)) { return true; }
+      if (previous != null) { return previous(sender, certificate, chain, errors); }
+      return errors == SslPolicyErrors.None;
+    }
+    public static void Enable(string kscHost) {
+      previous = ServicePointManager.ServerCertificateValidationCallback;
+      host = kscHost;
+      ServicePointManager.ServerCertificateValidationCallback = Validate;
+    }
+    public static void Restore() {
+      ServicePointManager.ServerCertificateValidationCallback = previous;
+      previous = null;
+      host = null;
+    }
   }
 }
 "@
-    }
-    [STools.TrustAll]::Enable()
-  }
 }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -181,9 +212,10 @@ function Test-TypedWrapper($v) {
   return ($names.Count -eq 2) -and ($names -contains "type") -and ($names -contains "value") -and ($v.type -is [string])
 }
 # Обход поддерева с режимом скрытия. Ключ с признаком секрета включает режим для всего, что под ним.
-# В режиме строки и двоичные значения (@{ type = "binary"; ... }) → "<скрыто>"; булевы, числа и прочие
-# типизированные значения остаются. Обёртки params проходятся насквозь и остаются на месте, списки —
-# поэлементно. Значения под ключами без признака не проверяются, если выше нет признака.
+# В режиме строки → "<скрыто>"; булевы, числа и прочие типизированные значения остаются. Двоичные
+# значения (@{ type = "binary"; ... }) скрываются всегда, под любым ключом. Обёртки params проходятся
+# насквозь и остаются на месте, списки — поэлементно. То же правило — hide_secrets в
+# api/modules/ksc/core/secrets.py.
 # Списки возвращаются через ",": иначе конвейер разворачивает список из одного элемента в скаляр,
 # а пустой — в $null. По той же причине результат присваивается переменной, а не выражением if.
 function Hide-Value($v, [bool]$hide) {
@@ -193,7 +225,7 @@ function Hide-Value($v, [bool]$hide) {
       $inner = Hide-Value $v.value $hide
       return [ordered]@{ type = "params"; value = $inner }
     }
-    if ($hide -and $v.type -eq "binary") { return "<скрыто>" }
+    if ($v.type -eq "binary") { return "<скрыто>" }
     return $v
   }
   if ($v -is [System.Management.Automation.PSCustomObject]) {
@@ -365,214 +397,230 @@ $LicenseFields = @("KLLIC_SERIAL","KLLIC_PROD_NAME","KLLIC_KEY_TYPE","KLLIC_CREA
 $RoleFields = @("nRoleId","wstrRoleName","wstrRoleDisplayName","nInternalUserId","wstrTrusteeDisplayName","wstrUserPrincipalName","nGroupId","wstrGroupName")
 $UserFields = @("ul_llTrusteeId","ul_nSplUserId","ul_wstrDisplayName","ul_wstrSamAccountName","ul_wstrPrincipalName","ul_bUser","ul_Builtin","ul_InternalUser")
 
-Write-Host "STools KSC Collector $CollectorVersion → $base" -ForegroundColor Green
-$warnings = New-Object System.Collections.ArrayList
-$policyContents = [ordered]@{}
-Write-Step "Вход"
-$script:session = Start-KscSession
-if (-not $script:session) { throw "KSC не выдал сессию" }
+if ($tlsHook) { [STools.KscTls]::Enable($Server) }
 try {
-  Write-Step "Сервер"
-  $static = Unwrap (Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = @("KLADMSRV_SERVER_VERSION_ID","KLADMSRV_SERVER_HOSTNAME","KLADMSRV_PRODUCT_FULL_VERSION") }) "PxgRetVal")
-  if (-not (Prop $static "KLADMSRV_SERVER_HOSTNAME") -and -not (Prop $static "KLADMSRV_SERVER_VERSION_ID") -and -not (Prop $static "KLADMSRV_PRODUCT_FULL_VERSION")) {
-    $static = Unwrap (Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = $null }) "PxgRetVal")
-  }
-  $domains = @((Prop (Invoke-Ksc "HostGroup.GetDomains" "{}") "PxgRetVal") | Where-Object { $null -ne $_ })
-
-  Write-Step "Группы"
-  $ga = (Invoke-Ksc "HostGroup.FindGroups" @{ wstrFilter = ""; vecFieldsToReturn = $GroupFields; vecFieldsToOrder = @(); lMaxLifeTime = 600 }).strAccessor
-  $groups = Read-Accessor $ga
-
-  Write-Step "Хосты"
-  $ha = (Invoke-Ksc "HostGroup.FindHosts" @{ wstrFilter = ""; vecFieldsToReturn = $HostFields; vecFieldsToOrder = @(); pParams = @{ KLGRP_FIND_FROM_CUR_VS_ONLY = $true }; lMaxLifeTime = 600 }).strAccessor
-  $hosts = Read-Accessor $ha
-
-  $products = @{}
-  $components = @{}
-  if (-not $SkipProducts) {
-    Write-Step ("Продукты и компоненты ({0} хостов)" -f $hosts.Count)
-    $n = 0
-    foreach ($h in $hosts) {
-      $n++
-      $hv = Unwrap $h
-      $hid = [string](Prop $hv "KLHST_WKS_HOSTNAME")
-      if (-not $hid) { continue }
-      if (((AsInt (Prop $hv "KLHST_WKS_STATUS")) -band 4) -eq 0) { continue }   # без агента продуктов нет
-      try {
-        $p = (Invoke-Ksc "HostGroup.GetHostProducts" @{ strHostName = $hid }).PxgRetVal
-        $products[$hid] = $p
-        $comp = @{}
-        foreach ($prod in (Unwrap $p).PSObject.Properties) {
-          if ($prod.Name -in @("1103","1093")) { continue }
-          foreach ($ver in (Unwrap $prod.Value).PSObject.Properties) {
-            try {
-              $c = (Invoke-Ksc "HostGroup.GetComponentsForProductOnHost" @{ strHostName = $hid; strProductName = $prod.Name; strProductVersion = $ver.Name }).PxgRetVal
-              $comp["{0}/{1}" -f $prod.Name, $ver.Name] = @($c)
-            } catch { Write-Warning ("компоненты {0} {1}: {2}" -f $hid, $prod.Name, $_.Exception.Message) }
-          }
-        }
-        if ($comp.Count -gt 0) { $components[$hid] = $comp }
-      } catch { Write-Warning ("продукты {0}: {1}" -f $hid, $_.Exception.Message) }
-      if ($n % 100 -eq 0) { Write-Step ("  {0} из {1}" -f $n, $hosts.Count) }
+  Write-Host "STools KSC Collector $CollectorVersion → $base" -ForegroundColor Green
+  $warnings = New-Object System.Collections.ArrayList
+  $policyContents = [ordered]@{}
+  Write-Step "Вход"
+  $script:session = Start-KscSession
+  if (-not $script:session) { throw "KSC не выдал сессию" }
+  try {
+    Write-Step "Сервер"
+    $static = Unwrap (Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = @("KLADMSRV_SERVER_VERSION_ID","KLADMSRV_SERVER_HOSTNAME","KLADMSRV_PRODUCT_FULL_VERSION") }) "PxgRetVal")
+    if (-not (Prop $static "KLADMSRV_SERVER_HOSTNAME") -and -not (Prop $static "KLADMSRV_SERVER_VERSION_ID") -and -not (Prop $static "KLADMSRV_PRODUCT_FULL_VERSION")) {
+      $static = Unwrap (Prop (Invoke-Ksc "HostGroup.GetStaticInfo" @{ pValues = $null }) "PxgRetVal")
     }
-  }
+    $domains = @((Prop (Invoke-Ksc "HostGroup.GetDomains" "{}") "PxgRetVal") | Where-Object { $null -ne $_ })
 
-  Write-Step "Политики"
-  $policies = @((Prop (Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ })
-  $effective = @{}
-  foreach ($g in $groups) {
-    $gid = AsInt (Prop (Unwrap $g) "id")
-    try { $effective[[string]$gid] = @((Prop (Invoke-Ksc "Policy.GetEffectivePoliciesForGroup" @{ nGroupId = $gid }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
-    catch { Write-Warning ("политики группы {0}: {1}" -f $gid, $_.Exception.Message); [void]$warnings.Add("политики группы $($gid): $($_.Exception.Message)") }
-  }
+    Write-Step "Группы"
+    $ga = (Invoke-Ksc "HostGroup.FindGroups" @{ wstrFilter = ""; vecFieldsToReturn = $GroupFields; vecFieldsToOrder = @(); lMaxLifeTime = 600 }).strAccessor
+    $groups = Read-Accessor $ga
 
-  if (-not $SkipPolicyContents) {
-    Write-Step "Содержимое политик"
-    $policyCount = 0
-    foreach ($p in $policies) {
-      $pv = Unwrap $p
-      if (-not (AsBool (Prop $pv "KLPOL_ACTIVE"))) { continue }
-      $product = [string](Prop $pv "KLPOL_PRODUCT")
-      if ($product -in @("1103", "1093")) { continue }   # не продукт защиты (агент, сервер)
-      $policyCount++
-      $npolicy = AsInt (Prop $pv "KLPOL_ID")
-      $version = [string](Prop $pv "KLPOL_VERSION")
-      if ($policyCount -gt $PolicyContentsMaxPolicies) {
-        # Пропущенная по лимиту политика остаётся в секции с причиной — POLICY_CONTENT_MISSING её покажет.
-        if ($policyCount -eq $PolicyContentsMaxPolicies + 1) {
-          Write-Warning ("содержимое политик: больше лимита {0}, часть пропущена" -f $PolicyContentsMaxPolicies)
-          [void]$warnings.Add("policy_contents: политик больше лимита $($PolicyContentsMaxPolicies), часть пропущена")
-        }
-        $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = @{}; errors = @("лимит политик") }
-        continue
-      }
-      try {
-        $ssid = (Invoke-Ksc "Policy.GetPolicyContents" @{ nPolicy = $npolicy; nRevisionId = 0; nLifeTime = 0 }).PxgRetVal
+    Write-Step "Хосты"
+    $ha = (Invoke-Ksc "HostGroup.FindHosts" @{ wstrFilter = ""; vecFieldsToReturn = $HostFields; vecFieldsToOrder = @(); pParams = @{ KLGRP_FIND_FROM_CUR_VS_ONLY = $true }; lMaxLifeTime = 600 }).strAccessor
+    $hosts = Read-Accessor $ha
+
+    $products = @{}
+    $components = @{}
+    if (-not $SkipProducts) {
+      Write-Step ("Продукты и компоненты ({0} хостов)" -f $hosts.Count)
+      $n = 0
+      foreach ($h in $hosts) {
+        $n++
+        $hv = Unwrap $h
+        $hid = [string](Prop $hv "KLHST_WKS_HOSTNAME")
+        if (-not $hid) { continue }
+        if (((AsInt (Prop $hv "KLHST_WKS_STATUS")) -band 4) -eq 0) { continue }   # без агента продуктов нет
         try {
-          $names = @((Prop (Invoke-Ksc "SsContents.SS_GetNames" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version }) "PxgRetVal") | Where-Object { $null -ne $_ })
-          $sections = [ordered]@{}
-          $errors = New-Object System.Collections.ArrayList
-          foreach ($sectionName in $names) {
-            try {
-              $raw = (Invoke-Ksc "SsContents.Ss_Read" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version; wstrSection = $sectionName }).PxgRetVal
-              $hidden = Hide-Secrets $sectionName $raw
-              $bytes = [Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $hidden -Depth 100 -Compress))
-              if ($bytes -gt $PolicyContentsSectionMaxBytes) { [void]$errors.Add("$($sectionName): секция больше лимита") }
-              else { $sections[$sectionName] = $hidden }
-            } catch { [void]$errors.Add("$($sectionName): $($_.Exception.Message)") }
+          $p = (Invoke-Ksc "HostGroup.GetHostProducts" @{ strHostName = $hid }).PxgRetVal
+          $products[$hid] = $p
+          $comp = @{}
+          foreach ($prod in (Unwrap $p).PSObject.Properties) {
+            if ($prod.Name -in @("1103","1093")) { continue }
+            foreach ($ver in (Unwrap $prod.Value).PSObject.Properties) {
+              try {
+                $c = (Invoke-Ksc "HostGroup.GetComponentsForProductOnHost" @{ strHostName = $hid; strProductName = $prod.Name; strProductVersion = $ver.Name }).PxgRetVal
+                $comp["{0}/{1}" -f $prod.Name, $ver.Name] = @($c)
+              } catch { Write-Warning ("компоненты {0} {1}: {2}" -f $hid, $prod.Name, $_.Exception.Message) }
+            }
           }
-          $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = $sections; errors = @($errors.ToArray()) }
-        } finally {
-          Invoke-Ksc "SsContents.Ss_Release" @{ wstrID = $ssid } | Out-Null
+          if ($comp.Count -gt 0) { $components[$hid] = $comp }
+        } catch { Write-Warning ("продукты {0}: {1}" -f $hid, $_.Exception.Message) }
+        if ($n % 100 -eq 0) { Write-Step ("  {0} из {1}" -f $n, $hosts.Count) }
+      }
+    }
+
+    Write-Step "Политики"
+    $policies = @((Prop (Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ })
+    $effective = @{}
+    foreach ($g in $groups) {
+      $gid = AsInt (Prop (Unwrap $g) "id")
+      try { $effective[[string]$gid] = @((Prop (Invoke-Ksc "Policy.GetEffectivePoliciesForGroup" @{ nGroupId = $gid }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
+      catch { Write-Warning ("политики группы {0}: {1}" -f $gid, $_.Exception.Message); [void]$warnings.Add("политики группы $($gid): $($_.Exception.Message)") }
+    }
+
+    if (-not $SkipPolicyContents) {
+      Write-Step "Содержимое политик"
+      $policyCount = 0
+      foreach ($p in $policies) {
+        $pv = Unwrap $p
+        if (-not (AsBool (Prop $pv "KLPOL_ACTIVE"))) { continue }
+        $product = [string](Prop $pv "KLPOL_PRODUCT")
+        if ($product -in @("1103", "1093")) { continue }   # не продукт защиты (агент, сервер)
+        $policyCount++
+        $npolicy = AsInt (Prop $pv "KLPOL_ID")
+        $version = [string](Prop $pv "KLPOL_VERSION")
+        if ($policyCount -gt $PolicyContentsMaxPolicies) {
+          # Пропущенная по лимиту политика остаётся в секции с причиной — POLICY_CONTENT_MISSING её покажет.
+          if ($policyCount -eq $PolicyContentsMaxPolicies + 1) {
+            Write-Warning ("содержимое политик: больше лимита {0}, часть пропущена" -f $PolicyContentsMaxPolicies)
+            [void]$warnings.Add("policy_contents: политик больше лимита $($PolicyContentsMaxPolicies), часть пропущена")
+          }
+          $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = @{}; errors = @("лимит политик") }
+          continue
         }
-      } catch {
-        Write-Warning ("содержимое политики {0}: {1}" -f $npolicy, $_.Exception.Message)
-        [void]$warnings.Add("policy_contents[$($npolicy)]: $($_.Exception.Message)")
+        try {
+          $ssid = (Invoke-Ksc "Policy.GetPolicyContents" @{ nPolicy = $npolicy; nRevisionId = 0; nLifeTime = 0 }).PxgRetVal
+          try {
+            $names = @((Prop (Invoke-Ksc "SsContents.SS_GetNames" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version }) "PxgRetVal") | Where-Object { $null -ne $_ })
+            $sections = [ordered]@{}
+            $errors = New-Object System.Collections.ArrayList
+            foreach ($sectionName in $names) {
+              try {
+                $raw = (Invoke-Ksc "SsContents.Ss_Read" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version; wstrSection = $sectionName }).PxgRetVal
+                $hidden = Hide-Secrets $sectionName $raw
+                $bytes = [Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $hidden -Depth 100 -Compress))
+                if ($bytes -gt $PolicyContentsSectionMaxBytes) { [void]$errors.Add("$($sectionName): секция больше лимита") }
+                else { $sections[$sectionName] = $hidden }
+              } catch { [void]$errors.Add("$($sectionName): $($_.Exception.Message)") }
+            }
+            $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = $sections; errors = @($errors.ToArray()) }
+          } finally {
+            Invoke-Ksc "SsContents.Ss_Release" @{ wstrID = $ssid } | Out-Null
+          }
+        } catch {
+          Write-Warning ("содержимое политики {0}: {1}" -f $npolicy, $_.Exception.Message)
+          [void]$warnings.Add("policy_contents[$($npolicy)]: $($_.Exception.Message)")
+        }
       }
     }
-  }
 
-  Write-Step "Задачи"
-  $tasks = New-Object System.Collections.ArrayList
-  $it = (Invoke-Ksc "Tasks.ResetTasksIterator" @{ nGroupId = -1; bGroupIdSignificant = $false; strProductName = ""; strVersion = ""; strComponentName = ""; strInstanceId = ""; strTaskName = ""; bIncludeSupergroups = $false }).strTaskIteratorId
-  while ($true) {
-    $t = Prop (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }) "pTaskData"
-    if ($null -eq $t -or @($t.PSObject.Properties).Count -eq 0) { break }
-    $tid = [string](Prop (Unwrap $t) "TASK_UNIQUE_ID")
-    # Статистика кладётся в сам объект задачи: у живого KSC он приходит в обёртке @{ type = "params"; value = ... },
-    # и лишнее свойство рядом с type/value перестало бы быть обёрткой — задача потерялась бы при разборе.
-    if ($tid) { try { (Unwrap $t) | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Prop (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }) "PxgRetVal") -Force } catch {} }
-    [void]$tasks.Add($t)
-  }
-  Invoke-Ksc "Tasks.ReleaseTasksIterator" @{ strTaskIteratorId = $it } | Out-Null
-
-  Write-Step "Лицензии"
-  $licenses = New-Object System.Collections.ArrayList
-  $lk = Invoke-Ksc "LicenseKeys.EnumKeys" @{ pFields = $LicenseFields; pFieldsToOrder = @(); pOptions = @{}; lTimeoutSec = 600 }
-  $li = [string](Prop $lk "wstrIterator")
-  if ($li) {   # ключей нет — итератора тоже нет
+    Write-Step "Задачи"
+    $tasks = New-Object System.Collections.ArrayList
+    $it = (Invoke-Ksc "Tasks.ResetTasksIterator" @{ nGroupId = -1; bGroupIdSignificant = $false; strProductName = ""; strVersion = ""; strComponentName = ""; strInstanceId = ""; strTaskName = ""; bIncludeSupergroups = $false }).strTaskIteratorId
     while ($true) {
-      $chunk = Invoke-Ksc "GroupSyncIterator.GetNextItems" @{ szwIterator = $li; nCount = 50 }
-      foreach ($k in @((Prop (Prop $chunk "pData") "KLCSP_ITERATOR_ARRAY") | Where-Object { $null -ne $_ })) { [void]$licenses.Add($k) }
-      $eof = Prop $chunk "bEOF"
-      if ($null -eq $eof -or $eof) { break }
-    }
-    Invoke-Ksc "GroupSyncIterator.ReleaseIterator" @{ szwIterator = $li } | Out-Null
-  }
-
-  Write-Step "Роли и внутренние учётки"
-  $roleAssignments = @()
-  try { $roleAssignments = Read-SrvView "AdmGroupsAclRolesSrvViewName" $RoleFields }
-  catch { Write-Warning ("роли: {0}" -f $_.Exception.Message); [void]$warnings.Add("роли: $($_.Exception.Message)") }
-  $internalUsers = @()
-  try { $internalUsers = Read-SrvView "GlobalUsersListSrvViewName" $UserFields "(ul_InternalUser = 1)" }
-  catch { Write-Warning ("внутренние учётки: {0}" -f $_.Exception.Message); [void]$warnings.Add("внутренние учётки: $($_.Exception.Message)") }
-
-  Write-Step "Двухэтапная проверка"
-  $twoFactor = $null
-  try { $twoFactor = (Invoke-Ksc "TotpGlobalSettings.Get2FaRequiredForAll" "{}").PxgRetVal }
-  catch { Write-Warning ("2FA: {0}" -f $_.Exception.Message); [void]$warnings.Add("2FA: $($_.Exception.Message)") }
-  $security = @{ two_factor_required_for_all = $twoFactor }
-
-  Write-Step "Сертификаты"
-  # Из контейнера берём только CPublic — приватная часть и прочие поля в выгрузку не идут.
-  # Отказ в правах (HTTP 403) — отказ на весь метод: секция остаётся пустой. Любая другая ошибка функции
-  # значит, что сертификата для этого назначения нет: функция пропускается, остальные собираются.
-  $serverCerts = @{}
-  for ($n = 1; $n -le 4; $n++) {
-    try {
-      $c = Unwrap (Prop (Invoke-Ksc "CertPoolCtrl.GetCertificateInfo" @{ nVServerId = -1; nFunction = $n }) "PxgRetVal")
-      $public = Prop $c "CPublic"
-      if ($null -ne $public) { $serverCerts["$n"] = @{ CPublic = $public } }
-    } catch {
-      if ((HttpStatus $_) -eq 403) {
-        $serverCerts = @{}
-        Write-Warning ("сертификаты: {0}" -f $_.Exception.Message); [void]$warnings.Add("сертификаты: нет прав на CertPoolCtrl.GetCertificateInfo")
-        break
+      $t = Prop (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }) "pTaskData"
+      if ($null -eq $t -or @($t.PSObject.Properties).Count -eq 0) { break }
+      $tid = [string](Prop (Unwrap $t) "TASK_UNIQUE_ID")
+      # Статистика кладётся в сам объект задачи: у живого KSC он приходит в обёртке @{ type = "params"; value = ... },
+      # и лишнее свойство рядом с type/value перестало бы быть обёрткой — задача потерялась бы при разборе.
+      if ($tid) { try { (Unwrap $t) | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Prop (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }) "PxgRetVal") -Force } catch {} }
+      # Параметры задачи несут и учётные данные запуска: то же скрытие, что у содержимого политик.
+      $taskBody = Unwrap $t
+      foreach ($k in @("TASK_ADDITIONAL_PARAMS", "TASK_INFO_PARAMS")) {
+        if ($taskBody.PSObject.Properties[$k]) { $hiddenParams = Hide-Secrets "" $taskBody.$k; $taskBody.$k = $hiddenParams }
       }
-      Write-Warning ("сертификат, функция {0}: {1}" -f $n, $_.Exception.Message); [void]$warnings.Add("сертификат, функция $($n): $($_.Exception.Message)")
+      [void]$tasks.Add($t)
     }
+    Invoke-Ksc "Tasks.ReleaseTasksIterator" @{ strTaskIteratorId = $it } | Out-Null
+
+    Write-Step "Лицензии"
+    $licenses = New-Object System.Collections.ArrayList
+    $lk = Invoke-Ksc "LicenseKeys.EnumKeys" @{ pFields = $LicenseFields; pFieldsToOrder = @(); pOptions = @{}; lTimeoutSec = 600 }
+    $li = [string](Prop $lk "wstrIterator")
+    if ($li) {   # ключей нет — итератора тоже нет
+      while ($true) {
+        $chunk = Invoke-Ksc "GroupSyncIterator.GetNextItems" @{ szwIterator = $li; nCount = 50 }
+        foreach ($k in @((Prop (Prop $chunk "pData") "KLCSP_ITERATOR_ARRAY") | Where-Object { $null -ne $_ })) { [void]$licenses.Add($k) }
+        $eof = Prop $chunk "bEOF"
+        if ($null -eq $eof -or $eof) { break }
+      }
+      Invoke-Ksc "GroupSyncIterator.ReleaseIterator" @{ szwIterator = $li } | Out-Null
+    }
+
+    Write-Step "Роли и внутренние учётки"
+    $roleAssignments = @()
+    try { $roleAssignments = Read-SrvView "AdmGroupsAclRolesSrvViewName" $RoleFields }
+    catch { Write-Warning ("роли: {0}" -f $_.Exception.Message); [void]$warnings.Add("роли: $($_.Exception.Message)") }
+    $internalUsers = @()
+    try { $internalUsers = Read-SrvView "GlobalUsersListSrvViewName" $UserFields "(ul_InternalUser = 1)" }
+    catch { Write-Warning ("внутренние учётки: {0}" -f $_.Exception.Message); [void]$warnings.Add("внутренние учётки: $($_.Exception.Message)") }
+
+    Write-Step "Двухэтапная проверка"
+    $twoFactor = $null
+    try { $twoFactor = (Invoke-Ksc "TotpGlobalSettings.Get2FaRequiredForAll" "{}").PxgRetVal }
+    catch { Write-Warning ("2FA: {0}" -f $_.Exception.Message); [void]$warnings.Add("2FA: $($_.Exception.Message)") }
+    $security = @{ two_factor_required_for_all = $twoFactor }
+
+    Write-Step "Сертификаты"
+    # Из контейнера берём только CPublic — приватная часть и прочие поля в выгрузку не идут.
+    # Отказ в правах (HTTP 403) — отказ на весь метод: секция остаётся пустой. Любая другая ошибка функции
+    # значит, что сертификата для этого назначения нет: функция пропускается, остальные собираются.
+    $serverCerts = @{}
+    for ($n = 1; $n -le 4; $n++) {
+      try {
+        $c = Unwrap (Prop (Invoke-Ksc "CertPoolCtrl.GetCertificateInfo" @{ nVServerId = -1; nFunction = $n }) "PxgRetVal")
+        $public = Prop $c "CPublic"
+        if ($null -ne $public) { $serverCerts["$n"] = @{ CPublic = $public } }
+      } catch {
+        if ((HttpStatus $_) -eq 403) {
+          $serverCerts = @{}
+          Write-Warning ("сертификаты: {0}" -f $_.Exception.Message); [void]$warnings.Add("сертификаты: нет прав на CertPoolCtrl.GetCertificateInfo")
+          break
+        }
+        Write-Warning ("сертификат, функция {0}: {1}" -f $n, $_.Exception.Message); [void]$warnings.Add("сертификат, функция $($n): $($_.Exception.Message)")
+      }
+    }
+
+    Write-Step "Подчинённые серверы"
+    $secondaryServers = @()
+    try { $secondaryServers = @((Prop (Invoke-Ksc "ServerHierarchy.GetChildServers" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
+    catch { Write-Warning ("иерархия: {0}" -f $_.Exception.Message); [void]$warnings.Add("иерархия: $($_.Exception.Message)") }
+
+    Write-Step "Точки распространения"
+    $updateAgents = @()
+    try { $updateAgents = @((Prop (Invoke-Ksc "UaControl.GetUpdateAgentsList" "{}") "pUasArr") | Where-Object { $null -ne $_ }) }
+    catch { Write-Warning ("точки распространения: {0}" -f $_.Exception.Message); [void]$warnings.Add("точки распространения: $($_.Exception.Message)") }
+  } finally {
+    try { Invoke-Ksc "Session.EndSession" "{}" | Out-Null } catch {}
   }
 
-  Write-Step "Подчинённые серверы"
-  $secondaryServers = @()
-  try { $secondaryServers = @((Prop (Invoke-Ksc "ServerHierarchy.GetChildServers" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ }) }
-  catch { Write-Warning ("иерархия: {0}" -f $_.Exception.Message); [void]$warnings.Add("иерархия: $($_.Exception.Message)") }
+  $serverName = [string](Prop $static "KLADMSRV_SERVER_HOSTNAME")
+  if (-not $serverName) { $serverName = $Server }
+  $export = [ordered]@{
+    format = $FormatVersion
+    server = @{ name = $serverName; version = [string](Prop $static "KLADMSRV_PRODUCT_FULL_VERSION"); collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); collector = "powershell"; collector_version = $CollectorVersion; user = $User; host = $Server; warnings = @($warnings.ToArray()) }
+    groups = $groups; hosts = $hosts; host_products = $products; host_components = $components
+    policies = $policies; effective_policies = $effective; tasks = $tasks.ToArray(); licenses = $licenses.ToArray()
+    static = $static; domains = $domains
+    role_assignments = @($roleAssignments); internal_users = @($internalUsers); security = $security
+    server_certs = $serverCerts; secondary_servers = @($secondaryServers); update_agents = @($updateAgents)
+    policy_contents = $policyContents
+  }
 
-  Write-Step "Точки распространения"
-  $updateAgents = @()
-  try { $updateAgents = @((Prop (Invoke-Ksc "UaControl.GetUpdateAgentsList" "{}") "pUasArr") | Where-Object { $null -ne $_ }) }
-  catch { Write-Warning ("точки распространения: {0}" -f $_.Exception.Message); [void]$warnings.Add("точки распространения: $($_.Exception.Message)") }
+  # Имя сервера пришло из ответа KSC: в имя файла — только латиница, цифры, точка, дефис и подчёркивание.
+  $safeName = $serverName -creplace '[^A-Za-z0-9._-]', '_'
+  $defaultName = "ksc-{0}-{1}.json.gz" -f $safeName, (Get-Date -Format "yyyyMMdd-HHmm")
+  if (-not $OutputPath) { $OutputPath = $defaultName }
+  # Указан каталог, а не файл — кладём в него файл с именем по умолчанию.
+  elseif ($OutputPath -match '[\\/]$' -or (Test-Path -LiteralPath $OutputPath -PathType Container)) { $OutputPath = Join-Path $OutputPath $defaultName }
+  if (-not [System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $PWD.ProviderPath $OutputPath }
+  Write-Step "Запись $OutputPath"
+  $json = $export | ConvertTo-Json -Depth 100 -Compress
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+  $out = [System.IO.File]::Create($OutputPath)
+  try {
+    $gz = New-Object System.IO.Compression.GZipStream($out, [System.IO.Compression.CompressionMode]::Compress)
+    $gz.Write($bytes, 0, $bytes.Length)
+    $gz.Dispose()
+  } finally { $out.Dispose() }
+  Write-Host ("Готово: хостов {0}, групп {1}, политик {2}, задач {3}, размер {4:N0} байт" -f $hosts.Count, $groups.Count, $policies.Count, $tasks.Count, (Get-Item $OutputPath).Length) -ForegroundColor Green
+  Write-Host "Загрузите файл в STools: Антивирус → Настройки и данные → Загрузить выгрузку."
+  if ($DeleteConfigAfterRun -and $ConfigPath) {
+    try { Remove-Item -LiteralPath $ConfigPath -Force; Write-Host "Файл настроек удалён: $ConfigPath" }
+    catch { Write-Warning ("файл настроек не удалён ({0}): удалите его вручную" -f $_.Exception.Message) }
+  }
 } finally {
-  try { Invoke-Ksc "Session.EndSession" "{}" | Out-Null } catch {}
+  if ($tlsHook) { [STools.KscTls]::Restore() }
 }
-
-$serverName = [string](Prop $static "KLADMSRV_SERVER_HOSTNAME")
-if (-not $serverName) { $serverName = $Server }
-$export = [ordered]@{
-  format = $FormatVersion
-  server = @{ name = $serverName; version = [string](Prop $static "KLADMSRV_PRODUCT_FULL_VERSION"); collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); collector = "powershell"; collector_version = $CollectorVersion; user = $User; host = $Server; warnings = @($warnings.ToArray()) }
-  groups = $groups; hosts = $hosts; host_products = $products; host_components = $components
-  policies = $policies; effective_policies = $effective; tasks = $tasks.ToArray(); licenses = $licenses.ToArray()
-  static = $static; domains = $domains
-  role_assignments = @($roleAssignments); internal_users = @($internalUsers); security = $security
-  server_certs = $serverCerts; secondary_servers = @($secondaryServers); update_agents = @($updateAgents)
-  policy_contents = $policyContents
-}
-
-$defaultName = "ksc-{0}-{1}.json.gz" -f $serverName, (Get-Date -Format "yyyyMMdd-HHmm")
-if (-not $OutputPath) { $OutputPath = $defaultName }
-# Указан каталог, а не файл — кладём в него файл с именем по умолчанию.
-elseif ($OutputPath -match '[\\/]$' -or (Test-Path -LiteralPath $OutputPath -PathType Container)) { $OutputPath = Join-Path $OutputPath $defaultName }
-if (-not [System.IO.Path]::IsPathRooted($OutputPath)) { $OutputPath = Join-Path $PWD.ProviderPath $OutputPath }
-Write-Step "Запись $OutputPath"
-$json = $export | ConvertTo-Json -Depth 100 -Compress
-$bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-$out = [System.IO.File]::Create($OutputPath)
-try {
-  $gz = New-Object System.IO.Compression.GZipStream($out, [System.IO.Compression.CompressionMode]::Compress)
-  $gz.Write($bytes, 0, $bytes.Length)
-  $gz.Dispose()
-} finally { $out.Dispose() }
-Write-Host ("Готово: хостов {0}, групп {1}, политик {2}, задач {3}, размер {4:N0} байт" -f $hosts.Count, $groups.Count, $policies.Count, $tasks.Count, (Get-Item $OutputPath).Length) -ForegroundColor Green
-Write-Host "Загрузите файл в STools: Антивирус → Настройки и данные → Загрузить выгрузку."

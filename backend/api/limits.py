@@ -23,6 +23,7 @@ ASGI-обёртка снаружи всего приложения, и тело 
 """
 from __future__ import annotations
 
+import httpx
 from fastapi import HTTPException, status
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
@@ -66,6 +67,32 @@ def _detail(limit: int) -> str:
 
 class BodyTooLarge(Exception):
     """Тело перешло лимит посреди чтения."""
+
+
+#: Потолок ответа внешнего API, который читается в память целиком (KSC Open API, MaxPatrol VM;
+#: аудит L6): ответ «сервера» больше — не данные, а поломка или подмена.
+MAX_API_RESPONSE = 64 * MB
+
+
+class ResponseTooLarge(ValueError):
+    """Ответ внешнего API больше лимита."""
+
+
+def read_limited(resp: httpx.Response, limit: int) -> bytes:
+    """Тело потокового ответа (`client.stream(...)`), но не больше `limit` байт: заявленный
+    `Content-Length` больше — отказ до чтения, иначе счётчик по мере чтения (распакованные байты)."""
+    too_large = ResponseTooLarge(f"ответ больше лимита ({limit // MB} МБ)")
+    declared = resp.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise too_large
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in resp.iter_bytes():
+        total += len(chunk)
+        if total > limit:
+            raise too_large
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def check_upload_size(size: int, limit: int) -> None:

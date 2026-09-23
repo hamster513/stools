@@ -512,7 +512,11 @@ DELETE /api/settings/attack/pending         204   отказаться от ск
 POST   /api/settings/attack/notice/dismiss  204   человек увидел замену поставкой
 POST   /api/settings/attack/translate       перевести недостающее -> {job_id, pending}
 GET    /api/settings/attack/translation/gaps  чего не хватает в переводе
+POST   /api/settings/attack/jobs/{id}/cancel  204 | 404 | 409 уже завершена
 ```
+
+Задания скачивания и перевода запускает администратор здесь же — он их и
+отменяет; ход заданий (`GET /api/attack/jobs`) читают все.
 
 Матрица живёт в базе. Вложенный в образ бандл — база и то, что
 **перекрывает загруженный при обновлении софта**: перекрытие срабатывает

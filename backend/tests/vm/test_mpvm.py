@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from api.modules.vm.core import mpvm as mpvm_mod
 from api.modules.vm.core.mpvm import MpVmClient, MpVmError, build_pdql
 from api.modules.vm.services.settings import Connection
 
@@ -58,3 +59,22 @@ def test_bad_secret_is_a_clear_error() -> None:
     client = MpVmClient(CONN, httpx.Client(transport=httpx.MockTransport(handler)))
     with pytest.raises(MpVmError, match="HTTP 400"):
         client.token()
+
+
+def test_oversized_response_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Аудит L6: ответ API больше лимита (64 МБ) в память не читается — по Content-Length сразу,
+    без длины — счётчиком при чтении."""
+    monkeypatch.setattr(mpvm_mod, "MAX_API_RESPONSE", 1000)
+    big = json.dumps({"access_token": "t" * 2000}).encode()
+    client = MpVmClient(CONN, httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=big))))
+    with pytest.raises(MpVmError, match="больше лимита"):
+        client.token()
+
+    def chunked(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/token":
+            return httpx.Response(200, json={"access_token": "tok"})
+        return httpx.Response(200, content=iter([b'{"token": "' + b"x" * 900, b"x" * 900 + b'"}']))
+
+    client = MpVmClient(CONN, httpx.Client(transport=httpx.MockTransport(chunked)))
+    with pytest.raises(MpVmError, match="больше лимита"):
+        client.export_token("select(@Host)")
