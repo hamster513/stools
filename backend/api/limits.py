@@ -36,6 +36,8 @@ AD_UPLOAD = 200 * MB
 KSC_UPLOAD = 200 * MB
 ATTACK_BUNDLE_UPLOAD = 100 * MB
 RU_TTP_UPLOAD = 20 * MB
+#: Эталонная разметка ATT&CK (xlsx/csv): реальные таблицы больше 2 МБ.
+SIEM_REFERENCE_UPLOAD = 50 * MB
 DEFAULT_LIMIT = 2 * MB
 
 #: (префикс пути, лимит тела в байтах). Первое совпадение выигрывает.
@@ -47,6 +49,7 @@ BODY_LIMITS: list[tuple[str, int]] = [
     ("/api/ksc/snapshots/file", KSC_UPLOAD),
     ("/api/settings/attack", ATTACK_BUNDLE_UPLOAD),
     ("/api/attack/ru-ttp", RU_TTP_UPLOAD),
+    ("/api/siem/attack/reference", SIEM_REFERENCE_UPLOAD),
 ]
 
 

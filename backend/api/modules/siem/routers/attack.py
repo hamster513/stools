@@ -33,7 +33,7 @@ from api.db.models import (
     Snapshot,
 )
 from api.deps import get_current_user
-from api.limits import DEFAULT_LIMIT, check_upload_size
+from api.limits import SIEM_REFERENCE_UPLOAD, check_upload_size
 from api.modules.attack.layers import parent_of
 from api.modules.attack.services.attack_bundle import current as current_bundle
 from api.modules.siem.services.appsettings import load_llm
@@ -508,7 +508,7 @@ def upload_reference(
     data = file.file.read()
     if not data:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="файл пуст")
-    check_upload_size(len(data), DEFAULT_LIMIT)
+    check_upload_size(len(data), SIEM_REFERENCE_UPLOAD)
     try:
         parsed = reference_parse(data, file.filename or "")
     except ValueError as exc:

@@ -35,7 +35,8 @@ def test_limit_for_uses_path_prefixes() -> None:
     # Префикс — по границе сегмента пути, а не по началу строки.
     assert limit_for("/api/siem/snapshots-x") == 2 * MB
     assert limit_for("/api/auth/login") == 2 * MB
-    assert limit_for("/api/siem/attack/reference") == 2 * MB
+    assert limit_for("/api/siem/attack/reference") == 50 * MB
+    assert limit_for("/api/siem/attack/run") == 2 * MB
 
 
 # ---- Сама обёртка, без приложения ------------------------------------------
@@ -200,11 +201,22 @@ def test_attack_bundle_upload_checks_size(auth_client: TestClient, monkeypatch: 
 def test_siem_reference_upload_checks_size(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from api.modules.siem.routers import attack as router
 
-    monkeypatch.setattr(router, "DEFAULT_LIMIT", 100)
+    monkeypatch.setattr(router, "SIEM_REFERENCE_UPLOAD", 100)
     r = auth_client.post(
         "/api/siem/attack/reference?snapshot_id=1", files={"file": ("r.csv", b"x" * 101, "text/csv")}
     )
     assert r.status_code == 413 and "МБ" in r.json()["detail"]
+
+
+def test_siem_reference_above_default_limit_passes(auth_client: TestClient) -> None:
+    """Таблица эталона больше 2 МБ по умолчанию доходит до разбора: 422 за
+    содержимое (нет колонок), а не 413 за размер."""
+    body = b"a;b\n" * (MB // 2 + 1024)
+    assert len(body) > 2 * MB
+    r = auth_client.post(
+        "/api/siem/attack/reference?snapshot_id=1", files={"file": ("r.csv", body, "text/csv")}
+    )
+    assert r.status_code == 422, r.text
 
 
 # ---- Распаковка xlsx в ручках ----------------------------------------------
