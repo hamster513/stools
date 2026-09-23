@@ -134,3 +134,16 @@ def test_concurrent_job_rejected(auth_client: TestClient, db_session: Any) -> No
     db_session.commit()
     r = auth_client.post("/api/ksc/snapshots/file", files={"file": ("k.json", json.dumps(build_export()).encode(), "application/json")})
     assert r.status_code == 409
+
+
+def test_gzip_bomb_fails_job_without_snapshot(auth_client: TestClient, monkeypatch: Any) -> None:
+    """Аудит H2: сжатая выгрузка, распаковка которой больше лимита, — задание
+    failed с текстом про лимит, снапшот не создаётся."""
+    from api.modules.ksc.core import export
+
+    monkeypatch.setattr(export, "MAX_UNPACKED", 1024 * 1024)
+    padded = json.dumps(build_export()).encode() + b" " * (2 * 1024 * 1024)
+    r = auth_client.post("/api/ksc/snapshots/file", files={"file": ("ksc.json.gz", gzip.compress(padded), "application/gzip")})
+    job = auth_client.get(f"/api/ksc/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "failed" and "распакованный размер больше лимита" in job["error"]
+    assert auth_client.get("/api/ksc/snapshots").json() == []

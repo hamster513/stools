@@ -2,8 +2,12 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
+from kbaudit import safe_io
 from kbaudit.models import ObjectType
 from kbaudit.parsers.archive import group_by_uuid, object_type_of, read_text
+from kbaudit.parsers.snapshot import parse_archive
 
 U1 = "000ffb49-bb9e-4ee4-9262-6754b7ee28d2"
 U2 = "111ffb49-bb9e-4ee4-9262-6754b7ee28d2"
@@ -43,3 +47,25 @@ def test_read_text_strips_bom(synthetic_zip: Callable[..., Path]) -> None:
     path = synthetic_zip({"a.txt": "﻿текст"})
     with zipfile.ZipFile(path) as zf:
         assert read_text(zf, "a.txt") == "текст"
+
+
+def test_read_text_rejects_member_over_limit(
+    synthetic_zip: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Аудит H2: член архива больше лимита — ошибка разбора, а не гигабайт в памяти."""
+    monkeypatch.setattr(safe_io, "ZIP_MEMBER_LIMIT", 1024 * 1024)
+    path = synthetic_zip({f"correlation-rules/rules/correlation/{U1}/R1.co": " " * (2 * 1024 * 1024)})
+    with zipfile.ZipFile(path) as zf, pytest.raises(ValueError, match="распакованный размер больше лимита"):
+        read_text(zf, f"correlation-rules/rules/correlation/{U1}/R1.co")
+
+
+def test_parse_archive_rejects_archive_over_total_limit(
+    synthetic_zip: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(safe_io, "ZIP_TOTAL_LIMIT", 1024 * 1024)
+    path = synthetic_zip({
+        f"correlation-rules/rules/correlation/{U1}/R1.co": " " * (600 * 1024),
+        f"correlation-rules/rules/correlation/{U2}/R2.co": " " * (600 * 1024),
+    })
+    with pytest.raises(ValueError, match="архив: распакованный размер больше лимита"):
+        parse_archive(path)

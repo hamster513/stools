@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.models import VmRefState
 from api.modules.vm.routers.import_ import JobStarted
-from api.modules.vm.services.jobs import JobHandle, active_job, run_job, start_job
+from api.modules.vm.services.jobs import JobHandle, active_job, fail_job, run_job, start_job
 from api.modules.vm.services.refs import URLS, nvd_years_default, run_ref_download, run_ref_file
 from api.modules.vm.services.settings import load_settings
 from api.settings import Settings, get_settings
@@ -125,18 +126,29 @@ async def upload_ref(
     folder = settings.data_dir / "vm"
     folder.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
-    for i, f in enumerate(files):
-        suffix = Path(f.filename or "").suffix or ".dat"
-        target = folder / f"ref-{job_id}-{i}{suffix}"
-        size = 0
-        with target.open("wb") as out:
-            while chunk := await f.read(1 << 20):
-                out.write(chunk)
-                size += len(chunk)
-        if size == 0:
-            target.unlink(missing_ok=True)
-            continue
-        paths.append(target)
+    written: list[Path] = []
+    total = 0
+    try:
+        for i, f in enumerate(files):
+            suffix = Path(f.filename or "").suffix or ".dat"
+            target = folder / f"ref-{job_id}-{i}{suffix}"
+            written.append(target)
+            size = 0
+            with target.open("wb") as out:
+                while chunk := await f.read(1 << 20):
+                    out.write(chunk)
+                    size += len(chunk)
+                    total += len(chunk)
+                    check_upload_size(total, VM_UPLOAD)
+            if size == 0:
+                target.unlink(missing_ok=True)
+                continue
+            paths.append(target)
+    except HTTPException as exc:
+        for path in written:
+            path.unlink(missing_ok=True)
+        fail_job(db, job_id, str(exc.detail))
+        raise
     if not paths:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="пустые файлы")
 

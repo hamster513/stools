@@ -25,6 +25,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.jobs import active_job, run_job, start_job
+from api.limits import ATTACK_BUNDLE_UPLOAD, check_upload_size
 from api.llm_settings import load_llm
 from api.modules.attack.models import AttackJob
 from api.modules.attack.services import download_job
@@ -38,7 +39,6 @@ from api.modules.attack.services.attack_bundle import (
     parse_uploaded,
     replacement_notice,
 )
-from api.modules.attack.services.download_job import MAX_BUNDLE_BYTES
 from api.modules.attack.services.translate_job import run_translation
 
 router = APIRouter(prefix="/attack", tags=["settings"])
@@ -87,10 +87,7 @@ async def preview_bundle(
 ) -> dict[str, Any]:
     """Что изменится, если принять загруженный бандл. Ничего не сохраняет."""
     data = await file.read()
-    if len(data) > MAX_BUNDLE_BYTES:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="файл слишком велик"
-        )
+    check_upload_size(len(data), ATTACK_BUNDLE_UPLOAD)
     try:
         incoming = parse_uploaded(data)
     except Exception as exc:
@@ -119,10 +116,7 @@ async def upload_bundle(
     обновления матрицы нельзя.
     """
     data = await file.read()
-    if len(data) > MAX_BUNDLE_BYTES:
-        raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="файл слишком велик"
-        )
+    check_upload_size(len(data), ATTACK_BUNDLE_UPLOAD)
     try:
         incoming = parse_uploaded(data)
     except Exception as exc:

@@ -5,6 +5,7 @@ import zipfile
 from collections import defaultdict
 from pathlib import PurePosixPath
 
+from kbaudit import safe_io
 from kbaudit.models import ObjectType
 
 #: Расширения тел по типам объектов.
@@ -46,5 +47,15 @@ def object_type_of(member: str) -> ObjectType | None:
     return _TOP_DIR_TO_TYPE.get(parts[0])
 
 
+def check_sizes(zf: zipfile.ZipFile) -> None:
+    """Размеры членов по заголовкам: каждый не больше 512 МБ, все вместе — 2 ГБ.
+
+    Вызывается сразу после открытия архива: дальше его читают разные
+    разборщики, и суммарный лимит иначе не соблюсти.
+    """
+    safe_io.check_zip_sizes(zf, safe_io.ZIP_MEMBER_LIMIT, safe_io.ZIP_TOTAL_LIMIT)
+
+
 def read_text(zf: zipfile.ZipFile, member: str) -> str:
-    return zf.read(member).decode("utf-8-sig", errors="replace")
+    data = safe_io.read_zip_member(zf, member, safe_io.ZIP_MEMBER_LIMIT)
+    return data.decode("utf-8-sig", errors="replace")

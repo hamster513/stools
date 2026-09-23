@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import gzip
 import json
 from functools import cached_property
 from pathlib import Path
@@ -16,10 +15,15 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from kbaudit.safe_io import MB, decompress_gzip
+
 if TYPE_CHECKING:
     from api.modules.ksc.core.coverage import AdComputer, Coverage
 
 FORMAT = "stools-ksc/1"
+#: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
+#: но gzip разворачивается до ~1000:1 (аудит H2).
+MAX_UNPACKED = 2048 * MB
 
 STATUS_VISIBLE = 1 << 0
 STATUS_AGENT_INSTALLED = 1 << 2
@@ -138,12 +142,14 @@ class ExportFormatError(ValueError):
 def load_export(data: bytes) -> KscExport:
     if data[:2] == b"\x1f\x8b":
         try:
-            data = gzip.decompress(data)
+            data = decompress_gzip(data, MAX_UNPACKED)
         except (OSError, EOFError) as exc:
             raise ExportFormatError("файл не разобран как JSON выгрузки (битый gzip)") from exc
+        except ValueError as exc:
+            raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
     try:
         raw = json.loads(data)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise ExportFormatError("файл не разобран как JSON выгрузки") from exc
     if not isinstance(raw, dict) or raw.get("format") != FORMAT:
         found = raw.get("format") if isinstance(raw, dict) else "—"
@@ -154,6 +160,9 @@ def load_export(data: bytes) -> KscExport:
     except ValueError as exc:
         first = str(exc).splitlines()[0][:200]
         raise ExportFormatError(f"выгрузка неполная: {first}") from exc
+    except RecursionError as exc:
+        # JSON-разбор держит вложенность глубже, чем рекурсивный разбор обёрток.
+        raise ExportFormatError("выгрузка не разобрана: вложенность глубже допустимой") from exc
 
 
 def load_export_path(path: Path) -> KscExport:

@@ -9,7 +9,12 @@
 	encode gzip
 
 	# API проксируется как есть, префикс сохраняется.
+	# Потолок тела — наибольший из лимитов API (500 МБ у VM) с запасом
+	# на multipart; точные лимиты по путям держит сам API (api/limits.py).
 	handle /api/* {
+		request_body {
+			max_size 600MB
+		}
 		reverse_proxy api:8000
 	}
 

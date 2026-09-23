@@ -94,3 +94,26 @@ def test_live_params_wrappers_are_stripped() -> None:
     from api.modules.ksc.core.config import KscConfig
 
     assert sorted(f.key for f in run_all(wrapped, KscConfig())) == sorted(f.key for f in run_all(plain, KscConfig()))
+
+
+def test_gzip_bomb_rejected_with_limit_in_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Аудит H2: gzip распаковывается со счётчиком, а не целиком в память."""
+    from api.modules.ksc.core import export
+
+    monkeypatch.setattr(export, "MAX_UNPACKED", 1024 * 1024)
+    bomb = gzip.compress(b" " * (10 * 1024 * 1024))
+    with pytest.raises(ExportFormatError, match="распакованный размер больше лимита"):
+        load_export(bomb)
+    # Под лимитом та же выгрузка в gzip разбирается как раньше.
+    assert load_export(gzip.compress(export_bytes())).format == "stools-ksc/1"
+
+
+def test_deeply_nested_json_is_a_format_error() -> None:
+    """Аудит L9: вложенность без предела — ошибка формата, а не RecursionError."""
+    deep = b'{"format": "stools-ksc/1", "x": ' + b"[" * 200_000 + b"]" * 200_000 + b"}"
+    with pytest.raises(ExportFormatError, match="JSON"):
+        load_export(deep)
+    # Глубина, которую JSON-разбор ещё держит, а снятие обёрток — уже нет.
+    text = json.dumps(build_export())[:-1] + ', "extra": ' + "[" * 5000 + "]" * 5000 + "}"
+    with pytest.raises(ExportFormatError, match="вложенность"):
+        load_export(text.encode())

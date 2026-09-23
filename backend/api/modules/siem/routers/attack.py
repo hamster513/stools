@@ -33,6 +33,7 @@ from api.db.models import (
     Snapshot,
 )
 from api.deps import get_current_user
+from api.limits import DEFAULT_LIMIT, check_upload_size
 from api.modules.attack.layers import parent_of
 from api.modules.attack.services.attack_bundle import current as current_bundle
 from api.modules.siem.services.appsettings import load_llm
@@ -507,7 +508,12 @@ def upload_reference(
     data = file.file.read()
     if not data:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="файл пуст")
-    parsed = reference_parse(data, file.filename or "")
+    check_upload_size(len(data), DEFAULT_LIMIT)
+    try:
+        parsed = reference_parse(data, file.filename or "")
+    except ValueError as exc:
+        # В том числе xlsx, распакованный больше лимита (kbaudit.safe_io).
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"файл не разобран: {exc}") from exc
     if not parsed.rows:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

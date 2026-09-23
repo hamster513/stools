@@ -63,3 +63,22 @@ def test_index_groups_and_names() -> None:
     root = idx.root
     assert root is not None and idx.sd_of(root) is not None and len(idx.sd_of(root).dacl) == 6
     assert idx.extended_right("Enroll") == "0e10c968-78fb-11d2-90d4-00c04f79dc55"
+
+
+def test_gzip_bomb_rejected_with_limit_in_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Аудит H2: gzip распаковывается со счётчиком, а не целиком в память."""
+    from api.modules.ad.core import export
+
+    monkeypatch.setattr(export, "MAX_UNPACKED", 1024 * 1024)
+    bomb = gzip.compress(b" " * (10 * 1024 * 1024))
+    with pytest.raises(ExportFormatError, match="распакованный размер больше лимита"):
+        load_export(bomb)
+    # Под лимитом та же выгрузка в gzip разбирается как раньше.
+    assert load_export(gzip.compress(export_bytes())).format == "stools-ad/1"
+
+
+def test_deeply_nested_json_is_a_format_error() -> None:
+    """Аудит L9: вложенность без предела — ошибка формата, а не RecursionError."""
+    deep = b'{"format": "stools-ad/1", "x": ' + b"[" * 200_000 + b"]" * 200_000 + b"}"
+    with pytest.raises(ExportFormatError, match="JSON"):
+        load_export(deep)

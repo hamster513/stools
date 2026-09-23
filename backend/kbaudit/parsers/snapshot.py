@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from kbaudit.models import KbObject, ObjectType, ParsedArchive, ParseStatus, Rule
-from kbaudit.parsers.archive import BODY_EXT_BY_TYPE, group_by_uuid, read_text
+from kbaudit.parsers.archive import BODY_EXT_BY_TYPE, check_sizes, group_by_uuid, read_text
 from kbaudit.parsers.i18n import Localization, parse_localization
 from kbaudit.parsers.metainfo import parse_metainfo
 from kbaudit.parsers.rule_body import body_hash, parse_rule_body
@@ -60,6 +60,7 @@ def _collect_bodies(zf: zipfile.ZipFile) -> list[KbObject]:
 
 def parse_archive(path: Path) -> ParsedArchive:
     with zipfile.ZipFile(path) as zf:
+        check_sizes(zf)
         taxonomy = load_taxonomy(zf)
         rules: list[Rule] = []
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
-import gzip
 import json
 from functools import cached_property
 from pathlib import Path
@@ -17,8 +16,12 @@ from typing import Annotated, Any
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from api.modules.ad.core.sd import SecurityDescriptor, parse_sd
+from kbaudit.safe_io import MB, decompress_gzip
 
 FORMAT = "stools-ad/1"
+#: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
+#: но gzip разворачивается до ~1000:1 (аудит H2).
+MAX_UNPACKED = 2048 * MB
 
 UAC_DISABLED = 0x2
 UAC_DONT_EXPIRE_PASSWORD = 0x10000
@@ -187,10 +190,13 @@ class ExportFormatError(ValueError):
 
 def load_export(data: bytes) -> AdExport:
     if data[:2] == b"\x1f\x8b":
-        data = gzip.decompress(data)
+        try:
+            data = decompress_gzip(data, MAX_UNPACKED)
+        except ValueError as exc:
+            raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
     try:
         raw = json.loads(data)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise ExportFormatError("файл не разобран как JSON выгрузки") from exc
     if not isinstance(raw, dict) or raw.get("format") != FORMAT:
         raise ExportFormatError(f"это не выгрузка формата {FORMAT}: в файле «{(raw or {}).get('format') if isinstance(raw, dict) else '—'}»")

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser, Snapshot
 from api.deps import get_current_user
+from api.limits import SIEM_UPLOAD, check_upload_size
 from api.modules.siem.services.ingest import (
     UploadResult,
     process_upload,
@@ -34,6 +35,7 @@ async def upload_snapshot(
     data = await file.read()
     if not data:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="пустой файл")
+    check_upload_size(len(data), SIEM_UPLOAD)
     result = start_upload(db, settings, data, file.filename or "kb.zip")
     if not result.duplicate:
         background_tasks.add_task(process_upload, result.job_id, result.snapshot_id)

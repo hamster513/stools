@@ -18,12 +18,17 @@ tests/api/test_auth_boundary.py перебирает `app.routes` и прове�
 `require_access`: обычный ASGI-порядок middleware-до-роутера здесь не
 подводит, потому что чтение состояния происходит уже после `call_next`,
 когда зависимости роутера отработали.
+
+`BodyLimitMiddleware` (`api/limits.py`) подключена последней, то есть
+снаружи всех: лимит тела срабатывает до маршрутизации и до проверки сессии,
+потому что FastAPI читает тело раньше зависимостей.
 """
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI
 
 from api.audit import AuditMiddleware
+from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
 from api.platform import router as settings_router
 from api.rbac import require_access
@@ -31,6 +36,8 @@ from api.routers import auth, oidc
 
 app = FastAPI(title="STools API")
 app.add_middleware(AuditMiddleware)
+#: Последней — значит, снаружи всех остальных.
+app.add_middleware(BodyLimitMiddleware)
 
 app.include_router(auth.public_router)
 #: Тоже без сессии: вход через провайдера как раз её и выдаёт.

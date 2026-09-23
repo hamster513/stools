@@ -5,6 +5,9 @@ import io
 import zipfile
 from pathlib import Path
 
+import pytest
+
+from kbaudit import safe_io
 from kbaudit.attack.reference import code_key, parse
 
 
@@ -129,3 +132,14 @@ def test_shipped_sample_parses_as_intended() -> None:
     assert parsed.rows[1].techniques == ["T1110.001", "T1110.003"]
     assert parsed.rows[1].note.startswith("Подбор пароля")
     assert parsed.without_techniques == 1
+
+
+def test_xlsx_member_over_limit_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Аудит H2: xlsx — тот же zip, и распаковывается с тем же потолком."""
+    monkeypatch.setattr(safe_io, "ZIP_MEMBER_LIMIT", 1024 * 1024)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("xl/sharedStrings.xml", " " * (2 * 1024 * 1024))
+        archive.writestr("xl/worksheets/sheet1.xml", "<worksheet/>")
+    with pytest.raises(ValueError, match="распакованный размер больше лимита"):
+        parse(buf.getvalue(), "t.xlsx")

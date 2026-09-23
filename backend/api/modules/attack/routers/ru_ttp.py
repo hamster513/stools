@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.limits import RU_TTP_UPLOAD, check_upload_size
 from api.modules.attack.services.attack_bundle import current as current_bundle
 from api.modules.attack.services.prevalence import prevalence_raw
 from api.modules.attack.services.ru_ttp import (
@@ -54,7 +55,12 @@ def upload_ru_ttp(
     data = file.file.read()
     if not data:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail="файл пуст")
-    parsed = ru_parse(data, file.filename or "")
+    check_upload_size(len(data), RU_TTP_UPLOAD)
+    try:
+        parsed = ru_parse(data, file.filename or "")
+    except ValueError as exc:
+        # В том числе xlsx, распакованный больше лимита (kbaudit.safe_io).
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"файл не разобран: {exc}") from exc
     if not parsed.rows:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

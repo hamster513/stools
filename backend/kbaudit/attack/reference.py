@@ -21,6 +21,8 @@ from xml.etree import ElementTree as ET
 
 from pydantic import BaseModel, Field
 
+from kbaudit import safe_io
+
 _NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 _T = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"
 
@@ -77,16 +79,22 @@ def _pick_columns(header: list[str]) -> dict[str, int]:
 
 
 def rows_from_xlsx(data: bytes) -> list[list[str]]:
-    """Ячейки первого листа как таблица строк."""
+    """Ячейки первого листа как таблица строк.
+
+    Члены xlsx распаковываются с потолком (`kbaudit.safe_io`): превышение —
+    `ValueError`, вызывающий показывает его как ошибку разбора.
+    """
+    limit = safe_io.ZIP_MEMBER_LIMIT
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        safe_io.check_zip_sizes(archive, limit, safe_io.ZIP_TOTAL_LIMIT)
         shared: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            root = ET.fromstring(safe_io.read_zip_member(archive, "xl/sharedStrings.xml", limit))
             shared = ["".join(t.text or "" for t in si.iter(_T)) for si in root.findall("m:si", _NS)]
         sheets = sorted(n for n in archive.namelist() if n.startswith("xl/worksheets/sheet"))
         if not sheets:
             return []
-        root = ET.fromstring(archive.read(sheets[0]))
+        root = ET.fromstring(safe_io.read_zip_member(archive, sheets[0], limit))
 
     table: list[list[str]] = []
     data_node = root.find("m:sheetData", _NS)

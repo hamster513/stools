@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.models import VmImport
 from api.modules.vm.routers.jobs import JobView
 from api.modules.vm.services.importer import run_import
-from api.modules.vm.services.jobs import JobHandle, active_job, run_job, start_job
+from api.modules.vm.services.jobs import JobHandle, active_job, fail_job, run_job, start_job
 from api.modules.vm.services.settings import load_settings
 from api.settings import Settings, get_settings
 
@@ -92,10 +93,16 @@ async def import_from_file(
     target.parent.mkdir(parents=True, exist_ok=True)
     # Файл на гигабайт в память не читается: пишем кусками на диск.
     size = 0
-    with target.open("wb") as out:
-        while chunk := await file.read(1 << 20):
-            out.write(chunk)
-            size += len(chunk)
+    try:
+        with target.open("wb") as out:
+            while chunk := await file.read(1 << 20):
+                out.write(chunk)
+                size += len(chunk)
+                check_upload_size(size, VM_UPLOAD)
+    except HTTPException as exc:
+        target.unlink(missing_ok=True)
+        fail_job(db, job_id, str(exc.detail))
+        raise
     if size == 0:
         target.unlink(missing_ok=True)
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="пустой файл")
