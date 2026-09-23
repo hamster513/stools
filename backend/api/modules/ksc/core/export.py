@@ -23,8 +23,9 @@ if TYPE_CHECKING:
 
 FORMAT = "stools-ksc/1"
 #: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
-#: но gzip разворачивается до ~1000:1 (аудит H2).
-MAX_UNPACKED = 2048 * MB
+#: но gzip разворачивается до ~1000:1 (аудит H2). Распакованные байты плюс
+#: разобранный JSON должны помещаться в `mem_limit` контейнера API (2 ГБ).
+MAX_UNPACKED = 512 * MB
 
 STATUS_VISIBLE = 1 << 0
 STATUS_AGENT_INSTALLED = 1 << 2
@@ -158,7 +159,7 @@ def _hide_export_secrets(raw: dict[str, Any]) -> None:
                 hide_task_params(task)
 
 
-def load_export(data: bytes) -> KscExport:
+def load_export(data: bytes | bytearray) -> KscExport:
     if data[:2] == b"\x1f\x8b":
         try:
             data = decompress_gzip(data, MAX_UNPACKED)

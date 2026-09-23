@@ -120,3 +120,70 @@ def test_reseal_secrets_refuses_without_key(app_settings: Any, monkeypatch: pyte
     monkeypatch.setenv("STOOLS_SESSION_SECRET", "")
     result = runner.invoke(app, ["reseal-secrets"])
     assert result.exit_code == 1 and "STOOLS_SESSION_SECRET" in result.output
+
+
+# ---- unlock-login: снять блокировку входа ----------------------------------
+
+
+def _login_failures(db: Any, *, login: str, ip: str, count: int, minutes_ago: int = 1) -> None:
+    import datetime as dt
+
+    from api.db.models import AuditEvent
+
+    at = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=minutes_ago)
+    db.add_all(
+        AuditEvent(at=at, login=login, method="POST", path="/api/auth/login", status=401, ip=ip)
+        for _ in range(count)
+    )
+    db.commit()
+
+
+def _audit(db: Any) -> list[tuple[str, str | None, int]]:
+    from api.db.models import AuditEvent
+
+    db.expire_all()
+    return sorted((e.login, e.ip, e.status) for e in db.query(AuditEvent))
+
+
+def test_unlock_login_clears_the_login_lock(client: Any, test_user: Any, db_session: Any) -> None:
+    from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
+
+    _login_failures(db_session, login=TEST_LOGIN, ip="10.0.0.5", count=10)
+    _login_failures(db_session, login="other", ip="10.0.0.5", count=3)
+    body = {"login": TEST_LOGIN, "password": TEST_PASSWORD}
+    assert client.post("/api/auth/login", json=body).status_code == 429
+    result = runner.invoke(app, ["unlock-login", TEST_LOGIN])
+    assert result.exit_code == 0, result.output
+    assert "10" in result.output
+    # Неудачи других логинов не тронуты.
+    assert [row for row in _audit(db_session) if row[2] == 401] == [("other", "10.0.0.5", 401)] * 3
+    assert client.post("/api/auth/login", json=body).status_code == 204
+
+
+def test_unlock_login_by_ip_clears_the_address_lock(client: Any, test_user: Any, db_session: Any) -> None:
+    from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
+
+    for i in range(50):
+        _login_failures(db_session, login=f"user{i}", ip="testclient", count=1)
+    _login_failures(db_session, login="user0", ip="10.0.0.9", count=2)
+    body = {"login": TEST_LOGIN, "password": TEST_PASSWORD}
+    assert client.post("/api/auth/login", json=body).status_code == 429
+    result = runner.invoke(app, ["unlock-login", "--ip", "testclient"])
+    assert result.exit_code == 0, result.output
+    assert [row for row in _audit(db_session) if row[2] == 401] == [("user0", "10.0.0.9", 401)] * 2
+    assert client.post("/api/auth/login", json=body).status_code == 204
+
+
+def test_unlock_login_keeps_failures_outside_the_window(app_settings: Any, db_session: Any) -> None:
+    """Удаляются только неудачи, которые считает троттлинг (окно 15 минут):
+    история журнала старше окна остаётся."""
+    _login_failures(db_session, login="u", ip="10.0.0.5", count=2, minutes_ago=30)
+    _login_failures(db_session, login="u", ip="10.0.0.5", count=4)
+    result = runner.invoke(app, ["unlock-login", "u"])
+    assert result.exit_code == 0 and "4" in result.output
+    assert len(_audit(db_session)) == 2
+
+
+def test_unlock_login_needs_login_or_ip(app_settings: Any) -> None:
+    result = runner.invoke(app, ["unlock-login"])
+    assert result.exit_code == 1

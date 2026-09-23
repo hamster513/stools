@@ -5,6 +5,11 @@
 воркера (аудит H2). Всё, что распаковывает присланный человеком файл, идёт
 через эти функции, и превышение — `ValueError` с лимитом в тексте.
 
+Результат копится в одном `bytearray`, а не списком кусков с `join` в конце:
+иначе на пике в памяти два результата сразу (финальное ревью, I2). Отдаётся
+тот же `bytearray` без копии в `bytes` — `json.loads`, `ElementTree` и
+`.decode` принимают его как есть.
+
 Модуль в ядре, а не в `api/`: zip разбирают разборщики ядра (архив базы
 знаний, xlsx), а ядро не зависит от слоя HTTP.
 """
@@ -27,20 +32,18 @@ def _too_big(what: str, max_bytes: int) -> ValueError:
     return ValueError(f"{what}распакованный размер больше лимита ({max_bytes // MB} МБ)")
 
 
-def decompress_gzip(data: bytes, max_bytes: int) -> bytes:
+def decompress_gzip(data: bytes | bytearray, max_bytes: int) -> bytearray:
     """Распаковать gzip, но не больше `max_bytes`. Битый gzip — `OSError`/`EOFError`, как у `gzip.decompress`."""
-    chunks: list[bytes] = []
-    total = 0
+    out = bytearray()
     with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
         while chunk := gz.read(_CHUNK):
-            total += len(chunk)
-            if total > max_bytes:
+            if len(out) + len(chunk) > max_bytes:
                 raise _too_big("", max_bytes)
-            chunks.append(chunk)
-    return b"".join(chunks)
+            out += chunk
+    return out
 
 
-def read_zip_member(zf: zipfile.ZipFile, member: str | zipfile.ZipInfo, max_bytes: int) -> bytes:
+def read_zip_member(zf: zipfile.ZipFile, member: str | zipfile.ZipInfo, max_bytes: int) -> bytearray:
     """Прочитать член архива, но не больше `max_bytes`.
 
     Сначала размер из заголовка — отказ без распаковки. Счётчик при чтении
@@ -50,15 +53,13 @@ def read_zip_member(zf: zipfile.ZipFile, member: str | zipfile.ZipInfo, max_byte
     info = member if isinstance(member, zipfile.ZipInfo) else zf.getinfo(member)
     if info.file_size > max_bytes:
         raise _too_big(f"{info.filename}: ", max_bytes)
-    chunks: list[bytes] = []
-    total = 0
+    out = bytearray()
     with zf.open(info) as fh:
         while chunk := fh.read(_CHUNK):
-            total += len(chunk)
-            if total > max_bytes:
+            if len(out) + len(chunk) > max_bytes:
                 raise _too_big(f"{info.filename}: ", max_bytes)
-            chunks.append(chunk)
-    return b"".join(chunks)
+            out += chunk
+    return out
 
 
 def check_zip_sizes(zf: zipfile.ZipFile, max_member: int, max_total: int) -> None:

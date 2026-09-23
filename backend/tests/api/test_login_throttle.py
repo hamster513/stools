@@ -47,9 +47,24 @@ def test_throttle_by_login_from_other_addresses(client: TestClient, test_user: A
 
 
 def test_throttle_by_address_across_logins(client: TestClient, test_user: Any, db_session: Any) -> None:
-    for i in range(10):
+    """Порог по IP — 50: за общим адресом (NAT, терминатор TLS) сидят многие."""
+    for i in range(50):
         _failures(db_session, login=f"user{i}", ip=TESTCLIENT_IP, count=1)
     assert client.post(LOGIN, json={"login": TEST_LOGIN, "password": TEST_PASSWORD}).status_code == 429
+
+
+def test_shared_address_does_not_lock_after_ten(client: TestClient, test_user: Any, db_session: Any) -> None:
+    """11 неудач с одного адреса на разных логинах не запирают свежий логин
+    (раньше порог по IP был тем же, что по логину, — 10)."""
+    for i in range(11):
+        _failures(db_session, login=f"user{i}", ip=TESTCLIENT_IP, count=1)
+    assert client.post(LOGIN, json={"login": TEST_LOGIN, "password": TEST_PASSWORD}).status_code == 204
+
+
+def test_address_below_fifty_is_not_throttled(client: TestClient, test_user: Any, db_session: Any) -> None:
+    for i in range(49):
+        _failures(db_session, login=f"user{i}", ip=TESTCLIENT_IP, count=1)
+    assert client.post(LOGIN, json={"login": TEST_LOGIN, "password": TEST_PASSWORD}).status_code == 204
 
 
 def test_other_login_from_other_address_is_not_throttled(

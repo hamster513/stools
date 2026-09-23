@@ -23,7 +23,10 @@ POST/PUT/PATCH/DELETE под `/api/` пропускаются, только ес
 провайдера — переход с чужого сайта по определению.
 
 Middleware стоит внутри журнала действий: отказ пишется в журнал как 403,
-без пользователя (до проверки сессии дело не доходит) и со сводкой.
+без пользователя (до проверки сессии дело не доходит) и со сводкой — но
+только если запрос несёт cookie сессии. Анонимный отказ не пишется: иначе
+любой снаружи заполнял бы журнал (финальное ревью). Вход (`/api/auth/login`)
+журнал пишет всегда, как и прежде.
 """
 from __future__ import annotations
 
@@ -31,10 +34,12 @@ from urllib.parse import urlsplit
 
 from fastapi import status
 from starlette.datastructures import Headers
+from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from api.audit import OIDC_PREFIX, WRITE_METHODS
+from api.settings import get_settings
 
 DETAIL = "запрос с другого сайта"
 OWN_FETCH_SITES = frozenset({"same-origin", "none"})
@@ -80,7 +85,8 @@ class OriginMiddleware:
             reason = refusal(Headers(scope=scope))
             if reason is not None:
                 state = scope.setdefault("state", {})
-                state["audit_anonymous"] = True
+                if get_settings().session_cookie_name in HTTPConnection(scope).cookies:
+                    state["audit_anonymous"] = True
                 state["audit_summary"] = f"{DETAIL}; {reason}"
                 await JSONResponse({"detail": DETAIL}, status_code=status.HTTP_403_FORBIDDEN)(scope, receive, send)
                 return

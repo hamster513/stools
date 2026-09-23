@@ -1,4 +1,5 @@
-"""CLI администрирования: создание первого пользователя, перешифрование секретов.
+"""CLI администрирования: создание первого пользователя, перешифрование секретов,
+снятие блокировки входа.
 
 Пароль запрашивается интерактивно (`getpass`), а не аргументом командной
 строки — аргумент попадает в историю оболочки и в вывод `ps`.
@@ -103,6 +104,33 @@ def reseal_secrets() -> None:
     finally:
         session.close()
     typer.echo(", ".join(f"{kind}: {n}" for kind, n in counts.items()))
+
+
+@app.command("unlock-login")
+def unlock_login(
+    login: str | None = typer.Argument(None, help="логин, для которого снять блокировку"),
+    ip: str | None = typer.Option(None, "--ip", help="адрес клиента, для которого снять блокировку"),
+) -> None:
+    """Снять блокировку входа: удалить из журнала неудачные входы за окно
+    троттлинга (15 минут) для логина и/или адреса. Старые записи журнала и
+    записи других логинов и адресов не трогаются."""
+    from sqlalchemy import CursorResult, delete, or_
+
+    from api.db.models import AuditEvent
+    from api.routers.auth import counted_failures
+
+    if not login and not ip:
+        typer.secho("укажите логин или --ip", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    targets = [*([AuditEvent.login == login] if login else []), *([AuditEvent.ip == ip] if ip else [])]
+    session = get_sessionmaker()()
+    try:
+        result = session.execute(delete(AuditEvent).where(*counted_failures(), or_(*targets)))
+        session.commit()
+    finally:
+        session.close()
+    deleted = result.rowcount if isinstance(result, CursorResult) else 0
+    typer.echo(f"удалено неудачных входов: {deleted}")
 
 
 def main() -> None:

@@ -56,6 +56,9 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+    # Должен быть больше наибольшего потолка распаковки (512 МБ: выгрузки
+    # AD/KSC, член zip — kbaudit/safe_io.py) плюс разбор JSON, который
+    # занимает в памяти кратно больше самих байтов.
     mem_limit: 2g
     cpus: 2
     # Наружу не публикуется: единственный вход — через прокси.
@@ -73,7 +76,19 @@ services:
       # слушает 443 с автоматическим HTTPS; тогда порт 443 нужно
       # опубликовать дополнительно (свой compose.override.yml или правка
       # `ports` ниже) — по умолчанию стек публикует только 80/STOOLS_PORT.
-      STOOLS_SITE_ADDRESS: ${STOOLS_SITE_ADDRESS:-}
+      # Пустое значение заменяется на ":80" здесь: заданную, но пустую
+      # переменную Caddy подставляет как есть, и конфиг не разбирается.
+      STOOLS_SITE_ADDRESS: ${STOOLS_SITE_ADDRESS:-:80}
+      # Откуда сертификат: auto | internal | files (ops/Caddyfile, README «TLS»).
+      STOOLS_TLS: ${STOOLS_TLS:-auto}
+    volumes:
+      # Свои сертификат и ключ для STOOLS_TLS=files: ops/tls/cert.pem и
+      # ops/tls/key.pem (каталог в .gitignore).
+      - ./tls:/etc/caddy/tls:ro
+      # Данные Caddy: полученные сертификаты и корневой сертификат своего
+      # центра (STOOLS_TLS=internal) переживают пересоздание контейнера —
+      # иначе розданный на рабочие места корень перестал бы подходить.
+      - caddy-data:/data
     ports:
       - "${STOOLS_PORT:-8080}:80"
     depends_on:
@@ -91,3 +106,4 @@ services:
 volumes:
   db-data:
   archives:
+  caddy-data:

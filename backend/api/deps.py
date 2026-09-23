@@ -15,6 +15,16 @@ from api.timeutil import as_aware_utc, utcnow
 get_db = _get_db
 
 
+def find_session(db: Session, token: str) -> SessionRow | None:
+    """Строка сессии по токену из cookie. В базе — хеш токена (api/crypto.py):
+    дамп таблицы не даёт войти. Один поиск по первичному ключу."""
+    return db.get(SessionRow, hash_token(token))
+
+
+def session_expired(row: SessionRow) -> bool:
+    return as_aware_utc(row.expires_at) < utcnow()
+
+
 def get_current_user(
     request: Request,
     session: Session = Depends(get_db),
@@ -34,11 +44,10 @@ def get_current_user(
     stools_session = request.cookies.get(settings.session_cookie_name)
     if not stools_session:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="нет сессии")
-    #: В базе — хеш токена (api/crypto.py): дамп таблицы не даёт войти.
-    row = session.get(SessionRow, hash_token(stools_session))
+    row = find_session(session, stools_session)
     if row is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="сессия не найдена")
-    if as_aware_utc(row.expires_at) < utcnow():
+    if session_expired(row):
         session.delete(row)
         session.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="сессия истекла")
@@ -72,4 +81,4 @@ def get_current_user(
     return user
 
 
-__all__ = ["get_current_user", "get_db"]
+__all__ = ["find_session", "get_current_user", "get_db", "session_expired"]

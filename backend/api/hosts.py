@@ -30,8 +30,13 @@ def server_error(status_code: int | None = None) -> str:
 
 
 def validate_host(value: str) -> str:
-    """Имя хоста по RFC 1123 или IPv4/IPv6 литерал; иначе ValueError."""
+    """Имя хоста по RFC 1123 или IPv4/IPv6 литерал; иначе ValueError.
+
+    IPv6 с зоной (`fe80::1%eth0`) не принимается: `ipaddress` пропускает в
+    зоне любые символы, в том числе разделители URL (`fe80::1%@host:port#`)."""
     host = value.strip()
+    if "%" in host:
+        raise ValueError(BAD_HOST)
     try:
         ipaddress.ip_address(host)
         return host

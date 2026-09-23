@@ -95,7 +95,8 @@ if ($InitConfig) {
   [System.IO.File]::WriteAllText($InitConfig, ($template | ConvertTo-Json), (New-Object System.Text.UTF8Encoding($false)))
   # В файл лягут пароль и секрет второго фактора: читать и менять его может только текущая учётная запись.
   if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-    & icacls $InitConfig /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+    # (M) — чтение, запись и удаление: без удаления -DeleteConfigAfterRun не уберёт файл после /inheritance:r.
+    & icacls $InitConfig /inheritance:r /grant:r "$($env:USERDOMAIN)\$($env:USERNAME):(M)" | Out-Null
   } else {
     & chmod 600 -- $InitConfig
   }

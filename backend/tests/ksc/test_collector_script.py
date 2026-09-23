@@ -426,3 +426,30 @@ $afterFail = [object]::ReferenceEquals($prev, [System.Net.ServicePointManager]::
     assert run.returncode == 0, run.stdout + run.stderr
     assert json.loads(run.stdout.strip().splitlines()[-1]) == {"compiled": True, "after_ok": True, "failed": True, "after_fail": True}
     assert (out / "ok.json.gz").exists() and not (out / "bad.json.gz").exists()
+
+
+def test_init_config_grants_modify_to_domain_qualified_user() -> None:
+    """Windows: право (M) — чтение, запись и удаление (иначе `-DeleteConfigAfterRun`
+    не удалит файл после /inheritance:r), учётка с доменом — имя без домена
+    icacls может разрешить в одноимённую локальную. Ветку icacls в контейнере
+    Linux не прогнать, поэтому проверяется текст скрипта."""
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    assert '/grant:r "$($env:USERDOMAIN)\\$($env:USERNAME):(M)"' in text
+    assert "(R,W)" not in text
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_init_config_aborts_when_permissions_cannot_be_set(tmp_path: Path) -> None:
+    """Не удалось закрыть доступ к файлу — скрипт падает, а не пишет «шаблон записан»."""
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    fake_chmod = fakebin / "chmod"
+    fake_chmod.write_text("#!/bin/sh\nexit 1\n")
+    fake_chmod.chmod(0o755)
+    cmd = ["docker", "run", "--rm", "-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{tmp_path}:/out",
+           "-e", "PATH=/out/fakebin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/microsoft/powershell/7",
+           IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1", "-InitConfig", "/out/ksc-config.json"]
+    run = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
+    assert run.returncode != 0, run.stdout + run.stderr
+    assert "Не удалось закрыть доступ к файлу настроек" in run.stdout + run.stderr
+    assert "Шаблон записан" not in run.stdout

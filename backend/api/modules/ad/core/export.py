@@ -20,8 +20,9 @@ from kbaudit.safe_io import MB, decompress_gzip
 
 FORMAT = "stools-ad/1"
 #: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
-#: но gzip разворачивается до ~1000:1 (аудит H2).
-MAX_UNPACKED = 2048 * MB
+#: но gzip разворачивается до ~1000:1 (аудит H2). Распакованные байты плюс
+#: разобранный JSON должны помещаться в `mem_limit` контейнера API (2 ГБ).
+MAX_UNPACKED = 512 * MB
 
 UAC_DISABLED = 0x2
 UAC_DONT_EXPIRE_PASSWORD = 0x10000
@@ -188,7 +189,7 @@ class ExportFormatError(ValueError):
     pass
 
 
-def load_export(data: bytes) -> AdExport:
+def load_export(data: bytes | bytearray) -> AdExport:
     if data[:2] == b"\x1f\x8b":
         try:
             data = decompress_gzip(data, MAX_UNPACKED)

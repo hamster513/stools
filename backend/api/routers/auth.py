@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.orm import Session
 
 from api.audit import purge_old
@@ -42,6 +42,10 @@ LOGIN_PATH = "/api/auth/login"
 #: и счётчик по IP обходится; счётчик по логину от этого не зависит.
 LOGIN_WINDOW = dt.timedelta(minutes=15)
 LOGIN_MAX_FAILURES = 10
+#: Порог по адресу выше, чем по логину: за одним адресом (NAT, терминатор
+#: TLS перед Caddy) сидят многие, и десять чужих опечаток запирали бы вход
+#: всем (финальное ревью, I3). Снять блокировку — `python -m api.cli unlock-login`.
+LOGIN_MAX_FAILURES_PER_IP = 50
 #: Логин длиннее этого или с пробелами — скорее пароль, введённый не в то
 #: поле; в журнал он не идёт (аудит L5).
 MAX_PLAIN_LOGIN = 64
@@ -116,15 +120,21 @@ def login_for_audit(login: str) -> str:
     return login[:255]
 
 
-def _too_many_failures(db: Session, login: str, ip: str | None) -> bool:
-    failures = select(func.count()).select_from(AuditEvent).where(
+def counted_failures() -> tuple[ColumnElement[bool], ...]:
+    """Условия строки журнала, которую троттлинг считает неудачным входом.
+    Общие с `api.cli unlock-login`, который такие строки удаляет."""
+    return (
         AuditEvent.path == LOGIN_PATH,
         AuditEvent.status == status.HTTP_401_UNAUTHORIZED,
         AuditEvent.at >= utcnow() - LOGIN_WINDOW,
     )
+
+
+def _too_many_failures(db: Session, login: str, ip: str | None) -> bool:
+    failures = select(func.count()).select_from(AuditEvent).where(*counted_failures())
     if (db.scalar(failures.where(AuditEvent.login == login)) or 0) >= LOGIN_MAX_FAILURES:
         return True
-    return ip is not None and (db.scalar(failures.where(AuditEvent.ip == ip)) or 0) >= LOGIN_MAX_FAILURES
+    return ip is not None and (db.scalar(failures.where(AuditEvent.ip == ip)) or 0) >= LOGIN_MAX_FAILURES_PER_IP
 
 
 @public_router.post("/login", status_code=status.HTTP_204_NO_CONTENT)

@@ -24,19 +24,34 @@ from kbaudit import safe_io
 from tests.ksc.synthetic import build_export
 
 
-def test_limit_for_uses_path_prefixes() -> None:
-    assert limit_for("/api/siem/snapshots") == 300 * MB
-    assert limit_for("/api/vm/import/file") == 500 * MB
-    assert limit_for("/api/vm/refs/nvd/upload") == 500 * MB
-    assert limit_for("/api/ad/snapshots/file") == 200 * MB
-    assert limit_for("/api/ksc/snapshots/file") == 200 * MB
-    assert limit_for("/api/settings/attack/preview") == 100 * MB
-    assert limit_for("/api/attack/ru-ttp") == 20 * MB
-    # Префикс — по границе сегмента пути, а не по началу строки.
-    assert limit_for("/api/siem/snapshots-x") == 2 * MB
-    assert limit_for("/api/auth/login") == 2 * MB
-    assert limit_for("/api/siem/attack/reference") == 50 * MB
-    assert limit_for("/api/siem/attack/run") == 2 * MB
+def test_limit_for_matches_exact_upload_routes() -> None:
+    """Большой лимит — только у ручек загрузки файлов (метод и путь целиком);
+    JSON-ручки рядом с ними получают 2 МБ по умолчанию."""
+    assert limit_for("POST", "/api/siem/snapshots") == 300 * MB
+    assert limit_for("POST", "/api/vm/import/file") == 500 * MB
+    assert limit_for("POST", "/api/vm/refs/nvd/upload") == 500 * MB
+    assert limit_for("POST", "/api/ad/snapshots/file") == 200 * MB
+    assert limit_for("POST", "/api/ksc/snapshots/file") == 200 * MB
+    assert limit_for("POST", "/api/settings/attack") == 100 * MB
+    assert limit_for("POST", "/api/settings/attack/preview") == 100 * MB
+    assert limit_for("POST", "/api/attack/ru-ttp") == 20 * MB
+    assert limit_for("POST", "/api/siem/attack/reference") == 50 * MB
+    # JSON-ручки под теми же префиксами и другие методы — 2 МБ.
+    for method, path in [
+        ("POST", "/api/vm/refs/nvd/download"),
+        ("POST", "/api/vm/import/vm"),
+        ("POST", "/api/siem/attack/reference/apply"),
+        ("POST", "/api/settings/attack/download"),
+        ("POST", "/api/settings/attack/pending/apply"),
+        ("POST", "/api/siem/snapshots/1/reparse"),
+        ("PUT", "/api/siem/snapshots"),
+        ("POST", "/api/vm/refs/a/b/upload"),
+        ("POST", "/api/vm/refs//upload"),
+        ("POST", "/api/siem/snapshots-x"),
+        ("POST", "/api/auth/login"),
+        ("POST", "/api/siem/attack/run"),
+    ]:
+        assert limit_for(method, path) == 2 * MB, (method, path)
 
 
 # ---- Сама обёртка, без приложения ------------------------------------------
@@ -94,12 +109,47 @@ def test_chunked_body_is_cut_by_counter() -> None:
     assert seen["receive"] == 3
 
 
+def test_upload_without_session_rejected_before_reading() -> None:
+    """Лимит выше умолчания — только с живой сессией: без cookie 401 до
+    чтения тела, приложение не вызывается."""
+    status, body, seen = _call(
+        [(b"content-length", str(3 * MB).encode())], [b"x"], path="/api/vm/import/file"
+    )
+    assert status == 401 and body == {"detail": "нет сессии"}
+    assert seen == {"receive": 0, "app": 0}
+
+
+def test_upload_with_unknown_session_rejected_before_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    looked_up: list[str] = []
+
+    def fake_refusal(token: str | None) -> str | None:
+        looked_up.append(token or "")
+        return "сессия не найдена"
+
+    monkeypatch.setattr(limits, "session_refusal", fake_refusal)
+    status, body, seen = _call(
+        [(b"content-length", str(3 * MB).encode()), (b"cookie", b"stools_session=abc")],
+        [b"x"],
+        path="/api/vm/import/file",
+    )
+    assert status == 401 and body == {"detail": "сессия не найдена"}
+    assert seen == {"receive": 0, "app": 0}
+    assert looked_up == ["abc"]
+
+
+def test_default_limit_needs_no_session() -> None:
+    """В пределах 2 МБ сессия здесь не проверяется: это делает `require_access`."""
+    for path in ("/api/auth/login", "/api/vm/refs/nvd/download"):
+        status, body, _seen = _call([(b"content-length", b"3")], [b"abc"], path=path)
+        assert status == 200 and body == {"len": 3}, path
+
+
 # ---- Через приложение ------------------------------------------------------
 
 
 @pytest.fixture
 def small_limits(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(limits, "BODY_LIMITS", [("/api/ksc/snapshots/file", MB)])
+    monkeypatch.setattr(limits, "BODY_LIMITS", [("POST", "/api/ksc/snapshots/file", MB)])
     monkeypatch.setattr(limits, "DEFAULT_LIMIT", MB)
 
 
@@ -140,6 +190,72 @@ def test_chunked_body_without_length_is_cut(client: TestClient, small_limits: No
     )
     assert r.status_code == 413
     assert r.json() == {"detail": "тело запроса больше лимита (1 МБ)"}
+
+
+def test_anonymous_big_json_to_json_route_gets_413(client: TestClient) -> None:
+    """JSON-ручка под путём справочников VM больше не наследует лимит загрузки:
+    3 МБ без входа — 413, тело не разбирается (не 422 и не 401 после разбора)."""
+    body = b'{"x": "' + b"a" * (3 * MB) + b'"}'
+    for path in ("/api/vm/refs/x/download", "/api/siem/attack/reference/apply?snapshot_id=1"):
+        r = client.post(path, content=body, headers={"content-type": "application/json"})
+        assert r.status_code == 413, (path, r.status_code)
+        assert r.json() == {"detail": "тело запроса больше лимита (2 МБ)"}
+
+
+@pytest.fixture
+def form_parses(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Сколько раз приложение разбирало multipart (разбор и есть спул на диск)."""
+    from starlette.formparsers import MultiPartParser
+
+    calls: list[bool] = []
+    original = MultiPartParser.parse
+
+    async def parse(self: Any) -> Any:
+        calls.append(True)
+        return await original(self)
+
+    monkeypatch.setattr(MultiPartParser, "parse", parse)
+    return calls
+
+
+def test_anonymous_big_upload_gets_401_before_endpoint(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, app_settings: Any, form_parses: list[bool]
+) -> None:
+    from api.modules.vm.routers import import_ as router
+
+    reached: list[bool] = []
+    monkeypatch.setattr(router, "_reject_if_running", lambda db: reached.append(True))
+    files = {"file": ("e.csv", b"x" * (3 * MB), "text/csv")}
+    r = client.post("/api/vm/import/file", files=files)
+    assert r.status_code == 401 and r.json() == {"detail": "нет сессии"}
+    client.cookies.set(app_settings.session_cookie_name, "not-a-session")
+    r = client.post("/api/vm/import/file", files=files)
+    assert r.status_code == 401 and r.json() == {"detail": "сессия не найдена"}
+    assert reached == []
+    assert form_parses == []
+
+
+def test_expired_session_big_upload_gets_401(
+    auth_client: TestClient, db_session: Any, form_parses: list[bool]
+) -> None:
+    import datetime as dt
+
+    from api.db.models import SessionRow
+
+    db_session.query(SessionRow).update({"expires_at": dt.datetime(2000, 1, 1, tzinfo=dt.UTC)})
+    db_session.commit()
+    files = {"file": ("e.csv", b"x" * (3 * MB), "text/csv")}
+    r = auth_client.post("/api/vm/import/file", files=files)
+    assert r.status_code == 401 and r.json() == {"detail": "сессия истекла"}
+    assert form_parses == []
+
+
+def test_signed_in_analyst_upload_above_default_passes(client_as: Any, form_parses: list[bool]) -> None:
+    analyst = client_as("analyst")
+    body = b"cve,host\n" + b"x" * (3 * MB)
+    r = analyst.post("/api/vm/import/file", files={"file": ("e.csv", body, "text/csv")})
+    assert r.status_code == 202, r.text
+    assert form_parses == [True]
 
 
 # ---- Проверка размера в ручках ---------------------------------------------

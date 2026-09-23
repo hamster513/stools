@@ -34,6 +34,15 @@ def test_foreign_origin_is_refused_and_audited(auth_client: TestClient, db_sessi
     assert "evil.example" in (last.summary or "")
 
 
+def test_anonymous_refusal_is_not_audited(client: TestClient, db_session: Any) -> None:
+    """Отказ по источнику без cookie сессии в журнал не пишется: иначе любой
+    снаружи заполнял бы журнал анонимными строками (финальное ревью)."""
+    response = client.put(SECURITY, json=BODY, headers={"Origin": "https://evil.example"})
+    assert response.status_code == 403 and response.json() == DENIED
+    db_session.expire_all()
+    assert db_session.query(AuditEvent).filter_by(path=SECURITY).count() == 0
+
+
 @pytest.mark.parametrize("site", ["cross-site", "same-site"])
 def test_foreign_fetch_site_is_refused(auth_client: TestClient, site: str) -> None:
     response = auth_client.put(SECURITY, json=BODY, headers={"Sec-Fetch-Site": site})

@@ -9,7 +9,26 @@
 # значение или его отсутствие даёт голый ":80" (лаборатория без TLS, как
 # сейчас); настоящее имя хоста ("stools.example.ru") — Caddy сам заводит
 # сертификат и слушает 443 с автоматическим HTTPS (см. README «Запуск»).
+#
+# Откуда сертификат — STOOLS_TLS (README «Безопасность», «TLS»):
+#   auto     — по умолчанию: автоматический HTTPS Caddy (ACME, нужен выход
+#              в интернет к удостоверяющему центру);
+#   internal — свой удостоверяющий центр Caddy, без сети; его корневой
+#              сертификат (/data/caddy/pki/authorities/local/root.crt в
+#              контейнере web) раздаётся на рабочие места;
+#   files    — свои сертификат и ключ: ops/tls/cert.pem и ops/tls/key.pem
+#              (монтируются в /etc/caddy/tls, ops/tls/ в git не попадает).
+(tls-auto) {
+}
+(tls-internal) {
+	tls internal
+}
+(tls-files) {
+	tls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem
+}
+
 {$STOOLS_SITE_ADDRESS::80} {
+	import tls-{$STOOLS_TLS:auto}
 	encode gzip
 
 	# HSTS только когда соединение и правда https: под голым :80 заголовок
