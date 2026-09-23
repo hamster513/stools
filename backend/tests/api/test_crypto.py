@@ -46,9 +46,20 @@ def test_without_key_values_stay_plaintext(monkeypatch: pytest.MonkeyPatch) -> N
     assert encrypt("p@ss") == "p@ss"
 
 
-def test_hash_token_is_sha256_hex() -> None:
+def test_hash_token_depends_on_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Хеш сессии — HMAC с ключом из STOOLS_SESSION_SECRET: смена ключа
+    завершает сессии, а дамп базы без ключа не даёт подобрать токен."""
+    monkeypatch.setenv("STOOLS_SESSION_SECRET", KEY)
+    one = hash_token("abc")
+    assert len(one) == 64 and one != "abc" and one != hashlib.sha256(b"abc").hexdigest()
+    assert hash_token("abc") == one
+    monkeypatch.setenv("STOOLS_SESSION_SECRET", OTHER_KEY)
+    assert hash_token("abc") != one
+
+
+def test_hash_token_without_key_is_plain_sha256(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STOOLS_SESSION_SECRET", "")
     assert hash_token("abc") == hashlib.sha256(b"abc").hexdigest()
-    assert len(hash_token("abc")) == 64 and hash_token("abc") != "abc"
 
 
 def test_startup_refuses_production_without_key(caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:

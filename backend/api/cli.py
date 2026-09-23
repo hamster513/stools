@@ -1,4 +1,4 @@
-"""CLI администрирования: создание первого пользователя.
+"""CLI администрирования: создание первого пользователя, перешифрование секретов.
 
 Пароль запрашивается интерактивно (`getpass`), а не аргументом командной
 строки — аргумент попадает в историю оболочки и в вывод `ps`.
@@ -6,12 +6,15 @@
 from __future__ import annotations
 
 import getpass
+import json
 
 import typer
 
+from api.crypto import reseal
 from api.db.base import get_sessionmaker
-from api.db.models import ROLE_ADMIN, ROLE_ANALYST, ROLES, AppUser
+from api.db.models import ROLE_ADMIN, ROLE_ANALYST, ROLES, AppSetting, AppUser
 from api.security import hash_password
+from api.settings import get_settings
 
 app = typer.Typer(help="Администрирование STools API", no_args_is_help=True)
 
@@ -56,6 +59,50 @@ def create_user(
         typer.secho(f"пользователь создан: {login} ({role})", fg=typer.colors.GREEN)
     finally:
         session.close()
+
+
+@app.command("reseal-secrets")
+def reseal_secrets() -> None:
+    """Зашифровать секреты, сохранённые открытым текстом до обновления:
+    пароли подключений AD и KSC, пароль и client secret MaxPatrol VM, секрет
+    клиента OIDC. Уже зашифрованные не трогаются; значения не печатаются."""
+    from api.modules.ad.models import AdConnection
+    from api.modules.ksc.models import KscConnection
+
+    if not get_settings().session_secret:
+        typer.secho("STOOLS_SESSION_SECRET не задан — шифровать нечем", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    counts = {"ad": 0, "ksc": 0, "vm": 0, "oidc": 0}
+    session = get_sessionmaker()()
+    try:
+        conns: list[tuple[str, AdConnection | KscConnection]] = [
+            *(("ad", c) for c in session.query(AdConnection)),
+            *(("ksc", c) for c in session.query(KscConnection)),
+        ]
+        for kind, conn in conns:
+            sealed = reseal(conn.password)
+            if sealed != conn.password:
+                conn.password = sealed
+                counts[kind] += 1
+        #: Ключ настройки в app_setting, раздел JSON с секретами (None — корень), поля.
+        for kind, section, fields in (("vm", "connection", ("password", "client_secret")), ("oidc", None, ("client_secret",))):
+            row = session.get(AppSetting, kind)
+            if row is None or not row.value_json:
+                continue
+            value = json.loads(row.value_json)
+            holder = (value.get(section) or {}) if section else value
+            before = counts[kind]
+            for field in fields:
+                sealed = reseal(holder.get(field) or "")
+                if sealed != (holder.get(field) or ""):
+                    holder[field] = sealed
+                    counts[kind] += 1
+            if counts[kind] != before:
+                row.value_json = json.dumps(value, ensure_ascii=False)
+        session.commit()
+    finally:
+        session.close()
+    typer.echo(", ".join(f"{kind}: {n}" for kind, n in counts.items()))
 
 
 def main() -> None:

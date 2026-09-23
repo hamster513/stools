@@ -76,3 +76,47 @@ def test_first_user_is_admin_and_next_is_analyst(
 def test_unknown_role_is_refused(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _create("x", "--role", "boss", monkeypatch=monkeypatch)
     assert result.exit_code != 0
+
+
+def test_reseal_secrets_encrypts_plaintext_in_place(app_settings: Any, db_session: Any) -> None:
+    """Открытые секреты из старой базы шифруются одной командой; значения
+    в вывод не попадают."""
+    import json
+
+    from api.crypto import decrypt
+    from api.db.models import AppSetting
+    from api.modules.ad.models import AdConnection
+    from api.modules.ksc.models import KscConnection
+
+    db_session.add_all([
+        AdConnection(host="dc01.corp.local", username="CORP\\auditor", password="ad-plain"),
+        KscConnection(host="ksc01.corp.local", username="svc", password="ksc-plain"),
+        AppSetting(key="vm", value_json=json.dumps({"connection": {"host": "vm.local", "username": "u", "password": "vm-plain", "client_secret": "vm-sec"}})),
+        AppSetting(key="oidc", value_json=json.dumps({"client_id": "stools", "client_secret": "oidc-plain"})),
+    ])
+    db_session.commit()
+
+    result = runner.invoke(app, ["reseal-secrets"])
+    assert result.exit_code == 0, result.output
+    assert "ad: 1" in result.output and "ksc: 1" in result.output
+    assert "vm: 2" in result.output and "oidc: 1" in result.output
+    assert "plain" not in result.output and "vm-sec" not in result.output
+
+    db_session.expire_all()
+    ad = db_session.query(AdConnection).one().password
+    ksc = db_session.query(KscConnection).one().password
+    vm = json.loads(db_session.get(AppSetting, "vm").value_json)["connection"]
+    oidc = json.loads(db_session.get(AppSetting, "oidc").value_json)
+    sealed = [ad, ksc, vm["password"], vm["client_secret"], oidc["client_secret"]]
+    assert all(v.startswith("enc:v1:") for v in sealed)
+    assert [decrypt(v) for v in sealed] == ["ad-plain", "ksc-plain", "vm-plain", "vm-sec", "oidc-plain"]
+    assert oidc["client_id"] == "stools" and vm["host"] == "vm.local"
+
+    again = runner.invoke(app, ["reseal-secrets"])
+    assert again.exit_code == 0 and "ad: 0" in again.output and "vm: 0" in again.output
+
+
+def test_reseal_secrets_refuses_without_key(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STOOLS_SESSION_SECRET", "")
+    result = runner.invoke(app, ["reseal-secrets"])
+    assert result.exit_code == 1 and "STOOLS_SESSION_SECRET" in result.output

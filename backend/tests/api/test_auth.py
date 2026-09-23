@@ -81,6 +81,12 @@ def test_password_change_keeps_only_the_current_session(auth_client: TestClient,
     assert other.get("/api/auth/me").status_code == 401
 
 
+def test_changing_the_key_ends_sessions(auth_client: TestClient, monkeypatch: Any) -> None:
+    assert auth_client.get("/api/auth/me").status_code == 200
+    monkeypatch.setenv("STOOLS_SESSION_SECRET", "another-test-only-key")
+    assert auth_client.get("/api/auth/me").status_code == 401
+
+
 def test_hash_migration_ends_all_sessions() -> None:
     """Миграция на хеши удаляет старые строки: сырой токен в базе больше не ищется."""
     from pathlib import Path

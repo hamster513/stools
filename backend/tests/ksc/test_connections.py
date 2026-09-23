@@ -10,6 +10,7 @@ from api.modules.ksc.core import collector as collector_mod
 from api.modules.ksc.core.client import KscClient, KscError
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.export import load_export
+from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
 from tests.ksc.fake_ksc import PASSWORD, USER, FakeKsc, http_factory_for
 from tests.ksc.synthetic import (
     add_inactive_policy,
@@ -402,6 +403,9 @@ def test_legacy_plaintext_password_is_used_and_reencrypted(auth_client: TestClie
 def test_password_under_another_key_asks_to_reenter(auth_client: TestClient, monkeypatch: Any, fake: FakeKsc) -> None:
     cid = _create(auth_client)
     monkeypatch.setenv("STOOLS_SESSION_SECRET", "some-other-test-key")
+    #: Смена ключа завершает и сессии — входим заново.
+    assert auth_client.get("/api/auth/me").status_code == 401
+    assert auth_client.post("/api/auth/login", json={"login": TEST_LOGIN, "password": TEST_PASSWORD}).status_code == 204
     t = auth_client.post(f"/api/ksc/connections/{cid}/test").json()
     assert t == {"ok": False, "message": "секрет зашифрован другим ключом — введите его заново"}
     assert "Session.StartSession" not in fake.calls

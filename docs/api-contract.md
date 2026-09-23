@@ -13,7 +13,8 @@ Management — `/api/vm/…` (см. `docs/vm/api.md`), у модуля Анти�
 - Всё, кроме `POST /api/auth/login` и `GET /api/auth/oidc/{status,start,callback}`,
   требует сессионную cookie. Без неё — `401`.
 - Cookie: `stools_session`, `httpOnly`, `SameSite=Strict`, срок 12 часов.
-- Секреты при хранении: в базе токен сессии — SHA-256 значения cookie,
+- Секреты при хранении: в базе токен сессии — HMAC-SHA256 значения cookie
+  с ключом из `STOOLS_SESSION_SECRET`,
   пароли подключений и секрет клиента OIDC зашифрованы ключом из
   `STOOLS_SESSION_SECRET`. Ответы API от этого не меняются (`password_set`,
   маска `••••`). Смена `STOOLS_SESSION_SECRET` завершает все сессии и
