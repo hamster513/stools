@@ -2,7 +2,8 @@
 
 Секрет клиента наружу не отдаётся: в ответах он заменён маской, а PUT с
 маской или пустым значением оставляет сохранённый — иначе любая правка
-формы стирала бы секрет."""
+формы стирала бы секрет. В базе он зашифрован (api/crypto.py) и
+расшифровывается только для обмена кода на токены."""
 from __future__ import annotations
 
 import json
@@ -12,6 +13,7 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from api.crypto import encrypt, reseal
 from api.db.models import ROLES, AppSetting
 from api.llm_settings import read_setting
 
@@ -102,7 +104,10 @@ def save_oidc(db: Session, payload: OidcSettingsIn, login: str | None) -> OidcSe
     current = load_oidc(db)
     merged = OidcSettings.model_validate(payload.model_dump())
     if payload.client_secret in ("", SECRET_MASK):
-        merged.client_secret = current.client_secret
+        #: Секрет, сохранённый до шифрования, шифруется при этой записи.
+        merged.client_secret = reseal(current.client_secret)
+    else:
+        merged.client_secret = encrypt(merged.client_secret)
     if merged.enabled and merged.missing():
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,

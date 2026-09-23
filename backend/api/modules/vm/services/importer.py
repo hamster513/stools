@@ -186,7 +186,7 @@ def run_import(
     temp: Path | None = None
     try:
         if source == "vm":
-            conn = settings.connection
+            conn = settings.connection.unsealed()
             handle.stage("fetching", message=f"экспорт из {conn.host}")
             temp = data_dir / "vm" / f"export-{handle.id}.csv"
             temp.parent.mkdir(parents=True, exist_ok=True)

@@ -25,16 +25,28 @@ tests/api/test_auth_boundary.py перебирает `app.routes` и прове�
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 
 from api.audit import AuditMiddleware
+from api.crypto import check_session_secret
 from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
 from api.platform import router as settings_router
 from api.rbac import require_access
 from api.routers import auth, oidc
+from api.settings import get_settings
 
-app = FastAPI(title="STools API")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    check_session_secret(get_settings())
+    yield
+
+
+app = FastAPI(title="STools API", lifespan=_lifespan)
 app.add_middleware(AuditMiddleware)
 #: Последней — значит, снаружи всех остальных.
 app.add_middleware(BodyLimitMiddleware)

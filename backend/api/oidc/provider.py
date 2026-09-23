@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 import jwt
 
+from api.crypto import SecretUnreadable, decrypt
 from api.oidc.settings import OidcSettings
 
 HttpFactory = Callable[[], httpx.Client]
@@ -154,12 +155,16 @@ def exchange_code(
     http_factory: HttpFactory | None = None,
 ) -> dict[str, Any]:
     """Обменять код авторизации на токены. Без следования редиректам: в теле — секрет."""
+    try:
+        client_secret = decrypt(settings.client_secret)
+    except SecretUnreadable as exc:
+        raise ProviderError("oidc_token", str(exc)) from exc
     form = {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": settings.redirect_uri,
         "client_id": settings.client_id,
-        "client_secret": settings.client_secret,
+        "client_secret": client_secret,
         "code_verifier": code_verifier,
     }
     try:

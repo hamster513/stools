@@ -6,6 +6,7 @@ import datetime as dt
 from fastapi import Cookie, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from api.crypto import hash_token
 from api.db.base import get_db as _get_db
 from api.db.models import AppUser, SessionRow
 from api.settings import Settings, get_settings
@@ -28,7 +29,8 @@ def get_current_user(
     """
     if not stools_session:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="нет сессии")
-    row = session.get(SessionRow, stools_session)
+    #: В базе — хеш токена (api/crypto.py): дамп таблицы не даёт войти.
+    row = session.get(SessionRow, hash_token(stools_session))
     if row is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="сессия не найдена")
     if as_aware_utc(row.expires_at) < utcnow():

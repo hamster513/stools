@@ -21,7 +21,7 @@ class KscServer(Base):
 
 
 class KscConnection(Base):
-    """Онлайн-подключение к Open API. Пароль хранится в открытом виде, как у AD-подключений."""
+    """Онлайн-подключение к Open API. Пароль зашифрован, как у AD-подключений (api/crypto.py)."""
 
     __tablename__ = "ksc_connection"
 
@@ -30,7 +30,7 @@ class KscConnection(Base):
     host: Mapped[str] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer, default=13299)
     username: Mapped[str] = mapped_column(String(255), default="")
-    password: Mapped[str] = mapped_column(String(255), default="")
+    password: Mapped[str] = mapped_column(Text, default="")
     verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     #: Внутренняя учётка KSC (internal="1") или доменная с именем домена.
     internal: Mapped[bool] = mapped_column(Boolean, default=True)

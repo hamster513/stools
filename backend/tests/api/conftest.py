@@ -53,6 +53,8 @@ event Start:
 
 TEST_LOGIN = "tester"
 TEST_PASSWORD = "correct horse battery staple"
+#: Ключ шифрования секретов в тестах — фиксированная строка, не настоящий ключ.
+TEST_SESSION_SECRET = "test-only-session-secret"
 
 
 def _build_kb_zip(extra_rule: bool = False) -> bytes:
@@ -147,6 +149,7 @@ def app_settings(
     monkeypatch.setenv("STOOLS_DATABASE_URL", postgres_url)
     monkeypatch.setenv("STOOLS_DATA_DIR", str(data_dir))
     monkeypatch.setenv("STOOLS_SESSION_COOKIE_SECURE", "false")
+    monkeypatch.setenv("STOOLS_SESSION_SECRET", TEST_SESSION_SECRET)
     from api.settings import get_settings
 
     yield get_settings()

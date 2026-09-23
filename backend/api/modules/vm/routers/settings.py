@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.audit import changes_summary
+from api.crypto import SecretUnreadable
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
@@ -86,6 +87,8 @@ class TestVmResponse(BaseModel):
 
 def _public_error(exc: BaseException) -> str:
     """Класс причины отказа для ответа проверки: без адреса и текста VM."""
+    if isinstance(exc, SecretUnreadable):
+        return str(exc)
     if isinstance(exc.__cause__, httpx.HTTPError) or isinstance(exc, httpx.HTTPError):
         return TLS_FAILED if is_tls_error(exc) else NO_LINK
     code = exc.status if isinstance(exc, MpVmError) else None
@@ -111,7 +114,7 @@ def test_vm(db: Session = Depends(get_db), user: AppUser = Depends(get_current_u
     slot = take_slot("vm", user.id)
     try:
         with make_client(conn, timeout=30.0) as http:
-            head = MpVmClient(conn, http).probe()
+            head = MpVmClient(conn.unsealed(), http).probe()
     except Exception as exc:  # noqa: BLE001 — любая причина отказа доходит до человека классом, без текста VM
         return TestVmResponse(ok=False, message=_public_error(exc))
     finally:

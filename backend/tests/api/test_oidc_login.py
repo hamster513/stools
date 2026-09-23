@@ -367,3 +367,34 @@ def test_state_table_is_capped(
     kept = {row.state for row in db_session.query(OidcLoginState).all()}
     assert len(kept) <= 3
     assert states[-1] in kept and states[0] not in kept
+
+
+def test_legacy_plaintext_client_secret_still_logs_in_and_is_reencrypted(
+    client: TestClient, oidc_enabled: FakeProvider, auth_client: TestClient
+) -> None:
+    """Секрет, сохранённый до шифрования, продолжает работать и шифруется
+    при следующем сохранении настроек."""
+    import json
+
+    from api.db.base import get_sessionmaker
+    from api.db.models import AppSetting
+
+    with get_sessionmaker()() as db:
+        row = db.get(AppSetting, "oidc")
+        value = json.loads(row.value_json)
+        value["client_secret"] = oidc_enabled.client_secret
+        row.value_json = json.dumps(value)
+        db.commit()
+
+    fresh = TestClient(app)
+    response = _login(fresh, oidc_enabled, "sub-9", "zoe", ["stools-analysts"])
+    assert response.status_code == 302 and response.headers["location"] == "/attack"
+
+    body = {k: v for k, v in auth_client.get("/api/settings/oidc").json().items() if k not in ("has_secret", "redirect_uri")}
+    assert auth_client.put("/api/settings/oidc", json=body).status_code == 204
+    with get_sessionmaker()() as db:
+        stored = json.loads(db.get(AppSetting, "oidc").value_json)["client_secret"]
+    assert stored.startswith("enc:v1:")
+    again = TestClient(app)
+    assert _login(again, oidc_enabled, "sub-9", "zoe", ["stools-analysts"]).status_code == 302
+    assert again.get("/api/auth/me").status_code == 200

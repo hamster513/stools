@@ -72,10 +72,11 @@ class AppUser(Base):
 
 
 class SessionRow(Base):
-    """Сессионный токен — то, что лежит в cookie `stools_session`."""
+    """Сессия. В cookie `stools_session` — сырой токен, здесь — его SHA-256."""
 
     __tablename__ = "session"
 
+    #: hash_token(токен из cookie), hex (api/crypto.py).
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

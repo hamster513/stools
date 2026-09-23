@@ -34,11 +34,24 @@ def test_masked_or_empty_secret_does_not_erase_the_stored_one(auth_client: TestC
     auth_client.put("/api/settings/oidc", json=FULL)
     assert auth_client.put("/api/settings/oidc", json={**FULL, "client_secret": "••••"}).status_code == 204
     assert auth_client.put("/api/settings/oidc", json={**FULL, "client_secret": ""}).status_code == 204
+    from api.crypto import decrypt
     from api.db.base import get_sessionmaker
     from api.oidc.settings import load_oidc
 
     with get_sessionmaker()() as db:
-        assert load_oidc(db).client_secret == "s3cr3t"
+        assert decrypt(load_oidc(db).client_secret) == "s3cr3t"
+
+
+def test_client_secret_is_encrypted_at_rest(auth_client: TestClient) -> None:
+    import json
+
+    from api.db.base import get_sessionmaker
+    from api.db.models import AppSetting
+
+    assert auth_client.put("/api/settings/oidc", json=FULL).status_code == 204
+    with get_sessionmaker()() as db:
+        stored = json.loads(db.get(AppSetting, "oidc").value_json)
+    assert stored["client_secret"].startswith("enc:v1:") and "s3cr3t" not in stored["client_secret"]
 
 
 def test_enabling_requires_complete_settings(auth_client: TestClient) -> None:

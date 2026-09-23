@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from api.crypto import hash_token
 from api.db.models import SessionRow
 from tests.api.conftest import TEST_LOGIN
 
@@ -51,7 +52,7 @@ def test_blocking_drops_sessions(auth_client: TestClient, client_as: Callable[[s
     token = analyst.cookies["stools_session"]
     uid = next(u["id"] for u in auth_client.get("/api/settings/users").json() if u["login"] == "user-analyst")
     assert auth_client.patch(f"/api/settings/users/{uid}", json={"is_active": False}).json()["is_active"] is False
-    assert db_session.get(SessionRow, token) is None
+    assert db_session.get(SessionRow, hash_token(token)) is None
     assert analyst.get("/api/auth/me").status_code == 401
 
 

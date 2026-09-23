@@ -76,10 +76,62 @@ def _create(auth_client: TestClient, **extra: Any) -> int:
 
 
 def _stored_password(db_session: Any, cid: int) -> str:
+    from api.crypto import decrypt
+    from api.modules.ad.models import AdConnection
+
+    db_session.expire_all()
+    return decrypt(db_session.get(AdConnection, cid).password)
+
+
+def _raw_password(db_session: Any, cid: int) -> str:
     from api.modules.ad.models import AdConnection
 
     db_session.expire_all()
     return str(db_session.get(AdConnection, cid).password)
+
+
+def test_password_is_encrypted_at_rest(auth_client: TestClient, db_session: Any) -> None:
+    cid = _create(auth_client)
+    raw = _raw_password(db_session, cid)
+    assert raw.startswith("enc:v1:") and "secret" not in raw
+    assert auth_client.get("/api/ad/connections").json()[0]["password_set"] is True
+
+
+def test_legacy_plaintext_password_is_used_and_reencrypted(auth_client: TestClient, db_session: Any, monkeypatch: Any) -> None:
+    """Пароль, сохранённый до шифрования, уходит на контроллер как есть и
+    шифруется при следующем сохранении подключения."""
+    import ldap3
+    from ldap3.core.exceptions import LDAPBindError
+
+    from api.modules.ad.models import AdConnection
+
+    sent: list[str] = []
+
+    def bind(*args: Any, **kwargs: Any) -> Any:
+        sent.append(kwargs["password"])
+        raise LDAPBindError("invalid credentials")
+
+    monkeypatch.setattr(ldap3, "Connection", bind)
+    cid = _create(auth_client)
+    db_session.get(AdConnection, cid).password = "secret"
+    db_session.commit()
+    assert auth_client.post(f"/api/ad/connections/{cid}/test").json() == {"ok": False, "message": "вход отклонён"}
+    r = auth_client.put(f"/api/ad/connections/{cid}", json={"title": "другое", "host": "dc01.corp.local", "username": "CORP\\auditor", "password": ""})
+    assert r.status_code == 200
+    assert _raw_password(db_session, cid).startswith("enc:v1:")
+    assert auth_client.post(f"/api/ad/connections/{cid}/test").json()["ok"] is False
+    assert sent == ["secret", "secret"]
+
+
+def test_sysvol_gets_the_decrypted_password(auth_client: TestClient, monkeypatch: Any) -> None:
+    fake_conn = _FakeConn()
+    seen: list[str] = []
+    monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
+    monkeypatch.setattr(svc, "ldap3_searcher", lambda c: fake_conn.fake.search)
+    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p: seen.append(p) or fake_conn.fake.smb)
+    cid = _create(auth_client)
+    assert auth_client.post(f"/api/ad/connections/{cid}/collect").status_code == 202
+    assert seen == ["secret"]
 
 
 def test_address_change_requires_password(auth_client: TestClient, db_session: Any) -> None:

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.audit import changes_summary
+from api.crypto import encrypt, reseal
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
@@ -85,6 +86,7 @@ def list_connections(db: Session = Depends(get_db), _user: AppUser = Depends(get
 @router.post("", response_model=ConnectionView, status_code=status.HTTP_201_CREATED)
 def create_connection(payload: ConnectionIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ConnectionView:
     c = KscConnection(**payload.model_dump())
+    c.password = encrypt(c.password)
     db.add(c)
     db.commit()
     return _view(c)
@@ -102,7 +104,10 @@ def update_connection(
         # Сохранённый пароль не уходит на новый адрес или под новым именем.
         if c.password and ADDRESS_FIELDS.intersection(changed):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=PASSWORD_AGAIN)
-        data.pop("password")
+        #: Пароль, сохранённый до шифрования, шифруется при этой записи.
+        data["password"] = reseal(c.password)
+    else:
+        data["password"] = encrypt(data["password"])
     for k, v in data.items():
         setattr(c, k, v)
     db.commit()

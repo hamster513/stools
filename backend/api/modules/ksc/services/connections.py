@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from api.crypto import SecretUnreadable, decrypt
 from api.hosts import (
     LOGIN_REJECTED,
     NO_LINK,
@@ -25,11 +26,13 @@ from api.modules.ksc.services.snapshots import import_export
 
 
 def _client(conn: KscConnection) -> KscClient:
-    return KscClient(f"https://{url_host(conn.host)}:{conn.port}", conn.username, conn.password, verify_tls=conn.verify_tls, internal=conn.internal, domain=conn.domain)
+    return KscClient(f"https://{url_host(conn.host)}:{conn.port}", conn.username, decrypt(conn.password), verify_tls=conn.verify_tls, internal=conn.internal, domain=conn.domain)
 
 
 def public_error(exc: BaseException) -> str:
     """Класс причины отказа для ответа проверки: без адреса и текста KSC."""
+    if isinstance(exc, SecretUnreadable):
+        return str(exc)
     if not isinstance(exc, KscError):
         return server_error()
     if exc.kind == "link":

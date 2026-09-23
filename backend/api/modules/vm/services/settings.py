@@ -1,8 +1,9 @@
 """Настройки модуля VM в `app_setting['vm']` (спека §7).
 
-Пароль и client secret MaxPatrol хранятся здесь же: база и так внутри
-периметра, модель доступа к ней не слабее, чем к самому VM. Наружу они
-не отдаются никогда — только признак «задан».
+Пароль и client secret MaxPatrol хранятся здесь же, зашифрованными
+(api/crypto.py); расшифровываются только для обращения к VM
+(`Connection.unsealed`). Наружу они не отдаются никогда — только признак
+«задан».
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import datetime as dt
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from api.crypto import decrypt, encrypt, reseal
 from api.db.models import AppSetting
 from api.hosts import validate_host
 from api.modules.vm.core.weights import DEFAULT_THRESHOLD, Weights
@@ -40,6 +42,10 @@ class Connection(BaseModel):
     @property
     def configured(self) -> bool:
         return bool(self.host.strip() and self.username.strip() and self.password)
+
+    def unsealed(self) -> Connection:
+        """Копия с расшифрованными секретами — для обращения к VM, не для записи."""
+        return self.model_copy(update={f: decrypt(getattr(self, f)) for f in SECRET_FIELDS})
 
 
 class ConnectionIn(Connection):
@@ -125,10 +131,10 @@ def save_settings(db: Session, incoming: VmSettingsIn, login: str | None) -> VmS
         threshold=incoming.threshold,
         attack_min_risk=current.attack_min_risk if incoming.attack_min_risk is None else incoming.attack_min_risk,
     )
-    if not merged.connection.password:
-        merged.connection.password = current.connection.password
-    if not merged.connection.client_secret:
-        merged.connection.client_secret = current.connection.client_secret
+    #: Новые секреты шифруются; прежние — тоже, если лежали открытыми.
+    for f in SECRET_FIELDS:
+        new_value = getattr(merged.connection, f)
+        setattr(merged.connection, f, encrypt(new_value) if new_value else reseal(getattr(current.connection, f)))
     row = db.get(AppSetting, VM_KEY)
     if row is None:
         row = AppSetting(key=VM_KEY)

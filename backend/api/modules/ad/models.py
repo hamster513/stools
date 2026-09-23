@@ -42,7 +42,8 @@ class AdConnection(Base):
     #: если у контроллера сертификат внутреннего CA, неизвестного контейнеру.
     verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     username: Mapped[str] = mapped_column(String(255), default="")
-    password: Mapped[str] = mapped_column(String(255), default="")
+    #: Зашифрован (api/crypto.py): `enc:v1:…`; открытый — сохранён до шифрования.
+    password: Mapped[str] = mapped_column(Text, default="")
     #: '' — defaultNamingContext из rootDSE.
     base_dn: Mapped[str] = mapped_column(String(512), default="")
     collect_sysvol: Mapped[bool] = mapped_column(Boolean, default=True)

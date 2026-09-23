@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     #: STOOLS_SESSION_COOKIE_SECURE=false.
     session_cookie_secure: bool = True
 
+    #: Ключ шифрования секретов подключений (api/crypto.py). Пустой — секреты
+    #: хранятся открытым текстом; с session_cookie_secure=true сервис при
+    #: этом не стартует. Смена ключа делает сохранённые секреты нечитаемыми.
+    session_secret: str = ""
+
     #: Откуда скачивается бандл ATT&CK по кнопке. Стенды без выхода наружу
     #: указывают свой зеркальный адрес через STOOLS_ATTACK_BUNDLE_URL.
     attack_bundle_url: str = (

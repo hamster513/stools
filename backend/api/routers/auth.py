@@ -11,6 +11,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from api.audit import purge_old
+from api.crypto import hash_token
 from api.db.base import get_db
 from api.db.models import AppUser, SessionRow
 from api.deps import get_current_user
@@ -61,7 +62,7 @@ def open_session(
     security = load_security(db)
     ttl_hours = security.session_ttl_hours
     token = new_session_token()
-    db.add(SessionRow(token=token, user_id=user.id, expires_at=session_expiry(ttl_hours)))
+    db.add(SessionRow(token=hash_token(token), user_id=user.id, expires_at=session_expiry(ttl_hours)))
     user.last_login_at = utcnow()
     db.commit()
     purge_old(db, security.audit_retention_days)
@@ -119,7 +120,7 @@ def logout(
     _user: AppUser = Depends(get_current_user),
 ) -> None:
     if stools_session:
-        row = db.get(SessionRow, stools_session)
+        row = db.get(SessionRow, hash_token(stools_session))
         if row is not None:
             db.delete(row)
             db.commit()
@@ -162,5 +163,5 @@ def change_password(
     if not verify_password(payload.current, user.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="текущий пароль неверен")
     user.password_hash = hash_password(payload.new)
-    db.execute(delete(SessionRow).where(SessionRow.user_id == user.id, SessionRow.token != (stools_session or "")))
+    db.execute(delete(SessionRow).where(SessionRow.user_id == user.id, SessionRow.token != hash_token(stools_session or "")))
     db.commit()

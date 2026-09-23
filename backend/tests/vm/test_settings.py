@@ -38,8 +38,8 @@ def test_put_keeps_secrets_when_empty(auth_client: TestClient) -> None:
     from api.modules.vm.services.settings import load_settings
 
     with get_sessionmaker()() as db:
-        s = load_settings(db)
-        assert s.connection.password == "p1" and s.connection.client_secret == "s1"
+        s = load_settings(db).connection.unsealed()
+        assert s.password == "p1" and s.client_secret == "s1"
 
 
 def test_put_keeps_attack_threshold_when_absent(auth_client: TestClient) -> None:
@@ -79,7 +79,60 @@ def _stored_connection() -> Any:
     from api.modules.vm.services.settings import load_settings
 
     with get_sessionmaker()() as db:
-        return load_settings(db).connection
+        return load_settings(db).connection.unsealed()
+
+
+def _raw_setting() -> dict[str, Any]:
+    import json
+
+    from api.db.base import get_sessionmaker
+    from api.db.models import AppSetting
+
+    with get_sessionmaker()() as db:
+        return dict(json.loads(db.get(AppSetting, "vm").value_json))
+
+
+def test_secrets_are_encrypted_at_rest(auth_client: TestClient) -> None:
+    assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
+    conn = _raw_setting()["connection"]
+    assert conn["password"].startswith("enc:v1:") and conn["client_secret"].startswith("enc:v1:")
+    assert _stored_connection().password == "p1"
+
+
+def test_legacy_plaintext_secrets_are_used_and_reencrypted(auth_client: TestClient, monkeypatch: Any) -> None:
+    """Пароль и секрет из старой базы уходят в MaxPatrol как есть и
+    шифруются при следующем сохранении настроек."""
+    import json
+
+    import httpx
+
+    from api.db.base import get_sessionmaker
+    from api.db.models import AppSetting
+    from api.modules.vm.routers import settings as router
+
+    forms: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/token":
+            forms.append(dict(httpx.QueryParams(request.content.decode())))
+            return httpx.Response(200, json={"access_token": "t"})
+        return httpx.Response(403)
+
+    monkeypatch.setattr(router, "make_client", lambda conn, timeout=60.0: httpx.Client(transport=httpx.MockTransport(handler)))
+    assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
+    with get_sessionmaker()() as db:
+        row = db.get(AppSetting, "vm")
+        value = json.loads(row.value_json)
+        value["connection"]["password"], value["connection"]["client_secret"] = "p1", "s1"
+        row.value_json = json.dumps(value)
+        db.commit()
+    auth_client.post("/api/vm/settings/test-vm")
+    keep = {**FIRST, "connection": {**FIRST["connection"], "password": "", "client_secret": ""}}
+    assert auth_client.put("/api/vm/settings", json=keep).status_code == 200
+    conn = _raw_setting()["connection"]
+    assert conn["password"].startswith("enc:v1:") and conn["client_secret"].startswith("enc:v1:")
+    auth_client.post("/api/vm/settings/test-vm")
+    assert [(f["password"], f["client_secret"]) for f in forms] == [("p1", "s1"), ("p1", "s1")]
 
 
 def test_address_change_requires_secrets(auth_client: TestClient) -> None:

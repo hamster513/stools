@@ -363,10 +363,48 @@ def _create(auth_client: TestClient, **extra: Any) -> int:
 
 
 def _stored_password(db_session: Any, cid: int) -> str:
+    from api.crypto import decrypt
+    from api.modules.ksc.models import KscConnection
+
+    db_session.expire_all()
+    return decrypt(db_session.get(KscConnection, cid).password)
+
+
+def _raw_password(db_session: Any, cid: int) -> str:
     from api.modules.ksc.models import KscConnection
 
     db_session.expire_all()
     return str(db_session.get(KscConnection, cid).password)
+
+
+def test_password_is_encrypted_at_rest(auth_client: TestClient, db_session: Any) -> None:
+    cid = _create(auth_client)
+    raw = _raw_password(db_session, cid)
+    assert raw.startswith("enc:v1:") and PASSWORD not in raw
+    assert auth_client.get("/api/ksc/connections").json()[0]["password_set"] is True
+
+
+def test_legacy_plaintext_password_is_used_and_reencrypted(auth_client: TestClient, db_session: Any, fake: FakeKsc) -> None:
+    """Открытый пароль из старой базы принимается сервером KSC и шифруется
+    при следующем сохранении подключения."""
+    from api.modules.ksc.models import KscConnection
+
+    cid = _create(auth_client)
+    db_session.get(KscConnection, cid).password = PASSWORD
+    db_session.commit()
+    assert auth_client.post(f"/api/ksc/connections/{cid}/test").json()["ok"] is True
+    r = auth_client.put(f"/api/ksc/connections/{cid}", json={"title": "другое", "host": "ksc01.corp.local", "username": USER, "password": ""})
+    assert r.status_code == 200
+    assert _raw_password(db_session, cid).startswith("enc:v1:")
+    assert auth_client.post(f"/api/ksc/connections/{cid}/test").json()["ok"] is True
+
+
+def test_password_under_another_key_asks_to_reenter(auth_client: TestClient, monkeypatch: Any, fake: FakeKsc) -> None:
+    cid = _create(auth_client)
+    monkeypatch.setenv("STOOLS_SESSION_SECRET", "some-other-test-key")
+    t = auth_client.post(f"/api/ksc/connections/{cid}/test").json()
+    assert t == {"ok": False, "message": "секрет зашифрован другим ключом — введите его заново"}
+    assert "Session.StartSession" not in fake.calls
 
 
 def test_address_change_requires_password(auth_client: TestClient, db_session: Any) -> None:

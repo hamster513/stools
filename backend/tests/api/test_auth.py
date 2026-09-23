@@ -43,3 +43,49 @@ def test_logout_invalidates_session(auth_client: TestClient) -> None:
     logout = auth_client.post("/api/auth/logout")
     assert logout.status_code == 204
     assert auth_client.get("/api/auth/me").status_code == 401
+
+
+def test_session_is_stored_as_hash_of_the_cookie_token(auth_client: TestClient, db_session: Any) -> None:
+    """В базе лежит SHA-256 токена: дамп таблицы session не даёт войти."""
+    from sqlalchemy import select
+
+    from api.crypto import hash_token
+    from api.db.models import SessionRow
+
+    token = auth_client.cookies["stools_session"]
+    stored = db_session.execute(select(SessionRow.token)).scalars().all()
+    assert stored == [hash_token(token)] and token not in stored
+    #: Значение из базы, подставленное в cookie, сессией не является.
+    forged = TestClient(auth_client.app)
+    forged.cookies.set("stools_session", stored[0])
+    assert forged.get("/api/auth/me").status_code == 401
+    assert auth_client.get("/api/auth/me").status_code == 200
+    assert auth_client.post("/api/auth/logout").status_code == 204
+    db_session.expire_all()
+    assert db_session.execute(select(SessionRow.token)).scalars().all() == []
+
+
+def test_password_change_keeps_only_the_current_session(auth_client: TestClient, db_session: Any) -> None:
+    from sqlalchemy import select
+
+    from api.crypto import hash_token
+    from api.db.models import SessionRow
+
+    other = TestClient(auth_client.app)
+    assert other.post("/api/auth/login", json={"login": TEST_LOGIN, "password": TEST_PASSWORD}).status_code == 204
+    r = auth_client.post("/api/auth/password", json={"current": TEST_PASSWORD, "new": "another-password-1"})
+    assert r.status_code == 204
+    db_session.expire_all()
+    assert db_session.execute(select(SessionRow.token)).scalars().all() == [hash_token(auth_client.cookies["stools_session"])]
+    assert auth_client.get("/api/auth/me").status_code == 200
+    assert other.get("/api/auth/me").status_code == 401
+
+
+def test_hash_migration_ends_all_sessions() -> None:
+    """Миграция на хеши удаляет старые строки: сырой токен в базе больше не ищется."""
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[2] / "api" / "db" / "migrations" / "versions"
+    source = next(versions.glob("*_секреты_и_хеш_сессий.py")).read_text(encoding="utf-8")
+    assert 'down_revision: str | Sequence[str] | None = "d5e6f7a8b9c0"' in source
+    assert 'op.execute("DELETE FROM session")' in source

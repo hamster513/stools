@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from api.crypto import SecretUnreadable, decrypt
 from api.hosts import LOGIN_REJECTED, NO_LINK, NO_RIGHTS, TLS_FAILED, is_tls_error, server_error
 from api.jobs import JobHandle
 from api.modules.ad.core.config import AdConfig
@@ -32,7 +33,7 @@ def ldap3_connection(conn: AdConnection) -> Any:
     tls = Tls(validate=ssl.CERT_REQUIRED if conn.verify_tls else ssl.CERT_NONE)
     server = Server(conn.host, port=conn.port, use_ssl=conn.use_ssl, get_info="ALL", tls=tls, connect_timeout=15)
     auth = NTLM if "\\" in conn.username else SIMPLE
-    c = Connection(server, user=conn.username, password=conn.password, authentication=auth, auto_bind=True, receive_timeout=120)
+    c = Connection(server, user=conn.username, password=decrypt(conn.password), authentication=auth, auto_bind=True, receive_timeout=120)
     return c
 
 
@@ -62,7 +63,7 @@ def public_error(exc: BaseException) -> str:
         LDAPStartTLSError,
     )
 
-    if isinstance(exc, NoNamingContext):
+    if isinstance(exc, (NoNamingContext, SecretUnreadable)):
         return str(exc)
     if isinstance(exc, (LDAPBindError, LDAPInvalidCredentialsResult)):
         return LOGIN_REJECTED
@@ -99,7 +100,7 @@ def collect_snapshot(
         reader = None
         if conn.collect_sysvol:
             try:
-                reader = smb_reader(conn.host, conn.username, conn.password)
+                reader = smb_reader(conn.host, conn.username, decrypt(conn.password))
             except Exception as exc:  # noqa: BLE001 — без SYSVOL сбор всё равно полезен
                 handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; User Rights пропущены")
         handle.stage("collecting", message="объекты и дескрипторы")
