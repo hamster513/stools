@@ -91,7 +91,9 @@ def test_connection_crud_hides_password(auth_client: TestClient) -> None:
     assert body["password_set"] is True and "password" not in body and body["port"] == 13299 and body["internal"] is True
     assert body["skip_policy_contents"] is False
     cid = body["id"]
-    r = auth_client.put(f"/api/ksc/connections/{cid}", json={"host": "ksc02.corp.local", "username": USER, "password": "", "internal": False, "domain": "CORP", "skip_policy_contents": True})
+    r = auth_client.put(f"/api/ksc/connections/{cid}", json={"title": "KSC-2", "host": "ksc01.corp.local", "username": USER, "password": "", "skip_policy_contents": True})
+    assert r.json()["title"] == "KSC-2" and r.json()["password_set"] is True
+    r = auth_client.put(f"/api/ksc/connections/{cid}", json={"host": "ksc02.corp.local", "username": USER, "password": PASSWORD, "internal": False, "domain": "CORP", "skip_policy_contents": True})
     assert r.json()["host"] == "ksc02.corp.local" and r.json()["password_set"] is True and r.json()["domain"] == "CORP"
     assert r.json()["skip_policy_contents"] is True
     assert auth_client.delete(f"/api/ksc/connections/{cid}").status_code == 204
@@ -352,3 +354,139 @@ def test_collect_policy_contents_skips_inactive_typed_bool_policy(monkeypatch: A
     export = load_export(__import__("json").dumps(raw).encode())
     assert set(export.policy_contents) == {"1", "3"}
     assert "9" not in export.policy_contents
+
+
+def _create(auth_client: TestClient, **extra: Any) -> int:
+    r = auth_client.post("/api/ksc/connections", json={"title": "KSC", "host": "ksc01.corp.local", "username": USER, "password": PASSWORD, **extra})
+    assert r.status_code == 201, r.text
+    return int(r.json()["id"])
+
+
+def _stored_password(db_session: Any, cid: int) -> str:
+    from api.modules.ksc.models import KscConnection
+
+    db_session.expire_all()
+    return str(db_session.get(KscConnection, cid).password)
+
+
+def test_address_change_requires_password(auth_client: TestClient, db_session: Any) -> None:
+    cid = _create(auth_client)
+    base = {"host": "ksc01.corp.local", "username": USER, "password": ""}
+    for change in ({"host": "evil.corp.local"}, {"port": 443}, {"verify_tls": False}, {"username": "other"}, {"internal": False}, {"domain": "CORP"}):
+        r = auth_client.put(f"/api/ksc/connections/{cid}", json={**base, **change})
+        assert r.status_code == 422, (change, r.text)
+        assert r.json()["detail"] == "при смене адреса или учётной записи пароль нужно ввести заново"
+    assert _stored_password(db_session, cid) == PASSWORD
+    assert auth_client.get("/api/ksc/connections").json()[0]["host"] == "ksc01.corp.local"
+    r = auth_client.put(f"/api/ksc/connections/{cid}", json={**base, "host": "ksc02.corp.local", "password": "new"})
+    assert r.status_code == 200 and r.json()["host"] == "ksc02.corp.local"
+    assert _stored_password(db_session, cid) == "new"
+
+
+def test_title_change_keeps_password(auth_client: TestClient, db_session: Any) -> None:
+    cid = _create(auth_client)
+    r = auth_client.put(f"/api/ksc/connections/{cid}", json={"title": "другое", "host": "ksc01.corp.local", "username": USER, "password": ""})
+    assert r.status_code == 200 and r.json()["title"] == "другое" and r.json()["password_set"] is True
+    assert _stored_password(db_session, cid) == PASSWORD
+
+
+def test_host_must_be_name_or_ip(auth_client: TestClient) -> None:
+    for bad in ("10.0.0.5/internal/admin?x=", "https://ksc01", "ksc01:13299", "u@ksc01", "ksc01#x", "ksc 01", ""):
+        r = auth_client.post("/api/ksc/connections", json={"host": bad})
+        assert r.status_code == 422 and "адрес сервера: только имя или IP" in r.text, bad
+    cid = _create(auth_client)
+    assert auth_client.put(f"/api/ksc/connections/{cid}", json={"host": "10.0.0.5/x?y", "password": PASSWORD}).status_code == 422
+
+
+def test_ipv6_host_goes_into_url_in_brackets() -> None:
+    from api.modules.ksc.models import KscConnection
+    from api.modules.ksc.services.connections import _client
+
+    c = _client(KscConnection(host="fe80::1", port=13299, username=USER, password=PASSWORD, verify_tls=True, internal=True, domain=""))
+    try:
+        assert c.base_url == "https://[fe80::1]:13299/api/v1.0/"
+    finally:
+        c._http.close()
+
+
+def test_test_error_names_only_the_cause(auth_client: TestClient) -> None:
+    cid = _create(auth_client, host="127.0.0.1", port=1)
+    assert auth_client.post(f"/api/ksc/connections/{cid}/test").json() == {"ok": False, "message": "нет связи"}
+
+
+def test_test_errors_are_generic_classes(auth_client: TestClient, fake: FakeKsc) -> None:
+    cid = _create(auth_client)
+    fake.fail_login = True
+    assert auth_client.post(f"/api/ksc/connections/{cid}/test").json() == {"ok": False, "message": "вход отклонён"}
+    fake.fail_login = False
+    fake.fail_after = "HostGroup.GetStaticInfo"  # PxgError с текстом сервера
+    assert auth_client.post(f"/api/ksc/connections/{cid}/test").json() == {"ok": False, "message": "ошибка сервера"}
+    fake.fail_after = None
+    fake.deny = {"HostGroup.GetStaticInfo"}
+    assert auth_client.post(f"/api/ksc/connections/{cid}/test").json() == {"ok": False, "message": "нет прав"}
+
+
+def test_public_error_classes() -> None:
+    import ssl
+
+    import httpx
+
+    from api.modules.ksc.services.connections import public_error
+
+    try:
+        raise KscError("нет связи с KSC: ConnectError", kind="link") from httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED]")
+    except KscError as exc:
+        assert public_error(exc) == "отказ TLS"
+    try:
+        raise KscError("нет связи с KSC: ConnectError", kind="link") from httpx.ConnectError("[Errno 61] Connection refused")
+    except KscError as exc:
+        assert public_error(exc) == "нет связи"
+    try:
+        raise KscError("нет связи с KSC: ConnectError", kind="link") from ssl.SSLError("handshake")
+    except KscError as exc:
+        assert public_error(exc) == "отказ TLS"
+    assert public_error(KscError("KSC ответил 502 на X", 502, kind="http")) == "ошибка сервера (HTTP 502)"
+    assert public_error(KscError("X: текст сервера", 1)) == "ошибка сервера"
+    assert public_error(RuntimeError("что угодно")) == "ошибка сервера"
+
+
+def test_third_parallel_test_is_rejected(auth_client: TestClient, monkeypatch: Any) -> None:
+    import threading
+
+    from api.modules.ksc.services import connections as svc
+
+    entered = threading.Semaphore(0)
+    release = threading.Event()
+
+    def slow(conn: Any) -> dict[str, Any]:
+        entered.release()
+        release.wait(10)
+        return {"ok": True, "message": "подключились"}
+
+    monkeypatch.setattr(svc, "test_connection", slow)
+    cid = _create(auth_client)
+    codes: list[int] = []
+    threads = [threading.Thread(target=lambda: codes.append(auth_client.post(f"/api/ksc/connections/{cid}/test").status_code)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    assert entered.acquire(timeout=10) and entered.acquire(timeout=10)
+    r = auth_client.post(f"/api/ksc/connections/{cid}/test")
+    assert r.status_code == 429 and r.json()["detail"] == "дождитесь завершения проверки"
+    assert auth_client.post(f"/api/ksc/connections/{cid}/collect").status_code == 429
+    release.set()
+    for t in threads:
+        t.join(10)
+    assert codes == [200, 200]
+    assert auth_client.post(f"/api/ksc/connections/{cid}/test").status_code == 200
+
+
+def test_put_summary_lists_changed_fields(auth_client: TestClient, db_session: Any) -> None:
+    from api.db.models import AuditEvent
+
+    cid = _create(auth_client)
+    auth_client.put(f"/api/ksc/connections/{cid}", json={"title": "KSC", "host": "ksc02.corp.local", "port": 443, "username": USER, "password": "new-secret"})
+    auth_client.put(f"/api/ksc/connections/{cid}", json={"title": "KSC", "host": "ksc02.corp.local", "port": 443, "username": USER, "password": "", "internal": False})
+    db_session.expire_all()
+    events = [e for e in db_session.query(AuditEvent).order_by(AuditEvent.id) if e.method == "PUT"]
+    assert [(e.status, e.summary) for e in events] == [(200, "изменено: host, port, password"), (422, "изменено: internal")]
+    assert all("ksc0" not in (e.summary or "") and "secret" not in (e.summary or "") for e in events)

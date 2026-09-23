@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.audit import changes_summary
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.hosts import take_slot, validate_host
 from api.jobs import JobHandle
 from api.modules.ksc.models import KscConnection
 from api.modules.ksc.routers.snapshots import JobStarted
@@ -20,6 +22,10 @@ from api.modules.ksc.services.settings import load_config
 from api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/connections", tags=["ksc"])
+
+#: Поля, от которых зависит, куда и под чьим именем уйдёт сохранённый пароль.
+ADDRESS_FIELDS = frozenset({"host", "port", "verify_tls", "username", "internal", "domain"})
+PASSWORD_AGAIN = "при смене адреса или учётной записи пароль нужно ввести заново"
 
 
 class ConnectionIn(BaseModel):
@@ -35,6 +41,11 @@ class ConnectionIn(BaseModel):
     domain: str = ""
     #: Не собирать содержимое политик (секция policy_contents) — файл заметно больше.
     skip_policy_contents: bool = False
+
+    @field_validator("host")
+    @classmethod
+    def check_host(cls, value: str) -> str:
+        return validate_host(value)
 
 
 class ConnectionView(BaseModel):
@@ -80,10 +91,17 @@ def create_connection(payload: ConnectionIn, db: Session = Depends(get_db), _use
 
 
 @router.put("/{connection_id}", response_model=ConnectionView)
-def update_connection(connection_id: int, payload: ConnectionIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ConnectionView:
+def update_connection(
+    connection_id: int, payload: ConnectionIn, request: Request, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+) -> ConnectionView:
     c = _get(db, connection_id)
     data = payload.model_dump()
+    changed = [k for k, v in data.items() if v != getattr(c, k) and (k != "password" or v)]
+    request.state.audit_summary = changes_summary(changed)
     if not data["password"]:
+        # Сохранённый пароль не уходит на новый адрес или под новым именем.
+        if c.password and ADDRESS_FIELDS.intersection(changed):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=PASSWORD_AGAIN)
         data.pop("password")
     for k, v in data.items():
         setattr(c, k, v)
@@ -98,12 +116,15 @@ def delete_connection(connection_id: int, db: Session = Depends(get_db), _user: 
 
 
 @router.post("/{connection_id}/test")
-def test_connection(connection_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+def test_connection(connection_id: int, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     c = _get(db, connection_id)
+    slot = take_slot("ksc", user.id)
     try:
         return svc.test_connection(c)
-    except Exception as exc:  # noqa: BLE001 — любая причина отказа должна дойти до человека текстом
-        return {"ok": False, "message": str(exc)[:200]}
+    except Exception as exc:  # noqa: BLE001 — любая причина отказа доходит до человека классом, без текста KSC
+        return {"ok": False, "message": svc.public_error(exc)}
+    finally:
+        slot.release()
 
 
 @router.post("/{connection_id}/collect", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
@@ -120,7 +141,12 @@ def collect(
     running = active_job(db, ["import_file", "collect", "reanalyze"])
     if running is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, дождитесь её")
-    job_id = start_job(db, "collect", user.login, message=c.host)
+    slot = take_slot("ksc", user.id)
+    try:
+        job_id = start_job(db, "collect", user.login, message=c.host)
+    except Exception:
+        slot.release()
+        raise
     data_dir = settings.data_dir
 
     def work(session: Session, handle: JobHandle) -> None:
@@ -130,5 +156,11 @@ def collect(
         snap = svc.collect_snapshot(session, handle, conn, load_config(session), data_dir)
         handle.stage("done", message=f"снапшот #{snap.id}: находок {snap.findings}")
 
-    background_tasks.add_task(run_job, job_id, work)
+    def guarded() -> None:
+        try:
+            run_job(job_id, work)
+        finally:
+            slot.release()
+
+    background_tasks.add_task(guarded)
     return JobStarted(job_id=job_id)

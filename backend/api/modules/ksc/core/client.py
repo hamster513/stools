@@ -21,9 +21,14 @@ http_factory: Callable[[bool], httpx.Client] = _default_http_factory
 
 
 class KscError(Exception):
-    def __init__(self, message: str, code: int | None = None) -> None:
+    """`kind` — класс причины для ответа проверки подключения: link (нет
+    связи), auth (вход отклонён), forbidden (нет прав), http (код ответа не
+    200), server (ошибка метода или ответа)."""
+
+    def __init__(self, message: str, code: int | None = None, *, kind: str = "server") -> None:
         super().__init__(message)
         self.code = code
+        self.kind = kind
 
 
 def _b64(value: str) -> str:
@@ -54,13 +59,13 @@ class KscClient:
         try:
             resp = self._http.post(self.base_url + method, json=body or {}, headers={"Content-Type": "application/json", **headers})
         except httpx.HTTPError as exc:
-            raise KscError(f"нет связи с KSC: {exc.__class__.__name__}") from exc
+            raise KscError(f"нет связи с KSC: {exc.__class__.__name__}", kind="link") from exc
         if resp.status_code in (401, 403):
             if method != "Session.StartSession" and resp.status_code == 403:
-                raise KscError(f"нет прав на {method}", resp.status_code)
-            raise KscError("вход отклонён: неверные логин, пароль или тип учётной записи", resp.status_code)
+                raise KscError(f"нет прав на {method}", resp.status_code, kind="forbidden")
+            raise KscError("вход отклонён: неверные логин, пароль или тип учётной записи", resp.status_code, kind="auth")
         if resp.status_code != 200:
-            raise KscError(f"KSC ответил {resp.status_code} на {method}", resp.status_code)
+            raise KscError(f"KSC ответил {resp.status_code} на {method}", resp.status_code, kind="http")
         try:
             data = resp.json() if resp.content else {}
         except ValueError as exc:

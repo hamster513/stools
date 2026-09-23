@@ -12,6 +12,8 @@ from urllib.parse import quote
 
 import httpx
 
+from api.hosts import url_host
+
 
 class ConnectionLike(Protocol):
     host: str
@@ -25,7 +27,15 @@ class ConnectionLike(Protocol):
 
 
 class MpVmError(Exception):
-    pass
+    """`status` — код HTTP-ответа, если отказ пришёл с ним."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+class MpVmLoginError(MpVmError):
+    """Токен не выдан: логин, пароль или client secret не приняты."""
 
 
 PDQL_SELECT = (
@@ -67,13 +77,13 @@ class MpVmClient:
         host = self.conn.host.strip().rstrip("/")
         if host.startswith("http"):
             return host
-        return f"https://{host}"
+        return f"https://{url_host(host)}"
 
     def token(self) -> str:
         if self._token:
             return self._token
         host = self.conn.host.strip().rstrip("/").removeprefix("https://").removeprefix("http://")
-        url = f"https://{host}:3334/connect/token"
+        url = f"https://{url_host(host)}:3334/connect/token"
         data = {
             "username": self.conn.username,
             "password": self.conn.password,
@@ -88,10 +98,10 @@ class MpVmClient:
         except httpx.HTTPError as exc:
             raise MpVmError(f"нет связи с {host}:3334 — {exc.__class__.__name__}") from exc
         if r.status_code != 200:
-            raise MpVmError(f"токен не выдан: HTTP {r.status_code}")
+            raise MpVmLoginError(f"токен не выдан: HTTP {r.status_code}", r.status_code)
         token = r.json().get("access_token")
         if not token:
-            raise MpVmError("ответ без access_token — проверьте client secret")
+            raise MpVmLoginError("ответ без access_token — проверьте client secret")
         self._token = str(token)
         return self._token
 
@@ -105,7 +115,7 @@ class MpVmClient:
         except httpx.HTTPError as exc:
             raise MpVmError(f"запрос PDQL не прошёл — {exc.__class__.__name__}") from exc
         if r.status_code != 200:
-            raise MpVmError(f"PDQL отклонён: HTTP {r.status_code} {r.text[:200]}")
+            raise MpVmError(f"PDQL отклонён: HTTP {r.status_code} {r.text[:200]}", r.status_code)
         token = r.json().get("token")
         if not token:
             raise MpVmError("ответ без токена экспорта")
@@ -122,7 +132,7 @@ class MpVmClient:
         try:
             with self.http.stream("GET", url, headers=self._headers(), timeout=600.0) as r:
                 if r.status_code != 200:
-                    raise MpVmError(f"экспорт не отдан: HTTP {r.status_code}")
+                    raise MpVmError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
                 with to_path.open("wb") as out:
                     for chunk in r.iter_bytes():
                         out.write(chunk)
@@ -143,5 +153,5 @@ class MpVmClient:
         )
         r = self.http.get(url, headers=self._headers())
         if r.status_code != 200:
-            raise MpVmError(f"экспорт не отдан: HTTP {r.status_code}")
+            raise MpVmError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
         return r.text[:200]

@@ -7,8 +7,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from api.hosts import (
+    LOGIN_REJECTED,
+    NO_LINK,
+    NO_RIGHTS,
+    TLS_FAILED,
+    is_tls_error,
+    server_error,
+    url_host,
+)
 from api.jobs import JobHandle
-from api.modules.ksc.core.client import KscClient
+from api.modules.ksc.core.client import KscClient, KscError
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.models import KscConnection, KscSnapshot
@@ -16,7 +25,20 @@ from api.modules.ksc.services.snapshots import import_export
 
 
 def _client(conn: KscConnection) -> KscClient:
-    return KscClient(f"https://{conn.host}:{conn.port}", conn.username, conn.password, verify_tls=conn.verify_tls, internal=conn.internal, domain=conn.domain)
+    return KscClient(f"https://{url_host(conn.host)}:{conn.port}", conn.username, conn.password, verify_tls=conn.verify_tls, internal=conn.internal, domain=conn.domain)
+
+
+def public_error(exc: BaseException) -> str:
+    """Класс причины отказа для ответа проверки: без адреса и текста KSC."""
+    if not isinstance(exc, KscError):
+        return server_error()
+    if exc.kind == "link":
+        return TLS_FAILED if is_tls_error(exc) else NO_LINK
+    if exc.kind == "auth":
+        return LOGIN_REJECTED
+    if exc.kind == "forbidden":
+        return NO_RIGHTS
+    return server_error(exc.code if exc.kind == "http" else None)
 
 
 def test_connection(conn: KscConnection) -> dict[str, Any]:

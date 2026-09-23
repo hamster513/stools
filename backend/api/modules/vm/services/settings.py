@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import datetime as dt
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from api.db.models import AppSetting
+from api.hosts import validate_host
 from api.modules.vm.core.weights import DEFAULT_THRESHOLD, Weights
 
 VM_KEY = "vm"
@@ -41,6 +42,25 @@ class Connection(BaseModel):
         return bool(self.host.strip() and self.username.strip() and self.password)
 
 
+class ConnectionIn(Connection):
+    """Подключение из формы: адрес проверяется, пустой — «не настроено»."""
+
+    @field_validator("host")
+    @classmethod
+    def check_host(cls, value: str) -> str:
+        return validate_host(value) if value.strip() else ""
+
+
+#: Поля, от которых зависит, куда и под чьим именем уйдут пароль и секрет.
+ADDRESS_FIELDS = ("host", "username", "verify_tls")
+SECRET_FIELDS = ("password", "client_secret")
+SECRETS_AGAIN = "при смене адреса или учётной записи пароль нужно ввести заново"
+
+
+class SecretsRequired(ValueError):
+    pass
+
+
 class VmSettings(BaseModel):
     connection: Connection = Field(default_factory=Connection)
     weights: Weights = Field(default_factory=Weights)
@@ -57,7 +77,7 @@ class VmSettingsIn(BaseModel):
     без этого сохранение любой из них молча возвращало бы его в умолчание.
     """
 
-    connection: Connection = Field(default_factory=Connection)
+    connection: ConnectionIn = Field(default_factory=ConnectionIn)
     weights: Weights = Field(default_factory=Weights)
     threshold: int = Field(default=DEFAULT_THRESHOLD, ge=0, le=100)
     attack_min_risk: int | None = Field(default=None, ge=0, le=100)
@@ -70,13 +90,37 @@ def load_settings(db: Session) -> VmSettings:
     return VmSettings.model_validate_json(row.value_json)
 
 
+def changed_fields(current: VmSettings, incoming: VmSettingsIn) -> list[str]:
+    """Имена изменённых полей для журнала; пустой секрет — «не трогать»."""
+    changed = []
+    for name in Connection.model_fields:
+        new = getattr(incoming.connection, name)
+        if new != getattr(current.connection, name) and (name not in SECRET_FIELDS or new):
+            changed.append(name)
+    if incoming.weights != current.weights:
+        changed.append("weights")
+    if incoming.threshold != current.threshold:
+        changed.append("threshold")
+    if incoming.attack_min_risk is not None and incoming.attack_min_risk != current.attack_min_risk:
+        changed.append("attack_min_risk")
+    return changed
+
+
 def save_settings(db: Session, incoming: VmSettingsIn, login: str | None) -> VmSettings:
     """Сохранить, оставив прежние секреты, если новые пришли пустыми:
     форма их не показывает, а значит, и не присылает. Порог матрицы —
-    так же: отсутствие поля значит «не трогать», а не «сбросить»."""
+    так же: отсутствие поля значит «не трогать», а не «сбросить».
+
+    Исключение — смена адреса или учётной записи: прежние секреты на новый
+    адрес не уходят, их нужно ввести заново (`SecretsRequired`)."""
     current = load_settings(db)
+    new, old = incoming.connection, current.connection
+    if new.host and any(getattr(new, f) != getattr(old, f) for f in ADDRESS_FIELDS) and any(
+        getattr(old, f) and not getattr(new, f) for f in SECRET_FIELDS
+    ):
+        raise SecretsRequired(SECRETS_AGAIN)
     merged = VmSettings(
-        connection=incoming.connection.model_copy(deep=True),
+        connection=Connection(**incoming.connection.model_dump()),
         weights=incoming.weights.model_copy(deep=True),
         threshold=incoming.threshold,
         attack_min_risk=current.attack_min_risk if incoming.attack_min_risk is None else incoming.attack_min_risk,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 
@@ -25,9 +27,10 @@ def test_put_keeps_secrets_when_empty(auth_client: TestClient) -> None:
     assert r.json()["connection"]["password_set"] is True
     assert r.json()["threshold"] == 60
 
-    second = {"connection": {"host": "vm2.local", "username": "u", "password": "", "client_secret": ""}, "weights": {}, "threshold": 60}
+    second = {"connection": {"host": "vm.local", "username": "u", "password": "", "client_secret": "", "pdql_extra": "Host.OsName != 'x'"}, "weights": {}, "threshold": 65}
     r = auth_client.put("/api/vm/settings", json=second)
-    assert r.json()["connection"]["host"] == "vm2.local"
+    assert r.status_code == 200, r.text
+    assert r.json()["connection"]["pdql_extra"] == "Host.OsName != 'x'" and r.json()["threshold"] == 65
     assert r.json()["connection"]["password_set"] is True
     assert r.json()["connection"]["client_secret_set"] is True
 
@@ -65,3 +68,126 @@ def test_zones_roundtrip(auth_client: TestClient) -> None:
     assert zones == [
         {"name": "DMZ", "internet_access": True, "confidential_data": False, "marked": True, "hosts": 0}
     ]
+
+
+FIRST = {"connection": {"host": "vm.local", "username": "u", "password": "p1", "client_secret": "s1"}, "weights": {}, "threshold": 60}
+SECRET_AGAIN = "при смене адреса или учётной записи пароль нужно ввести заново"
+
+
+def _stored_connection() -> Any:
+    from api.db.base import get_sessionmaker
+    from api.modules.vm.services.settings import load_settings
+
+    with get_sessionmaker()() as db:
+        return load_settings(db).connection
+
+
+def test_address_change_requires_secrets(auth_client: TestClient) -> None:
+    assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
+    keep = {"host": "vm.local", "username": "u", "password": "", "client_secret": ""}
+    for change in ({"host": "evil.local"}, {"username": "other"}, {"verify_tls": True},
+                   {"host": "evil.local", "password": "p2"}, {"host": "evil.local", "client_secret": "s2"}):
+        r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**keep, **change}})
+        assert r.status_code == 422, (change, r.text)
+        assert r.json()["detail"] == SECRET_AGAIN
+    stored = _stored_connection()
+    assert (stored.host, stored.username, stored.password, stored.client_secret) == ("vm.local", "u", "p1", "s1")
+    r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**keep, "host": "vm2.local", "password": "p2", "client_secret": "s2"}})
+    assert r.status_code == 200 and r.json()["connection"]["host"] == "vm2.local"
+    stored = _stored_connection()
+    assert (stored.password, stored.client_secret) == ("p2", "s2")
+
+
+def test_other_changes_keep_secrets(auth_client: TestClient) -> None:
+    assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
+    r = auth_client.put("/api/vm/settings", json={**FIRST, "threshold": 50, "connection": {**FIRST["connection"], "password": "", "client_secret": "", "limit": 10}})
+    assert r.status_code == 200, r.text
+    stored = _stored_connection()
+    assert (stored.password, stored.client_secret, stored.limit) == ("p1", "s1", 10)
+
+
+def test_host_must_be_name_or_ip(auth_client: TestClient) -> None:
+    for bad in ("10.0.0.5/x?y", "https://vm.local", "vm.local:3334", "u@vm.local", "vm local"):
+        r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**FIRST["connection"], "host": bad}})
+        assert r.status_code == 422 and "адрес сервера: только имя или IP" in r.text, bad
+    empty = {**FIRST, "connection": {"host": "", "username": "", "password": "", "client_secret": ""}}
+    assert auth_client.put("/api/vm/settings", json=empty).status_code == 200
+
+
+def test_test_vm_error_names_only_the_cause(auth_client: TestClient) -> None:
+    body = {**FIRST, "connection": {**FIRST["connection"], "host": "127.0.0.1"}}
+    assert auth_client.put("/api/vm/settings", json=body).status_code == 200
+    assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "нет связи"}
+
+
+def test_test_vm_errors_are_generic_classes(auth_client: TestClient, monkeypatch: Any) -> None:
+    import httpx
+
+    from api.modules.vm.routers import settings as router
+
+    answers: dict[str, httpx.Response] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/token":
+            return answers.get("token") or httpx.Response(200, json={"access_token": "t"})
+        return answers.get("pdql") or httpx.Response(200, json={"token": "e"})
+
+    monkeypatch.setattr(router, "make_client", lambda conn, timeout=60.0: httpx.Client(transport=httpx.MockTransport(handler)))
+    assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
+    answers["token"] = httpx.Response(400, json={"error": "invalid_grant"})
+    assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "вход отклонён"}
+    answers["token"] = httpx.Response(200, json={"access_token": "t"})
+    answers["pdql"] = httpx.Response(500, text="внутренний текст сервера")
+    assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "ошибка сервера (HTTP 500)"}
+    answers["pdql"] = httpx.Response(403)
+    assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "нет прав"}
+    answers["token"] = httpx.Response(200, text="не json")
+    assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "ошибка сервера"}
+
+
+def test_third_parallel_test_vm_is_rejected(auth_client: TestClient, monkeypatch: Any) -> None:
+    import threading
+
+    from api.modules.vm.routers import settings as router
+
+    entered = threading.Semaphore(0)
+    release = threading.Event()
+
+    class Slow:
+        def __init__(self, conn: Any, http: Any) -> None:
+            pass
+
+        def probe(self) -> str:
+            entered.release()
+            release.wait(10)
+            return "host;os"
+
+    monkeypatch.setattr(router, "MpVmClient", Slow)
+    assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
+    codes: list[int] = []
+    threads = [threading.Thread(target=lambda: codes.append(auth_client.post("/api/vm/settings/test-vm").status_code)) for _ in range(2)]
+    for t in threads:
+        t.start()
+    assert entered.acquire(timeout=10) and entered.acquire(timeout=10)
+    r = auth_client.post("/api/vm/settings/test-vm")
+    assert r.status_code == 429 and r.json()["detail"] == "дождитесь завершения проверки"
+    release.set()
+    for t in threads:
+        t.join(10)
+    assert codes == [200, 200]
+    assert auth_client.post("/api/vm/settings/test-vm").status_code == 200
+
+
+def test_put_summary_lists_changed_fields(auth_client: TestClient, db_session: Any) -> None:
+    from api.db.models import AuditEvent
+
+    auth_client.put("/api/vm/settings", json=FIRST)
+    auth_client.put("/api/vm/settings", json={**FIRST, "threshold": 65, "connection": {**FIRST["connection"], "host": "vm2.local", "password": "p2", "client_secret": "s2"}})
+    auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**FIRST["connection"], "host": "vm3.local", "password": "", "client_secret": ""}})
+    db_session.expire_all()
+    events = [e for e in db_session.query(AuditEvent).order_by(AuditEvent.id) if e.path == "/api/vm/settings"]
+    assert [(e.status, e.summary) for e in events][1:] == [
+        (200, "изменено: host, password, client_secret, threshold"),
+        (422, "изменено: host, threshold"),
+    ]
+    assert all("vm" not in (e.summary or "") and "p2" not in (e.summary or "") for e in events)

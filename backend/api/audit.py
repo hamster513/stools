@@ -37,6 +37,11 @@ MAX_SUMMARY = 200
 logger = logging.getLogger(__name__)
 
 
+def changes_summary(fields: list[str]) -> str:
+    """Сводка правки настроек: имена изменённых полей, без значений."""
+    return "изменено: " + ", ".join(fields) if fields else "без изменений"
+
+
 def record(
     db: Session,
     *,

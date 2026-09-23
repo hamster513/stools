@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from api.hosts import LOGIN_REJECTED, NO_LINK, NO_RIGHTS, TLS_FAILED, is_tls_error, server_error
 from api.jobs import JobHandle
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.ldap_collector import LdapCollector, ldap3_searcher, smb_reader
@@ -17,6 +18,10 @@ from api.modules.ad.services.snapshots import import_export
 
 #: Фабрика соединения подменяется в тестах: сети там нет.
 ConnectionFactory = Callable[[AdConnection], Any]
+
+
+class NoNamingContext(ValueError):
+    """Наш собственный текст без адреса и ответа сервера: доходит до человека как есть."""
 
 
 def ldap3_connection(conn: AdConnection) -> Any:
@@ -43,8 +48,29 @@ def root_dse_of(connection: Any, base_dn: str) -> dict[str, Any]:
         "schemaNamingContext": first("schemaNamingContext"),
     }
     if not root["defaultNamingContext"]:
-        raise ValueError("rootDSE не отдал defaultNamingContext — укажите base DN")
+        raise NoNamingContext("rootDSE не отдал defaultNamingContext — укажите base DN")
     return root
+
+
+def public_error(exc: BaseException) -> str:
+    """Класс причины отказа для ответа проверки: без адреса и текста LDAP."""
+    from ldap3.core.exceptions import (
+        LDAPBindError,
+        LDAPCommunicationError,
+        LDAPInsufficientAccessRightsResult,
+        LDAPInvalidCredentialsResult,
+        LDAPStartTLSError,
+    )
+
+    if isinstance(exc, NoNamingContext):
+        return str(exc)
+    if isinstance(exc, (LDAPBindError, LDAPInvalidCredentialsResult)):
+        return LOGIN_REJECTED
+    if isinstance(exc, LDAPInsufficientAccessRightsResult):
+        return NO_RIGHTS
+    if isinstance(exc, (LDAPCommunicationError, LDAPStartTLSError, OSError)):
+        return TLS_FAILED if is_tls_error(exc) else NO_LINK
+    return server_error()
 
 
 def test_connection(conn: AdConnection, factory: ConnectionFactory | None = None) -> dict[str, Any]:
