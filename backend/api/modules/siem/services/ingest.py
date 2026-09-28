@@ -127,25 +127,31 @@ def _run_pipeline(db: Session, job_id: int, snapshot_id: int) -> None:
     if job is None or snapshot is None:
         return
     try:
-        _set_stage(db, job, "parsing")
-        parsed = parse_archive(Path(snapshot.archive_path))
-        Path(snapshot.parsed_cache_path).write_text(parsed.model_dump_json(), encoding="utf-8")
-
-        _set_stage(db, job, "analyzing")
-        profile = _load_profile(db, snapshot_id, parsed)
-        report = build_report(parsed, profile)
-
-        _set_stage(db, job, "persisting")
-        persist_report(db, snapshot, parsed, report)
-
-        job.stage = "done"
-        job.status = "done"
-        job.progress = 100
-        db.add(job)
-        db.commit()
+        _run_stages(db, job, snapshot, snapshot_id)
     except Exception as exc:  # noqa: BLE001 — любая ошибка стадии проваливает job
         db.rollback()
         _fail_job(db, job_id, snapshot_id, _safe_error(exc))
+
+
+def _run_stages(db: Session, job: Job, snapshot: Snapshot, snapshot_id: int) -> None:
+    """Разбор -> анализ -> запись отчёта -> job(done); ошибки ловит вызывающий:
+    загрузка и переразбор по-разному решают судьбу снапшота."""
+    _set_stage(db, job, "parsing")
+    parsed = parse_archive(Path(snapshot.archive_path))
+    Path(snapshot.parsed_cache_path).write_text(parsed.model_dump_json(), encoding="utf-8")
+
+    _set_stage(db, job, "analyzing")
+    profile = _load_profile(db, snapshot_id, parsed)
+    report = build_report(parsed, profile)
+
+    _set_stage(db, job, "persisting")
+    persist_report(db, snapshot, parsed, report)
+
+    job.stage = "done"
+    job.status = "done"
+    job.progress = 100
+    db.add(job)
+    db.commit()
 
 
 def _load_profile(db: Session, snapshot_id: int, parsed: ParsedArchive) -> Profile:
@@ -194,24 +200,7 @@ def reparse(job_id: int, snapshot_id: int) -> None:
         if job is None or snapshot is None:
             return
         try:
-            _set_stage(db, job, "parsing")
-            parsed = parse_archive(Path(snapshot.archive_path))
-            Path(snapshot.parsed_cache_path).write_text(
-                parsed.model_dump_json(), encoding="utf-8"
-            )
-
-            _set_stage(db, job, "analyzing")
-            profile = _load_profile(db, snapshot_id, parsed)
-            report = build_report(parsed, profile)
-
-            _set_stage(db, job, "persisting")
-            persist_report(db, snapshot, parsed, report)
-
-            job.stage = "done"
-            job.status = "done"
-            job.progress = 100
-            db.add(job)
-            db.commit()
+            _run_stages(db, job, snapshot, snapshot_id)
         except Exception as exc:
             db.rollback()
             logger.exception("повторный разбор провалился")

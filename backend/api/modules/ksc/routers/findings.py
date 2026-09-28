@@ -7,9 +7,18 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.collector_routes import (
+    FINDING_STATUSES,
+    filter_findings,
+    finding_history,
+    finding_or_404,
+    finding_rows,
+    findings_page,
+    snapshot_or_404,
+    verdict_view,
+)
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
@@ -20,7 +29,6 @@ from api.modules.ksc.services.snapshots import accepted_keys, compare
 
 router = APIRouter(tags=["ksc"])
 
-STATUSES = ("new", "persisting", "accepted", "fixed")
 MAX_LIMIT = 1000
 
 
@@ -53,84 +61,39 @@ def list_findings(
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    snap = db.get(KscSnapshot, snapshot_id)
-    if snap is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
-    if status_ is not None and status_ not in STATUSES:
+    snap = snapshot_or_404(db, KscSnapshot, snapshot_id)
+    if status_ is not None and status_ not in FINDING_STATUSES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="неизвестный статус")
     cmp_ = compare(db, snap)
     accepted = accepted_keys(db, snap.server_id)
 
     # Находок у сервера тысячи, не миллионы: статусы и фасеты считаются
     # в памяти, а не в SQL, — статус зависит от двух других снапшотов.
-    if status_ == "fixed":
-        rows = list(cmp_.fixed)
-        statuses = {f.id: "fixed" for f in rows}
-    else:
-        rows = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id)).scalars())
-        statuses = {
-            f.id: "accepted" if f.key in accepted else "new" if f.key in cmp_.new_keys else "persisting" for f in rows
-        }
-
-    def keep(f: KscFinding) -> bool:
-        if check and f.check != check:
-            return False
-        if severity and f.severity != severity:
-            return False
-        if allowlisted is not None and f.allowlisted != allowlisted:
-            return False
-        if status_ and status_ != "fixed" and statuses[f.id] != status_:
-            return False
-        if q:
-            needle = q.lower()
-            check_title = CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check
-            if needle not in f.host.lower() and needle not in f.target.lower() and needle not in check_title.lower():
-                return False
-        return True
-
-    filtered = [f for f in rows if keep(f)]
+    rows, statuses = finding_rows(db, KscFinding, snapshot_id, cmp_, accepted, status_)
+    filtered = filter_findings(
+        rows, statuses, check=check, severity=severity, allowlisted=allowlisted, status_=status_, q=q,
+        haystack=lambda f: (f.host, f.target, CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check),
+    )
     filtered.sort(key=lambda f: (SEVERITY_RANK.get(f.severity, 9), f.check, f.host.lower(), f.target.lower()))
-    facets: dict[str, dict[str, int]] = {"check": {}, "severity": dict.fromkeys(SEVERITIES, 0), "status": dict.fromkeys(STATUSES, 0), "allowlisted": {"yes": 0, "no": 0}}
-    for f in filtered:
-        facets["check"][f.check] = facets["check"].get(f.check, 0) + 1
-        facets["severity"][f.severity] = facets["severity"].get(f.severity, 0) + 1
-        facets["status"][statuses[f.id]] += 1
-        facets["allowlisted"]["yes" if f.allowlisted else "no"] += 1
-    if status_ != "fixed":
-        facets["status"]["fixed"] = len(cmp_.fixed)
-    page = filtered[offset : offset + limit]
-    return {
-        "total": len(filtered),
-        "items": [_item(f, statuses[f.id]) for f in page],
-        "facets": facets if offset == 0 else None,
-        "compared_to": {"previous_id": cmp_.previous_id, "collected_at": cmp_.previous_collected_at.isoformat() if cmp_.previous_collected_at else None, "new": cmp_.new, "fixed": len(cmp_.fixed)},
-        "check_titles": {code: spec.title for code, spec in CHECK_BY_CODE.items()},
-    }
+    return findings_page(
+        filtered, statuses, cmp_, status_=status_, offset=offset, limit=limit, item=_item, severities=SEVERITIES,
+        check_titles={code: spec.title for code, spec in CHECK_BY_CODE.items()},
+    )
 
 
 @router.get("/snapshots/{snapshot_id}/findings/{key}")
 def finding_detail(snapshot_id: int, key: str, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
-    snap = db.get(KscSnapshot, snapshot_id)
-    if snap is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
-    f = db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.key == key)).scalars().first()
-    if f is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="находка не найдена")
+    snap = snapshot_or_404(db, KscSnapshot, snapshot_id)
+    f = finding_or_404(db, KscFinding, snapshot_id, key)
     cmp_ = compare(db, snap)
     verdict = db.get(KscVerdict, (snap.server_id, key))
     status_ = "accepted" if verdict else "new" if key in cmp_.new_keys else "persisting"
-    history = db.execute(
-        select(KscSnapshot.id, KscSnapshot.collected_at)
-        .join(KscFinding, KscFinding.snapshot_id == KscSnapshot.id)
-        .where(KscSnapshot.server_id == snap.server_id, KscFinding.key == key)
-        .order_by(KscSnapshot.collected_at.desc())
-    ).all()
     spec = CHECK_BY_CODE.get(f.check)
     return {
         **_item(f, status_),
         "description": spec.description if spec else "",
-        "history": [{"snapshot_id": sid, "collected_at": at.isoformat()} for sid, at in history],
-        "verdict": {"status": verdict.status, "reason": verdict.reason, "decided_by": verdict.decided_by, "decided_at": verdict.decided_at.isoformat()} if verdict else None,
+        "history": finding_history(db, KscSnapshot, KscFinding, KscSnapshot.server_id, snap.server_id, key),
+        "verdict": verdict_view(verdict),
     }
 
 

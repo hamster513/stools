@@ -11,6 +11,14 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from api.collector_routes import (
+    checks_overview,
+    comparison_summary,
+    read_upload,
+    snapshot_or_404,
+    start_import,
+    start_reanalyze,
+)
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
@@ -18,8 +26,7 @@ from api.jobs import JobHandle
 from api.modules.ad.core.checks import CHECK_BY_CODE, CHECKS
 from api.modules.ad.core.export import ExportFormatError
 from api.modules.ad.core.findings import SEVERITIES
-from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot
-from api.modules.ad.services.jobs import active_job, run_job, start_job
+from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
 from api.modules.ad.services.settings import load_config
 from api.modules.ad.services.snapshots import (
     accepted_keys,
@@ -112,25 +119,6 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
     cmp_ = compare(db, snap)
     accepted = accepted_keys(db, domain_id)
     rows = db.execute(select(AdFinding.check, AdFinding.severity, AdFinding.key).where(AdFinding.snapshot_id == snap.id)).all()
-    per_check: dict[str, dict[str, Any]] = {
-        c.code: {"code": c.code, "title": c.title, "description": c.description, "total": 0, "by_severity": dict.fromkeys(SEVERITIES, 0), "new": 0, "accepted": 0}
-        for c in CHECKS
-    }
-    for check, severity, key in rows:
-        entry = per_check.get(check)
-        if entry is None:
-            continue
-        entry["total"] += 1
-        entry["by_severity"][severity] = entry["by_severity"].get(severity, 0) + 1
-        if key in cmp_.new_keys:
-            entry["new"] += 1
-        if key in accepted:
-            entry["accepted"] += 1
-    fixed_by_check: dict[str, int] = {}
-    for f in cmp_.fixed:
-        fixed_by_check[f.check] = fixed_by_check.get(f.check, 0) + 1
-    for code, entry in per_check.items():
-        entry["fixed"] = fixed_by_check.get(code, 0)
     counts = severity_counts(db, snap.id)
     return {
         "domain": {"id": domain.id, "dns_root": domain.dns_root, "netbios": domain.netbios, "dn": domain.dn, "sid": domain.sid},
@@ -138,13 +126,9 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
             "id": snap.id, "collected_at": snap.collected_at.isoformat(), "source": snap.source, "collector": snap.collector,
             "objects": snap.objects, "findings": snap.findings, "by_severity": {sev: counts.get(sev, 0) for sev in SEVERITIES},
         },
-        "compared_to": {
-            "previous_id": cmp_.previous_id,
-            "collected_at": cmp_.previous_collected_at.isoformat() if cmp_.previous_collected_at else None,
-            "new": cmp_.new, "fixed": len(cmp_.fixed),
-        },
+        "compared_to": comparison_summary(cmp_),
         "accepted_total": len(accepted & {key for _, _, key in rows}),
-        "checks": list(per_check.values()),
+        "checks": checks_overview(rows, CHECKS, SEVERITIES, cmp_, accepted),
     }
 
 
@@ -158,16 +142,7 @@ def list_snapshots(domain_id: int | None = None, db: Session = Depends(get_db), 
 
 @router.get("/snapshots/{snapshot_id}", response_model=SnapshotView)
 def get_snapshot(snapshot_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> SnapshotView:
-    s = db.get(AdSnapshot, snapshot_id)
-    if s is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
-    return _snapshot_view(db, s)
-
-
-def _reject_if_running(db: Session) -> None:
-    running = active_job(db, ["import_file", "collect", "reanalyze"])
-    if running is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id} ({running.kind}), дождитесь её")
+    return _snapshot_view(db, snapshot_or_404(db, AdSnapshot, snapshot_id))
 
 
 @router.post("/snapshots/file", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
@@ -178,29 +153,19 @@ async def upload_snapshot(
     settings: Settings = Depends(get_settings),
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
-    _reject_if_running(db)
-    data = await file.read()
-    if not data:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="пустой файл")
-    name = file.filename or "export.json"
-    job_id = start_job(db, "import_file", user.login, message=name)
-    upload = settings.data_dir / "ad" / f"upload-{job_id}.bin"
-    upload.parent.mkdir(parents=True, exist_ok=True)
-    upload.write_bytes(data)
+    data = await read_upload(db, AdJob, file)
     data_dir = settings.data_dir
 
-    def work(session: Session, handle: JobHandle) -> None:
+    def load(session: Session, handle: JobHandle, raw: bytes, name: str) -> str:
         try:
-            raw = upload.read_bytes()
-            try:
-                snap = import_export(session, handle, raw, "file", name, load_config(session), data_dir)
-            except ExportFormatError as exc:
-                raise ValueError(str(exc)) from exc
-            handle.stage("done", message=f"снапшот #{snap.id}: находок {snap.findings}")
-        finally:
-            upload.unlink(missing_ok=True)
+            snap = import_export(session, handle, raw, "file", name, load_config(session), data_dir)
+        except ExportFormatError as exc:
+            raise ValueError(str(exc)) from exc
+        return f"снапшот #{snap.id}: находок {snap.findings}"
 
-    background_tasks.add_task(run_job, job_id, work)
+    job_id = start_import(
+        background_tasks, db, user, data, file.filename, upload_dir=settings.data_dir / "ad", job_model=AdJob, load=load,
+    )
     return JobStarted(job_id=job_id)
 
 
@@ -212,20 +177,11 @@ def reanalyze_snapshot(
     settings: Settings = Depends(get_settings),
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
-    snap = db.get(AdSnapshot, snapshot_id)
-    if snap is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
-    _reject_if_running(db)
-    job_id = start_job(db, "reanalyze", user.login, message=f"снапшот #{snapshot_id}")
     data_dir = settings.data_dir
-
-    def work(session: Session, handle: JobHandle) -> None:
-        s = session.get(AdSnapshot, snapshot_id)
-        if s is None:
-            raise ValueError("снапшот удалён")
-        reanalyze(session, handle, s, load_config(session), data_dir)
-
-    background_tasks.add_task(run_job, job_id, work)
+    job_id = start_reanalyze(
+        background_tasks, db, user, snapshot_id, job_model=AdJob, snapshot_model=AdSnapshot,
+        reanalyze=lambda session, handle, s: reanalyze(session, handle, s, load_config(session), data_dir),
+    )
     return JobStarted(job_id=job_id)
 
 
@@ -236,10 +192,7 @@ def remove_snapshot(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> None:
-    snap = db.get(AdSnapshot, snapshot_id)
-    if snap is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
-    delete_snapshot(db, snap, Path(settings.data_dir))
+    delete_snapshot(db, snapshot_or_404(db, AdSnapshot, snapshot_id), Path(settings.data_dir))
 
 
 def check_titles() -> dict[str, str]:

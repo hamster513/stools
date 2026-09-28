@@ -8,17 +8,14 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.audit import changes_summary
-from api.crypto import encrypt, reseal
+from api.collector_routes import add_connection, edit_connection, run_connection_test, start_collect
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
-from api.hosts import take_slot, validate_host
-from api.jobs import JobHandle
-from api.modules.ad.models import AdConnection
+from api.hosts import validate_host
+from api.modules.ad.models import AdConnection, AdJob
 from api.modules.ad.routers.snapshots import JobStarted
 from api.modules.ad.services import connections as svc
-from api.modules.ad.services.jobs import active_job, run_job, start_job
 from api.modules.ad.services.settings import load_config
 from api.settings import Settings, get_settings
 
@@ -27,7 +24,6 @@ router = APIRouter(prefix="/connections", tags=["ad"])
 #: Поля, от которых зависит, куда и как уйдёт сохранённый пароль: смена имени
 #: вида DOMAIN\user на UPN переводит вход с NTLM на SIMPLE, открытым текстом.
 ADDRESS_FIELDS = frozenset({"host", "port", "use_ssl", "verify_tls", "username"})
-REENTER_SECRET_TEXT = "при смене адреса или учётной записи пароль нужно ввести заново"
 
 
 class ConnectionIn(BaseModel):
@@ -84,11 +80,7 @@ def list_connections(db: Session = Depends(get_db), _user: AppUser = Depends(get
 
 @router.post("", response_model=ConnectionView, status_code=status.HTTP_201_CREATED)
 def create_connection(payload: ConnectionIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ConnectionView:
-    c = AdConnection(**payload.model_dump())
-    c.password = encrypt(c.password)
-    db.add(c)
-    db.commit()
-    return _view(c)
+    return _view(add_connection(db, AdConnection, payload))
 
 
 @router.put("/{connection_id}", response_model=ConnectionView)
@@ -96,20 +88,7 @@ def update_connection(
     connection_id: int, payload: ConnectionIn, request: Request, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> ConnectionView:
     c = _get(db, connection_id)
-    data = payload.model_dump()
-    changed = [k for k, v in data.items() if v != getattr(c, k) and (k != "password" or v)]
-    request.state.audit_summary = changes_summary(changed)
-    if not data["password"]:
-        # Сохранённый пароль не уходит на новый адрес или под новым именем.
-        if c.password and ADDRESS_FIELDS.intersection(changed):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=REENTER_SECRET_TEXT)
-        #: Пароль, сохранённый до шифрования, шифруется при этой записи.
-        data["password"] = reseal(c.password)
-    else:
-        data["password"] = encrypt(data["password"])
-    for k, v in data.items():
-        setattr(c, k, v)
-    db.commit()
+    edit_connection(db, c, payload, request, ADDRESS_FIELDS)
     return _view(c)
 
 
@@ -122,14 +101,7 @@ def delete_connection(connection_id: int, db: Session = Depends(get_db), _user: 
 @router.post("/{connection_id}/test")
 def test_connection(connection_id: int, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     c = _get(db, connection_id)
-    slot = take_slot("ad", user.id)
-    try:
-        return svc.test_connection(c)
-    # Любая причина отказа доходит до человека классом, без текста LDAP.
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "message": svc.public_error(exc)}
-    finally:
-        slot.release()
+    return run_connection_test("ad", user.id, lambda: svc.test_connection(c), svc.public_error)
 
 
 @router.post("/{connection_id}/collect", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
@@ -141,31 +113,9 @@ def collect(
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
     c = _get(db, connection_id)
-    if not c.username or not c.password:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="у подключения нет логина или пароля")
-    running = active_job(db, ["import_file", "collect", "reanalyze"])
-    if running is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, дождитесь её")
-    slot = take_slot("ad", user.id)
-    try:
-        job_id = start_job(db, "collect", user.login, message=c.host)
-    except Exception:
-        slot.release()
-        raise
     data_dir = settings.data_dir
-
-    def work(session: Session, handle: JobHandle) -> None:
-        conn = session.get(AdConnection, connection_id)
-        if conn is None:
-            raise ValueError("подключение удалено")
-        snap = svc.collect_snapshot(session, handle, conn, load_config(session), data_dir)
-        handle.stage("done", message=f"снапшот #{snap.id}: находок {snap.findings}")
-
-    def guarded() -> None:
-        try:
-            run_job(job_id, work)
-        finally:
-            slot.release()
-
-    background_tasks.add_task(guarded)
+    job_id = start_collect(
+        background_tasks, db, user, c, module="ad", job_model=AdJob,
+        collect=lambda session, handle, conn: svc.collect_snapshot(session, handle, conn, load_config(session), data_dir),
+    )
     return JobStarted(job_id=job_id)
