@@ -53,7 +53,7 @@ function RefCard({ r }: { r: RefState }) {
       </div>
       {write && r.name === 'nvd' && (
         <label className="mb-2 block text-[11px] text-text-secondary">
-          Годы для скачивания
+          <span>Годы для скачивания</span>
           <input className="mt-1 w-full rounded border border-border bg-surface px-2 py-1 font-mono text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" value={years} onChange={(e) => setYears(e.target.value)} placeholder="2002-2026 или 2023, 2024" />
         </label>
       )}

@@ -70,7 +70,7 @@ export function ChainsPage() {
             onChange={(e) => setOnlyGaps(e.target.checked)}
             className="accent-primary"
           />
-          только с пробелами
+          <span>только с пробелами</span>
         </label>
         <label className="flex items-center gap-1.5">
           <input
@@ -79,7 +79,7 @@ export function ChainsPage() {
             onChange={(e) => setOnlyExposed(e.target.checked)}
             className="accent-primary"
           />
-          только с экспозицией
+          <span>только с экспозицией</span>
         </label>
         <span className="ml-auto flex flex-wrap items-center gap-3">
           <Legend className="bg-actor">мимо правил</Legend>

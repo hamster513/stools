@@ -66,7 +66,7 @@ export function CompareView({ snapshotId, ruleA, ruleB, pairs }: CompareViewProp
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-text-secondary">
             <input type="checkbox" checked={onlyDiff} onChange={(e) => setOnlyDiff(e.target.checked)} />
-            только расхождения
+            <span>только расхождения</span>
           </label>
           <PairNav label="предыдущая пара" icon={ChevronLeft} to={prev ? pairHref(prev) : null} />
           <PairNav label="следующая пара" icon={ChevronRight} to={next ? pairHref(next) : null} />

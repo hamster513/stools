@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChevronRight } from 'lucide-react'
 import type { Finding } from '@/modules/ad/api/types'
@@ -37,7 +38,7 @@ export function FindingsTable({ items, selectedIndex, onSelectIndex, onOpen, onR
           const selected = v.index === selectedIndex
           const detail = f.right || (typeof f.details.details === 'string' ? f.details.details : '') || (typeof f.details.delegation_type === 'string' ? f.details.delegation_type : '')
           return (
-            <div key={f.id} onClick={() => { onSelectIndex(v.index); onOpen(v.index) }} className={cn('absolute top-0 left-0 flex w-full min-w-[1100px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+            <div key={f.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-full min-w-[1100px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
               <div className="w-28 shrink-0 px-2"><SeverityBadge severity={f.severity} /></div>
               <div className="w-52 shrink-0 truncate px-2 text-text" title={f.check_title}>{f.check_title}</div>
               <div className="w-56 shrink-0 truncate px-2 font-mono text-text" title={f.identity}>{f.identity || '—'}</div>

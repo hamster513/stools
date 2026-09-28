@@ -273,7 +273,7 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
                       >
                         значение ✓
                       </span>
-                      — принято как норма
+                      <span>— принято как норма</span>
                     </span>
                   )}
                 </div>

@@ -142,7 +142,7 @@ export function FieldRolesSection({
             onChange={(e) => setOnlyUnknown(e.target.checked)}
             className="accent-primary"
           />
-          только без роли
+          <span>только без роли</span>
         </label>
       </div>
 

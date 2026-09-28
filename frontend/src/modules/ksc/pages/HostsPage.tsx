@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChevronRight, FilterX, Monitor, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
@@ -152,7 +153,7 @@ function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, s
           const h = items[v.index]
           const selected = v.index === selectedIndex
           return (
-            <div key={h.id} onClick={() => { onSelectIndex(v.index); onOpen(v.index) }} className={cn('absolute top-0 left-0 flex w-full min-w-[1200px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+            <div key={h.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-full min-w-[1200px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
               <div className="w-56 shrink-0 truncate px-2">
                 <div className="truncate text-text" title={h.name}>{h.name}</div>
                 <div className="truncate text-[10px] text-text-secondary" title={h.fqdn}>{h.fqdn}</div>
@@ -160,14 +161,14 @@ function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, s
               <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.group}>{h.group}</div>
               <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.os}>{h.os}</div>
               <div className="w-32 shrink-0 truncate px-2 text-text-secondary">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · ${h.agent_version}` : ''}</div>
-              <div className={cn('w-40 shrink-0 truncate px-2', h.protection === 'off' ? 'text-risk-high' : h.protection === 'on' ? 'text-text-secondary' : 'text-text-secondary')}>
+              <div className={cn('w-40 shrink-0 truncate px-2', h.protection === 'off' ? 'text-risk-high' : 'text-text-secondary')}>
                 {PROTECTION_LABELS[h.protection]}{h.protection === 'off' ? ` · ${RTP_STATE_LABELS[h.rtp_state] ?? h.rtp_state}` : ''}
               </div>
               <div className={cn('w-32 shrink-0 truncate px-2', h.bases === 'old' && 'text-risk-high')}>{h.bases_at ? new Date(h.bases_at).toLocaleDateString('ru-RU') : '—'} · {BASES_LABELS[h.bases]}</div>
               <div className="w-28 shrink-0 truncate px-2 text-text-secondary">{h.last_fullscan_at ? new Date(h.last_fullscan_at).toLocaleDateString('ru-RU') : 'никогда'}</div>
               <div className={cn('w-16 shrink-0 px-2 text-right font-mono tabular-nums', h.threats > 0 && 'text-risk-high')}>{h.threats}</div>
               <div className="w-24 shrink-0 truncate px-2 text-text-secondary">{h.in_ad ? IN_AD_LABELS[h.in_ad] : '—'}</div>
-              <div className="w-20 shrink-0 px-2 text-right" onClick={(e) => e.stopPropagation()}>
+              <div role="presentation" className="w-20 shrink-0 px-2 text-right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                 {h.findings > 0 ? (
                   <Link to={`/ksc/servers/${serverId}/findings?q=${encodeURIComponent(h.name)}`} className="font-mono tabular-nums text-text hover:text-primary">{h.findings}</Link>
                 ) : (

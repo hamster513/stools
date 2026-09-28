@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { CheckCircle2, ListTree, Search, Sparkles, XCircle } from 'lucide-react'
 import { useRules } from '@/modules/siem/api/queries'
@@ -117,11 +118,11 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
             onChange={(e) => setOnlyAttention(e.target.checked)}
             className="accent-primary"
           />
-          требуют внимания
+          <span>требуют внимания</span>
         </label>
         <label className="flex items-center gap-1.5 text-xs text-text-secondary">
           <input type="checkbox" checked={onlyScoped} onChange={(e) => setOnlyScoped(e.target.checked)} className="accent-primary" />
-          только ограниченные списком
+          <span>только ограниченные списком</span>
         </label>
         <div className="flex items-center gap-1.5">
           {ATTACK_FILTERS.map(({ key, label }) => (
@@ -236,8 +237,8 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
                   return (
                     <div
                       key={rule.uuid}
-                      onClick={() => setOpenUuid(rule.uuid)}
-                      className="absolute top-0 left-0 flex w-max min-w-full cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover"
+                      {...clickableRow(() => setOpenUuid(rule.uuid))}
+                      className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-max min-w-full cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover')}
                       style={{ height: ROW_HEIGHT, transform: `translateY(${row.start}px)` }}
                     >
                       <div className="w-[420px] shrink-0 truncate px-2 font-mono text-text" title={rule.name}>

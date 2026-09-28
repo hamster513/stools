@@ -108,7 +108,7 @@ export function AuditPage() {
             checked={deniedOnly}
             onChange={(e) => change(() => setDeniedOnly(e.target.checked))}
           />
-          Только отказы
+          <span>Только отказы</span>
         </label>
       </div>
 

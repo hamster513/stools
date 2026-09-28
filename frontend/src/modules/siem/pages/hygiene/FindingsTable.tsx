@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { CheckCircle2, ChevronRight, XCircle } from 'lucide-react'
 import type { FindingListItem } from '@/modules/siem/api/types'
@@ -83,11 +84,12 @@ export function FindingsTable({
             <div
               key={item.id}
               data-index={virtualRow.index}
-              onClick={() => {
+              {...clickableRow(() => {
                 onSelectIndex(virtualRow.index)
                 onOpen(virtualRow.index)
-              }}
+              })}
               className={cn(
+                ROW_FOCUS,
                 'absolute top-0 left-0 flex w-full min-w-[980px] cursor-pointer items-center border-b border-grid text-xs',
                 isSelected ? 'bg-row-selected' : 'hover:bg-row-hover',
               )}

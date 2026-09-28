@@ -16,7 +16,7 @@ import { SettingsPage } from './pages/SettingsPage'
 const SECTIONS = new Set(['overview', 'rules', 'clones', 'attack', 'profile', 'hygiene'])
 
 function latestOf(snapshots: SnapshotListItem[]): SnapshotListItem | null {
-  return snapshots.length > 0 ? snapshots.reduce((a, b) => (b.id > a.id ? b : a)) : null
+  return snapshots.length > 0 ? snapshots.reduce((a, b) => (b.id > a.id ? b : a), snapshots[0]) : null
 }
 
 /** Маршруты модуля SIEM — всё под /siem. Сессию платформа уже проверила. */

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { VulnItem, VulnSort } from '@/modules/vm/api/types'
@@ -34,15 +35,16 @@ function Th({
   if (!sortKey) return <div className={cn('px-2 py-2', className)}>{children}</div>
   const active = sort === sortKey
   return (
-    <button
-      type="button"
-      onClick={() => onSort(sortKey)}
-      className={cn('flex items-center gap-1 px-2 py-2 text-left uppercase hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', className, active && 'text-text')}
-      aria-sort={active ? 'descending' : 'none'}
-    >
-      {children}
-      {active && <ChevronDown size={11} aria-hidden />}
-    </button>
+    <div role="columnheader" aria-sort={active ? 'descending' : 'none'} className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn('flex w-full items-center gap-1 px-2 py-2 text-left uppercase hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active && 'text-text')}
+      >
+        {children}
+        {active && <ChevronDown size={11} aria-hidden />}
+      </button>
+    </div>
   )
 }
 
@@ -83,11 +85,12 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
           return (
             <div
               key={`${item.host_id}:${item.cve_id}`}
-              onClick={() => {
+              {...clickableRow(() => {
                 onSelectIndex(v.index)
                 onOpen(v.index)
-              }}
+              })}
               className={cn(
+                ROW_FOCUS,
                 'absolute top-0 left-0 flex w-full min-w-[1240px] cursor-pointer items-center border-b border-grid text-xs',
                 selected ? 'bg-row-selected' : 'hover:bg-row-hover',
               )}

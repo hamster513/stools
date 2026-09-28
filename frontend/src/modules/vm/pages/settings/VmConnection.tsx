@@ -84,7 +84,7 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
         <div className="flex flex-col justify-end pb-1">
           <label className="flex items-center gap-2 text-xs text-text">
             <input type="checkbox" checked={form.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} className="accent-primary" disabled={!write} />
-            Проверять TLS-сертификат
+            <span>Проверять TLS-сертификат</span>
           </label>
           <span className="mt-1 text-[11px] text-text-secondary">Выключено — сертификат VM не проверяется, как в первой итерации; включите за доверенным CA.</span>
         </div>

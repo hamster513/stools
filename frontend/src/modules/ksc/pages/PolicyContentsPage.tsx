@@ -123,7 +123,7 @@ export function PolicyContentsPage({ serverId, policyId }: { serverId: number; p
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-1.5 text-xs text-text">
               <input type="checkbox" className="accent-primary" checked={onlyUnlocked} onChange={(e) => setOnlyUnlocked(e.target.checked)} />
-              только незамкнутые
+              <span>только незамкнутые</span>
             </label>
             <label className="relative flex items-center">
               <Search size={13} className="pointer-events-none absolute left-2 text-text-secondary" aria-hidden />

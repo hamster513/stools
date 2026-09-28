@@ -150,7 +150,7 @@ export function OidcPage() {
                 checked={form.enabled}
                 onChange={(e) => patch({ enabled: e.target.checked })}
               />
-              Вход через провайдера включён
+              <span>Вход через провайдера включён</span>
             </label>
             <p className="text-xs text-text-secondary">
               Включить не выйдет, пока не заполнены адрес STools, адрес провайдера, идентификатор

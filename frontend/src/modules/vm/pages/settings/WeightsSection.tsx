@@ -66,8 +66,8 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
       about={<>Risk = EPSS × (CVSS ÷ 10) × Impact × CVE_param × ExDB_param × MSF_param; балл = min(1, Risk) × 100. Impact — сумма трёх слагаемых, CVE_param — произведение множителей CVSS v3 (или v2, если v3 нет), ExDB и MSF — по самому весомому эксплойту и модулю. Нет данных — множитель 1, нет EPSS — 0.5. Значения по умолчанию — из документированной формулы первой итерации.</>}
     >
       <div className="mb-4 flex items-center gap-3">
-        <label className="text-xs text-text">Порог риска</label>
-        <input className={NUM} type="number" min={0} max={100} value={threshold} onChange={(e) => { setDirty(true); setThreshold(Number(e.target.value)) }} aria-label="Порог риска" disabled={!write} />
+        <label htmlFor="risk-threshold" className="text-xs text-text">Порог риска</label>
+        <input id="risk-threshold" className={NUM} type="number" min={0} max={100} value={threshold} onChange={(e) => { setDirty(true); setThreshold(Number(e.target.value)) }} aria-label="Порог риска" disabled={!write} />
         <span className="text-[11px] text-text-secondary">выше порога — «требует действия» на обзоре и в карточке</span>
       </div>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">

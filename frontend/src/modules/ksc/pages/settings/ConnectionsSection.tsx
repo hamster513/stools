@@ -59,7 +59,7 @@ export function ConnectionsSection() {
           <tbody>
             {(list.data ?? []).map((c: Connection) => (
               <tr key={c.id} className="border-t border-grid align-top">
-                <td className="py-2 pr-3 text-text">{c.title || `#${c.id}`}{c.server_id && <span className="ml-1 text-[10px] text-text-secondary">· сервер связан</span>}</td>
+                <td className="py-2 pr-3 text-text">{c.title || `#${c.id}`}{!!c.server_id && <span className="ml-1 text-[10px] text-text-secondary">· сервер связан</span>}</td>
                 <td className="py-2 pr-3 font-mono text-text-secondary">{c.host}:{c.port}</td>
                 <td className="py-2 pr-3 font-mono text-text-secondary">{c.internal ? c.username : `${c.domain}\\${c.username}`}{c.password_set ? '' : ' (нет пароля)'}</td>
                 <td className="py-2 text-right whitespace-nowrap">

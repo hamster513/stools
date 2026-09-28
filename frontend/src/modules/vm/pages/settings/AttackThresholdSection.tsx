@@ -56,8 +56,9 @@ export function AttackThresholdSection({ settings }: { settings: SettingsView })
       about="Пары хост–CVE с риском не ниже порога считаются экспозицией в матрице ATT&CK. Порог отдельный от порога «требует действия»: очередь работ и способ атаки — разные вопросы, и опустить его до нуля значит объявить экспозицией всё подряд."
     >
       <div className="flex items-center gap-3">
-        <label className="text-xs text-text">Порог риска для матрицы</label>
+        <label htmlFor="attack-threshold" className="text-xs text-text">Порог риска для матрицы</label>
         <input
+          id="attack-threshold"
           className={NUM}
           type="number"
           min={0}

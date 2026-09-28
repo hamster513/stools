@@ -140,7 +140,7 @@ export function LlmPage() {
                   checked={form.enabled}
                   onChange={(e) => patch({ enabled: e.target.checked })}
                 />
-                Обращения к модели разрешены
+                <span>Обращения к модели разрешены</span>
               </label>
               <label className="flex items-center gap-2 text-xs text-text">
                 <input
@@ -148,7 +148,7 @@ export function LlmPage() {
                   checked={form.think}
                   onChange={(e) => patch({ think: e.target.checked })}
                 />
-                Режим рассуждения
+                <span>Режим рассуждения</span>
               </label>
             </div>
           </div>

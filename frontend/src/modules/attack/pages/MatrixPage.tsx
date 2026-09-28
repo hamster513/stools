@@ -191,7 +191,7 @@ export function MatrixPage() {
             title={coverageOn ? undefined : COVERAGE_OFF}
             className="accent-primary"
           />
-          только закрытые
+          <span>только закрытые</span>
         </label>
         {/* Обратный фильтр: вопрос экрана — не «что сделано», а «что нет». */}
         <label className={cn('flex items-center gap-1.5', !coverageOn && 'opacity-50')}>
@@ -203,7 +203,7 @@ export function MatrixPage() {
             title={coverageOn ? undefined : COVERAGE_OFF}
             className="accent-primary"
           />
-          только незакрытые
+          <span>только незакрытые</span>
         </label>
         <label className="flex items-center gap-1.5">
           <input
@@ -212,7 +212,7 @@ export function MatrixPage() {
             onChange={(e) => setOnlyExposed(e.target.checked)}
             className="accent-primary"
           />
-          только с экспозицией
+          <span>только с экспозицией</span>
         </label>
         {/* Разрыв — не то же, что незакрытое: техника не закрыта, и её
             есть чем выполнить именно здесь. Это и есть список работы. */}
@@ -225,7 +225,7 @@ export function MatrixPage() {
             title={coverageOn ? undefined : COVERAGE_OFF}
             className="accent-primary"
           />
-          только разрывы
+          <span>только разрывы</span>
         </label>
         <button
           type="button"
@@ -333,7 +333,7 @@ export function MatrixPage() {
           ))}
           <span className="inline-flex items-center gap-1.5">
             <span className="inline-block h-3 w-3 rounded-sm border border-grid bg-surface" aria-hidden />
-            данных нет
+            <span>данных нет</span>
           </span>
 
           {/* Главное число экрана: сколько из замеченного каждым источником
