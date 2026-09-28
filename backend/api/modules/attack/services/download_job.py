@@ -44,7 +44,7 @@ class PendingMeta(BaseModel):
     в настройки нужна только эта шапка.
     """
 
-    version: str | None  # NOSONAR: схема разбирает сохранённые данные, значение по умолчанию сделало бы поле необязательным при разборе
+    version: str | None  # NOSONAR(S8396) разбор сохранённых данных: поле обязательно
     downloaded_at: dt.datetime
     url: str
     diff: BundleDiff

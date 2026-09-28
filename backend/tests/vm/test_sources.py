@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from api.modules.vm.core.sources import iter_path, split_cves, split_host
@@ -11,6 +12,22 @@ def test_split_host() -> None:
     assert split_host("srv01 (10.1.2.3)") == ("srv01", "10.1.2.3")
     assert split_host("srv01") == ("srv01", "")
     assert split_host("  srv01.corp (10.0.0.1)  ") == ("srv01.corp", "10.0.0.1")
+
+
+def test_split_host_edge_cases() -> None:
+    assert split_host("srv (x) (10.0.0.1)") == ("srv (x)", "10.0.0.1")
+    assert split_host("a (b) c)") == ("a (b) c)", "")
+    assert split_host("(1.2.3.4)") == ("", "1.2.3.4")
+    assert split_host("a ()") == ("a", "")
+    assert split_host("a\nb (1.2.3.4)") == ("a\nb (1.2.3.4)", "")
+
+
+def test_split_host_linear_on_long_whitespace() -> None:
+    # Регрессия: прежняя регулярка вставала колом на длинной цепочке пробелов без «)».
+    text = "a" + " " * 131072 + "(x"
+    started = time.perf_counter()
+    assert split_host(text) == (text.strip(), "")
+    assert time.perf_counter() - started < 1.0
 
 
 def test_split_cves_dedupes_and_uppercases() -> None:

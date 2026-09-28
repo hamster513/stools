@@ -85,7 +85,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ loading, lastSnap
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder={searchPlaceholder} className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
-        {first?.compared_to.previous_id && <span className="text-[11px] text-text-secondary">к #{first.compared_to.previous_id}: <span className="text-risk-high">+{first.compared_to.new}</span> / <span className="text-kind-accepted">−{first.compared_to.fixed}</span></span>}
+        {first?.compared_to.previous_id != null && <span className="text-[11px] text-text-secondary">к #{first.compared_to.previous_id}: <span className="text-risk-high">+{first.compared_to.new}</span> / <span className="text-kind-accepted">−{first.compared_to.fixed}</span></span>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
       </header>
       <div className="flex min-h-0 flex-1">

@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import IO, Any
 
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
-HOST_RE = re.compile(r"^(?P<name>.*?)\s*\((?P<ip>[^()]*)\)\s*$")
 
 #: Колонки экспорта MP VM. `Host.@Groups` в старых выгрузках отсутствует.
 COL_HOST = "@Host"
@@ -41,10 +40,13 @@ class HostRow:
 
 def split_host(text: str) -> tuple[str, str]:
     """`server01 (10.1.2.3)` → (`server01`, `10.1.2.3`); без скобок IP пуст."""
-    m = HOST_RE.match(text.strip())
-    if not m:
-        return text.strip(), ""
-    return m.group("name").strip(), m.group("ip").strip()
+    s = text.strip()
+    head, sep, tail = s.rpartition("(")
+    # Как прежняя регулярка: скобки в конце, внутри последних скобок нет «)»,
+    # имя (без хвостовых пробелов) — в одну строку.
+    if not sep or not tail.endswith(")") or ")" in tail[:-1] or "\n" in head.rstrip():
+        return s, ""
+    return head.strip(), tail[:-1].strip()
 
 
 def split_cves(text: str) -> list[str]:
