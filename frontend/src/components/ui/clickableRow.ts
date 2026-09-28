@@ -17,6 +17,9 @@ export function clickableRow(onActivate: () => void) {
       if (e.target !== e.currentTarget) return
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
+        // Иначе Enter долетит до обработчиков страниц на document, которые
+        // откроют ранее выбранную строку, а не эту.
+        e.stopPropagation()
         onActivate()
       }
     },
