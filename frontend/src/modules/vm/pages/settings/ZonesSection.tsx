@@ -6,7 +6,7 @@ import type { Zone } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { Section } from './ui'
+import { Section } from '@/platform/collector/ui'
 
 /** Разметка зон — единственный источник двух из трёх слагаемых Impact. */
 export function ZonesSection() {

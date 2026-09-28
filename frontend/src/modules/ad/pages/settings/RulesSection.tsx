@@ -5,7 +5,7 @@ import { useSaveAdSettings } from '@/modules/ad/api/queries'
 import type { AdConfig, SettingsView } from '@/modules/ad/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
-import { Field, FIELD, Section } from './ui'
+import { Field, FIELD, Section } from '@/platform/collector/ui'
 
 const AREA = FIELD + ' font-mono text-xs min-h-[72px]'
 

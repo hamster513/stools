@@ -1,6 +1,7 @@
 /** Хуки TanStack Query модуля AD. */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
+import { nextPageOffset } from '@/platform/collector/paging'
 import type {
   AdConfig,
   Connection,
@@ -56,10 +57,7 @@ export function useFindings(snapshotId: number | undefined, query: Omit<Findings
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       api.get(`/api/ad/snapshots/${snapshotId}/findings${buildQuery({ ...query, limit: FINDINGS_PAGE_SIZE, offset: pageParam as number })}`),
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((sum, p) => sum + p.items.length, 0)
-      return loaded < last.total ? loaded : undefined
-    },
+    getNextPageParam: nextPageOffset,
     enabled: snapshotId !== undefined,
     placeholderData: (prev) => prev,
   })

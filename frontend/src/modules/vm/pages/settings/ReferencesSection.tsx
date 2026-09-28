@@ -6,7 +6,7 @@ import type { RefState } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { Section } from './ui'
+import { Section } from '@/platform/collector/ui'
 
 const ABOUT: Record<string, string> = {
   epss: 'Вероятность эксплуатации за 30 дней от FIRST; без неё берётся 0.5.',

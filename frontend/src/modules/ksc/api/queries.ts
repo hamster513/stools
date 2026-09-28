@@ -1,6 +1,7 @@
 /** Хуки TanStack Query модуля KSC. */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
+import { nextPageOffset } from '@/platform/collector/paging'
 import type {
   Connection,
   ConnectionIn,
@@ -63,10 +64,7 @@ export function useHosts(snapshotId: number | undefined, query: Omit<HostsQuery,
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       api.get(`/api/ksc/snapshots/${snapshotId}/hosts${buildQuery({ ...query, limit: HOSTS_PAGE_SIZE, offset: pageParam as number })}`),
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((sum, p) => sum + p.items.length, 0)
-      return loaded < last.total ? loaded : undefined
-    },
+    getNextPageParam: nextPageOffset,
     enabled: snapshotId !== undefined,
     placeholderData: (prev) => prev,
   })
@@ -86,10 +84,7 @@ export function useFindings(snapshotId: number | undefined, query: Omit<Findings
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       api.get(`/api/ksc/snapshots/${snapshotId}/findings${buildQuery({ ...query, limit: FINDINGS_PAGE_SIZE, offset: pageParam as number })}`),
-    getNextPageParam: (last, pages) => {
-      const loaded = pages.reduce((sum, p) => sum + p.items.length, 0)
-      return loaded < last.total ? loaded : undefined
-    },
+    getNextPageParam: nextPageOffset,
     enabled: snapshotId !== undefined,
     placeholderData: (prev) => prev,
   })

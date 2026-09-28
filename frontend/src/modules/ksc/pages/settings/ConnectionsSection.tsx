@@ -1,86 +1,47 @@
-import { useState } from 'react'
-import { CheckCircle2, PlugZap, Plus, ServerCog, Trash2, XCircle } from 'lucide-react'
-import { ApiRequestError } from '@/api/client'
 import { useCollect, useConnections, useDeleteConnection, useSaveConnection, useTestConnection } from '@/modules/ksc/api/queries'
 import type { Connection, ConnectionIn } from '@/modules/ksc/api/types'
-import { Button } from '@/components/ui/Button'
-import { useCan } from '@/lib/can'
-import { cn } from '@/lib/cn'
-import { Field, FIELD, Section } from './ui'
+import { CollectorConnectionsSection } from '@/platform/collector/ConnectionsSection'
+import { Field, FIELD } from '@/platform/collector/ui'
 
 const EMPTY: ConnectionIn = { title: '', host: '', port: 13299, username: '', password: '', verify_tls: true, internal: true, domain: '', skip_policy_contents: false }
 
-function Form({ initial, onDone, onCancel }: { initial: ConnectionIn & { id?: number }; onDone: () => void; onCancel: () => void }) {
-  const save = useSaveConnection()
-  const [f, setF] = useState<ConnectionIn>({ ...EMPTY, ...initial, password: '' })
-  const patch = (p: Partial<ConnectionIn>) => setF((v) => ({ ...v, ...p }))
-  return (
-    <div className="rounded border border-grid bg-app-bg p-3">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Название" hint="Как показывать в списке"><input className={FIELD} value={f.title} onChange={(e) => patch({ title: e.target.value })} /></Field>
-        <Field label="Сервер KSC" hint="Имя или адрес; Open API 13299"><input className={FIELD} value={f.host} onChange={(e) => patch({ host: e.target.value })} spellCheck={false} /></Field>
-        <Field label="Порт"><input className={FIELD} type="number" value={f.port} onChange={(e) => patch({ port: Number(e.target.value) })} /></Field>
-        <Field label="Учётная запись"><input className={FIELD} value={f.username} onChange={(e) => patch({ username: e.target.value })} spellCheck={false} autoComplete="off" /></Field>
-        <Field label="Пароль" hint={initial.id ? 'пусто — оставить прежний' : undefined}><input className={FIELD} type="password" value={f.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" /></Field>
-        {!f.internal && <Field label="Домен"><input className={FIELD} value={f.domain} onChange={(e) => patch({ domain: e.target.value })} spellCheck={false} /></Field>}
-        <div className="flex flex-col gap-2 pt-1">
-          <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={f.internal} onChange={(e) => patch({ internal: e.target.checked })} /> Внутренняя учётная запись KSC</label>
-          <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={f.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} /> Проверять сертификат</label>
-          {!f.verify_tls && <span className="text-[11px] text-risk-medium">Сертификат сервера проверяться не будет: подключение уязвимо к подмене. Выключайте только для внутреннего CA, которому контейнер не доверяет.</span>}
-          <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={!f.skip_policy_contents} onChange={(e) => patch({ skip_policy_contents: !e.target.checked })} /> Собирать содержимое политик</label>
-          {f.skip_policy_contents && <span className="text-[11px] text-text-secondary">Содержимое политик (замки, настройки) собираться не будет — файл выгрузки заметно меньше.</span>}
-        </div>
-      </div>
-      <div className="mt-3 flex items-center gap-2">
-        <Button variant="primary" loading={save.isPending} disabled={!f.host} onClick={() => save.mutate({ id: initial.id, body: f }, { onSuccess: onDone })}>Сохранить</Button>
-        <Button onClick={onCancel}>Отмена</Button>
-        {save.error && <span className="text-xs text-kind-1">{save.error instanceof ApiRequestError ? save.error.message : 'Не удалось сохранить'}</span>}
-      </div>
-    </div>
-  )
-}
-
 export function ConnectionsSection() {
-  // Подключения аудитор видит списком — сервер и учётная запись нужны,
-  // чтобы понимать, откуда снапшот; править, проверять и собирать не может.
-  const { write } = useCan()
   const list = useConnections()
   const test = useTestConnection()
   const collect = useCollect()
   const remove = useDeleteConnection()
-  const [editing, setEditing] = useState<(ConnectionIn & { id?: number }) | null>(null)
-  const [testResult, setTestResult] = useState<{ id: number; ok: boolean; message: string } | null>(null)
-
   return (
-    <Section title="Подключения к KSC (онлайн-режим)" about="Модуль читает KSC сам по Open API (HTTPS, порт 13299). Нужен сетевой доступ от сервера STools к KSC и учётная запись с правом чтения. Пароль хранится в базе и наружу не показывается.">
-      {(list.data ?? []).length > 0 && (
-        <table className="mb-3 w-full text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase"><tr><th className="py-1.5 pr-3 text-left">Подключение</th><th className="py-1.5 pr-3 text-left">Сервер</th><th className="py-1.5 pr-3 text-left">Учётная запись</th><th className="py-1.5 text-right"></th></tr></thead>
-          <tbody>
-            {(list.data ?? []).map((c: Connection) => (
-              <tr key={c.id} className="border-t border-grid align-top">
-                <td className="py-2 pr-3 text-text">{c.title || `#${c.id}`}{!!c.server_id && <span className="ml-1 text-[10px] text-text-secondary">· сервер связан</span>}</td>
-                <td className="py-2 pr-3 font-mono text-text-secondary">{c.host}:{c.port}</td>
-                <td className="py-2 pr-3 font-mono text-text-secondary">{c.internal ? c.username : `${c.domain}\\${c.username}`}{c.password_set ? '' : ' (нет пароля)'}</td>
-                <td className="py-2 text-right whitespace-nowrap">
-                  {write && (
-                    <>
-                      <Button variant="ghost" onClick={() => test.mutate(c.id, { onSuccess: (r) => setTestResult({ id: c.id, ...r }) })} loading={test.isPending}><PlugZap size={13} aria-hidden /> проверить</Button>
-                      <Button variant="ghost" onClick={() => collect.mutate(c.id)} loading={collect.isPending} disabled={!c.password_set}><ServerCog size={13} aria-hidden /> собрать</Button>
-                      <Button variant="ghost" onClick={() => setEditing({ ...c, password: '' })}>изменить</Button>
-                      <Button variant="ghost" onClick={() => remove.mutate(c.id)} aria-label="Удалить подключение"><Trash2 size={13} aria-hidden /></Button>
-                      {testResult?.id === c.id && <div className={cn('mt-1 inline-flex items-center gap-1 text-[11px]', testResult.ok ? 'text-kind-accepted' : 'text-kind-1')}>{testResult.ok ? <CheckCircle2 size={12} aria-hidden /> : <XCircle size={12} aria-hidden />} {testResult.message}</div>}
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <CollectorConnectionsSection<Connection, ConnectionIn>
+      list={list}
+      test={test}
+      collect={collect}
+      remove={remove}
+      useSaveConnection={useSaveConnection}
+      empty={EMPTY}
+      toForm={(c) => ({ ...c, password: '' })}
+      title="Подключения к KSC (онлайн-режим)"
+      about="Модуль читает KSC сам по Open API (HTTPS, порт 13299). Нужен сетевой доступ от сервера STools к KSC и учётная запись с правом чтения. Пароль хранится в базе и наружу не показывается."
+      hostHeader="Сервер"
+      linked={(c) => !!c.server_id && <span className="ml-1 text-[10px] text-text-secondary">· сервер связан</span>}
+      address={(c) => <>{c.host}:{c.port}</>}
+      account={(c) => (c.internal ? c.username : `${c.domain}\\${c.username}`)}
+      fields={(f, patch, initial) => (
+        <>
+          <Field label="Название" hint="Как показывать в списке"><input className={FIELD} value={f.title} onChange={(e) => patch({ title: e.target.value })} /></Field>
+          <Field label="Сервер KSC" hint="Имя или адрес; Open API 13299"><input className={FIELD} value={f.host} onChange={(e) => patch({ host: e.target.value })} spellCheck={false} /></Field>
+          <Field label="Порт"><input className={FIELD} type="number" value={f.port} onChange={(e) => patch({ port: Number(e.target.value) })} /></Field>
+          <Field label="Учётная запись"><input className={FIELD} value={f.username} onChange={(e) => patch({ username: e.target.value })} spellCheck={false} autoComplete="off" /></Field>
+          <Field label="Пароль" hint={initial.id ? 'пусто — оставить прежний' : undefined}><input className={FIELD} type="password" value={f.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" /></Field>
+          {!f.internal && <Field label="Домен"><input className={FIELD} value={f.domain} onChange={(e) => patch({ domain: e.target.value })} spellCheck={false} /></Field>}
+          <div className="flex flex-col gap-2 pt-1">
+            <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={f.internal} onChange={(e) => patch({ internal: e.target.checked })} /> Внутренняя учётная запись KSC</label>
+            <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={f.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} /> Проверять сертификат</label>
+            {!f.verify_tls && <span className="text-[11px] text-risk-medium">Сертификат сервера проверяться не будет: подключение уязвимо к подмене. Выключайте только для внутреннего CA, которому контейнер не доверяет.</span>}
+            <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={!f.skip_policy_contents} onChange={(e) => patch({ skip_policy_contents: !e.target.checked })} /> Собирать содержимое политик</label>
+            {f.skip_policy_contents && <span className="text-[11px] text-text-secondary">Содержимое политик (замки, настройки) собираться не будет — файл выгрузки заметно меньше.</span>}
+          </div>
+        </>
       )}
-      {write && (editing ? <Form initial={editing} onDone={() => setEditing(null)} onCancel={() => setEditing(null)} /> : <Button onClick={() => setEditing({ ...EMPTY })}><Plus size={13} aria-hidden /> Добавить подключение</Button>)}
-      {collect.data && <p className="mt-2 text-xs text-text-secondary">сбор запущен, задача #{collect.data.job_id} — прогресс на экране «Задачи»</p>}
-      {collect.error && <p className="mt-2 text-xs text-kind-1">{collect.error instanceof ApiRequestError ? collect.error.message : 'Сбор не запущен'}</p>}
-    </Section>
+    />
   )
 }

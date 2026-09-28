@@ -1,22 +1,17 @@
 /** Типы API модуля Kaspersky Security Center (docs/ksc/api.md, спека §7). */
 
-export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info'
-export const SEVERITIES: Severity[] = ['Critical', 'High', 'Medium', 'Low', 'Info']
-export const SEVERITY_LABELS: Record<Severity, string> = {
-  Critical: 'критический',
-  High: 'высокий',
-  Medium: 'средний',
-  Low: 'низкий',
-  Info: 'справочно',
-}
+import type {
+  FindingBase,
+  FindingStatus,
+  FindingDetail as CollectorFindingDetail,
+  FindingsResponse as CollectorFindingsResponse,
+  OverviewBase,
+  Severity,
+  SnapshotBase,
+} from '@/platform/collector/types'
 
-export type FindingStatus = 'new' | 'persisting' | 'accepted' | 'fixed'
-export const STATUS_LABELS: Record<FindingStatus, string> = {
-  new: 'новая',
-  persisting: 'висит',
-  accepted: 'принята',
-  fixed: 'закрыта',
-}
+export { SEVERITIES, SEVERITY_LABELS, STAGE_LABELS, STATUS_LABELS } from '@/platform/collector/types'
+export type { CheckSummary, FindingsQuery, FindingStatus, Job, JobStatus, Severity } from '@/platform/collector/types'
 
 export interface Server {
   id: number
@@ -27,31 +22,10 @@ export interface Server {
   last_snapshot_at: string | null
 }
 
-export interface Snapshot {
-  id: number
+export interface Snapshot extends SnapshotBase {
   server_id: number
-  collected_at: string
-  imported_at: string
   source: 'file' | 'online'
-  collector: string
-  filename: string
   hosts: number
-  findings: number
-  by_severity: Record<Severity, number>
-  new: number | null
-  fixed: number | null
-  previous_id: number | null
-}
-
-export interface CheckSummary {
-  code: string
-  title: string
-  description: string
-  total: number
-  by_severity: Record<Severity, number>
-  new: number
-  fixed: number
-  accepted: number
 }
 
 export interface Coverage {
@@ -66,65 +40,18 @@ export interface Coverage {
   bases_fresh: number
 }
 
-export interface Overview {
+export interface Overview extends OverviewBase {
   server: { id: number; name: string; version: string }
-  snapshot: {
-    id: number
-    collected_at: string
-    source: string
-    collector: string
-    hosts: number
-    findings: number
-    by_severity: Record<Severity, number>
-  } | null
-  compared_to?: { previous_id: number | null; collected_at: string | null; new: number; fixed: number }
-  accepted_total?: number
+  snapshot: (NonNullable<OverviewBase['snapshot']> & { hosts: number }) | null
   coverage: Coverage | null
-  checks: CheckSummary[]
 }
 
-export interface Finding {
-  id: number
-  key: string
-  check: string
-  check_title: string
-  severity: Severity
-  severity_original: Severity
+export interface Finding extends FindingBase {
   host: string
-  target: string
-  allowlisted: boolean
-  status: FindingStatus
-  details: Record<string, unknown>
 }
 
-export interface FindingsResponse {
-  total: number
-  items: Finding[]
-  facets: {
-    check: Record<string, number>
-    severity: Record<Severity, number>
-    status: Record<FindingStatus, number>
-    allowlisted: Record<'yes' | 'no', number>
-  } | null
-  compared_to: { previous_id: number | null; collected_at: string | null; new: number; fixed: number }
-  check_titles: Record<string, string>
-}
-
-export interface FindingDetail extends Finding {
-  description: string
-  history: { snapshot_id: number; collected_at: string }[]
-  verdict: { status: string; reason: string; decided_by: string; decided_at: string } | null
-}
-
-export interface FindingsQuery {
-  check?: string
-  severity?: Severity
-  status?: FindingStatus
-  allowlisted?: boolean
-  q?: string
-  limit?: number
-  offset?: number
-}
+export type FindingsResponse = CollectorFindingsResponse<Finding>
+export type FindingDetail = CollectorFindingDetail<Finding>
 
 export type HostAgent = 'none' | 'silent' | 'alive'
 export type HostProtection = 'none' | 'off' | 'on'
@@ -440,36 +367,8 @@ export interface SettingsView {
   checks: { code: string; title: string; description: string }[]
 }
 
-export type JobStatus = 'running' | 'done' | 'failed' | 'cancelled'
-
-export interface Job {
-  id: number
-  kind: string
-  stage: string
-  status: JobStatus
-  progress: number
-  processed: number
-  total: number | null
-  message: string
-  error: string | null
-  cancel_requested: boolean
-  started_at: string
-  finished_at: string | null
-  started_by: string
-}
-
 export const JOB_KIND_LABELS: Record<string, string> = {
   import_file: 'Загрузка выгрузки',
   collect: 'Сбор из KSC',
   reanalyze: 'Пересчёт снапшота',
-}
-
-export const STAGE_LABELS: Record<string, string> = {
-  pending: 'ожидание',
-  connecting: 'подключение',
-  collecting: 'сбор',
-  parsing: 'разбор',
-  analyzing: 'проверки',
-  persisting: 'запись',
-  done: 'готово',
 }

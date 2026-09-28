@@ -6,7 +6,7 @@ import type { SettingsView } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { Field, FIELD, Section } from './ui'
+import { Field, FIELD, Section } from '@/platform/collector/ui'
 
 /** Подключение к MaxPatrol VM: то, что сохранено, и запуск импорта. */
 export function VmConnection({ settings }: { settings: SettingsView }) {

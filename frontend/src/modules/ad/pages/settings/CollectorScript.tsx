@@ -1,5 +1,5 @@
 import { Download } from 'lucide-react'
-import { Section } from './ui'
+import { Section } from '@/platform/collector/ui'
 
 /** Офлайн-режим: скрипт для доменной машины. */
 export function CollectorScript() {

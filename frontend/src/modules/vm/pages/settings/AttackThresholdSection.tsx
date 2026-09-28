@@ -5,7 +5,8 @@ import { useSaveVmSettings } from '@/modules/vm/api/queries'
 import type { SettingsView } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
-import { NUM, Section } from './ui'
+import { Section } from '@/platform/collector/ui'
+import { NUM } from './ui'
 
 /** Порог экспозиции для матрицы ATT&CK — отдельно от весов формулы.
  *

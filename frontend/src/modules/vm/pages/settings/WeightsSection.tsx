@@ -5,7 +5,8 @@ import { useRecalculate, useSaveVmSettings } from '@/modules/vm/api/queries'
 import type { SettingsView, Weights } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
-import { NUM, Section } from './ui'
+import { Section } from '@/platform/collector/ui'
+import { NUM } from './ui'
 
 function Table({ title, rows, labels, onChange }: { title: string; rows: Record<string, number>; labels?: Record<string, string>; onChange: (k: string, v: number) => void }) {
   // Веса аудитор читает: без них непонятно, из чего сложился балл.

@@ -6,7 +6,7 @@ import { STAGE_LABELS } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { Section } from './ui'
+import { Section } from '@/platform/collector/ui'
 
 /** Импорт из файла: CSV-экспорт MaxPatrol VM или JSON первой итерации. */
 export function FileImport() {

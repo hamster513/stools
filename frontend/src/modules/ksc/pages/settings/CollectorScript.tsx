@@ -1,5 +1,5 @@
 import { Download } from 'lucide-react'
-import { Section } from './ui'
+import { Section } from '@/platform/collector/ui'
 
 /** Офлайн-режим: скрипт для машины внутри сети с доступом к серверу KSC. */
 export function CollectorScript() {
