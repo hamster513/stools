@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChevronRight, FilterX, Monitor, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useHostDetail, useHosts, useServers } from '@/modules/ksc/api/queries'
@@ -20,8 +19,9 @@ import {
   type HostsQuery,
   type HostsResponse,
 } from '@/modules/ksc/api/types'
-import { SeverityBadge } from '@/modules/ksc/components/SeverityBadge'
+import { SeverityBadge } from '@/platform/collector/SeverityBadge'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { useSearchParams, Link } from '@/lib/router'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -122,17 +122,7 @@ function HostFacetPanel({ facets, filters, onToggle, total }: { facets: HostsRes
 }
 
 function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, serverId }: { items: Host[]; selectedIndex: number; onSelectIndex: (i: number) => void; onOpen: (i: number) => void; onReachEnd?: () => void; serverId: number }) {
-  const parentRef = useRef<HTMLDivElement>(null)
-  const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 12 })
-  useEffect(() => {
-    if (selectedIndex >= 0 && selectedIndex < items.length) virtualizer.scrollToIndex(selectedIndex, { align: 'auto' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIndex])
-  const rows = virtualizer.getVirtualItems()
-  const last = rows.length ? rows[rows.length - 1].index : 0
-  useEffect(() => {
-    if (onReachEnd && items.length > 0 && last >= items.length - 20) onReachEnd()
-  }, [last, items.length, onReachEnd])
+  const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
 
   return (
     <div ref={parentRef} className="h-full overflow-auto">
@@ -148,7 +138,7 @@ function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, s
         <div className="w-24 shrink-0 px-2 py-2">AD</div>
         <div className="w-20 shrink-0 px-2 py-2 text-right">Находок</div>
       </div>
-      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+      <div style={{ height: totalSize, position: 'relative' }}>
         {rows.map((v) => {
           const h = items[v.index]
           const selected = v.index === selectedIndex

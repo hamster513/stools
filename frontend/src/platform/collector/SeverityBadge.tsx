@@ -1,5 +1,4 @@
-import type { Severity } from '@/modules/ksc/api/types'
-import { SEVERITY_LABELS } from '@/modules/ksc/api/types'
+import { SEVERITY_LABELS, type Severity } from './types'
 import { cn } from '@/lib/cn'
 
 const CLASSES: Record<Severity, string> = {

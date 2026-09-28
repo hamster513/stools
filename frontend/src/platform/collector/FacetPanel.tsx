@@ -1,9 +1,6 @@
 import type { ReactNode } from 'react'
-import type { FindingStatus, FindingsQuery, FindingsResponse, Severity } from '@/modules/ad/api/types'
-import { SEVERITIES, SEVERITY_LABELS, STATUS_LABELS } from '@/modules/ad/api/types'
+import { SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, STATUS_LABELS, type FindingBase, type FindingFilters, type FindingsResponse, type FindingStatus } from './types'
 import { cn } from '@/lib/cn'
-
-export type FindingFilters = Pick<FindingsQuery, 'check' | 'severity' | 'status' | 'allowlisted'>
 
 function Row({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
   return (
@@ -23,17 +20,16 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-const SEV_TEXT: Record<Severity, string> = { Critical: 'text-risk-critical', High: 'text-risk-high', Medium: 'text-risk-medium', Low: 'text-risk-low', Info: 'text-text-secondary' }
 const STATUSES: FindingStatus[] = ['new', 'persisting', 'accepted', 'fixed']
 
-export function FacetPanel({ facets, titles, filters, onToggle, total }: { facets: FindingsResponse['facets']; titles: Record<string, string>; filters: FindingFilters; onToggle: <K extends keyof FindingFilters>(key: K, value: FindingFilters[K]) => void; total: number }) {
+export function FacetPanel({ facets, titles, filters, onToggle, total }: { facets: FindingsResponse<FindingBase>['facets']; titles: Record<string, string>; filters: FindingFilters; onToggle: <K extends keyof FindingFilters>(key: K, value: FindingFilters[K]) => void; total: number }) {
   const checks = Object.entries(facets?.check ?? {}).sort((a, b) => b[1] - a[1])
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Находок <span className="font-mono tabular-nums text-text">{total}</span></div>
       <Section title="Severity">
         {SEVERITIES.map((s) => (
-          <Row key={s} active={filters.severity === s} count={facets?.severity[s]} onClick={() => onToggle('severity', filters.severity === s ? undefined : s)}><span className={SEV_TEXT[s]}>{SEVERITY_LABELS[s]}</span></Row>
+          <Row key={s} active={filters.severity === s} count={facets?.severity[s]} onClick={() => onToggle('severity', filters.severity === s ? undefined : s)}><span className={SEVERITY_TEXT[s]}>{SEVERITY_LABELS[s]}</span></Row>
         ))}
       </Section>
       <Section title="Статус">
