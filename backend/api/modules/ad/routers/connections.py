@@ -27,7 +27,7 @@ router = APIRouter(prefix="/connections", tags=["ad"])
 #: Поля, от которых зависит, куда и как уйдёт сохранённый пароль: смена имени
 #: вида DOMAIN\user на UPN переводит вход с NTLM на SIMPLE, открытым текстом.
 ADDRESS_FIELDS = frozenset({"host", "port", "use_ssl", "verify_tls", "username"})
-PASSWORD_AGAIN = "при смене адреса или учётной записи пароль нужно ввести заново"
+REENTER_SECRET_TEXT = "при смене адреса или учётной записи пароль нужно ввести заново"
 
 
 class ConnectionIn(BaseModel):
@@ -60,7 +60,7 @@ class ConnectionView(BaseModel):
     password_set: bool
     base_dn: str
     collect_sysvol: bool
-    domain_id: int | None
+    domain_id: int | None = None
 
 
 def _view(c: AdConnection) -> ConnectionView:
@@ -102,7 +102,7 @@ def update_connection(
     if not data["password"]:
         # Сохранённый пароль не уходит на новый адрес или под новым именем.
         if c.password and ADDRESS_FIELDS.intersection(changed):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=PASSWORD_AGAIN)
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=REENTER_SECRET_TEXT)
         #: Пароль, сохранённый до шифрования, шифруется при этой записи.
         data["password"] = reseal(c.password)
     else:
@@ -125,7 +125,8 @@ def test_connection(connection_id: int, db: Session = Depends(get_db), user: App
     slot = take_slot("ad", user.id)
     try:
         return svc.test_connection(c)
-    except Exception as exc:  # noqa: BLE001 — любая причина отказа доходит до человека классом, без текста LDAP
+    # Любая причина отказа доходит до человека классом, без текста LDAP.
+    except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": svc.public_error(exc)}
     finally:
         slot.release()

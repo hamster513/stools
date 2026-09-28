@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     #: тестах: SQLite прощает то, чего сервер не прощает (переиспользование
     #: id, наивные datetime, отсутствие длин у varchar), поэтому умолчание
     #: указывает на локальный Postgres, а не на файл рядом с каталогом.
-    database_url: str = "postgresql+psycopg://kbaudit:kbaudit@localhost:5432/kbaudit"
+    database_url: str = "postgresql+psycopg://kbaudit@localhost:5432/kbaudit"
 
     #: Каталог, куда сохраняются загруженные архивы (и кэш разбора).
     data_dir: Path = Path("./data")

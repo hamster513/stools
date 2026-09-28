@@ -36,13 +36,13 @@ class RefView(BaseModel):
     name: str
     title: str
     url: str
-    loaded_at: dt.datetime | None
-    source: str | None
+    loaded_at: dt.datetime | None = None
+    source: str | None = None
     records: int
     detail: str
     #: Старше 30 дней — справочник устарел, обзор это подсвечивает.
     stale: bool
-    active_job_id: int | None
+    active_job_id: int | None = None
 
 
 class DownloadRequest(BaseModel):

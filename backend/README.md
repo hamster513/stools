@@ -103,7 +103,7 @@ STOOLS_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/stools_te
 ## Запуск API вручную
 
 Сам сервис тоже рассчитан на Postgres — умолчание `STOOLS_DATABASE_URL`
-указывает на `postgresql+psycopg://kbaudit:kbaudit@localhost:5432/kbaudit`.
+указывает на `postgresql+psycopg://kbaudit@localhost:5432/kbaudit`.
 База из `ops/docker-compose.yml` наружу не публикуется (порт 5432 виден
 только внутри сети стека), поэтому для запуска вне контейнера нужен свой
 сервер, а его адрес задаётся переменной:

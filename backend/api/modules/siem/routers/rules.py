@@ -55,11 +55,11 @@ class RuleAttack(BaseModel):
 class RuleListItem(BaseModel):
     uuid: str
     name: str
-    author: str | None
-    category: str | None
-    group: str | None
-    rule_id: str | None
-    origin: str | None
+    author: str | None = None
+    category: str | None = None
+    group: str | None = None
+    rule_id: str | None = None
+    origin: str | None = None
     parse_status: str
     msgid_count: int
     finding_count: int
@@ -70,7 +70,7 @@ class RuleListItem(BaseModel):
     open_finding_count: int
     #: Наибольшая тяжесть среди открытых находок: high | medium | low.
     #: None означает, что открытых находок нет.
-    max_severity: str | None
+    max_severity: str | None = None
     attack: RuleAttack
 
 

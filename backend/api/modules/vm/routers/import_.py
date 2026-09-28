@@ -43,8 +43,8 @@ class ImportView(BaseModel):
 
 
 class ImportState(BaseModel):
-    last: ImportView | None
-    active: JobView | None
+    last: ImportView | None = None
+    active: JobView | None = None
 
 
 def _reject_if_running(db: Session) -> None:

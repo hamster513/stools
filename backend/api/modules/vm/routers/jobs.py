@@ -25,12 +25,12 @@ class JobView(BaseModel):
     status: str
     progress: int
     processed: int
-    total: int | None
+    total: int | None = None
     message: str
-    error: str | None
+    error: str | None = None
     cancel_requested: bool
     started_at: dt.datetime
-    finished_at: dt.datetime | None
+    finished_at: dt.datetime | None = None
     started_by: str
 
 

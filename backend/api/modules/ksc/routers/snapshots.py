@@ -45,8 +45,8 @@ class ServerView(BaseModel):
     name: str
     version: str
     snapshots: int
-    last_snapshot_id: int | None
-    last_snapshot_at: dt.datetime | None
+    last_snapshot_id: int | None = None
+    last_snapshot_at: dt.datetime | None = None
 
 
 class SnapshotView(BaseModel):
@@ -60,9 +60,9 @@ class SnapshotView(BaseModel):
     hosts: int
     findings: int
     by_severity: dict[str, int]
-    new: int | None
-    fixed: int | None
-    previous_id: int | None
+    new: int | None = None
+    fixed: int | None = None
+    previous_id: int | None = None
 
 
 def _snapshot_view(db: Session, s: KscSnapshot) -> SnapshotView:

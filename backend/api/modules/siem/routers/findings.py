@@ -38,8 +38,8 @@ class FindingListItem(BaseModel):
     in_table: bool
     #: Форма значения независимо от класса: сетевое имя, попавшее
     #: в «дублирует список», иначе в интерфейсе не найти.
-    shape: str | None
-    table_name: str | None
+    shape: str | None = None
+    table_name: str | None = None
     status: str
     has_value: bool
 
@@ -52,8 +52,8 @@ class FindingListResponse(BaseModel):
 
 class FindingDetail(BaseModel):
     value: str
-    body_excerpt: str | None
-    table_name: str | None
+    body_excerpt: str | None = None
+    table_name: str | None = None
     affected_rules: list[str]
 
 

@@ -47,10 +47,10 @@ class PolicyView(BaseModel):
     active: bool
     inherited: bool
     accept_parent: bool
-    modified_at: dt.datetime | None
+    modified_at: dt.datetime | None = None
     modified_group: str
     #: Замки содержимого политики (`policy_lock_share`/`POLICY_*`); `None` — содержимого нет в выгрузке.
-    locks: LockCountView | None
+    locks: LockCountView | None = None
     has_contents: bool
 
 
@@ -61,7 +61,7 @@ class TaskView(BaseModel):
     product: str
     inherited: bool
     schedule: int
-    last_run_at: dt.datetime | None
+    last_run_at: dt.datetime | None = None
     ok: int
     warning: int
     failed: int

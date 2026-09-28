@@ -115,7 +115,8 @@ def test_vm(db: Session = Depends(get_db), user: AppUser = Depends(get_current_u
     try:
         with make_client(conn, timeout=30.0) as http:
             head = MpVmClient(conn.unsealed(), http).probe()
-    except Exception as exc:  # noqa: BLE001 — любая причина отказа доходит до человека классом, без текста VM
+    # Любая причина отказа доходит до человека классом, без текста VM.
+    except Exception as exc:  # noqa: BLE001
         return TestVmResponse(ok=False, message=_public_error(exc))
     finally:
         slot.release()

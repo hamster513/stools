@@ -168,12 +168,12 @@ def make_jobs_router(model: type[Any], tag: str, *, cancel: bool = True) -> Any:
         status: str
         progress: int
         processed: int
-        total: int | None
+        total: int | None = None
         message: str
-        error: str | None
+        error: str | None = None
         cancel_requested: bool
         started_at: _dt.datetime
-        finished_at: _dt.datetime | None
+        finished_at: _dt.datetime | None = None
         started_by: str
 
     router = APIRouter(prefix="/jobs", tags=[tag])

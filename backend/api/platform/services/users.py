@@ -21,10 +21,10 @@ MIN_PASSWORD = 8
 class UserView(BaseModel):
     id: int
     login: str
-    display_name: str | None
+    display_name: str | None = None
     role: str
     is_active: bool
-    last_login_at: dt.datetime | None
+    last_login_at: dt.datetime | None = None
     created_at: dt.datetime
     auth_source: str
 

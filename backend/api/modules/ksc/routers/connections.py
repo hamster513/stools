@@ -26,7 +26,7 @@ router = APIRouter(prefix="/connections", tags=["ksc"])
 
 #: Поля, от которых зависит, куда и под чьим именем уйдёт сохранённый пароль.
 ADDRESS_FIELDS = frozenset({"host", "port", "verify_tls", "username", "internal", "domain"})
-PASSWORD_AGAIN = "при смене адреса или учётной записи пароль нужно ввести заново"
+REENTER_SECRET_TEXT = "при смене адреса или учётной записи пароль нужно ввести заново"
 
 
 class ConnectionIn(BaseModel):
@@ -59,7 +59,7 @@ class ConnectionView(BaseModel):
     verify_tls: bool
     internal: bool
     domain: str
-    server_id: int | None
+    server_id: int | None = None
     skip_policy_contents: bool
 
 
@@ -103,7 +103,7 @@ def update_connection(
     if not data["password"]:
         # Сохранённый пароль не уходит на новый адрес или под новым именем.
         if c.password and ADDRESS_FIELDS.intersection(changed):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=PASSWORD_AGAIN)
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=REENTER_SECRET_TEXT)
         #: Пароль, сохранённый до шифрования, шифруется при этой записи.
         data["password"] = reseal(c.password)
     else:
@@ -126,7 +126,8 @@ def test_connection(connection_id: int, db: Session = Depends(get_db), user: App
     slot = take_slot("ksc", user.id)
     try:
         return svc.test_connection(c)
-    except Exception as exc:  # noqa: BLE001 — любая причина отказа доходит до человека классом, без текста KSC
+    # Любая причина отказа доходит до человека классом, без текста KSC.
+    except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": svc.public_error(exc)}
     finally:
         slot.release()

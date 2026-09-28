@@ -36,7 +36,7 @@ class LockSummaryView(BaseModel):
 class SettingView(BaseModel):
     path: str
     value: str
-    locked: bool | None
+    locked: bool | None = None
     inherited_lock: bool
     lock_from: str
 
@@ -48,7 +48,7 @@ class SectionView(BaseModel):
 
 class PolicyContentsResponse(BaseModel):
     policy: PolicyHeaderView
-    summary: LockSummaryView | None
+    summary: LockSummaryView | None = None
     sections: list[SectionView]
     errors: list[str]
 

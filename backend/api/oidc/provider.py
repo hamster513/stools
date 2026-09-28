@@ -210,7 +210,8 @@ def verify_id_token(
     сменить уже после того, как JWKS туда попал.
     """
     try:
-        header = jwt.get_unverified_header(id_token)
+        # Заголовок читается только ради выбора ключа и алгоритма, подпись проверяет jwt.decode ниже.
+        header = jwt.get_unverified_header(id_token)  # NOSONAR: подпись проверяет jwt.decode ниже, здесь только выбор ключа
     except jwt.PyJWTError as exc:
         raise ProviderError("oidc_token", "id_token не разбирается") from exc
     alg = header.get("alg")

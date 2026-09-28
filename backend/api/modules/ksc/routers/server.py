@@ -46,7 +46,7 @@ class SecondaryServerView(BaseModel):
     name: str
     address: str
     version: str
-    last_connected: dt.datetime | None
+    last_connected: dt.datetime | None = None
     status: int
 
 
@@ -64,7 +64,7 @@ class ServerFindingView(BaseModel):
 
 
 class ServerResponse(BaseModel):
-    two_factor_required_for_all: bool | None
+    two_factor_required_for_all: bool | None = None
     admins: list[AdminView]
     certs: list[CertView]
     secondary_servers: list[SecondaryServerView]

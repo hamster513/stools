@@ -48,7 +48,7 @@ def cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
+    if not na or not nb:
         return 0.0
     return dot / (na * nb)
 
