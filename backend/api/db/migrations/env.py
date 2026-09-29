@@ -15,7 +15,9 @@ config = context.config
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Не выключать логгеры приложения: миграции идут и внутри процесса
+    # (тесты), и умолчание fileConfig глушило бы их до конца работы.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # URL берётся из настроек приложения (переменная окружения
 # STOOLS_DATABASE_URL), а не только из alembic.ini — так тесты и прод

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -398,3 +399,30 @@ def test_legacy_plaintext_client_secret_still_logs_in_and_is_reencrypted(
     again = TestClient(app)
     assert _login(again, oidc_enabled, "sub-9", "zoe", ["stools-analysts"]).status_code == 302
     assert again.get("/api/auth/me").status_code == 200
+
+
+def test_provider_refusal_reason_is_logged(
+    client: TestClient, oidc_enabled: FakeProvider, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Человек видит общий текст, а в логе API — какая проверка не прошла."""
+    fresh = TestClient(app)
+    params = _start(fresh)
+    code = oidc_enabled.issue_code(
+        "sub-1", "ann", "Ann", ["stools-admins"],
+        nonce=params["nonce"], groups_in_id_token=False,
+        code_challenge=params["code_challenge"], userinfo_sub="sub-чужой",
+    )
+    with caplog.at_level(logging.WARNING, logger="stools.oidc"):
+        fresh.get("/api/auth/oidc/callback", params={"code": code, "state": params["state"]}, follow_redirects=False)
+    messages = [r.getMessage() for r in caplog.records if r.name == "stools.oidc"]
+    assert any("oidc_token" in m and "userinfo вернул другой sub" in m for m in messages)
+
+
+def test_no_role_refusal_logs_received_groups(
+    client: TestClient, oidc_enabled: FakeProvider, caplog: pytest.LogCaptureFixture
+) -> None:
+    fresh = TestClient(app)
+    with caplog.at_level(logging.WARNING, logger="stools.oidc"):
+        _login(fresh, oidc_enabled, "sub-9", "bob", ["unrelated", "other"])
+    messages = [r.getMessage() for r in caplog.records if r.name == "stools.oidc"]
+    assert any("oidc_no_role" in m and "bob" in m and "unrelated" in m and "other" in m for m in messages)

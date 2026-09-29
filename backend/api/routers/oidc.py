@@ -15,6 +15,7 @@ api/main.py про то, как защищены остальные). Любой
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Any
 
@@ -105,6 +106,12 @@ def oidc_start(
     return redirect
 
 
+#: Причина отказа во входе: человек видит общий текст, а оператору нужно
+#: знать, какая проверка не прошла (издатель, аудитория, подпись, группы).
+#: Секретов в сообщениях нет — только классы ошибок и имена групп.
+logger = logging.getLogger("stools.oidc")
+
+
 @router.get("/callback")
 def oidc_callback(
     request: Request,
@@ -130,7 +137,9 @@ def oidc_callback(
     if pending is None:
         return _refused(request, "oidc_state", None)
     if error or not code:
+        logger.warning("вход через OIDC отклонён (oidc_denied): провайдер вернул error=%r", error[:100])
         return _refused(request, "oidc_denied", None)
+    groups: list[str] = []
     try:
         disco = fetch_discovery(cfg.issuer_url, oidc_login.http_factory)
         tokens = exchange_code(disco, cfg, code, pending.code_verifier, oidc_login.http_factory)
@@ -148,8 +157,12 @@ def oidc_callback(
             groups = claim_list(userinfo, cfg.groups_claim)
         user = resolve_user(db, cfg, claims, groups)
     except ProviderError as exc:
+        logger.warning("вход через OIDC отклонён (%s): %s", exc.code, exc)
         return _refused(request, exc.code, None)
     except LoginRefused as exc:
+        logger.warning(
+            "вход через OIDC отклонён (%s): логин %r, группы от провайдера %s", exc.code, exc.login, groups
+        )
         return _refused(request, exc.code, exc.login)
     request.state.audit_summary = "oidc"
     redirect = RedirectResponse("/attack", status_code=status.HTTP_302_FOUND)
