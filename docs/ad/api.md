@@ -37,8 +37,11 @@ DELETE /verdicts/{key}?domain_id=      204
 ```
 GET  /collector.ps1                    PowerShell-сборщик (attachment)
 GET  /connections                      [{id, title, host, port, use_ssl, verify_tls, username,
-                                        password_set, base_dn, collect_sysvol, domain_id}]
-POST /connections  PUT /{id}  DELETE /{id}      пустой пароль в PUT — оставить прежний
+                                        password_set, base_dn, collect_sysvol, page_size,
+                                        pause_ms, domain_id}]
+POST /connections  PUT /{id}  DELETE /{id}      пустой пароль в PUT — оставить прежний;
+                                        page_size 50–1000 (500), pause_ms 0–10000 (500) —
+                                        страница LDAP и пауза между запросами к контроллеру
 POST /connections/{id}/test            {ok, message}
 POST /connections/{id}/collect         {job_id} | 400 нет пароля | 409 идёт задача
 ```
