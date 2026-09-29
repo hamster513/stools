@@ -105,13 +105,21 @@ async def import_from_file(
         raise
     if size == 0:
         target.unlink(missing_ok=True)
+        fail_job(db, job_id, "пустой файл")
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="пустой файл")
     data_dir = settings.data_dir
 
     def work(session: Session, handle: JobHandle) -> None:
         run_import(session, handle, "file", Path(target), load_settings(session), data_dir, filename=name)
 
-    background_tasks.add_task(run_job, job_id, work)
+    def guarded() -> None:
+        # Задачу могли снять до старта потока: `work` тогда не вызывается, а файл остаётся.
+        try:
+            run_job(job_id, work)
+        finally:
+            target.unlink(missing_ok=True)
+
+    background_tasks.add_task(guarded)
     return JobStarted(job_id=job_id)
 
 

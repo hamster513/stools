@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from api.jobs import JobCancelled
-from api.modules.ad.core.ldap_collector import LdapResultError, ldap3_searcher
+from api.modules.ad.core.ldap_collector import LdapResultError, ldap3_searcher, paced_reader
 
 PAGED_OID = "1.2.840.113556.1.4.319"
 SD_FLAGS_OID = "1.2.840.113556.1.4.801"
@@ -191,3 +191,38 @@ def test_cancel_checked_after_pause_before_next_request() -> None:
         list(search("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"))
     # Отмена, пришедшая во время паузы, замечена до второго запроса.
     assert sleeps == [0.5] and checks == [1] and len(conn.calls) == 1
+
+
+def test_smb_reads_paused_between_and_not_after_last() -> None:
+    sleeps: list[str] = []
+    reads: list[str] = []
+
+    def read(unc: str) -> bytes | None:
+        reads.append(unc)
+        sleeps.append(f"read:{unc}")
+        return unc.encode()
+
+    paced = paced_reader(read, pause_ms=500, sleep=lambda s: sleeps.append(f"pause:{s}"))
+    assert [paced(p) for p in ("a", "b", "c")] == [b"a", b"b", b"c"]
+    # Первое чтение — без паузы, дальше пауза перед каждым; после последнего паузы нет.
+    assert sleeps == ["read:a", "pause:0.5", "read:b", "pause:0.5", "read:c"]
+
+
+def test_smb_zero_pause_does_not_sleep() -> None:
+    paced = paced_reader(lambda unc: b"x", pause_ms=0, sleep=lambda s: pytest.fail("пауза при pause_ms=0"))
+    assert [paced("a"), paced("b")] == [b"x", b"x"]
+
+
+def test_smb_cancel_checked_after_pause_before_next_read() -> None:
+    events: list[str] = []
+
+    def check_cancel() -> None:
+        events.append("check")
+        raise JobCancelled()
+
+    paced = paced_reader(lambda unc: events.append(f"read:{unc}") or b"", pause_ms=500, sleep=lambda s: events.append("pause"), check_cancel=check_cancel)
+    paced("a")
+    with pytest.raises(JobCancelled):
+        paced("b")
+    # Отмена, пришедшая в паузе, замечена до второго чтения.
+    assert events == ["read:a", "pause", "check"]

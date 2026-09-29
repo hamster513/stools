@@ -373,9 +373,33 @@ def ldap3_searcher(
     return search
 
 
-def smb_reader(host: str, username: str, password: str) -> SmbReader:
+def paced_reader(
+    read: SmbReader, *, pause_ms: int, check_cancel: Callable[[], None] | None = None, sleep: Callable[[float], None] | None = None,
+) -> SmbReader:
+    """Чтения SYSVOL идут с той же паузой, что и запросы LDAP: между любыми двумя чтениями —
+    `pause_ms`, после последнего паузы нет. После паузы, до чтения, — `check_cancel()`."""
+    pause = pause_ms / 1000
+    wait = sleep or time.sleep
+    reads = 0
+
+    def paced(unc: str) -> bytes | None:
+        nonlocal reads
+        if reads and pause > 0:
+            wait(pause)
+            if check_cancel is not None:
+                check_cancel()
+        reads += 1
+        return read(unc)
+
+    return paced
+
+
+def smb_reader(
+    host: str, username: str, password: str, *,
+    pause_ms: int = PAUSE_MS_DEFAULT, check_cancel: Callable[[], None] | None = None, sleep: Callable[[float], None] | None = None,
+) -> SmbReader:
     """Чтение файлов SYSVOL через smbprotocol; путь DFS переводится на
-    контроллер домена, к которому уже подключились."""
+    контроллер домена, к которому уже подключились. Чтения — с паузой `pause_ms` (`paced_reader`)."""
     import smbclient
 
     smbclient.register_session(host, username=username, password=password)
@@ -389,4 +413,4 @@ def smb_reader(host: str, username: str, password: str) -> SmbReader:
         except OSError:
             return None
 
-    return read
+    return paced_reader(read, pause_ms=pause_ms, check_cancel=check_cancel, sleep=sleep)

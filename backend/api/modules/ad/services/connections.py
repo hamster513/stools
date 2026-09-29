@@ -97,16 +97,18 @@ def collect_snapshot(
     c = (factory or ldap3_connection)(conn)
     try:
         root = root_dse_of(c, conn.base_dn)
-        reader = None
-        if conn.collect_sysvol:
-            try:
-                reader = smb_reader(conn.host, conn.username, decrypt(conn.password))
-            except Exception as exc:  # noqa: BLE001 — без SYSVOL сбор всё равно полезен
-                handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; User Rights пропущены")
-        handle.stage("collecting", message="объекты и дескрипторы")
+
         def check_cancel() -> None:
             if handle.cancelled():
                 raise JobCancelled()
+
+        reader = None
+        if conn.collect_sysvol:
+            try:
+                reader = smb_reader(conn.host, conn.username, decrypt(conn.password), pause_ms=conn.pause_ms, check_cancel=check_cancel)
+            except Exception as exc:  # noqa: BLE001 — без SYSVOL сбор всё равно полезен
+                handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; User Rights пропущены")
+        handle.stage("collecting", message="объекты и дескрипторы")
 
         # tick фиксирует сессию задачи: на этой стадии в ней нет ничего, кроме строки задачи.
         searcher = ldap3_searcher(

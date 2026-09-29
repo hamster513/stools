@@ -173,7 +173,14 @@ def start_import(
         finally:
             upload.unlink(missing_ok=True)
 
-    background_tasks.add_task(run_job, job_model, job_id, work)
+    def guarded() -> None:
+        # Задачу могли снять до старта потока: `work` тогда не вызывается, а файл остаётся.
+        try:
+            run_job(job_model, job_id, work)
+        finally:
+            upload.unlink(missing_ok=True)
+
+    background_tasks.add_task(guarded)
     return job_id
 
 

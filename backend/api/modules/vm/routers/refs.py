@@ -150,10 +150,19 @@ async def upload_ref(
         fail_job(db, job_id, str(exc.detail))
         raise
     if not paths:
+        fail_job(db, job_id, "пустой файл")
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="пустые файлы")
 
     def work(session: Session, handle: JobHandle) -> None:
         run_ref_file(session, handle, name, paths, load_settings(session).weights)
 
-    background_tasks.add_task(run_job, job_id, work)
+    def guarded() -> None:
+        # Задачу могли снять до старта потока: `work` тогда не вызывается, а файлы остаются.
+        try:
+            run_job(job_id, work)
+        finally:
+            for path in paths:
+                path.unlink(missing_ok=True)
+
+    background_tasks.add_task(guarded)
     return JobStarted(job_id=job_id)
