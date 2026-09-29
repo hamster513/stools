@@ -114,7 +114,7 @@ export function JobsPage() {
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap text-text-secondary">{duration(j)}</td>
                   <td className="px-3 py-2 text-right">
-                    {write && j.status === 'running' && !j.cancel_requested && (
+                    {write && j.status === 'running' && (
                       <Button variant="ghost" onClick={() => cancel.mutate(j.id)} aria-label={`Отменить задачу ${j.id}`}>
                         <XCircle size={13} aria-hidden /> отменить
                       </Button>

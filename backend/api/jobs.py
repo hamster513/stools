@@ -196,10 +196,13 @@ def run_job(model: type[Any], job_id: int, fn: Callable[[Session, JobHandle], No
 def _run_registered(model: type[Any], job_id: int, fn: Callable[[Session, JobHandle], None]) -> None:
     session_factory = get_sessionmaker()
     with session_factory() as db:
-        job = db.get(model, job_id)
-        # Снята раньше, чем поток до неё дошёл, — работу не начинаем.
+        # Регистрация уже сделана, строка читается под блокировкой: снятие, которое успело
+        # её взять раньше, решило «сирота» и зафиксировало cancelled — поток это увидит;
+        # снятие, которое придёт позже, дождётся commit и увидит задачу в реестре.
+        job = db.get(model, job_id, with_for_update=True)
         if job is None or job.status != "running":
             return
+        db.commit()
         handle = JobHandle(db, job)
         try:
             fn(db, handle)
@@ -233,7 +236,9 @@ def cancel_job(db: Session, model: type[Any], job_id: int) -> None:
     Флаг ставится и ей: если поток всё же подхватит задачу, он остановится сам."""
     from fastapi import HTTPException, status
 
-    job = db.get(model, job_id)
+    # Под блокировкой строки: поток, берущий задачу, читает её так же (`_run_registered`),
+    # поэтому реестр, проверенный здесь, не может устареть до commit.
+    job = db.get(model, job_id, with_for_update=True)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="задача не найдена")
     if job.status != "running":

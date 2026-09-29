@@ -1,6 +1,7 @@
 """Снятие фоновых задач: живую — флагом, осиротевшую — сразу; уборка при старте API."""
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -81,6 +82,36 @@ def test_job_cancelled_before_start_does_not_run(auth_client: TestClient, db_ses
     run_job(AdJob, job_id, work)
     job = _row(AdJob, job_id)
     assert job.status == "cancelled" and job.error is None and job.message == ORPHAN_MESSAGE
+
+
+
+def test_cancel_racing_with_start_is_consistent(app_settings: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Гонка: снятие уже решило, что задачу никто не ведёт, а поток как раз её берёт.
+    Строку держит блокировка снятия, поэтому поток видит уже снятую задачу и работу не
+    начинает — а не исполняет её до «готово» под сообщением о сироте."""
+    job_id = start_job(db_session, AdJob, "collect", "tester")
+    started = threading.Event()
+    original = jobs.is_live
+
+    def work(db: Any, h: JobHandle) -> None:
+        started.set()
+
+    thread = threading.Thread(target=run_job, args=(AdJob, job_id, work))
+
+    def is_live_then_start(model: type[Any], jid: int) -> bool:
+        live = original(model, jid)
+        thread.start()  # поток регистрируется и читает строку, пока снятие не зафиксировано
+        started.wait(timeout=1.0)
+        return live
+
+    monkeypatch.setattr(jobs, "is_live", is_live_then_start)
+    with db_base.get_sessionmaker()() as s:
+        jobs.cancel_job(s, AdJob, job_id)
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert not started.is_set(), "снятая задача не должна исполняться"
+    job = _row(AdJob, job_id)
+    assert (job.status, job.message) == ("cancelled", ORPHAN_MESSAGE)
 
 
 def test_live_registry_forgets_finished_jobs(db_session: Any) -> None:
