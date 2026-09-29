@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from api.jobs import JobCancelled
-from api.modules.ad.core.ldap_collector import ldap3_searcher
+from api.modules.ad.core.ldap_collector import LdapResultError, ldap3_searcher
 
 PAGED_OID = "1.2.840.113556.1.4.319"
 SD_FLAGS_OID = "1.2.840.113556.1.4.801"
@@ -29,11 +29,18 @@ class FakeLdap3:
         self.auto_referrals = True
         self.response: list[dict[str, Any]] | None = None
         self.result: dict[str, Any] = {}
+        #: Номер запроса (с 1) → (код, описание): контроллер отвечает ошибкой без страницы.
+        self.fail: dict[int, tuple[int, str]] = {}
 
     def search(self, search_base: str, search_filter: str, search_scope: Any = None, attributes: Any = None,
                controls: Any = None, paged_size: int | None = None, paged_cookie: bytes | None = None, **_: Any) -> bool:
         self.calls.append({"base": search_base, "filter": search_filter, "attributes": attributes, "controls": controls,
                            "paged_size": paged_size, "paged_cookie": paged_cookie})
+        if len(self.calls) in self.fail:
+            code, description = self.fail[len(self.calls)]
+            self.response = []
+            self.result = {"result": code, "description": description, "controls": {}}
+            return False
         rows = self.results.get(search_filter, [])
         assert paged_size
         start = int(paged_cookie or b"0")
@@ -143,3 +150,44 @@ def test_sd_flags_control_only_for_descriptor() -> None:
     list(search("DC=corp,DC=local", "(objectClass=group)", ["name", "nTSecurityDescriptor"], "SUBTREE"))
     assert conn.calls[0]["controls"] is None
     assert [str(c[0]) for c in conn.calls[1]["controls"]] == [SD_FLAGS_OID]
+
+
+def test_error_result_on_page_two_stops_with_readable_error() -> None:
+    """busy/unavailable/timeLimitExceeded приходят без постраничного контрола: раньше
+    петля молча заканчивалась, и снапшот выходил без части объектов."""
+    conn = FakeLdap3({"(objectClass=user)": _rows(5)})
+    conn.fail = {2: (51, "busy")}
+    got: list[str] = []
+    with pytest.raises(LdapResultError) as err:
+        for e in _searcher(conn, [], page_size=2, pause_ms=0)("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"):
+            got.append(e["dn"])
+    assert err.value.code == 51
+    assert str(err.value) == "контроллер ответил busy (51) на поиске (objectClass=user) — сбор прерван"
+    assert len(got) == 2 and len(conn.calls) == 2
+
+
+def test_error_text_cuts_long_filter() -> None:
+    flt = "(|" + "".join(f"(objectSid=S-1-5-21-{i})" for i in range(20)) + ")"
+    conn = FakeLdap3({})
+    conn.fail = {1: (3, "timeLimitExceeded")}
+    with pytest.raises(LdapResultError) as err:
+        list(_searcher(conn, [], pause_ms=0)("DC=corp,DC=local", flt, ["objectSid"], "SUBTREE"))
+    text = str(err.value)
+    assert text.startswith("контроллер ответил timeLimitExceeded (3) на поиске (|(objectSid=") and len(text) < 140
+
+
+def test_cancel_checked_after_pause_before_next_request() -> None:
+    conn = FakeLdap3({"(objectClass=user)": _rows(5)})
+    sleeps: list[float] = []
+    checks: list[int] = []
+
+    def check_cancel() -> None:
+        checks.append(len(conn.calls))
+        if sleeps:
+            raise JobCancelled()
+
+    search = ldap3_searcher(conn, page_size=2, pause_ms=500, sleep=sleeps.append, check_cancel=check_cancel)
+    with pytest.raises(JobCancelled):
+        list(search("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"))
+    # Отмена, пришедшая во время паузы, замечена до второго запроса.
+    assert sleeps == [0.5] and checks == [1] and len(conn.calls) == 1

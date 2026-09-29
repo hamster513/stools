@@ -10,7 +10,7 @@ import base64
 import datetime as dt
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from api.modules.ad.core import sd
@@ -32,6 +32,19 @@ TEMPLATE_ATTRS = [
 ]
 EXTENDED_RIGHTS = ["DS-Replication-Get-Changes", "DS-Replication-Get-Changes-All", "DS-Replication-Get-Changes-In-Filtered-Set", "Enroll", "AutoEnroll"]
 GPT_TMPL = "\\MACHINE\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf"
+#: Код LDAP noSuchObject: базы поиска нет.
+NO_SUCH_OBJECT = 32
+
+
+class LdapResultError(RuntimeError):
+    """Контроллер ответил на поиск кодом ошибки (busy, unavailable, timeLimitExceeded…).
+    Такой ответ приходит без постраничного контрола — продолжать нельзя: выгрузка
+    вышла бы без части объектов, а находки — без части нарушений."""
+
+    def __init__(self, code: int, description: str, flt: str) -> None:
+        self.code = code
+        what = flt if len(flt) <= 60 else flt[:59] + "…"
+        super().__init__(f"контроллер ответил {description or 'ошибкой'} ({code}) на поиске {what} — сбор прерван")
 
 
 def _first(value: Any) -> Any:
@@ -101,10 +114,19 @@ class LdapCollector:
 
     # -- вспомогательное ---------------------------------------------------
 
-    def _one(self, base: str, flt: str, attrs: list[str], scope: str = "SUBTREE") -> Entry | None:
-        for e in self.search(base, flt, attrs, scope):
+    def _one(self, base: str, flt: str, attrs: list[str], scope: str = "SUBTREE", *, missing_ok: bool = False) -> Entry | None:
+        for e in self._search_optional(base, flt, attrs, scope) if missing_ok else self.search(base, flt, attrs, scope):
             return e
         return None
+
+    def _search_optional(self, base: str, flt: str, attrs: list[str], scope: str) -> Iterator[Entry]:
+        """Поиск в базе, которой может не быть (шаблоны сертификатов без AD CS):
+        noSuchObject — пустой ответ; любой другой код ошибки — отказ сбора."""
+        try:
+            yield from self.search(base, flt, attrs, scope)
+        except LdapResultError as exc:
+            if exc.code != NO_SUCH_OBJECT:
+                raise
 
     def _register(self, sid: str | None, name: str, cls: str) -> None:
         if sid and sid not in self.principals:
@@ -127,7 +149,7 @@ class LdapCollector:
         config_nc = str(self.root.get("configurationNamingContext") or f"CN=Configuration,{default_nc}")
         schema_nc = str(self.root.get("schemaNamingContext") or f"CN=Schema,{config_nc}")
 
-        root_obj = self._one(default_nc, "(objectClass=*)", ["objectSid", "ms-DS-MachineAccountQuota", "nTSecurityDescriptor", "msDS-Behavior-Version"], "BASE")
+        root_obj = self._one(default_nc, "(objectClass=*)", ["objectSid", "ms-DS-MachineAccountQuota", "nTSecurityDescriptor", "msDS-Behavior-Version"], "BASE", missing_ok=True)
         if root_obj is None:
             raise ValueError("корень домена не прочитан — проверьте base DN и права")
         attrs = root_obj["attributes"]
@@ -164,7 +186,7 @@ class LdapCollector:
         root_sd = _raw(root_obj, "nTSecurityDescriptor")
         objects.append({"dn": default_nc, "class": "domainDNS", "sid": domain_sid, "sd": _b64(root_sd)})
         self._note_sd(root_sd)
-        holder = self._one(f"CN=AdminSDHolder,CN=System,{default_nc}", "(objectClass=*)", ["nTSecurityDescriptor"], "BASE")
+        holder = self._one(f"CN=AdminSDHolder,CN=System,{default_nc}", "(objectClass=*)", ["nTSecurityDescriptor"], "BASE", missing_ok=True)
         if holder is not None:
             hsd = _raw(holder, "nTSecurityDescriptor")
             objects.append({"dn": holder["dn"], "class": "container", "sd": _b64(hsd)})
@@ -199,7 +221,7 @@ class LdapCollector:
                     sysvol[e["dn"]] = {"GptTmpl.inf": _decode_inf(content)}
 
         tpl_base = f"CN=Certificate Templates,CN=Public Key Services,CN=Services,{config_nc}"
-        for e in self.search(tpl_base, "(objectClass=pKICertificateTemplate)", TEMPLATE_ATTRS, "SUBTREE"):
+        for e in self._search_optional(tpl_base, "(objectClass=pKICertificateTemplate)", TEMPLATE_ATTRS, "SUBTREE"):
             a = e["attributes"]
             tsd = _raw(e, "nTSecurityDescriptor")
             objects.append(
@@ -297,6 +319,7 @@ def ldap3_searcher(
     page_size: int = PAGE_SIZE_DEFAULT,
     pause_ms: int = PAUSE_MS_DEFAULT,
     on_page: Callable[[int], None] | None = None,
+    check_cancel: Callable[[], None] | None = None,
     sleep: Callable[[float], None] | None = None,
 ) -> Searcher:
     """Постраничный поиск ldap3 с контролем SD_FLAGS (только DACL).
@@ -305,15 +328,20 @@ def ldap3_searcher(
     двумя запросами к контроллеру — страницами одного поиска и отдельными
     поисками (дозапросы имён по SID тоже) — пауза `pause_ms`; после последнего
     запроса паузы нет. После каждой страницы — `on_page(прочитано всего)`:
-    прогресс и проверка отмены (исключение из него прерывает сбор до
-    следующего запроса)."""
+    прогресс и проверка отмены; после паузы, до следующего запроса, —
+    `check_cancel()`: отмена, пришедшая во время паузы, не ждёт ещё одной
+    страницы. Исключение из них прерывает сбор до следующего запроса.
+    Ответ контроллера с кодом ошибки — `LdapResultError`."""
     from ldap3 import BASE, SUBTREE
     from ldap3.protocol.microsoft import security_descriptor_control
 
     scopes = {"BASE": BASE, "SUBTREE": SUBTREE}
     pause = pause_ms / 1000
     wait = sleep or time.sleep
-    # Автопереход по ссылкам с постраничным поиском несовместим — ldap3 в paged_search выключает его так же.
+    # По ссылкам (referrals) на другие серверы сбор не ходит: все базы поиска — разделы
+    # этого контроллера (домен, конфигурация, схема). Прежний paged_search при включённом
+    # auto_referrals открывал новое соединение к серверу из ссылки; здесь ссылки
+    # пропускаются, а ответ-ссылка на саму базу (код 10) — ошибка сбора.
     connection.auto_referrals = False
     state = {"requests": 0, "read": 0}
 
@@ -323,12 +351,17 @@ def ldap3_searcher(
         while True:
             if state["requests"] and pause > 0:
                 wait(pause)
+                if check_cancel is not None:
+                    check_cancel()
             state["requests"] += 1
             connection.search(
                 base, flt, search_scope=scopes[scope], attributes=attrs, controls=controls, paged_size=page_size, paged_cookie=cookie,
             )
+            result = connection.result or {}
+            if result.get("result", 0) != 0:
+                raise LdapResultError(int(result["result"]), str(result.get("description") or ""), flt)
             entries = [e for e in connection.response or [] if e.get("type") == "searchResEntry"]
-            cookie = (((connection.result or {}).get("controls") or {}).get(PAGED_CONTROL) or {}).get("value", {}).get("cookie")
+            cookie = ((result.get("controls") or {}).get(PAGED_CONTROL) or {}).get("value", {}).get("cookie")
             state["read"] += len(entries)
             if on_page is not None:
                 on_page(state["read"])

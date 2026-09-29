@@ -239,8 +239,9 @@ PAGED_OID = "1.2.840.113556.1.4.319"
 class _PagedConn(_FakeConn):
     """ldap3-соединение в режиме SYNC поверх FakeLdap: ответ режется страницами по `paged_size`."""
 
-    def __init__(self, on_search: Any = None) -> None:
+    def __init__(self, on_search: Any = None, fail_on: dict[int, tuple[int, str]] | None = None) -> None:
         super().__init__()
+        self.fail_on = fail_on or {}
         self.paged_sizes: list[int | None] = []
         self.returned = 0
         self.auto_referrals = True
@@ -253,6 +254,10 @@ class _PagedConn(_FakeConn):
         self.paged_sizes.append(paged_size)
         if self.on_search is not None:
             self.on_search(len(self.paged_sizes))
+        if len(self.paged_sizes) in self.fail_on:
+            code, description = self.fail_on[len(self.paged_sizes)]
+            self.response, self.result = [], {"result": code, "description": description, "controls": {}}
+            return False
         assert paged_size
         rows = [{**e, "type": "searchResEntry"} for e in self.fake.search(search_base, search_filter, attributes, search_scope)]
         start = int(paged_cookie or b"0")
@@ -281,8 +286,11 @@ def test_paging_defaults_and_ranges(auth_client: TestClient) -> None:
     for bad, text in (
         ({"page_size": 49}, "размер страницы LDAP: от 50 до 1000"),
         ({"page_size": 1001}, "размер страницы LDAP: от 50 до 1000"),
-        ({"pause_ms": -1}, "пауза между страницами: от 0 до 10000 мс"),
-        ({"pause_ms": 10001}, "пауза между страницами: от 0 до 10000 мс"),
+        ({"pause_ms": -1}, "пауза между запросами к контроллеру: от 0 до 10000 мс"),
+        ({"pause_ms": 10001}, "пауза между запросами к контроллеру: от 0 до 10000 мс"),
+        # Пустое числовое поле формы приходит как null.
+        ({"page_size": None}, "размер страницы LDAP: от 50 до 1000"),
+        ({"pause_ms": None}, "пауза между запросами к контроллеру: от 0 до 10000 мс"),
     ):
         r = auth_client.put(f"/api/ad/connections/{cid}", json={**base, **bad})
         assert r.status_code == 422 and text in r.text, (bad, r.text)
@@ -370,3 +378,46 @@ def test_cancel_between_pages_stops_collect(auth_client: TestClient, db_session:
     assert len(fake_conn.paged_sizes) == 3
     db_session.expire_all()
     assert db_session.scalar(select(func.count()).select_from(AdSnapshot)) == 0
+
+
+def test_busy_controller_fails_job_without_snapshot(auth_client: TestClient, db_session: Any, monkeypatch: Any) -> None:
+    """Контроллер ответил busy на второй странице: задача failed с понятным текстом, снапшота нет."""
+    from sqlalchemy import func, select
+
+    from api.modules.ad.models import AdSnapshot
+
+    fake_conn = _PagedConn(fail_on={2: (51, "busy")})
+    monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
+    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p: fake_conn.fake.smb)
+    _real_searcher_with_fake_sleep(monkeypatch, [], {})
+    cid = _create(auth_client)
+    r = auth_client.post(f"/api/ad/connections/{cid}/collect")
+    job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "failed", job
+    assert job["error"].startswith("контроллер ответил busy (51) на поиске"), job["error"]
+    assert len(fake_conn.paged_sizes) == 2
+    db_session.expire_all()
+    assert db_session.scalar(select(func.count()).select_from(AdSnapshot)) == 0
+
+
+def test_cancel_during_pause_stops_before_next_request(auth_client: TestClient, db_session: Any, monkeypatch: Any) -> None:
+    from sqlalchemy import update
+
+    from api.modules.ad.models import AdJob
+
+    fake_conn = _PagedConn()
+    monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
+    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p: fake_conn.fake.smb)
+    real = svc.ldap3_searcher
+
+    def cancel_in_pause(seconds: float) -> None:
+        db_session.execute(update(AdJob).values(cancel_requested=True))
+        db_session.commit()
+
+    monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: real(c, sleep=cancel_in_pause, **kw))
+    cid = _create(auth_client)
+    r = auth_client.post(f"/api/ad/connections/{cid}/collect")
+    job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "cancelled", job
+    # Первый запрос прошёл, отмена пришла в паузе — второго запроса нет.
+    assert len(fake_conn.paged_sizes) == 1

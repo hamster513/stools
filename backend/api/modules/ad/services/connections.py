@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from api.crypto import SecretUnreadable, decrypt
 from api.hosts import LOGIN_REJECTED, NO_LINK, NO_RIGHTS, TLS_FAILED, is_tls_error, server_error
-from api.jobs import JobHandle
+from api.jobs import JobCancelled, JobHandle
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.ldap_collector import LdapCollector, ldap3_searcher, smb_reader
 from api.modules.ad.models import AdConnection, AdSnapshot
@@ -104,9 +104,14 @@ def collect_snapshot(
             except Exception as exc:  # noqa: BLE001 — без SYSVOL сбор всё равно полезен
                 handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; User Rights пропущены")
         handle.stage("collecting", message="объекты и дескрипторы")
+        def check_cancel() -> None:
+            if handle.cancelled():
+                raise JobCancelled()
+
         # tick фиксирует сессию задачи: на этой стадии в ней нет ничего, кроме строки задачи.
         searcher = ldap3_searcher(
-            c, page_size=conn.page_size, pause_ms=conn.pause_ms, on_page=lambda n: handle.tick(n, message=f"прочитано объектов {n}"),
+            c, page_size=conn.page_size, pause_ms=conn.pause_ms,
+            on_page=lambda n: handle.tick(n, message=f"прочитано объектов {n}"), check_cancel=check_cancel,
         )
         collector = LdapCollector(searcher, root, smb_reader=reader, host=conn.host, account=conn.username)
         export = collector.collect()

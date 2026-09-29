@@ -47,19 +47,22 @@ class ConnectionIn(BaseModel):
     def check_host(cls, value: str) -> str:
         return validate_host(value)
 
-    @field_validator("page_size")
+    # mode="before": пустое поле формы (null) и дробь получают тот же русский текст, что и выход за границы.
+    @field_validator("page_size", mode="before")
     @classmethod
-    def check_page_size(cls, value: int) -> int:
-        if not 50 <= value <= 1000:
-            raise ValueError("размер страницы LDAP: от 50 до 1000")
-        return value
+    def check_page_size(cls, value: Any) -> int:
+        return _whole_in_range(value, 50, 1000, "размер страницы LDAP: от 50 до 1000")
 
-    @field_validator("pause_ms")
+    @field_validator("pause_ms", mode="before")
     @classmethod
-    def check_pause(cls, value: int) -> int:
-        if not 0 <= value <= 10000:
-            raise ValueError("пауза между страницами: от 0 до 10000 мс")
-        return value
+    def check_pause(cls, value: Any) -> int:
+        return _whole_in_range(value, 0, 10000, "пауза между запросами к контроллеру: от 0 до 10000 мс")
+
+
+def _whole_in_range(value: Any, low: int, high: int, text: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise ValueError(text)
+    return value
 
 
 class ConnectionView(BaseModel):

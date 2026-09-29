@@ -12,6 +12,22 @@ export class ApiRequestError extends Error {
   }
 }
 
+/**
+ * Ошибка проверки схемы (422) приходит списком `[{loc, msg, …}]`, а не строкой:
+ * показываем тексты `msg`. Наши валидаторы пишут их по-русски, pydantic
+ * предваряет такой текст «Value error, » — префикс убирается.
+ */
+export function formatDetail(detail: unknown): string {
+  if (!Array.isArray(detail)) return String(detail)
+  return detail
+    .map((item) =>
+      item && typeof item === 'object' && 'msg' in item
+        ? String((item as { msg: unknown }).msg).replace(/^Value error, /, '')
+        : String(item),
+    )
+    .join('; ')
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
@@ -34,7 +50,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const detail =
       payload && typeof payload === 'object' && 'detail' in payload
-        ? String((payload as { detail: unknown }).detail)
+        ? formatDetail((payload as { detail: unknown }).detail)
         : `Запрос завершился ошибкой ${res.status}`
     // Отказ по правам объясняем словами: «нужна роль: аналитик» само по
     // себе не говорит, что действие отклонено, а не пошло не так.
