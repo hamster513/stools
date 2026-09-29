@@ -125,21 +125,7 @@ export function OidcPage() {
             остаётся: он нужен, пока провайдер настраивается, и на случай, когда он недоступен.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {saved && !dirty && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-kind-accepted">
-              <CheckCircle2 size={14} aria-hidden />
-              сохранено
-            </span>
-          )}
-          <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
-            <Save size={14} aria-hidden />
-            Сохранить
-          </Button>
-        </div>
       </div>
-
-      {save.isError && <p className="mb-4 text-xs text-kind-1">{save.error.message}</p>}
 
       <div className="grid max-w-2xl gap-5">
         <section className="rounded border border-grid bg-surface p-4">
@@ -236,6 +222,17 @@ export function OidcPage() {
                 <PlugZap size={14} aria-hidden />
                 Проверить
               </Button>
+              <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
+                <Save size={14} aria-hidden />
+                Сохранить
+              </Button>
+              {saved && !dirty && (
+                <span className="inline-flex items-center gap-1.5 text-xs text-kind-accepted">
+                  <CheckCircle2 size={14} aria-hidden />
+                  сохранено
+                </span>
+              )}
+              {save.isError && <span className="text-xs text-kind-1">{save.error.message}</span>}
               {test.isError && <span className="text-xs text-kind-1">{test.error.message}</span>}
               {result && (
                 <span
