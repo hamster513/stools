@@ -10,7 +10,14 @@ COPY kbaudit ./kbaudit
 COPY api ./api
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN pip install --no-cache-dir -e ".[api]"
+# pip нужен только здесь, при сборке. В работающем контейнере он лишний,
+# а сканеры образов находят уязвимости в копиях пакетов, которые pip
+# возит внутри себя (pip/_vendor: msgpack, код setuptools). Поэтому он
+# удаляется в том же слое, где отработал, вместе с запасной копией для
+# ensurepip; новые зависимости на проде приходят только пересборкой образа.
+RUN pip install --no-cache-dir -e ".[api]" \
+	&& python -m pip uninstall -y pip \
+	&& rm -rf /usr/local/lib/python3.13/ensurepip/_bundled
 
 # Архивы выгрузок и кэш разбора хранятся целиком: без архива нельзя
 # перепрогнать старый снапшот доработанным парсером, а без кэша разбора
