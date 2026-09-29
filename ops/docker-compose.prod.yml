@@ -1,0 +1,83 @@
+# STools на сервере: готовые образы из реестра, без сборки.
+#
+# Данные — в каталогах сервера (STOOLS_DATA_ROOT, по умолчанию /data/stools),
+# а не в томах Docker: их видно, их забирает резервное копирование сервера,
+# и они не зависят от того, где Docker хранит тома. TLS снимает nginx на
+# хосте (ops/nginx-stools.conf.example); web слушает только 127.0.0.1.
+#
+# Запуск из каталога ops/ (рядом лежит .env с секретами):
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+# Порядок установки — docs/install.md.
+
+name: stools
+
+services:
+  db:
+    image: ${STOOLS_POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kbaudit}
+      POSTGRES_USER: ${POSTGRES_USER:-kbaudit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+    volumes:
+      - ${STOOLS_DATA_ROOT:-/data/stools}/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kbaudit} -d ${POSTGRES_DB:-kbaudit}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    mem_limit: 1g
+    cpus: 1
+    restart: unless-stopped
+
+  api:
+    image: ${STOOLS_REGISTRY:-hamster5133}/stools-api:${STOOLS_VERSION:?задайте STOOLS_VERSION в .env}
+    environment:
+      STOOLS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kbaudit}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kbaudit}
+      STOOLS_SESSION_SECRET: ${STOOLS_SESSION_SECRET:?задайте STOOLS_SESSION_SECRET в .env}
+      STOOLS_DATA_DIR: /data
+      # Браузер видит https (его снимает nginx), поэтому cookie только Secure.
+      STOOLS_SESSION_COOKIE_SECURE: "true"
+    volumes:
+      # Архивы выгрузок и кэш разбора. Владелец каталога — uid 10001
+      # (пользователь stools в образе API), иначе загрузка не запишется.
+      - ${STOOLS_DATA_ROOT:-/data/stools}/archives:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/auth/oidc/status', timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    # Потолки распаковки ограничивают, но не гарантируют память (README
+    # «Безопасность»); при превышении контейнер перезапускается.
+    mem_limit: 2g
+    cpus: 2
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  web:
+    image: ${STOOLS_REGISTRY:-hamster5133}/stools-web:${STOOLS_VERSION:?задайте STOOLS_VERSION в .env}
+    environment:
+      # Голый HTTP внутри: TLS на nginx.
+      STOOLS_SITE_ADDRESS: ":80"
+      # Доверять X-Forwarded-* от nginx. Порт опубликован только на
+      # 127.0.0.1, так что к Caddy приходят лишь процессы самого сервера
+      # через шлюз сети Docker — он в private_ranges.
+      STOOLS_TRUSTED_PROXIES: ${STOOLS_TRUSTED_PROXIES:-private_ranges}
+    ports:
+      - "127.0.0.1:${STOOLS_PORT:-8080}:80"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped

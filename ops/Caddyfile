@@ -18,6 +18,23 @@
 #              контейнере web) раздаётся на рабочие места;
 #   files    — свои сертификат и ключ: ops/tls/cert.pem и ops/tls/key.pem
 #              (монтируются в /etc/caddy/tls, ops/tls/ в git не попадает).
+# Кому верить в X-Forwarded-For и X-Forwarded-Proto — STOOLS_TRUSTED_PROXIES.
+# По умолчанию 127.0.0.1/32: снаружи контейнера с этого адреса никто не
+# приходит, то есть не доверяем никому, и адрес клиента — тот, кто
+# подключился к Caddy (стенд, прямой доступ). За своим прокси (nginx на
+# хосте, ops/nginx-stools.conf.example) — private_ranges или его сеть:
+# тогда Caddy берёт адрес клиента и схему https от прокси. Без этого все
+# входы выглядят одним адресом (порог неудачных входов по IP закроет вход
+# всем), а проверка Origin увидит http вместо https и отклонит запись.
+# strict — адрес клиента берётся справа налево, до первого недоверенного:
+# подставленный клиентом X-Forwarded-For не подменит настоящий адрес.
+{
+	servers {
+		trusted_proxies static {$STOOLS_TRUSTED_PROXIES:127.0.0.1/32}
+		trusted_proxies_strict
+	}
+}
+
 (tls-auto) {
 }
 (tls-internal) {

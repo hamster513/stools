@@ -1,0 +1,131 @@
+# Установка STools на сервер
+
+Готовые образы из реестра, данные в каталогах сервера, TLS на nginx.
+Файлы: `ops/docker-compose.prod.yml`, `ops/.env.example`,
+`ops/nginx-stools.conf.example`.
+
+## Что нужно
+
+- Linux x86_64, Docker Engine с `docker compose` v2.
+- Доступ к реестру с образами `stools-api` и `stools-web` (для приватного
+  реестра — `docker login`) и к образу `postgres:16-alpine`.
+- nginx на сервере с сертификатом для имени STools.
+- Память: не меньше 4 ГБ (API ограничен 2 ГБ, база 1 ГБ).
+
+## 1. Каталоги данных
+
+База и загруженные выгрузки лежат в `/data/stools` (другой путь —
+`STOOLS_DATA_ROOT` в `.env`). Владельцы — пользователи внутри образов:
+Postgres (uid 70) и API (uid 10001).
+
+```bash
+sudo install -d -o 70 -g 70 -m 700 /data/stools/db
+sudo install -d -o 10001 -g 10001 -m 750 /data/stools/archives
+```
+
+## 2. Файлы и секреты
+
+Нужен каталог `ops/` из репозитория той же версии, что и образы (клон на
+теге или копия трёх файлов выше). В нём создаётся `.env`, права 600:
+
+```bash
+cp .env.example .env && chmod 600 .env
+```
+
+Заполнить в `.env`:
+
+- `POSTGRES_PASSWORD` — длинная случайная строка;
+- `STOOLS_SESSION_SECRET` — `openssl rand -hex 32`. Им шифруются
+  сохранённые пароли подключений: храните его отдельно от резервных копий,
+  без него секреты из копии не расшифровать. Менять — только по README,
+  раздел «Ротация STOOLS_SESSION_SECRET»;
+- `STOOLS_VERSION` — тег образов, например `ffa11c4`;
+- `STOOLS_REGISTRY` — если образы не в `hamster5133`;
+- `STOOLS_PORT` — порт на 127.0.0.1, куда ходит nginx (по умолчанию 8080).
+
+`STOOLS_SITE_ADDRESS`, `STOOLS_TLS` и `STOOLS_SESSION_COOKIE_SECURE` на
+сервере не используются: прод-compose задаёт их сам.
+
+## 3. Запуск
+
+```bash
+cd ops
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml ps
+```
+
+API на старте применяет миграции базы. Все три сервиса должны прийти в
+состояние `healthy`.
+
+## 4. Первый администратор
+
+```bash
+docker compose -f docker-compose.prod.yml exec api python -m api.cli create-user <логин> --role admin
+```
+
+Пароль спрашивается дважды и никуда не пишется. Дальше — вход через
+интерфейс; вход через Avanpost FAM настраивается в `/settings` (README,
+«Вход через Avanpost FAM»).
+
+## 5. nginx
+
+Взять `ops/nginx-stools.conf.example`, подставить имя сайта, сертификат и
+порт, проверить и перечитать:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Что важно в конфиге и почему:
+
+- `X-Forwarded-Proto $scheme` и `Host $host` — по ним STools проверяет
+  Origin запросов на запись; без них вход отклоняется с 403;
+- `X-Forwarded-For $remote_addr` (замена, не дописывание) — настоящий адрес
+  клиента для журнала и порога неудачных входов;
+- `client_max_body_size 600m` и таймауты 600 с — крупные выгрузки;
+- HSTS — на nginx: до STools доходит HTTP.
+
+Caddy в образе web доверяет этим заголовкам только от приватных адресов
+(`STOOLS_TRUSTED_PROXIES`), а порт web слушает только 127.0.0.1.
+
+## 6. Проверка
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://<имя>/api/auth/oidc/status
+curl -sI https://<имя>/ | grep -i -E 'strict-transport|content-security'
+```
+
+Ожидается `200`, оба заголовка на месте. Затем — вход в браузере и
+загрузка тестовой выгрузки.
+
+## Обновление
+
+1. Резервная копия (ниже).
+2. `STOOLS_VERSION` в `.env` — новый тег.
+3. `docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d`
+
+Миграции применяются на старте API.
+
+## Резервная копия
+
+Копируются оба каталога: база (дампом, а не файлами работающего Postgres)
+и выгрузки. Ключ `STOOLS_SESSION_SECRET` хранится отдельно.
+
+```bash
+cd ops
+docker compose -f docker-compose.prod.yml exec -T db sh -c 'pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > stools-db-$(date +%F).dump
+sudo tar -C /data/stools -czf stools-archives-$(date +%F).tar.gz archives
+```
+
+Восстановление — в пустую базу той же версии STools:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T db sh -c 'pg_restore --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < stools-db-<дата>.dump
+sudo tar -C /data/stools -xzf stools-archives-<дата>.tar.gz
+```
+
+## Откат
+
+Миграции назад не катятся. Откат версии — восстановление копии, сделанной
+перед обновлением, и прежний `STOOLS_VERSION`.

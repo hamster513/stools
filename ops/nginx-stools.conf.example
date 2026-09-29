@@ -1,0 +1,39 @@
+# nginx на сервере перед STools (ops/docker-compose.prod.yml).
+# Подставьте имя сайта и пути к сертификату; порт — STOOLS_PORT из .env.
+
+server {
+    listen 80;
+    server_name stools.example.ru;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name stools.example.ru;
+
+    ssl_certificate     /etc/nginx/ssl/stools.crt;
+    ssl_certificate_key /etc/nginx/ssl/stools.key;
+
+    # HSTS ставит nginx: до Caddy доходит HTTP, сам он https не видит.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Самая крупная загрузка STools — 500 МБ (выгрузка VM), с запасом.
+    client_max_body_size 600m;
+    # Большие файлы идут в STools потоком, а не копятся на диске nginx.
+    proxy_request_buffering off;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        # Схема https — по ней STools проверяет Origin запросов на запись.
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Заменяем, а не дописываем: подставленный клиентом X-Forwarded-For
+        # не должен доехать до STools (адрес клиента — журнал и порог входов).
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
+}
