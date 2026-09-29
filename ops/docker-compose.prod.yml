@@ -38,10 +38,19 @@ services:
       STOOLS_DATA_DIR: /data
       # Браузер видит https (его снимает nginx), поэтому cookie только Secure.
       STOOLS_SESSION_COOKIE_SECURE: "true"
+      # Каким УЦ доверять при исходящих HTTPS/LDAPS (провайдер OIDC, KSC,
+      # MaxPatrol, ленты VM): общий файл сертификатов сервера, где есть и
+      # публичные УЦ, и корпоративный. Одного корпоративного корня мало —
+      # переменная заменяет список целиком, и публичные сайты перестанут
+      # проверяться.
+      SSL_CERT_FILE: /etc/stools/ca-bundle.crt
     volumes:
       # Архивы выгрузок и кэш разбора. Владелец каталога — uid 10001
       # (пользователь stools в образе API), иначе загрузка не запишется.
       - ${STOOLS_DATA_ROOT:-/data/stools}/archives:/data
+      # Файл сертификатов сервера: Debian/Ubuntu — умолчание ниже,
+      # RHEL/CentOS/Astra — /etc/pki/tls/certs/ca-bundle.crt (STOOLS_CA_BUNDLE).
+      - ${STOOLS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/stools/ca-bundle.crt:ro
     depends_on:
       db:
         condition: service_healthy

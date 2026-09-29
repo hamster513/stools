@@ -43,8 +43,34 @@ cp .env.example .env && chmod 600 .env
 - `STOOLS_REGISTRY` — если образы не в `hamster5133`;
 - `STOOLS_PORT` — порт на 127.0.0.1, куда ходит nginx (по умолчанию 8080).
 
+- `STOOLS_CA_BUNDLE` — файл сертификатов сервера, если он не
+  `/etc/ssl/certs/ca-certificates.crt` (Debian/Ubuntu). На RHEL, CentOS,
+  Astra — `/etc/pki/tls/certs/ca-bundle.crt`.
+
 `STOOLS_SITE_ADDRESS`, `STOOLS_TLS` и `STOOLS_SESSION_COOKIE_SECURE` на
 сервере не используются: прод-compose задаёт их сам.
+
+### Корпоративный УЦ
+
+STools сам ходит по HTTPS и LDAPS к провайдеру OIDC, KSC, MaxPatrol VM и
+контроллерам домена. Если их сертификаты выпущены корпоративным УЦ, ему
+должен доверять сам сервер: API берёт общий файл сертификатов сервера
+(`STOOLS_CA_BUNDLE`). Проверка до запуска STools:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' --cacert /etc/ssl/certs/ca-certificates.crt https://<провайдер>/.well-known/openid-configuration
+```
+
+Если curl ругается на сертификат — корня нет в общем файле. На
+Debian/Ubuntu он добавляется так:
+
+```bash
+sudo cp <корень>.pem /usr/local/share/ca-certificates/corp-root.crt && sudo update-ca-certificates
+```
+
+Подключать файл с одним корпоративным корнем нельзя: список доверенных УЦ
+заменяется целиком, и перестанут проверяться публичные сайты (ленты VM,
+бандл ATT&CK).
 
 ## 3. Запуск
 
