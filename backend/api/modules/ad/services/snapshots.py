@@ -16,7 +16,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from api.jobs import JobHandle
+from api.jobs import JobHandle, insert_chunked
 from api.modules.ad.core.checks import ANALYZER_VERSION, run_all
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import AdExport, ExportIndex, load_export
@@ -41,9 +41,9 @@ def _domain_for(db: Session, export: AdExport) -> AdDomain:
     return domain
 
 
-def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding]) -> None:
+def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding], handle: JobHandle | None = None) -> None:
     db.execute(delete(AdFinding).where(AdFinding.snapshot_id == snapshot.id))
-    rows = [
+    rows = (
         {
             "snapshot_id": snapshot.id,
             "key": f.key,
@@ -58,9 +58,8 @@ def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding]) 
             "details_json": json.dumps(f.details, ensure_ascii=False, default=str),
         }
         for f in findings
-    ]
-    if rows:
-        db.execute(AdFinding.__table__.insert(), rows)  # type: ignore[attr-defined]
+    )
+    insert_chunked(db, AdFinding, rows, len(findings), handle, "находок")
     stats: dict[str, dict[str, int]] = {}
     for f in findings:
         stats.setdefault(f.check, {})
@@ -92,7 +91,7 @@ def import_export(
         handle.stage("analyzing", message=f"объектов {len(export.objects)}")
     findings = analyze(export, cfg)
     if handle:
-        handle.stage("persisting", message=f"находок {len(findings)}")
+        handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     domain = _domain_for(db, export)
     snapshot = AdSnapshot(
         domain_id=domain.id,
@@ -105,7 +104,7 @@ def import_export(
     )
     db.add(snapshot)
     db.flush()
-    _store_findings(db, snapshot, findings)
+    _store_findings(db, snapshot, findings, handle)
     path = snapshot_path(data_dir, snapshot.id)
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = data if data[:2] == b"\x1f\x8b" else gzip.compress(data)
@@ -122,7 +121,9 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: 
         handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
     export = load_export(path.read_bytes())
     findings = analyze(export, cfg)
-    _store_findings(db, snapshot, findings)
+    if handle:
+        handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
+    _store_findings(db, snapshot, findings, handle)
     db.commit()
     return snapshot
 

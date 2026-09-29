@@ -17,7 +17,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from api.jobs import JobHandle
+from api.jobs import JobHandle, insert_chunked
 from api.modules.ksc.core.checks import ANALYZER_VERSION, run_all
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, KscExport, load_export
@@ -66,7 +66,7 @@ def _coverage_stats(idx: ExportIndex, cfg: KscConfig) -> dict[str, Any]:
     }
 
 
-def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[Finding], cfg: KscConfig) -> None:
+def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[Finding], cfg: KscConfig, handle: JobHandle | None = None) -> None:
     db.execute(delete(KscFinding).where(KscFinding.snapshot_id == snapshot.id))
     db.execute(delete(KscHost).where(KscHost.snapshot_id == snapshot.id))
     cov = idx.coverage
@@ -85,16 +85,15 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
     ]
     if host_rows:
         db.execute(KscHost.__table__.insert(), host_rows)  # type: ignore[attr-defined]
-    rows = [
+    rows = (
         {
             "snapshot_id": snapshot.id, "key": f.key, "check": f.check, "severity": f.severity, "severity_original": f.severity_original,
             "host": f.host[:255], "host_key": f.host_key[:255], "target": f.target[:1024], "allowlisted": f.allowlisted,
             "details_json": json.dumps(f.details, ensure_ascii=False, default=str),
         }
         for f in findings
-    ]
-    if rows:
-        db.execute(KscFinding.__table__.insert(), rows)  # type: ignore[attr-defined]
+    )
+    insert_chunked(db, KscFinding, rows, len(findings), handle, "находок")
     checks: dict[str, dict[str, int]] = {}
     for f in findings:
         checks.setdefault(f.check, {})
@@ -113,7 +112,7 @@ def import_export(db: Session, handle: JobHandle | None, data: bytes, source: st
         handle.stage("analyzing", message=f"хостов {len(export.hosts)}")
     idx, findings = analyze(db, export, cfg, data_dir)
     if handle:
-        handle.stage("persisting", message=f"находок {len(findings)}")
+        handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     server = _server_for(db, export)
     snapshot = KscSnapshot(
         server_id=server.id, collected_at=export.server.collected_at, source=source,
@@ -122,7 +121,7 @@ def import_export(db: Session, handle: JobHandle | None, data: bytes, source: st
     )
     db.add(snapshot)
     db.flush()
-    _store(db, snapshot, idx, findings, cfg)
+    _store(db, snapshot, idx, findings, cfg, handle)
     path = snapshot_path(data_dir, snapshot.id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data if data[:2] == b"\x1f\x8b" else gzip.compress(data))
@@ -138,7 +137,9 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg:
         handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
     export = load_export(path.read_bytes())
     idx, findings = analyze(db, export, cfg, data_dir)
-    _store(db, snapshot, idx, findings, cfg)
+    if handle:
+        handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
+    _store(db, snapshot, idx, findings, cfg, handle)
     db.commit()
     return snapshot
 

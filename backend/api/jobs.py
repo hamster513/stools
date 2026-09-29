@@ -11,14 +11,20 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Callable, Iterable
+from itertools import batched
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, select
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, select, text, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm.attributes import set_committed_value
 
 from api.db.base import get_sessionmaker
 from api.db.models import _utcnow
+
+log = logging.getLogger(__name__)
 
 
 class JobColumns:
@@ -76,9 +82,57 @@ class JobHandle:
         if self.cancelled():
             raise JobCancelled()
 
+    def report_progress(self, processed: int, total: int, message: str) -> None:
+        """Прогресс отдельной короткой транзакцией, основная транзакция задачи
+        не фиксируется: на середине записи снапшота `tick` сделал бы видимой
+        половину находок и оставил бы её при ошибке. Строка задачи обновляется
+        по id; копия в сессии задачи получает те же значения как уже
+        записанные, чтобы следующий `stage` не счёл их неизменными."""
+        model: Any = type(self._job)
+        values = {
+            "processed": processed,
+            "total": total,
+            "progress": min(100, int(processed * 100 / total)) if total else 0,
+            "message": message,
+        }
+        # Прогресс — подсказка человеку, а не часть работы: если строку задачи
+        # держит чужая транзакция или связь оборвалась, отметка пропускается,
+        # а задача идёт дальше. lock_timeout не даёт отметке повиснуть.
+        try:
+            with Session(self._db.get_bind()) as side:
+                side.execute(text("SET LOCAL lock_timeout = '2s'"))
+                side.execute(update(model).where(model.id == self._job.id).values(**values))
+                side.commit()
+        except SQLAlchemyError as exc:
+            log.warning("прогресс задачи %s не записан: %s", self._job.id, type(exc).__name__)
+            return
+        for name, value in values.items():
+            set_committed_value(self._job, name, value)
+
     def cancelled(self) -> bool:
         self._db.refresh(self._job, attribute_names=["cancel_requested"])
         return bool(self._job.cancel_requested)
+
+
+#: Строк за один INSERT при записи находок: и память, и шаг прогресса.
+INSERT_CHUNK = 5000
+
+
+def insert_chunked(
+    db: Session, model: type[Any], rows: Iterable[dict[str, Any]], total: int, handle: JobHandle | None, what: str,
+) -> None:
+    """Вставить строки в таблицу `model` пакетами по `INSERT_CHUNK` в транзакции `db`, после каждого
+    пакета — прогресс «запись <what> N из M» через `report_progress` (без фиксации `db`)."""
+    done = 0
+    for chunk in batched(rows, INSERT_CHUNK):
+        db.execute(model.__table__.insert(), list(chunk))
+        done += len(chunk)
+        if handle:
+            handle.report_progress(done, total, f"запись {what} {_num(done)} из {_num(total)}")
+
+
+def _num(n: int) -> str:
+    return f"{n:,}".replace(",", "\u00a0")
 
 
 def active_job[J: JobColumns](db: Session, model: type[J], kinds: Iterable[str]) -> J | None:

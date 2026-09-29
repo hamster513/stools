@@ -15,6 +15,20 @@ function duration(job: Job): string {
   return s < 60 ? `${s} с` : `${Math.floor(s / 60)} мин ${s % 60} с`
 }
 
+/** Полоса прогресса идущей задачи с известным объёмом; без объёма колонка пуста. */
+function Progress({ job, total }: { job: Job; total: number }) {
+  return (
+    <div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-grid">
+        <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${job.progress}%` }} />
+      </div>
+      <div className="mt-1 font-mono text-[11px] tabular-nums text-text-secondary">
+        {job.progress}% · {job.processed.toLocaleString('ru-RU')} / {total.toLocaleString('ru-RU')}
+      </div>
+    </div>
+  )
+}
+
 /** Экран «Задачи» модуля: фоновые задачи, идущие — сверху; отмена — тому, кому разрешено. */
 export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLabels, about, emptyDescription }: {
   jobs: UseQueryResult<Job[], ApiRequestError>
@@ -40,9 +54,9 @@ export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLa
         <EmptyState icon={ListChecks} title="Задач ещё не было" description={emptyDescription} />
       ) : (
         <div className="overflow-x-auto rounded border border-grid">
-          <table className="w-full min-w-[800px] text-xs">
+          <table className="w-full min-w-[900px] text-xs">
             <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-              <tr><th className="px-3 py-2 text-left">Задача</th><th className="px-3 py-2 text-left">Стадия</th><th className="px-3 py-2 text-left">Статус</th><th className="px-3 py-2 text-left">Сообщение</th><th className="px-3 py-2 text-left">Запуск</th><th className="px-3 py-2 text-right">Длительность</th><th></th></tr>
+              <tr><th className="px-3 py-2 text-left">Задача</th><th className="px-3 py-2 text-left">Стадия</th><th className="px-3 py-2 text-left">Статус</th><th className="w-48 px-3 py-2 text-left">Прогресс</th><th className="px-3 py-2 text-left">Сообщение</th><th className="px-3 py-2 text-left">Запуск</th><th className="px-3 py-2 text-right">Длительность</th><th></th></tr>
             </thead>
             <tbody>
               {jobs.data.map((j) => (
@@ -50,6 +64,7 @@ export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLa
                   <td className="px-3 py-2 text-text"><span className="font-mono text-text-secondary">#{j.id}</span> {kindLabels[j.kind] ?? j.kind}</td>
                   <td className="px-3 py-2 text-text-secondary">{stageLabels[j.stage] ?? j.stage}</td>
                   <td className={cn('px-3 py-2', j.status === 'running' && 'text-focus-ring', j.status === 'done' && 'text-kind-accepted', j.status === 'failed' && 'text-kind-1', j.status === 'cancelled' && 'text-text-secondary')}>{STATUS_LABEL[j.status]}</td>
+                  <td className="px-3 py-2">{j.status === 'running' && j.total ? <Progress job={j} total={j.total} /> : null}</td>
                   <td className="max-w-[360px] px-3 py-2 text-text-secondary">{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-text-secondary">{new Date(j.started_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} <span className="font-mono">{j.started_by}</span></td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap text-text-secondary">{duration(j)}</td>
