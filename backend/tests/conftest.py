@@ -16,6 +16,12 @@ import zipfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+# У настроек нет умолчания адреса базы (api/settings.py), а часть модулей
+# собирает приложение уже при импорте — раньше, чем фикстура поднимет
+# тестовый Postgres. Заглушка нужна только для сборки; фикстура базы ниже
+# перезаписывает переменную настоящим адресом.
+os.environ.setdefault("STOOLS_DATABASE_URL", "postgresql+psycopg://stools@localhost:5432/stools_tests_unset")
+
 import pytest
 from sqlalchemy import Engine, create_engine, inspect
 from sqlalchemy import text as sql_text

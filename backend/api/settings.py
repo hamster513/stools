@@ -13,9 +13,13 @@ class Settings(BaseSettings):
 
     #: SQLAlchemy URL. Сервис рассчитан на Postgres — и в проде, и в
     #: тестах: SQLite прощает то, чего сервер не прощает (переиспользование
-    #: id, наивные datetime, отсутствие длин у varchar), поэтому умолчание
-    #: указывает на локальный Postgres, а не на файл рядом с каталогом.
-    database_url: str = "postgresql+psycopg://kbaudit@localhost:5432/kbaudit"
+    #: id, наивные datetime, отсутствие длин у varchar).
+    #:
+    #: Умолчания нет намеренно: адрес с паролем в коде — секрет в
+    #: репозитории, без пароля — подключение без защиты. Адрес приходит
+    #: только из окружения (STOOLS_DATABASE_URL: compose, тесты, .env), а без
+    #: него приложение не стартует и называет недостающую настройку.
+    database_url: str
 
     #: Каталог, куда сохраняются загруженные архивы (и кэш разбора).
     data_dir: Path = Path("./data")
@@ -52,4 +56,5 @@ class Settings(BaseSettings):
 
 
 def get_settings() -> Settings:
-    return Settings()
+    # Значения приходят из окружения; mypy этого не видит.
+    return Settings()  # type: ignore[call-arg]
