@@ -31,6 +31,9 @@ api = [
     # Модуль AD: онлайн-сборщик по LDAP и SYSVOL по SMB.
     "ldap3>=2.9",
     "smbprotocol>=1.13",
+    # NTLM (учётка ДОМЕН\имя) считает хеш пароля через MD4, а в OpenSSL 3 он
+    # выключен; ldap3 тогда берёт MD4 отсюда (tests/ad/test_ntlm_support.py).
+    "pycryptodome>=3.20",
     # Вход по OIDC: проверка подписи id_token по JWKS.
     "PyJWT[crypto]>=2.9",
     # Шифрование секретов подключений в базе (api/crypto.py).

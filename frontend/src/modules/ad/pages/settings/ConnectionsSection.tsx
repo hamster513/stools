@@ -30,7 +30,7 @@ export function ConnectionsSection() {
           <Field label="Название" hint="Как показывать в списке"><input className={FIELD} value={f.title} onChange={(e) => patch({ title: e.target.value })} /></Field>
           <Field label="Контроллер домена" hint="Имя или адрес; LDAPS 636 по умолчанию"><input className={FIELD} value={f.host} onChange={(e) => patch({ host: e.target.value })} spellCheck={false} /></Field>
           <Field label="Порт"><input className={FIELD} type="number" value={f.port} onChange={(e) => patch({ port: Number(e.target.value) })} /></Field>
-          <Field label="Учётная запись" hint="DOMAIN\\user — NTLM, иначе simple bind (например, DN или user@domain)"><input className={FIELD} value={f.username} onChange={(e) => patch({ username: e.target.value })} spellCheck={false} autoComplete="off" /></Field>
+          <Field label="Учётная запись" hint={'Формат имя@домен, например svc_stools@corp.example.ru, или ДОМЕН\\имя, например CORP\\svc_stools (обратный слеш один). Для имя@домен включите LDAPS (порт 636): пароль передаётся внутри TLS.'}><input className={FIELD} value={f.username} onChange={(e) => patch({ username: e.target.value })} spellCheck={false} autoComplete="off" /></Field>
           <Field label="Пароль" hint={initial.id ? 'пусто — оставить прежний' : undefined}><input className={FIELD} type="password" value={f.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" /></Field>
           <Field label="Base DN" hint="Пусто — defaultNamingContext из rootDSE"><input className={FIELD} value={f.base_dn} onChange={(e) => patch({ base_dn: e.target.value })} spellCheck={false} /></Field>
           <div className="flex flex-col gap-2 pt-1">
