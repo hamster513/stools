@@ -116,11 +116,24 @@ def take_state(db: Session, state: str) -> OidcLoginState | None:
 
 
 def claim_list(claims: dict[str, Any], name: str) -> list[str]:
-    """Claim со списком строк: провайдеры отдают его и одной строкой."""
+    """Claim со списком строк: провайдеры отдают его и одной строкой.
+
+    Avanpost FAM отдаёт группы объектами `{"id": …, "name": …}`: из объекта
+    берутся имя и идентификатор, чтобы в соответствии групп ролям можно было
+    указать любое — имя читаемо, идентификатор не меняется при переименовании.
+    """
     value = claims.get(name)
     if isinstance(value, str):
         return [value]
-    return [str(item) for item in value] if isinstance(value, list) else []
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            out.extend(str(item[key]) for key in ("name", "id") if item.get(key))
+        else:
+            out.append(str(item))
+    return out
 
 
 def resolve_user(
