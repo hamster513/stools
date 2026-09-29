@@ -29,7 +29,7 @@ function Progress({ job, total }: { job: Job; total: number }) {
   )
 }
 
-/** Экран «Задачи» модуля: фоновые задачи, идущие — сверху; отмена — тому, кому разрешено. */
+/** Экран «Задачи» модуля: фоновые задачи, идущие — сверху; снятие — тому, кому разрешено, без подтверждения. */
 export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLabels, about, emptyDescription }: {
   jobs: UseQueryResult<Job[], ApiRequestError>
   cancel: UseMutationResult<void, ApiRequestError, number>
@@ -68,7 +68,11 @@ export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLa
                   <td className="max-w-[360px] px-3 py-2 text-text-secondary">{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
                   <td className="px-3 py-2 whitespace-nowrap text-text-secondary">{new Date(j.started_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} <span className="font-mono">{j.started_by}</span></td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap text-text-secondary">{duration(j)}</td>
-                  <td className="px-3 py-2 text-right">{canCancel && j.status === 'running' && !j.cancel_requested && <Button variant="ghost" onClick={() => cancel.mutate(j.id)} aria-label={`Отменить задачу ${j.id}`}><XCircle size={13} aria-hidden /></Button>}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    {j.status === 'running' && j.cancel_requested && <span className="text-text-secondary">отменяется…</span>}
+                    {/* И после просьбы об отмене: осиротевшую задачу (процесс перезапускался) флаг не остановит, снятие закроет её сразу. */}
+                    {canCancel && j.status === 'running' && <Button variant="ghost" className="ml-2" onClick={() => cancel.mutate(j.id)} aria-label={`Снять задачу ${j.id}`}><XCircle size={13} aria-hidden />снять</Button>}
+                  </td>
                 </tr>
               ))}
             </tbody>

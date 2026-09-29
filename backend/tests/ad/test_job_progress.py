@@ -74,6 +74,25 @@ def test_failure_mid_write_leaves_no_snapshot_but_keeps_progress(auth_client: Te
     assert _count(AdFinding) == 0 and _count(AdSnapshot) == 0 and _count(AdDomain) == 0
 
 
+def test_cancel_between_chunks_rolls_back_everything(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Снятие посреди записи находок: задача останавливается после текущего пакета,
+    основная транзакция откатывается — ни снапшота, ни находок."""
+    monkeypatch.setattr(jobs, "INSERT_CHUNK", 5)
+    calls = _record(monkeypatch)
+    original = jobs.JobHandle.report_progress
+
+    def cancel_after_first(self: jobs.JobHandle, processed: int, total: int, message: str) -> None:
+        original(self, processed, total, message)
+        if len(calls) == 1:
+            assert auth_client.post(f"/api/ad/jobs/{self.id}/cancel").status_code == 204
+
+    monkeypatch.setattr(jobs.JobHandle, "report_progress", cancel_after_first)
+    job = _upload(auth_client)
+    assert job["status"] == "cancelled" and job["error"] is None, job
+    assert len(calls) == 1 and job["processed"] == 5
+    assert _count(AdFinding) == 0 and _count(AdSnapshot) == 0 and _count(AdDomain) == 0
+
+
 def test_reanalyze_reports_persisting_progress(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _upload(auth_client)["status"] == "done"
     snap = auth_client.get("/api/ad/snapshots").json()[0]

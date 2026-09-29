@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.jobs import cancel_job as _cancel_job
 from api.modules.vm.models import VmJob
 
 router = APIRouter(prefix="/jobs", tags=["vm"])
@@ -61,10 +62,4 @@ def get_job(job_id: int, db: Session = Depends(get_db), _user: AppUser = Depends
 
 @router.post("/{job_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
 def cancel_job(job_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> None:
-    job = db.get(VmJob, job_id)
-    if job is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="задача не найдена")
-    if job.status != "running":
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="задача уже завершена")
-    job.cancel_requested = True
-    db.commit()
+    _cancel_job(db, VmJob, job_id)

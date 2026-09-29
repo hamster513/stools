@@ -42,6 +42,8 @@ from fastapi import Depends, FastAPI
 
 from api.audit import AuditMiddleware
 from api.crypto import check_session_secret
+from api.db.base import get_sessionmaker
+from api.jobs import fail_interrupted_jobs
 from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
 from api.origin import OriginMiddleware
@@ -54,6 +56,9 @@ from api.settings import get_settings
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     check_session_secret(get_settings())
+    # Потоки задач умерли вместе с прежним процессом: их «идущие» задачи никто не ведёт.
+    with get_sessionmaker()() as db:
+        fail_interrupted_jobs(db)
     yield
 
 

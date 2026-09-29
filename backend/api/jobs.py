@@ -7,11 +7,17 @@
 
 Таблица у каждого модуля своя (`vm_job`, `ad_job`): их история и права
 не смешиваются, а колонки одинаковы — `JobColumns`.
+
+API — один процесс, поэтому «задачу кто-то ведёт» проверяется реестром в
+памяти: `run_job` вносит в него (таблица, id) на время работы. Задача со
+статусом running, которой в реестре нет, осиротела — её поток умер вместе
+с прежним процессом, и флаг отмены проверять некому.
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 from collections.abc import Callable, Iterable
 from itertools import batched
 from typing import Any
@@ -22,7 +28,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.orm.attributes import set_committed_value
 
 from api.db.base import get_sessionmaker
-from api.db.models import _utcnow
+from api.db.models import Base, Job, _utcnow
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +55,24 @@ class JobColumns:
 
 class JobCancelled(Exception):
     """Задача остановлена по просьбе человека; не ошибка."""
+
+
+#: Задачи, которые ведёт этот процесс: (таблица, id). Пишут потоки BackgroundTasks.
+_live: set[tuple[str, int]] = set()
+_live_lock = threading.Lock()
+
+ORPHAN_CANCEL_MESSAGE = "снята: процесс, который её вёл, перезапускался"
+RESTART_ERROR = "прервана: API перезапускался"
+
+
+def _key(model: type[Any], job_id: int) -> tuple[str, int]:
+    return (model.__tablename__, job_id)
+
+
+def is_live(model: type[Any], job_id: int) -> bool:
+    """Задачу ведёт поток этого процесса."""
+    with _live_lock:
+        return _key(model, job_id) in _live
 
 
 class JobHandle:
@@ -129,6 +153,10 @@ def insert_chunked(
         done += len(chunk)
         if handle:
             handle.report_progress(done, total, f"запись {what} {_num(done)} из {_num(total)}")
+            # Между пакетами прервать безопасно: основная транзакция не зафиксирована,
+            # run_job откатит её целиком.
+            if handle.cancelled():
+                raise JobCancelled()
 
 
 def _num(n: int) -> str:
@@ -155,10 +183,22 @@ def safe_error(exc: Exception) -> str:
 
 
 def run_job(model: type[Any], job_id: int, fn: Callable[[Session, JobHandle], None]) -> None:
+    key = _key(model, job_id)
+    with _live_lock:
+        _live.add(key)
+    try:
+        _run_registered(model, job_id, fn)
+    finally:
+        with _live_lock:
+            _live.discard(key)
+
+
+def _run_registered(model: type[Any], job_id: int, fn: Callable[[Session, JobHandle], None]) -> None:
     session_factory = get_sessionmaker()
     with session_factory() as db:
         job = db.get(model, job_id)
-        if job is None:
+        # Снята раньше, чем поток до неё дошёл, — работу не начинаем.
+        if job is None or job.status != "running":
             return
         handle = JobHandle(db, job)
         try:
@@ -188,7 +228,9 @@ def run_job(model: type[Any], job_id: int, fn: Callable[[Session, JobHandle], No
 
 
 def cancel_job(db: Session, model: type[Any], job_id: int) -> None:
-    """Попросить идущую задачу остановиться: 404 — задачи нет, 409 — уже завершена."""
+    """Попросить идущую задачу остановиться: 404 — задачи нет, 409 — уже завершена.
+    Осиротевшую (в процессе её никто не ведёт) — снять сразу: флаг проверять некому.
+    Флаг ставится и ей: если поток всё же подхватит задачу, он остановится сам."""
     from fastapi import HTTPException, status
 
     job = db.get(model, job_id)
@@ -197,7 +239,36 @@ def cancel_job(db: Session, model: type[Any], job_id: int) -> None:
     if job.status != "running":
         raise HTTPException(status.HTTP_409_CONFLICT, detail="задача уже завершена")
     job.cancel_requested = True
+    if not is_live(model, job_id):
+        job.status = "cancelled"
+        job.message = ORPHAN_CANCEL_MESSAGE
+        job.finished_at = dt.datetime.now(dt.UTC)
     db.commit()
+
+
+def job_models() -> list[type[Any]]:
+    """Все таблицы задач: модели с `JobColumns` и задания SIEM (`job`, своя схема)."""
+    models: list[type[Any]] = [m.class_ for m in Base.registry.mappers if issubclass(m.class_, JobColumns)]
+    return [*sorted(models, key=lambda m: m.__tablename__), Job]
+
+
+def fail_interrupted_jobs(db: Session) -> None:
+    """При старте API: задачи, оставшиеся running, вёл прежний процесс — закрыть как прерванные.
+    Каждая таблица своей транзакцией: сбой одной (миграция ещё не применена) не мешает
+    остальным и не мешает API подняться."""
+    for model in job_models():
+        values: dict[str, Any] = {"status": "failed", "error": RESTART_ERROR}
+        if "finished_at" in model.__table__.c:
+            values["finished_at"] = dt.datetime.now(dt.UTC)
+        try:
+            result = db.execute(update(model).where(model.status == "running").values(**values))
+            db.commit()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            log.warning("задачи %s не закрыты при старте: %s", model.__tablename__, type(exc).__name__)
+            continue
+        if count := getattr(result, "rowcount", 0):
+            log.warning("задач %s прервано перезапуском: %s", model.__tablename__, count)
 
 
 def make_jobs_router(model: type[Any], tag: str, *, cancel: bool = True) -> Any:
