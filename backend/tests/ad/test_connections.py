@@ -40,7 +40,7 @@ def test_connection_crud_hides_password(auth_client: TestClient) -> None:
 def test_collect_via_fake_ldap(auth_client: TestClient, monkeypatch: Any) -> None:
     fake_conn = _FakeConn()
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
-    monkeypatch.setattr(svc, "ldap3_searcher", lambda c: fake_conn.fake.search)
+    monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: fake_conn.fake.search)
     monkeypatch.setattr(svc, "smb_reader", lambda host, u, p: fake_conn.fake.smb)
     r = auth_client.post("/api/ad/connections", json={"host": "dc01.corp.local", "username": "CORP\\auditor", "password": "secret"})
     cid = r.json()["id"]
@@ -127,7 +127,7 @@ def test_sysvol_gets_the_decrypted_password(auth_client: TestClient, monkeypatch
     fake_conn = _FakeConn()
     seen: list[str] = []
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
-    monkeypatch.setattr(svc, "ldap3_searcher", lambda c: fake_conn.fake.search)
+    monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: fake_conn.fake.search)
     monkeypatch.setattr(svc, "smb_reader", lambda host, u, p: seen.append(p) or fake_conn.fake.smb)
     cid = _create(auth_client)
     assert auth_client.post(f"/api/ad/connections/{cid}/collect").status_code == 202
@@ -229,3 +229,144 @@ def test_put_summary_lists_changed_fields(auth_client: TestClient, db_session: A
     events = [e for e in db_session.query(AuditEvent).order_by(AuditEvent.id) if e.method == "PUT"]
     assert [(e.status, e.summary) for e in events] == [(200, "изменено: host, port, password"), (422, "изменено: host")]
     assert all("dc0" not in (e.summary or "") and "secret" not in (e.summary or "") for e in events)
+
+
+# ---- Сбор порциями с паузами -------------------------------------------------
+
+PAGED_OID = "1.2.840.113556.1.4.319"
+
+
+class _PagedConn(_FakeConn):
+    """ldap3-соединение в режиме SYNC поверх FakeLdap: ответ режется страницами по `paged_size`."""
+
+    def __init__(self, on_search: Any = None) -> None:
+        super().__init__()
+        self.paged_sizes: list[int | None] = []
+        self.returned = 0
+        self.auto_referrals = True
+        self.on_search = on_search
+        self.response: list[dict[str, Any]] = []
+        self.result: dict[str, Any] = {}
+
+    def search(self, search_base: str, search_filter: str, search_scope: Any = None, attributes: Any = None,
+               controls: Any = None, paged_size: int | None = None, paged_cookie: bytes | None = None, **_: Any) -> bool:
+        self.paged_sizes.append(paged_size)
+        if self.on_search is not None:
+            self.on_search(len(self.paged_sizes))
+        assert paged_size
+        rows = [{**e, "type": "searchResEntry"} for e in self.fake.search(search_base, search_filter, attributes, search_scope)]
+        start = int(paged_cookie or b"0")
+        nxt = start + paged_size
+        self.response = rows[start:nxt]
+        self.returned += len(self.response)
+        self.result = {"result": 0, "controls": {PAGED_OID: {"value": {"cookie": str(nxt).encode() if nxt < len(rows) else b""}}}}
+        return True
+
+
+def _real_searcher_with_fake_sleep(monkeypatch: Any, sleeps: list[float], seen: dict[str, Any]) -> None:
+    real = svc.ldap3_searcher
+
+    def searcher(c: Any, **kw: Any) -> Any:
+        seen.update(kw)
+        return real(c, sleep=sleeps.append, **kw)
+
+    monkeypatch.setattr(svc, "ldap3_searcher", searcher)
+
+
+def test_paging_defaults_and_ranges(auth_client: TestClient) -> None:
+    cid = _create(auth_client)
+    body = auth_client.get("/api/ad/connections").json()[0]
+    assert (body["page_size"], body["pause_ms"]) == (500, 500)
+    base = {"host": "dc01.corp.local", "username": "CORP\\auditor", "password": "secret"}
+    for bad, text in (
+        ({"page_size": 49}, "размер страницы LDAP: от 50 до 1000"),
+        ({"page_size": 1001}, "размер страницы LDAP: от 50 до 1000"),
+        ({"pause_ms": -1}, "пауза между страницами: от 0 до 10000 мс"),
+        ({"pause_ms": 10001}, "пауза между страницами: от 0 до 10000 мс"),
+    ):
+        r = auth_client.put(f"/api/ad/connections/{cid}", json={**base, **bad})
+        assert r.status_code == 422 and text in r.text, (bad, r.text)
+        r = auth_client.post("/api/ad/connections", json={**base, **bad})
+        assert r.status_code == 422 and text in r.text, (bad, r.text)
+    for ok in ({"page_size": 50, "pause_ms": 0}, {"page_size": 1000, "pause_ms": 10000}):
+        r = auth_client.put(f"/api/ad/connections/{cid}", json={**base, **ok})
+        assert r.status_code == 200 and (r.json()["page_size"], r.json()["pause_ms"]) == (ok["page_size"], ok["pause_ms"])
+
+
+def test_paging_change_keeps_password(auth_client: TestClient, db_session: Any) -> None:
+    """Размер страницы и пауза — не адрес: пароль заново вводить не нужно."""
+    cid = _create(auth_client)
+    r = auth_client.put(f"/api/ad/connections/{cid}", json={"host": "dc01.corp.local", "username": "CORP\\auditor", "password": "", "page_size": 200, "pause_ms": 2000})
+    assert r.status_code == 200, r.text
+    assert (r.json()["page_size"], r.json()["pause_ms"]) == (200, 2000)
+    assert _stored_password(db_session, cid) == "secret"
+
+
+def test_old_connection_gets_paging_defaults(auth_client: TestClient, db_session: Any) -> None:
+    """Строка, записанная без новых колонок (как до миграции), получает умолчания базы."""
+    from sqlalchemy import text
+
+    db_session.execute(text(
+        "INSERT INTO ad_connection (title, host, port, use_ssl, verify_tls, username, password, base_dn, collect_sysvol) "
+        "VALUES ('old', 'dc01.corp.local', 636, true, true, 'CORP\\auditor', '', '', true)"
+    ))
+    db_session.commit()
+    body = auth_client.get("/api/ad/connections").json()[0]
+    assert body["title"] == "old" and (body["page_size"], body["pause_ms"]) == (500, 500)
+
+
+def test_collect_reads_in_pages_with_pauses_and_progress(auth_client: TestClient, monkeypatch: Any) -> None:
+    from api import jobs
+
+    fake_conn = _PagedConn()
+    sleeps: list[float] = []
+    seen: dict[str, Any] = {}
+    ticks: list[tuple[int, str | None]] = []
+    original_tick = jobs.JobHandle.tick
+
+    def spy(self: jobs.JobHandle, processed: int, message: str | None = None, total: int | None = None) -> None:
+        ticks.append((processed, message))
+        original_tick(self, processed, message, total)
+
+    monkeypatch.setattr(jobs.JobHandle, "tick", spy)
+    monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
+    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p: fake_conn.fake.smb)
+    _real_searcher_with_fake_sleep(monkeypatch, sleeps, seen)
+    cid = _create(auth_client, page_size=50, pause_ms=250)
+    r = auth_client.post(f"/api/ad/connections/{cid}/collect")
+    assert r.status_code == 202, r.text
+    job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "done", job
+    assert seen["page_size"] == 50 and seen["pause_ms"] == 250
+    assert set(fake_conn.paged_sizes) == {50}
+    # Пауза между любыми двумя запросами к контроллеру, после последнего — нет.
+    assert sleeps == [0.25] * (len(fake_conn.paged_sizes) - 1)
+    reads = [t for t in ticks if t[1] and t[1].startswith("прочитано объектов")]
+    assert len(reads) == len(fake_conn.paged_sizes)
+    assert reads[-1] == (fake_conn.returned, f"прочитано объектов {fake_conn.returned}")
+    assert fake_conn.returned > 20
+
+
+def test_cancel_between_pages_stops_collect(auth_client: TestClient, db_session: Any, monkeypatch: Any) -> None:
+    from sqlalchemy import func, select, update
+
+    from api.modules.ad.models import AdJob, AdSnapshot
+
+    def cancel_on_third(n: int) -> None:
+        if n == 3:
+            db_session.execute(update(AdJob).values(cancel_requested=True))
+            db_session.commit()
+
+    fake_conn = _PagedConn(on_search=cancel_on_third)
+    monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
+    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p: fake_conn.fake.smb)
+    _real_searcher_with_fake_sleep(monkeypatch, [], {})
+    cid = _create(auth_client)
+    r = auth_client.post(f"/api/ad/connections/{cid}/collect")
+    assert r.status_code == 202, r.text
+    job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "cancelled", job
+    # Отмена замечена сразу после третьей страницы: четвёртого запроса к контроллеру нет.
+    assert len(fake_conn.paged_sizes) == 3
+    db_session.expire_all()
+    assert db_session.scalar(select(func.count()).select_from(AdSnapshot)) == 0

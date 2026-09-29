@@ -47,6 +47,9 @@ class AdConnection(Base):
     #: '' — defaultNamingContext из rootDSE.
     base_dn: Mapped[str] = mapped_column(String(512), default="")
     collect_sysvol: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: Щадят контроллер: объектов в одной странице LDAP и пауза между запросами к нему.
+    page_size: Mapped[int] = mapped_column(Integer, default=500, server_default="500")
+    pause_ms: Mapped[int] = mapped_column(Integer, default=500, server_default="500")
     domain_id: Mapped[int | None] = mapped_column(ForeignKey("ad_domain.id", ondelete="SET NULL"), nullable=True)
 
 

@@ -13,6 +13,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import validate_host
+from api.modules.ad.core.ldap_collector import PAGE_SIZE_DEFAULT, PAUSE_MS_DEFAULT
 from api.modules.ad.models import AdConnection, AdJob
 from api.modules.ad.routers.snapshots import JobStarted
 from api.modules.ad.services import connections as svc
@@ -38,11 +39,27 @@ class ConnectionIn(BaseModel):
     password: str = ""
     base_dn: str = ""
     collect_sysvol: bool = True
+    page_size: int = PAGE_SIZE_DEFAULT
+    pause_ms: int = PAUSE_MS_DEFAULT
 
     @field_validator("host")
     @classmethod
     def check_host(cls, value: str) -> str:
         return validate_host(value)
+
+    @field_validator("page_size")
+    @classmethod
+    def check_page_size(cls, value: int) -> int:
+        if not 50 <= value <= 1000:
+            raise ValueError("размер страницы LDAP: от 50 до 1000")
+        return value
+
+    @field_validator("pause_ms")
+    @classmethod
+    def check_pause(cls, value: int) -> int:
+        if not 0 <= value <= 10000:
+            raise ValueError("пауза между страницами: от 0 до 10000 мс")
+        return value
 
 
 class ConnectionView(BaseModel):
@@ -56,13 +73,16 @@ class ConnectionView(BaseModel):
     password_set: bool
     base_dn: str
     collect_sysvol: bool
+    page_size: int
+    pause_ms: int
     domain_id: int | None = None
 
 
 def _view(c: AdConnection) -> ConnectionView:
     return ConnectionView(
         id=c.id, title=c.title, host=c.host, port=c.port, use_ssl=c.use_ssl, verify_tls=c.verify_tls,
-        username=c.username, password_set=bool(c.password), base_dn=c.base_dn, collect_sysvol=c.collect_sysvol, domain_id=c.domain_id,
+        username=c.username, password_set=bool(c.password), base_dn=c.base_dn, collect_sysvol=c.collect_sysvol,
+        page_size=c.page_size, pause_ms=c.pause_ms, domain_id=c.domain_id,
     )
 
 

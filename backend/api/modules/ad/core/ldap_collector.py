@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import time
 import uuid
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -284,21 +285,57 @@ def _decode_inf(content: bytes) -> str:
 # ---- Реальный транспорт ----------------------------------------------------
 
 
-def ldap3_searcher(connection: Any) -> Searcher:
-    """Постраничный поиск ldap3 с контролем SD_FLAGS (только DACL)."""
+#: Умолчания подключения: щадят контроллер — страница меньше и пауза между запросами.
+PAGE_SIZE_DEFAULT = 500
+PAUSE_MS_DEFAULT = 500
+PAGED_CONTROL = "1.2.840.113556.1.4.319"
+
+
+def ldap3_searcher(
+    connection: Any,
+    *,
+    page_size: int = PAGE_SIZE_DEFAULT,
+    pause_ms: int = PAUSE_MS_DEFAULT,
+    on_page: Callable[[int], None] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> Searcher:
+    """Постраничный поиск ldap3 с контролем SD_FLAGS (только DACL).
+
+    Страницы запрашиваются своей петлёй, а не `paged_search`: между любыми
+    двумя запросами к контроллеру — страницами одного поиска и отдельными
+    поисками (дозапросы имён по SID тоже) — пауза `pause_ms`; после последнего
+    запроса паузы нет. После каждой страницы — `on_page(прочитано всего)`:
+    прогресс и проверка отмены (исключение из него прерывает сбор до
+    следующего запроса)."""
     from ldap3 import BASE, SUBTREE
     from ldap3.protocol.microsoft import security_descriptor_control
 
     scopes = {"BASE": BASE, "SUBTREE": SUBTREE}
+    pause = pause_ms / 1000
+    wait = sleep or time.sleep
+    # Автопереход по ссылкам с постраничным поиском несовместим — ldap3 в paged_search выключает его так же.
+    connection.auto_referrals = False
+    state = {"requests": 0, "read": 0}
 
     def search(base: str, flt: str, attrs: list[str], scope: str) -> Iterable[Entry]:
         controls = security_descriptor_control(sdflags=0x04) if "nTSecurityDescriptor" in attrs else None
-        for entry in connection.extend.standard.paged_search(
-            base, flt, search_scope=scopes[scope], attributes=attrs, controls=controls, paged_size=1000, generator=True
-        ):
-            if entry.get("type") != "searchResEntry":
-                continue
-            yield {"dn": entry["dn"], "attributes": entry.get("attributes") or {}, "raw_attributes": entry.get("raw_attributes") or {}}
+        cookie: bytes | None = None
+        while True:
+            if state["requests"] and pause > 0:
+                wait(pause)
+            state["requests"] += 1
+            connection.search(
+                base, flt, search_scope=scopes[scope], attributes=attrs, controls=controls, paged_size=page_size, paged_cookie=cookie,
+            )
+            entries = [e for e in connection.response or [] if e.get("type") == "searchResEntry"]
+            cookie = (((connection.result or {}).get("controls") or {}).get(PAGED_CONTROL) or {}).get("value", {}).get("cookie")
+            state["read"] += len(entries)
+            if on_page is not None:
+                on_page(state["read"])
+            for entry in entries:
+                yield {"dn": entry["dn"], "attributes": entry.get("attributes") or {}, "raw_attributes": entry.get("raw_attributes") or {}}
+            if not cookie:
+                return
 
     return search
 

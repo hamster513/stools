@@ -81,6 +81,8 @@ export interface Connection {
   password_set: boolean
   base_dn: string
   collect_sysvol: boolean
+  page_size: number
+  pause_ms: number
   domain_id: number | null
 }
 
@@ -94,6 +96,8 @@ export interface ConnectionIn {
   password: string
   base_dn: string
   collect_sysvol: boolean
+  page_size: number
+  pause_ms: number
 }
 
 export const JOB_KIND_LABELS: Record<string, string> = {

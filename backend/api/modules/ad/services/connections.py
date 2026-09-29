@@ -104,7 +104,11 @@ def collect_snapshot(
             except Exception as exc:  # noqa: BLE001 — без SYSVOL сбор всё равно полезен
                 handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; User Rights пропущены")
         handle.stage("collecting", message="объекты и дескрипторы")
-        collector = LdapCollector(ldap3_searcher(c), root, smb_reader=reader, host=conn.host, account=conn.username)
+        # tick фиксирует сессию задачи: на этой стадии в ней нет ничего, кроме строки задачи.
+        searcher = ldap3_searcher(
+            c, page_size=conn.page_size, pause_ms=conn.pause_ms, on_page=lambda n: handle.tick(n, message=f"прочитано объектов {n}"),
+        )
+        collector = LdapCollector(searcher, root, smb_reader=reader, host=conn.host, account=conn.username)
         export = collector.collect()
     finally:
         with contextlib.suppress(Exception):
