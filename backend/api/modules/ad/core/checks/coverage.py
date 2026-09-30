@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from api.modules.ad.core.ca_data import CaData
+from api.modules.ad.core.checks.adcs_ca import unread
 from api.modules.ad.core.export import AdExport
 
 
@@ -32,6 +33,18 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
     if not templates:
         gaps["ADCS_ESC"] = "шаблонов сертификатов в выгрузке нет: в лесу нет AD CS или контейнер шаблонов недоступен"
-    elif not pki_objects:
-        gaps["ADCS_CA"] = "ESC5 не проверен: выгрузка собрана без объектов PKI (старый сборщик)"
+    ca_reasons: list[str] = []
+    if templates and not pki_objects:
+        ca_reasons.append("ESC5 не проверен: выгрузка собрана без объектов PKI (старый сборщик)")
+    sections = set(ca.sections) if ca else set()
+    if "ca" not in sections:
+        ca_reasons.append("ESC6, 7, 11, 16 не проверены: нужны данные ЦС (сборщик, пункт 5)")
+    elif ca:
+        ca_reasons += [f"ЦС {c.name}: данные не прочитаны ({c.error})" for c in ca.cas if unread(c)]
+    if "web" not in sections:
+        ca_reasons.append("ESC8 не проверен: нужна проверка веб-выдачи (сборщик, пункт 7)")
+    if ca_reasons:
+        gaps["ADCS_CA"] = "; ".join(ca_reasons)
+    if "dc" not in sections:
+        gaps["ADCS_MAPPING"] = "ESC10 не проверен: нужен реестр контроллеров (сборщик, пункт 6)"
     return gaps

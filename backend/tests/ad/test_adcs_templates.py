@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from api.modules.ad.core import sd
+from api.modules.ad.core.ca_data import parse_ca_data
 from api.modules.ad.core.checks.adcs import check_adcs_templates
 from api.modules.ad.core.checks.adcs_rules import requester_kind, severity_for, step_down
 from api.modules.ad.core.config import AdConfig
@@ -17,9 +18,11 @@ from tests.ad.synthetic import (
     EXT_SID,
     GUID_AUTOENROLL,
     GUID_ENROLL,
+    NOW,
     OTHER_SID,
     PKI,
     b64sd,
+    build_ca_data,
     build_export,
     rid,
     user_dn,
@@ -438,3 +441,49 @@ def test_esc9_13_15_not_with_agent_signature() -> None:
     })
     fs = run(raw=_linked(_raw(t), user_dn("Tier0")))
     assert esc(fs, "ESC9") == esc(fs, "ESC13") == esc(fs, "ESC15") == []
+
+
+# ---- ESC9 и ESC15 с данными ЦС ------------------------------------------------------
+
+
+def _esc9_template() -> dict[str, Any]:
+    return template(aces=[enroll(rid(513))], **{"msPKI-Enrollment-Flag": 0x80000, "msPKI-Certificate-Name-Flag": 0})
+
+
+def run_with_ca(*templates: dict[str, Any], **ca_overrides: Any) -> list[Finding]:
+    ca = parse_ca_data(build_ca_data(**ca_overrides))
+    return check_adcs_templates(ExportIndex(load_export(json.dumps(_raw(*templates)).encode()), ca), AdConfig())
+
+
+def _dc(strong: int | None) -> list[dict[str, Any]]:
+    return [{"host": "dc01.corp.local", "strong_binding": strong, "mapping_methods": 0x18, "error": ""}]
+
+
+def test_esc9_high_with_weak_binding() -> None:
+    fs = esc(run_with_ca(_esc9_template(), dcs=_dc(1)), "ESC9")
+    assert [f.severity for f in fs] == ["High"] and fs[0].details["binding"] == "слабая"
+    assert fs[0].details["ca_data_collected_at"] == NOW.isoformat()
+
+
+def test_esc9_stays_medium_with_strong_binding() -> None:
+    fs = esc(run_with_ca(_esc9_template(), dcs=_dc(2)), "ESC9")
+    assert [f.severity for f in fs] == ["Medium"] and fs[0].details["binding"] == "строгая"
+
+
+def test_esc9_binding_unknown_without_dc_section() -> None:
+    fs = esc(run(_esc9_template()), "ESC9")
+    assert [f.severity for f in fs] == ["Medium"] and fs[0].details["binding"] == "неизвестно"
+    fs = esc(run_with_ca(_esc9_template(), sections=["ca", "web"], dcs=[]), "ESC9")
+    assert [f.severity for f in fs] == ["Medium"] and fs[0].details["binding"] == "неизвестно"
+
+
+def test_esc15_carries_ca_os_build() -> None:
+    t = template(pKIExtendedKeyUsage=[SERVER_AUTH], **{"msPKI-Template-Schema-Version": 1})
+    assert esc(run_with_ca(t), "ESC15")[0].details["ca_os_build"] == "20348"
+    assert "ca_os_build" not in esc(run(t), "ESC15")[0].details
+
+
+def test_esc15_os_build_only_from_publishing_ca() -> None:
+    t = template(pKIExtendedKeyUsage=[SERVER_AUTH], **{"msPKI-Template-Schema-Version": 1})
+    other = [{"name": "OTHER-CA", "host": "ca02.corp.local", "os_build": "17763", "error": ""}]
+    assert "ca_os_build" not in esc(run_with_ca(t, cas=other), "ESC15")[0].details

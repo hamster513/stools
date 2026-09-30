@@ -221,3 +221,14 @@ def writers_details(idx: ExportIndex, writers: list[Writer], text: str, base: st
     severity, broad, text = _common(text, [k for _, k, _ in writers], base)
     principals = sorted(({"name": idx.principal_name(s), "sid": s, "kind": k, "rights": r} for s, k, r in writers), key=lambda p: (str(p["name"]), str(p["sid"])))
     return severity, {"details": text, "principals": principals, "principals_broad": broad}
+
+
+def ca_data_details(idx: ExportIndex, section: str) -> dict[str, object]:
+    """Откуда данные ЦС у находки: дата сбора раздела и id загрузки, если данные сведены."""
+    ca = idx.ca
+    if ca is None:
+        return {}
+    out: dict[str, object] = {"ca_data_collected_at": ca.section_dates.get(section, ca.collected_at).isoformat()}
+    if section in ca.section_sources:
+        out["ca_data_id"] = ca.section_sources[section]
+    return out

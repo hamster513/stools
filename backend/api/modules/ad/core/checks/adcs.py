@@ -6,6 +6,7 @@ import uuid
 from api.modules.ad.core import sd
 from api.modules.ad.core.checks.adcs_rules import (
     Kind,
+    ca_data_details,
     denials,
     requester_kind,
     requesters_details,
@@ -31,6 +32,7 @@ ENROLLEE_SUPPLIES_SUBJECT = 0x1
 
 UNPUBLISHED_NOTE = "шаблон не опубликован ни на одном ЦС"
 PUBLICATION_UNKNOWN = "неизвестно"
+BINDING_WEAK, BINDING_STRONG, BINDING_UNKNOWN = "слабая", "строгая", "неизвестно"
 
 
 def effective_eku(t: AdObject) -> list[str]:
@@ -86,11 +88,37 @@ def _linked_groups(idx: ExportIndex) -> dict[str, str]:
     return {o.template_oid: o.oid_group_link for o in idx.objects("msPKI-Enterprise-Oid") if o.template_oid and o.oid_group_link}
 
 
+def _dc_binding(idx: ExportIndex) -> tuple[str, dict[str, object]]:
+    """Привязка сертификатов на контроллерах по данным ЦС: «слабая», если хоть на одном
+    StrongCertificateBindingEnforcement 0 или 1; «строгая», если на всех 2; иначе «неизвестно»."""
+    ca = idx.ca
+    if ca is None or "dc" not in ca.sections:
+        return BINDING_UNKNOWN, {}
+    values = [dc.strong_binding for dc in ca.dcs]
+    if any(v in (0, 1) for v in values):
+        binding = BINDING_WEAK
+    elif values and all(v == 2 for v in values):
+        binding = BINDING_STRONG
+    else:
+        binding = BINDING_UNKNOWN
+    return binding, ca_data_details(idx, "dc")
+
+
+def _ca_os_build(idx: ExportIndex, published: list[str] | None) -> dict[str, object]:
+    """Сборка ОС ЦС, публикующих шаблон, из данных ЦС: ESC15 закрыт обновлением ноября 2024."""
+    if idx.ca is None or not published:
+        return {}
+    names = {n.lower() for n in published}
+    builds = sorted({ca.os_build for ca in idx.ca.cas if ca.name.lower() in names and ca.os_build})
+    return {"ca_os_build": ", ".join(builds), **ca_data_details(idx, "ca")} if builds else {}
+
+
 def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     enroll_rights = (uuid.UUID(idx.extended_right("Enroll") or GUID_ENROLL_DEFAULT), None)
     templates = idx.objects("pKICertificateTemplate")
     links = _linked_groups(idx)
     on_behalf: int | None = None
+    binding, binding_source = _dc_binding(idx)
     out: list[Finding] = []
     for t in templates:
         desc = idx.sd_of(t)
@@ -112,7 +140,9 @@ def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
                     on_behalf = _on_behalf_templates(idx, templates)
                 hits.append(("ESC3", "High", "сертификат агента регистрации: выпуск сертификатов от имени других", requesters, {"on_behalf_templates": on_behalf}))
             if free and (t.enrollment_flag or 0) & NO_SECURITY_EXTENSION and logon:
-                hits.append(("ESC9", "Medium", "в сертификат не пишется расширение безопасности с SID (NO_SECURITY_EXTENSION), сертификат годится для входа", requesters, {}))
+                base = "High" if binding == BINDING_WEAK else "Medium"
+                text = "в сертификат не пишется расширение безопасности с SID (NO_SECURITY_EXTENSION), сертификат годится для входа"
+                hits.append(("ESC9", base, text, requesters, {"binding": binding, **binding_source}))
             groups = sorted({links[p] for p in t.issuance_policies if p in links})
             if free and groups and logon:
                 hits.append(("ESC13", "High", "политика выдачи шаблона связана с группой: сертификат даёт её права", requesters, {"group": "; ".join(groups)}))
@@ -125,6 +155,8 @@ def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
             rated.append(("ESC4", *writers_details(idx, writers, text, "High"), {}))
         published = idx.published_on(t)
         for code, severity, common, extra in rated:
+            if code == "ESC15":
+                extra = {**extra, **_ca_os_build(idx, published)}
             if published == []:
                 severity = "Low"
                 common["details"] = f"{common['details']}; {UNPUBLISHED_NOTE}"
