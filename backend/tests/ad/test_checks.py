@@ -100,7 +100,7 @@ def test_user_rights_and_adcs(findings: list[Finding]) -> None:
         ("SeDebugPrivilege", "CORP\\helpdesk"): "High",
         ("SeBackupPrivilege", "BUILTIN\\Backup Operators"): "Medium",
     }
-    esc = {(f.target, f.details["esc"]): (f.severity, f.details["requesters"]) for f in by(findings, "ADCS_ESC")}
+    esc = {(f.target, f.details["esc"]): (f.severity, f.details.get("requesters") or [p["name"] for p in f.details["principals"]]) for f in by(findings, "ADCS_ESC")}
     assert esc == {
         ("VulnTemplate", "ESC1"): ("High", ["CORP\\Domain Users"]),
         ("AgentTemplate", "ESC3"): ("High", ["NT AUTHORITY\\Authenticated Users"]),

@@ -1,7 +1,7 @@
 """Центр сертификации: ESC5 по снапшоту (права на объекты PKI в разделе конфигурации)."""
 from __future__ import annotations
 
-from api.modules.ad.core.checks.adcs_rules import principals_details, unsafe_writers
+from api.modules.ad.core.checks.adcs_rules import unsafe_writers, writers_details
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding, finalize
@@ -18,10 +18,10 @@ def _esc5(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     for cls in PKI_OBJECT_CLASSES:
         for obj in idx.objects(cls):
             desc = idx.sd_of(obj)
-            writers = unsafe_writers(idx, cfg, desc) if desc else []
+            writers = unsafe_writers(idx, cfg, obj, desc) if desc else []
             if not writers:
                 continue
-            severity, common = principals_details(idx, writers, "право записи на объект PKI (контейнер или объект ЦС)", "High")
+            severity, common = writers_details(idx, writers, "право записи на объект PKI (контейнер или объект ЦС)", "High")
             out.append(_finding(cfg, "ESC5", severity, obj.dn, {**common, "object_class": obj.cls}))
     return out
 

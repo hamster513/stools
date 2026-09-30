@@ -1,6 +1,7 @@
 """ADCS_ESC: правило заявителя и ESC1–4, 9, 13, 15 по шаблонам."""
 from __future__ import annotations
 
+import base64
 import json
 import uuid
 from typing import Any
@@ -221,7 +222,9 @@ def _writer(sid: str, right: int) -> dict[str, Any]:
 def test_esc4_other_writer_is_medium() -> None:
     fs = run(_writer(HELPDESK, sd.WRITE_DACL))
     assert [(f.key_extra, f.severity) for f in on(fs)] == [("ESC4", "Medium")]
-    assert esc(fs, "ESC4")[0].details["requesters"] == ["CORP\\helpdesk"]
+    d = esc(fs, "ESC4")[0].details
+    assert d["principals"] == [{"name": "CORP\\helpdesk", "sid": HELPDESK, "kind": "other", "rights": ["WriteDacl"]}]
+    assert d["principals_broad"] is False and "requesters" not in d
 
 
 def test_esc4_broad_writer_is_high() -> None:
@@ -230,6 +233,17 @@ def test_esc4_broad_writer_is_high() -> None:
 
 def test_esc4_not_for_admins() -> None:
     assert on(run(_writer(rid(512), sd.WRITE_OWNER))) == []
+
+
+def test_esc4_owner_is_writer() -> None:
+    t = template(aces=[sd.build_ace(rid(512), sd.GENERIC_ALL)], pKIExtendedKeyUsage=[SERVER_AUTH], **{"msPKI-Certificate-Name-Flag": 0})
+    t["sd"] = base64.b64encode(sd.build_sd([sd.build_ace(rid(512), sd.GENERIC_ALL)], owner=HELPDESK)).decode()
+    fs = esc(run(t), "ESC4")
+    assert len(fs) == 1 and fs[0].severity == "Medium" and fs[0].details["principals"][0]["rights"] == ["owner"]
+
+
+def test_esc4_not_for_create_child() -> None:
+    assert on(run(_writer("S-1-5-11", sd.CREATE_CHILD))) == []
 
 
 # ---- ESC9, ESC13, ESC15 -------------------------------------------------------

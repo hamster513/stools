@@ -7,9 +7,10 @@ from collections import Counter
 from api.modules.ad.core import sd
 from api.modules.ad.core.checks.adcs_rules import (
     Kind,
-    principals_details,
     requester_kind,
+    requesters_details,
     unsafe_writers,
+    writers_details,
 )
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import AdObject, ExportIndex
@@ -103,7 +104,7 @@ def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
             continue
         eku = effective_eku(t)
         requesters = _requesters(idx, cfg, desc, enroll_rights)
-        # (ESC, базовая серьёзность, условие, субъекты, доп. детали)
+        # (ESC, базовая серьёзность, условие, заявители, доп. детали)
         hits: list[tuple[str, str, str, list[tuple[str, Kind]], dict[str, object]]] = []
         if requesters:
             free, logon = unobstructed(t), logon_capable(eku)
@@ -123,12 +124,13 @@ def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
                 hits.append(("ESC13", "High", "политика выдачи шаблона связана с группой: сертификат даёт её права", requesters, {"group": "; ".join(groups)}))
             if free and t.schema_version == 1 and supplies:
                 hits.append(("ESC15", "High", "шаблон схемы v1, субъект задаёт заявитель: политики приложений подставляются из запроса (закрыто обновлением ноября 2024)", requesters, {}))
-        writers = unsafe_writers(idx, cfg, desc)
+        rated = [(code, *requesters_details(idx, principals, text, base), extra) for code, base, text, principals, extra in hits]
+        writers = unsafe_writers(idx, cfg, t, desc)
         if writers:
-            hits.append(("ESC4", "High", "право менять шаблон (GenericAll, GenericWrite, WriteDacl, WriteOwner или WriteProperty)", writers, {}))
+            text = "право менять шаблон (GenericAll, GenericWrite, WriteDacl, WriteOwner, WriteProperty или владелец)"
+            rated.append(("ESC4", *writers_details(idx, writers, text, "High"), {}))
         published = idx.published_on(t)
-        for code, base, text, principals, extra in hits:
-            severity, common = principals_details(idx, principals, text, base)
+        for code, severity, common, extra in rated:
             if published == []:
                 severity = "Low"
                 common["details"] = f"{common['details']}; {UNPUBLISHED_NOTE}"
