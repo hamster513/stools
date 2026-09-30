@@ -1,13 +1,13 @@
 """Задачи модуля VM поверх платформенного механизма (api/jobs.py)."""
 from __future__ import annotations
 
-import datetime as dt
 from collections.abc import Callable, Iterable
 
 from sqlalchemy.orm import Session
 
 from api.jobs import JobCancelled, JobHandle
 from api.jobs import active_job as _active_job
+from api.jobs import fail_job as _fail_job
 from api.jobs import run_job as _run_job
 from api.jobs import start_job as _start_job
 from api.modules.vm.models import VmJob
@@ -28,11 +28,4 @@ def run_job(job_id: int, fn: Callable[[Session, JobHandle], None]) -> None:
 
 
 def fail_job(db: Session, job_id: int, error: str) -> None:
-    """Закрыть задачу, до исполнения которой дело не дошло (загрузка отвергнута):
-    иначе она висит «в работе» и блокирует следующую."""
-    job = db.get(VmJob, job_id)
-    if job is not None:
-        job.status = "failed"
-        job.error = error
-        job.finished_at = dt.datetime.now(dt.UTC)
-        db.commit()
+    _fail_job(db, VmJob, job_id, error)

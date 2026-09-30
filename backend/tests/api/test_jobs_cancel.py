@@ -1,11 +1,13 @@
 """Снятие фоновых задач: живую — флагом, осиротевшую — сразу; уборка при старте API."""
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from api import jobs
 from api.db import base as db_base
@@ -16,7 +18,7 @@ from api.modules.attack.models import AttackJob
 from api.modules.ksc.models import KscJob
 from api.modules.vm.models import VmJob
 
-ORPHAN_MESSAGE = "снята: процесс, который её вёл, перезапускался"
+ORPHAN_ERROR = "снята: процесс, который её вёл, перезапускался"
 RESTART_ERROR = "прервана: API перезапускался"
 
 #: (модель, адрес списка задач, адрес снятия) — снятие ATT&CK живёт в общих настройках.
@@ -52,7 +54,7 @@ def test_cancel_live_job_only_raises_the_flag(auth_client: TestClient, db_sessio
     assert seen["status"] == "running" and seen["cancel_requested"] is True and seen["finished_at"] is None
     body = auth_client.get(f"/api/ad/jobs/{job_id}").json()
     assert body["status"] == "cancelled" and body["finished_at"] is not None
-    assert body["message"] != ORPHAN_MESSAGE
+    assert body["error"] is None and body["message"] == ""
 
 
 @pytest.mark.parametrize(("model", "read", "cancel"), CANCEL_PATHS, ids=["ad", "ksc", "vm", "attack"])
@@ -61,12 +63,13 @@ def test_cancel_orphaned_job_closes_it_at_once(
 ) -> None:
     """Задача «идёт», но в процессе её никто не ведёт: флаг проверять некому,
     поэтому она снимается сразу."""
-    job_id = start_job(db_session, model, "collect", "tester")
+    job_id = start_job(db_session, model, "collect", "tester", message="dc.example")
     assert auth_client.post(f"{cancel}/{job_id}/cancel").status_code == 204
     body = auth_client.get(f"{read}/{job_id}").json()
     assert body["status"] == "cancelled", body
     assert body["finished_at"] is not None
-    assert body["message"] == ORPHAN_MESSAGE
+    # Причина снятия — в error; message (что делала задача) не затирается.
+    assert (body["error"], body["message"]) == (ORPHAN_ERROR, "dc.example")
     assert auth_client.post(f"{cancel}/{job_id}/cancel").status_code == 409
     assert auth_client.post(f"{cancel}/999999/cancel").status_code == 404
 
@@ -81,8 +84,7 @@ def test_job_cancelled_before_start_does_not_run(auth_client: TestClient, db_ses
 
     run_job(AdJob, job_id, work)
     job = _row(AdJob, job_id)
-    assert job.status == "cancelled" and job.error is None and job.message == ORPHAN_MESSAGE
-
+    assert job.status == "cancelled" and job.error == ORPHAN_ERROR
 
 
 def test_cancel_racing_with_start_is_consistent(app_settings: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,7 +113,7 @@ def test_cancel_racing_with_start_is_consistent(app_settings: Any, db_session: A
     assert not thread.is_alive()
     assert not started.is_set(), "снятая задача не должна исполняться"
     job = _row(AdJob, job_id)
-    assert (job.status, job.message) == ("cancelled", ORPHAN_MESSAGE)
+    assert (job.status, job.error) == ("cancelled", ORPHAN_ERROR)
 
 
 def test_live_registry_forgets_finished_jobs(db_session: Any) -> None:
@@ -155,3 +157,34 @@ def test_startup_fails_jobs_left_running(app_settings: Any, db_session: Any) -> 
     assert (siem_job.status, siem_job.error) == ("failed", RESTART_ERROR)
     done = _row(AdJob, done_id)
     assert done.status == "done" and done.error is None
+
+
+class _Unreachable:
+    """Сессия, у которой каждый запрос падает ошибкой `exc`."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+        self.executed = 0
+
+    def execute(self, *args: Any, **kwargs: Any) -> Any:
+        self.executed += 1
+        raise self.exc
+
+    def commit(self) -> None:
+        raise AssertionError("после ошибки запроса commit не вызывается")
+
+    def rollback(self) -> None:
+        pass
+
+
+def test_startup_cleanup_stops_when_database_is_unreachable(caplog: pytest.LogCaptureFixture) -> None:
+    """База недоступна: остальные таблицы не трогаются (каждая ждала бы таймаут подключения), одно предупреждение."""
+    db = _Unreachable(OperationalError("UPDATE", {}, ConnectionRefusedError("connection refused")))
+    with caplog.at_level(logging.WARNING, logger="api.jobs"):
+        jobs.fail_interrupted_jobs(db)  # type: ignore[arg-type]
+    assert db.executed == 1
+    assert len(caplog.records) == 1
+    # Ошибка одной таблицы (миграция не применена) по-прежнему не мешает остальным.
+    missing = _Unreachable(ProgrammingError("UPDATE", {}, Exception("relation does not exist")))
+    jobs.fail_interrupted_jobs(missing)  # type: ignore[arg-type]
+    assert missing.executed == len(jobs.job_models())

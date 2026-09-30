@@ -1,4 +1,4 @@
-"""Загруженный файл убирается, даже если задачу сняли до старта потока; пустая загрузка закрывает задачу."""
+"""Загруженный файл убирается, даже если задачу сняли до старта потока или приём оборвался; пустая загрузка закрывает задачу."""
 from __future__ import annotations
 
 import importlib
@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from starlette.datastructures import UploadFile
+from starlette.requests import ClientDisconnect
 
 from api.jobs import cancel_job
 from api.modules.ad.models import AdJob
@@ -83,3 +85,58 @@ def test_empty_upload_fails_the_job(
     # Следующая загрузка не упирается в «импорт уже идёт».
     ok = auth_client.post("/api/vm/import/file", files={"file": ("h.csv", b"@Host\n", "text/csv")})
     assert ok.status_code == 202, ok.text
+
+
+def _stream_breaks_after_first_chunk(monkeypatch: Any) -> None:
+    """Приём файла обрывается на середине: первый кусок пришёл, следующее чтение — обрыв клиента."""
+    real = UploadFile.read
+    calls: list[int] = []
+
+    async def read(self: UploadFile, size: int = -1) -> bytes:
+        calls.append(size)
+        if len(calls) > 1:
+            raise ClientDisconnect()
+        return await real(self, size)
+
+    monkeypatch.setattr(UploadFile, "read", read)
+
+
+def _assert_interrupted(db_session: Any, model: type[Any], folder: Path) -> None:
+    job = _job(db_session, model)
+    assert (job.status, job.error) == ("failed", "загрузка прервана") and job.finished_at is not None
+    assert _leftovers(folder) == []
+
+
+@pytest.mark.parametrize(
+    ("url", "files"),
+    [
+        ("/api/vm/import/file", lambda: {"file": ("h.csv", b"@Host\nx\n", "text/csv")}),
+        ("/api/vm/refs/epss/upload", lambda: [("files", ("a.csv", b"cve,epss\n", "text/csv")), ("files", ("b.csv", b"cve,epss\n", "text/csv"))]),
+    ],
+    ids=["import", "refs"],
+)
+def test_interrupted_vm_upload_fails_job_and_removes_files(
+    auth_client: TestClient, db_session: Any, app_settings: Any, monkeypatch: Any, url: str, files: Callable[[], Any],
+) -> None:
+    _stream_breaks_after_first_chunk(monkeypatch)
+    with pytest.raises(ClientDisconnect):
+        auth_client.post(url, files=files())
+    _assert_interrupted(db_session, VmJob, app_settings.data_dir / "vm")
+
+
+def test_failed_ad_upload_write_fails_job_and_removes_file(
+    auth_client: TestClient, db_session: Any, app_settings: Any, monkeypatch: Any,
+) -> None:
+    """Запись принятой выгрузки на диск оборвалась (нет места): задача не висит «в работе»."""
+    real = Path.write_bytes
+
+    def write_bytes(self: Path, data: Any) -> int:
+        if self.name.startswith("upload-"):
+            real(self, bytes(data)[:1])
+            raise OSError(28, "No space left on device")
+        return real(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes)
+    with pytest.raises(OSError, match="No space left"):
+        auth_client.post("/api/ad/snapshots/file", files={"file": ("e.json", b"{}", "application/json")})
+    _assert_interrupted(db_session, AdJob, app_settings.data_dir / "ad")

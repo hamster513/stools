@@ -23,7 +23,7 @@ from itertools import batched
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, select, text, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -61,8 +61,9 @@ class JobCancelled(Exception):
 _live: set[tuple[str, int]] = set()
 _live_lock = threading.Lock()
 
-ORPHAN_CANCEL_MESSAGE = "снята: процесс, который её вёл, перезапускался"
+ORPHAN_CANCEL_ERROR = "снята: процесс, который её вёл, перезапускался"
 RESTART_ERROR = "прервана: API перезапускался"
+UPLOAD_INTERRUPTED = "загрузка прервана"
 
 
 def _key(model: type[Any], job_id: int) -> tuple[str, int]:
@@ -176,6 +177,17 @@ def start_job[J: JobColumns](db: Session, model: type[J], kind: str, started_by:
     return job.id
 
 
+def fail_job(db: Session, model: type[Any], job_id: int, error: str) -> None:
+    """Закрыть задачу, до исполнения которой дело не дошло (загрузка отвергнута или
+    оборвалась): иначе она висит «в работе» и блокирует следующую."""
+    job = db.get(model, job_id)
+    if job is not None:
+        job.status = "failed"
+        job.error = error
+        job.finished_at = dt.datetime.now(dt.UTC)
+        db.commit()
+
+
 def safe_error(exc: Exception) -> str:
     """Текст ошибки без хвоста драйвера: в нём могут быть данные запроса."""
     text = str(exc).strip().splitlines()[0] if str(exc).strip() else exc.__class__.__name__
@@ -232,7 +244,8 @@ def _run_registered(model: type[Any], job_id: int, fn: Callable[[Session, JobHan
 
 def cancel_job(db: Session, model: type[Any], job_id: int) -> None:
     """Попросить идущую задачу остановиться: 404 — задачи нет, 409 — уже завершена.
-    Осиротевшую (в процессе её никто не ведёт) — снять сразу: флаг проверять некому.
+    Осиротевшую (в процессе её никто не ведёт) — снять сразу: флаг проверять некому;
+    причина — в `error`, `message` (что делала задача) остаётся.
     Флаг ставится и ей: если поток всё же подхватит задачу, он остановится сам."""
     from fastapi import HTTPException, status
 
@@ -246,7 +259,7 @@ def cancel_job(db: Session, model: type[Any], job_id: int) -> None:
     job.cancel_requested = True
     if not is_live(model, job_id):
         job.status = "cancelled"
-        job.message = ORPHAN_CANCEL_MESSAGE
+        job.error = ORPHAN_CANCEL_ERROR
         job.finished_at = dt.datetime.now(dt.UTC)
     db.commit()
 
@@ -260,7 +273,8 @@ def job_models() -> list[type[Any]]:
 def fail_interrupted_jobs(db: Session) -> None:
     """При старте API: задачи, оставшиеся running, вёл прежний процесс — закрыть как прерванные.
     Каждая таблица своей транзакцией: сбой одной (миграция ещё не применена) не мешает
-    остальным и не мешает API подняться."""
+    остальным и не мешает API подняться. База недоступна (`OperationalError`) — уборка
+    прекращается: каждая следующая таблица ждала бы таймаут подключения заново."""
     for model in job_models():
         values: dict[str, Any] = {"status": "failed", "error": RESTART_ERROR}
         if "finished_at" in model.__table__.c:
@@ -268,6 +282,10 @@ def fail_interrupted_jobs(db: Session) -> None:
         try:
             result = db.execute(update(model).where(model.status == "running").values(**values))
             db.commit()
+        except OperationalError as exc:
+            db.rollback()
+            log.warning("база недоступна, задачи при старте не закрыты: %s", type(exc).__name__)
+            return
         except SQLAlchemyError as exc:
             db.rollback()
             log.warning("задачи %s не закрыты при старте: %s", model.__tablename__, type(exc).__name__)

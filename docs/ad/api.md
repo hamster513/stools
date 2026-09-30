@@ -42,6 +42,7 @@ GET  /connections                      [{id, title, host, port, use_ssl, verify_
 POST /connections  PUT /{id}  DELETE /{id}      пустой пароль в PUT — оставить прежний;
                                         page_size 50–1000 (500), pause_ms 0–10000 (500) —
                                         страница LDAP и пауза между запросами к контроллеру
+                                        (LDAP и SYSVOL); нет поля в PUT — оставить прежнее
 POST /connections/{id}/test            {ok, message}
 POST /connections/{id}/collect         {job_id} | 400 нет пароля | 409 идёт задача
 ```

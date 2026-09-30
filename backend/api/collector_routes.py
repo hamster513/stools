@@ -21,7 +21,7 @@ from api.audit import changes_summary
 from api.crypto import encrypt, reseal
 from api.db.models import AppUser
 from api.hosts import take_slot
-from api.jobs import JobHandle, active_job, run_job, start_job
+from api.jobs import UPLOAD_INTERRUPTED, JobHandle, active_job, fail_job, run_job, start_job
 
 #: Задачи, при которых нельзя начать ещё одну: все пишут в те же снапшоты.
 BUSY_KINDS = ("import_file", "collect", "reanalyze")
@@ -66,7 +66,8 @@ def add_connection(db: Session, model: type[Any], payload: BaseModel) -> Any:
 
 
 def edit_connection(db: Session, c: Any, payload: BaseModel, request: Request, address_fields: frozenset[str]) -> None:
-    data = payload.model_dump()
+    """Поле со значением None в схеме обновления — «оставить прежнее»."""
+    data = {k: v for k, v in payload.model_dump().items() if v is not None}
     changed = [k for k, v in data.items() if v != getattr(c, k) and (k != "password" or v)]
     request.state.audit_summary = changes_summary(changed)
     if not data["password"]:
@@ -164,8 +165,14 @@ def start_import(
     name = filename or "export.json"
     job_id = start_job(db, job_model, "import_file", user.login, message=name)
     upload = upload_dir / f"upload-{job_id}.bin"
-    upload.parent.mkdir(parents=True, exist_ok=True)
-    upload.write_bytes(data)
+    try:
+        upload.parent.mkdir(parents=True, exist_ok=True)
+        upload.write_bytes(data)
+    # Запись оборвалась (нет места, нет прав): задача не остаётся «в работе», обрывок не лежит.
+    except Exception:
+        upload.unlink(missing_ok=True)
+        fail_job(db, job_model, job_id, UPLOAD_INTERRUPTED)
+        raise
 
     def work(session: Session, handle: JobHandle) -> None:
         try:

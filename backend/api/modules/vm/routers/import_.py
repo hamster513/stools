@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.jobs import UPLOAD_INTERRUPTED
 from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.models import VmImport
 from api.modules.vm.routers.jobs import JobView
@@ -99,9 +100,10 @@ async def import_from_file(
                 out.write(chunk)
                 size += len(chunk)
                 check_upload_size(size, VM_UPLOAD)
-    except HTTPException as exc:
+    # Отказ по размеру, обрыв клиента, ошибка диска: задача не остаётся «в работе», файл не лежит.
+    except Exception as exc:
         target.unlink(missing_ok=True)
-        fail_job(db, job_id, str(exc.detail))
+        fail_job(db, job_id, str(exc.detail) if isinstance(exc, HTTPException) else UPLOAD_INTERRUPTED)
         raise
     if size == 0:
         target.unlink(missing_ok=True)

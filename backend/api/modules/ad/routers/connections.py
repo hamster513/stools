@@ -59,6 +59,14 @@ class ConnectionIn(BaseModel):
         return _whole_in_range(value, 0, 10000, "пауза между запросами к контроллеру: от 0 до 10000 мс")
 
 
+class ConnectionUpdate(ConnectionIn):
+    """PUT: поле страницы или паузы, которого нет в запросе, оставляет прежнее значение, а не
+    умолчание. Явный null по-прежнему отвергается проверкой диапазона."""
+
+    page_size: int | None = None  # type: ignore[assignment]
+    pause_ms: int | None = None  # type: ignore[assignment]
+
+
 def _whole_in_range(value: Any, low: int, high: int, text: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
         raise ValueError(text)
@@ -108,7 +116,7 @@ def create_connection(payload: ConnectionIn, db: Session = Depends(get_db), _use
 
 @router.put("/{connection_id}", response_model=ConnectionView)
 def update_connection(
-    connection_id: int, payload: ConnectionIn, request: Request, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+    connection_id: int, payload: ConnectionUpdate, request: Request, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> ConnectionView:
     c = _get(db, connection_id)
     edit_connection(db, c, payload, request, ADDRESS_FIELDS)

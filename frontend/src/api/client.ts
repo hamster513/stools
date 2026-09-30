@@ -15,17 +15,15 @@ export class ApiRequestError extends Error {
 /**
  * Ошибка проверки схемы (422) приходит списком `[{loc, msg, …}]`, а не строкой:
  * показываем тексты `msg`. Наши валидаторы пишут их по-русски, pydantic
- * предваряет такой текст «Value error, » — префикс убирается.
+ * предваряет такой текст «Value error, » — префикс убирается. Объект вместо
+ * строки — его `msg` или `detail`, иначе JSON, но не «[object Object]».
  */
 export function formatDetail(detail: unknown): string {
-  if (!Array.isArray(detail)) return String(detail)
-  return detail
-    .map((item) =>
-      item && typeof item === 'object' && 'msg' in item
-        ? String((item as { msg: unknown }).msg).replace(/^Value error, /, '')
-        : String(item),
-    )
-    .join('; ')
+  if (Array.isArray(detail)) return detail.map(formatDetail).join('; ')
+  if (!detail || typeof detail !== 'object') return String(detail)
+  if ('msg' in detail) return String(detail.msg).replace(/^Value error, /, '')
+  if ('detail' in detail) return String(detail.detail)
+  return JSON.stringify(detail)
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

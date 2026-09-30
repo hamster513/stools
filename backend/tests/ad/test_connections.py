@@ -269,13 +269,19 @@ class _PagedConn(_FakeConn):
 
 
 def _real_searcher_with_fake_sleep(monkeypatch: Any, sleeps: list[float], seen: dict[str, Any]) -> None:
-    real = svc.ldap3_searcher
+    """Настоящие поиск и дозатор; паузы дозатора — в `sleeps`, аргументы — в `seen`."""
+    real_searcher, real_pacer = svc.ldap3_searcher, svc.Pacer
 
     def searcher(c: Any, **kw: Any) -> Any:
         seen.update(kw)
-        return real(c, sleep=sleeps.append, **kw)
+        return real_searcher(c, **kw)
+
+    def pacer(pause_ms: int, *, check_cancel: Any = None) -> Any:
+        seen.update(pause_ms=pause_ms, check_cancel=check_cancel)
+        return real_pacer(pause_ms, check_cancel=check_cancel, sleep=sleeps.append)
 
     monkeypatch.setattr(svc, "ldap3_searcher", searcher)
+    monkeypatch.setattr(svc, "Pacer", pacer)
 
 
 def test_paging_defaults_and_ranges(auth_client: TestClient) -> None:
@@ -310,6 +316,18 @@ def test_paging_change_keeps_password(auth_client: TestClient, db_session: Any) 
     assert _stored_password(db_session, cid) == "secret"
 
 
+def test_put_without_paging_keeps_stored_values(auth_client: TestClient) -> None:
+    """PUT без page_size и pause_ms (старая форма, скрипт) не сбрасывает их на умолчания."""
+    cid = _create(auth_client, page_size=200, pause_ms=1000)
+    r = auth_client.put(f"/api/ad/connections/{cid}", json={"title": "другое", "host": "dc01.corp.local", "username": "CORP\\auditor", "password": ""})
+    assert r.status_code == 200, r.text
+    assert (r.json()["title"], r.json()["page_size"], r.json()["pause_ms"]) == ("другое", 200, 1000)
+    # POST без этих полей по-прежнему получает умолчания.
+    other = _create(auth_client)
+    body = {c["id"]: c for c in auth_client.get("/api/ad/connections").json()}
+    assert (body[other]["page_size"], body[other]["pause_ms"]) == (500, 500)
+
+
 def test_old_connection_gets_paging_defaults(auth_client: TestClient, db_session: Any) -> None:
     """Строка, записанная без новых колонок (как до миграции), получает умолчания базы."""
     from sqlalchemy import text
@@ -340,18 +358,17 @@ def test_collect_reads_in_pages_with_pauses_and_progress(auth_client: TestClient
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
     from api.modules.ad.core.ldap_collector import paced_reader
 
-    smb_sleeps: list[float] = []
     smb_reads: list[str] = []
     smb_seen: dict[str, Any] = {}
 
-    def smb(host: str, u: str, p: str, **kw: Any) -> Any:
-        smb_seen.update(kw)
+    def smb(host: str, u: str, p: str, *, pacer: Any) -> Any:
+        smb_seen["pacer"] = pacer
 
         def read(path: str) -> bytes | None:
             smb_reads.append(path)
             return fake_conn.fake.smb(path)
 
-        return paced_reader(read, sleep=smb_sleeps.append, **kw)
+        return paced_reader(read, pacer)
 
     monkeypatch.setattr(svc, "smb_reader", smb)
     _real_searcher_with_fake_sleep(monkeypatch, sleeps, seen)
@@ -360,13 +377,12 @@ def test_collect_reads_in_pages_with_pauses_and_progress(auth_client: TestClient
     assert r.status_code == 202, r.text
     job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()
     assert job["status"] == "done", job
-    assert seen["page_size"] == 50 and seen["pause_ms"] == 250
+    assert seen["page_size"] == 50 and seen["pause_ms"] == 250 and callable(seen["check_cancel"])
     assert set(fake_conn.paged_sizes) == {50}
-    # Пауза между любыми двумя запросами к контроллеру, после последнего — нет.
-    assert sleeps == [0.25] * (len(fake_conn.paged_sizes) - 1)
-    # Чтения SYSVOL — с той же паузой подключения и проверкой отмены; после последнего паузы нет.
-    assert smb_seen["pause_ms"] == 250 and callable(smb_seen["check_cancel"])
-    assert smb_reads and smb_sleeps == [0.25] * (len(smb_reads) - 1)
+    # LDAP и SYSVOL идут через один дозатор: пауза между любыми двумя запросами к контроллеру,
+    # в том числе на стыке LDAP и SMB; после последнего — нет.
+    assert smb_reads and smb_seen["pacer"] is seen["pacer"]
+    assert sleeps == [0.25] * (len(fake_conn.paged_sizes) + len(smb_reads) - 1)
     reads = [t for t in ticks if t[1] and t[1].startswith("прочитано объектов")]
     assert len(reads) == len(fake_conn.paged_sizes)
     assert reads[-1] == (fake_conn.returned, f"прочитано объектов {fake_conn.returned}")
@@ -426,13 +442,13 @@ def test_cancel_during_pause_stops_before_next_request(auth_client: TestClient, 
     fake_conn = _PagedConn()
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
     monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
-    real = svc.ldap3_searcher
+    real = svc.Pacer
 
     def cancel_in_pause(seconds: float) -> None:
         db_session.execute(update(AdJob).values(cancel_requested=True))
         db_session.commit()
 
-    monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: real(c, sleep=cancel_in_pause, **kw))
+    monkeypatch.setattr(svc, "Pacer", lambda pause_ms, *, check_cancel: real(pause_ms, check_cancel=check_cancel, sleep=cancel_in_pause))
     cid = _create(auth_client)
     r = auth_client.post(f"/api/ad/connections/{cid}/collect")
     job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()

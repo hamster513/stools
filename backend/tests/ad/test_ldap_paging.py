@@ -10,7 +10,13 @@ from typing import Any
 import pytest
 
 from api.jobs import JobCancelled
-from api.modules.ad.core.ldap_collector import LdapResultError, ldap3_searcher, paced_reader
+from api.modules.ad.core.ldap_collector import (
+    PAUSE_MS_DEFAULT,
+    LdapResultError,
+    Pacer,
+    ldap3_searcher,
+    paced_reader,
+)
 
 PAGED_OID = "1.2.840.113556.1.4.319"
 SD_FLAGS_OID = "1.2.840.113556.1.4.801"
@@ -55,8 +61,9 @@ def _rows(n: int, prefix: str = "CN=o") -> list[dict[str, Any]]:
     return [_entry(f"{prefix}{i},DC=corp,DC=local") for i in range(n)]
 
 
-def _searcher(conn: FakeLdap3, sleeps: list[float], pages: list[int] | None = None, **kw: Any) -> Any:
-    return ldap3_searcher(conn, sleep=sleeps.append, on_page=pages.append if pages is not None else None, **kw)
+def _searcher(conn: FakeLdap3, sleeps: list[float], pages: list[int] | None = None, *, pause_ms: int = PAUSE_MS_DEFAULT, **kw: Any) -> Any:
+    pacer = Pacer(pause_ms, sleep=sleeps.append)
+    return ldap3_searcher(conn, pacer=pacer, on_page=pages.append if pages is not None else None, **kw)
 
 
 def test_page_size_and_cookie_are_passed() -> None:
@@ -74,7 +81,7 @@ def test_page_size_and_cookie_are_passed() -> None:
 def test_defaults_page_500_pause_half_second() -> None:
     conn = FakeLdap3({"(objectClass=user)": _rows(1200)})
     sleeps: list[float] = []
-    list(ldap3_searcher(conn, sleep=sleeps.append)("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"))
+    list(ldap3_searcher(conn, pacer=Pacer(sleep=sleeps.append))("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"))
     assert [c["paged_size"] for c in conn.calls] == [500, 500, 500]
     assert sleeps == [0.5, 0.5]
 
@@ -136,7 +143,7 @@ def test_cancel_between_pages_stops_collection() -> None:
     def on_page(n: int) -> None:
         raise JobCancelled()
 
-    search = ldap3_searcher(conn, page_size=2, pause_ms=500, on_page=on_page, sleep=sleeps.append)
+    search = ldap3_searcher(conn, page_size=2, pacer=Pacer(500, sleep=sleeps.append), on_page=on_page)
     with pytest.raises(JobCancelled):
         list(search("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"))
     # Следующая страница не запрошена, пауза не выдержана.
@@ -186,7 +193,7 @@ def test_cancel_checked_after_pause_before_next_request() -> None:
         if sleeps:
             raise JobCancelled()
 
-    search = ldap3_searcher(conn, page_size=2, pause_ms=500, sleep=sleeps.append, check_cancel=check_cancel)
+    search = ldap3_searcher(conn, page_size=2, pacer=Pacer(500, check_cancel=check_cancel, sleep=sleeps.append))
     with pytest.raises(JobCancelled):
         list(search("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"))
     # Отмена, пришедшая во время паузы, замечена до второго запроса.
@@ -202,14 +209,14 @@ def test_smb_reads_paused_between_and_not_after_last() -> None:
         sleeps.append(f"read:{unc}")
         return unc.encode()
 
-    paced = paced_reader(read, pause_ms=500, sleep=lambda s: sleeps.append(f"pause:{s}"))
+    paced = paced_reader(read, Pacer(500, sleep=lambda s: sleeps.append(f"pause:{s}")))
     assert [paced(p) for p in ("a", "b", "c")] == [b"a", b"b", b"c"]
     # Первое чтение — без паузы, дальше пауза перед каждым; после последнего паузы нет.
     assert sleeps == ["read:a", "pause:0.5", "read:b", "pause:0.5", "read:c"]
 
 
 def test_smb_zero_pause_does_not_sleep() -> None:
-    paced = paced_reader(lambda unc: b"x", pause_ms=0, sleep=lambda s: pytest.fail("пауза при pause_ms=0"))
+    paced = paced_reader(lambda unc: b"x", Pacer(0, sleep=lambda s: pytest.fail("пауза при pause_ms=0")))
     assert [paced("a"), paced("b")] == [b"x", b"x"]
 
 
@@ -220,9 +227,41 @@ def test_smb_cancel_checked_after_pause_before_next_read() -> None:
         events.append("check")
         raise JobCancelled()
 
-    paced = paced_reader(lambda unc: events.append(f"read:{unc}") or b"", pause_ms=500, sleep=lambda s: events.append("pause"), check_cancel=check_cancel)
+    paced = paced_reader(lambda unc: events.append(f"read:{unc}") or b"", Pacer(500, check_cancel=check_cancel, sleep=lambda s: events.append("pause")))
     paced("a")
     with pytest.raises(JobCancelled):
         paced("b")
     # Отмена, пришедшая в паузе, замечена до второго чтения.
     assert events == ["read:a", "pause", "check"]
+
+
+def test_one_pacer_for_ldap_and_smb() -> None:
+    """Один дозатор на сбор: пауза и на стыке LDAP→SMB, и на стыке SMB→LDAP."""
+    conn = FakeLdap3({"(objectClass=user)": _rows(1), "(objectClass=group)": _rows(1, "CN=g")})
+    events: list[str] = []
+    pacer = Pacer(500, sleep=lambda s: events.append(f"pause:{s}"))
+    search = ldap3_searcher(conn, page_size=10, pacer=pacer)
+    read = paced_reader(lambda unc: events.append(f"read:{unc}") or b"", pacer)
+    list(search("DC=corp,DC=local", "(objectClass=user)", ["name"], "SUBTREE"))
+    events.append("ldap")
+    read("a")
+    list(search("DC=corp,DC=local", "(objectClass=group)", ["name"], "SUBTREE"))
+    events.append("ldap")
+    assert events == ["ldap", "pause:0.5", "read:a", "pause:0.5", "ldap"]
+
+
+def test_cancel_checked_between_searches_without_pause() -> None:
+    """Пауза 0 — отмена всё равно проверяется перед каждым запросом, кроме первого."""
+    conn = FakeLdap3({"(objectSid=S-1)": _rows(1, "CN=a"), "(objectSid=S-2)": _rows(1, "CN=b")})
+    cancelled: list[bool] = []
+
+    def check_cancel() -> None:
+        if cancelled:
+            raise JobCancelled()
+
+    search = ldap3_searcher(conn, page_size=100, pacer=Pacer(0, check_cancel=check_cancel, sleep=lambda s: pytest.fail("пауза при pause_ms=0")))
+    assert len(list(search("DC=corp,DC=local", "(objectSid=S-1)", ["objectSid"], "SUBTREE"))) == 1
+    cancelled.append(True)
+    with pytest.raises(JobCancelled):
+        list(search("DC=corp,DC=local", "(objectSid=S-2)", ["objectSid"], "SUBTREE"))
+    assert len(conn.calls) == 1

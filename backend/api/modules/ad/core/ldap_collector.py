@@ -313,47 +313,64 @@ PAUSE_MS_DEFAULT = 500
 PAGED_CONTROL = "1.2.840.113556.1.4.319"
 
 
+class Pacer:
+    """Дозатор запросов к контроллеру — один на сбор, общий для LDAP и SMB.
+
+    Вызывается перед каждым запросом: перед первым в сборе — ничего, перед
+    остальными — пауза `pause_ms` (если она не 0) и `check_cancel()`. Так пауза
+    выдерживается и на стыке LDAP и SMB, а отмена замечается до следующего
+    запроса и при нулевой паузе. Исключение из `check_cancel` прерывает сбор."""
+
+    def __init__(
+        self, pause_ms: int = PAUSE_MS_DEFAULT, *,
+        check_cancel: Callable[[], None] | None = None, sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        self.pause = pause_ms / 1000
+        self.check_cancel = check_cancel
+        self.sleep = sleep or time.sleep
+        self.requests = 0
+
+    def __call__(self) -> None:
+        if self.requests:
+            if self.pause > 0:
+                self.sleep(self.pause)
+            if self.check_cancel is not None:
+                self.check_cancel()
+        self.requests += 1
+
+
 def ldap3_searcher(
     connection: Any,
     *,
     page_size: int = PAGE_SIZE_DEFAULT,
-    pause_ms: int = PAUSE_MS_DEFAULT,
+    pacer: Pacer | None = None,
     on_page: Callable[[int], None] | None = None,
-    check_cancel: Callable[[], None] | None = None,
-    sleep: Callable[[float], None] | None = None,
 ) -> Searcher:
     """Постраничный поиск ldap3 с контролем SD_FLAGS (только DACL).
 
-    Страницы запрашиваются своей петлёй, а не `paged_search`: между любыми
-    двумя запросами к контроллеру — страницами одного поиска и отдельными
-    поисками (дозапросы имён по SID тоже) — пауза `pause_ms`; после последнего
-    запроса паузы нет. После каждой страницы — `on_page(прочитано всего)`:
-    прогресс и проверка отмены; после паузы, до следующего запроса, —
-    `check_cancel()`: отмена, пришедшая во время паузы, не ждёт ещё одной
-    страницы. Исключение из них прерывает сбор до следующего запроса.
+    Страницы запрашиваются своей петлёй, а не `paged_search`: перед каждым
+    запросом — страницей одного поиска или отдельным поиском (дозапросы имён
+    по SID тоже) — `pacer()`: пауза и проверка отмены (`Pacer`). После каждой
+    страницы — `on_page(прочитано всего)`: прогресс и проверка отмены.
+    Исключение из них прерывает сбор до следующего запроса.
     Ответ контроллера с кодом ошибки — `LdapResultError`."""
     from ldap3 import BASE, SUBTREE
     from ldap3.protocol.microsoft import security_descriptor_control
 
     scopes = {"BASE": BASE, "SUBTREE": SUBTREE}
-    pause = pause_ms / 1000
-    wait = sleep or time.sleep
+    before_request = pacer or Pacer()
     # По ссылкам (referrals) на другие серверы сбор не ходит: все базы поиска — разделы
     # этого контроллера (домен, конфигурация, схема). Прежний paged_search при включённом
     # auto_referrals открывал новое соединение к серверу из ссылки; здесь ссылки
     # пропускаются, а ответ-ссылка на саму базу (код 10) — ошибка сбора.
     connection.auto_referrals = False
-    state = {"requests": 0, "read": 0}
+    state = {"read": 0}
 
     def search(base: str, flt: str, attrs: list[str], scope: str) -> Iterable[Entry]:
         controls = security_descriptor_control(sdflags=0x04) if "nTSecurityDescriptor" in attrs else None
         cookie: bytes | None = None
         while True:
-            if state["requests"] and pause > 0:
-                wait(pause)
-                if check_cancel is not None:
-                    check_cancel()
-            state["requests"] += 1
+            before_request()
             connection.search(
                 base, flt, search_scope=scopes[scope], attributes=attrs, controls=controls, paged_size=page_size, paged_cookie=cookie,
             )
@@ -373,33 +390,19 @@ def ldap3_searcher(
     return search
 
 
-def paced_reader(
-    read: SmbReader, *, pause_ms: int, check_cancel: Callable[[], None] | None = None, sleep: Callable[[float], None] | None = None,
-) -> SmbReader:
-    """Чтения SYSVOL идут с той же паузой, что и запросы LDAP: между любыми двумя чтениями —
-    `pause_ms`, после последнего паузы нет. После паузы, до чтения, — `check_cancel()`."""
-    pause = pause_ms / 1000
-    wait = sleep or time.sleep
-    reads = 0
+def paced_reader(read: SmbReader, pacer: Pacer) -> SmbReader:
+    """Чтения SYSVOL идут через тот же дозатор, что и запросы LDAP: перед каждым — `pacer()`."""
 
     def paced(unc: str) -> bytes | None:
-        nonlocal reads
-        if reads and pause > 0:
-            wait(pause)
-            if check_cancel is not None:
-                check_cancel()
-        reads += 1
+        pacer()
         return read(unc)
 
     return paced
 
 
-def smb_reader(
-    host: str, username: str, password: str, *,
-    pause_ms: int = PAUSE_MS_DEFAULT, check_cancel: Callable[[], None] | None = None, sleep: Callable[[float], None] | None = None,
-) -> SmbReader:
+def smb_reader(host: str, username: str, password: str, *, pacer: Pacer | None = None) -> SmbReader:
     """Чтение файлов SYSVOL через smbprotocol; путь DFS переводится на
-    контроллер домена, к которому уже подключились. Чтения — с паузой `pause_ms` (`paced_reader`)."""
+    контроллер домена, к которому уже подключились. Чтения — через дозатор сбора (`paced_reader`)."""
     import smbclient
 
     smbclient.register_session(host, username=username, password=password)
@@ -413,4 +416,4 @@ def smb_reader(
         except OSError:
             return None
 
-    return paced_reader(read, pause_ms=pause_ms, check_cancel=check_cancel, sleep=sleep)
+    return paced_reader(read, pacer or Pacer())

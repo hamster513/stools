@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.jobs import UPLOAD_INTERRUPTED
 from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.models import VmRefState
@@ -144,10 +145,11 @@ async def upload_ref(
                 target.unlink(missing_ok=True)
                 continue
             paths.append(target)
-    except HTTPException as exc:
+    # Отказ по размеру, обрыв клиента, ошибка диска: задача не остаётся «в работе», файлы не лежат.
+    except Exception as exc:
         for path in written:
             path.unlink(missing_ok=True)
-        fail_job(db, job_id, str(exc.detail))
+        fail_job(db, job_id, str(exc.detail) if isinstance(exc, HTTPException) else UPLOAD_INTERRUPTED)
         raise
     if not paths:
         fail_job(db, job_id, "пустой файл")
