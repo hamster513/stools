@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from api.modules.ad.core.ca_data import CaData
+from api.modules.ad.core.ca_data import CaAuthority, CaData, DcBinding
 from api.modules.ad.core.checks.adcs_ca import broken_security, unread
 from api.modules.ad.core.export import AdExport
 
@@ -44,8 +44,8 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     if "ca" not in sections:
         ca_reasons.append("ESC6, 7, 11, 16 не проверены: нужны данные ЦС (сборщик, пункт 5)")
     elif ca:
-        ca_reasons += [f"ЦС {c.name}: данные не прочитаны ({c.error})" for c in ca.cas if unread(c)]
-        ca_reasons += [f"ЦС {c.name}: дескриптор прав не разобран" for c in ca.cas if broken_security(c)]
+        for c in ca.cas:
+            ca_reasons += _ca_record_reasons(c)
     if "web" not in sections:
         ca_reasons.append("ESC8 не проверен: нужна проверка веб-выдачи (сборщик, пункт 7)")
     elif ca:
@@ -55,11 +55,35 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     if "dc" not in sections:
         gaps["ADCS_MAPPING"] = "ESC10 не проверен: нужен реестр контроллеров (сборщик, пункт 6)"
     elif ca:
-        dc_reasons = [
-            f"контроллер {d.host}: реестр не прочитан ({d.error})"
-            for d in ca.dcs
-            if d.error and d.strong_binding is None and d.mapping_methods is None
-        ]
+        dc_reasons = [reason for d in ca.dcs for reason in _dc_record_reasons(d)]
         if dc_reasons:
             gaps["ADCS_MAPPING"] = "; ".join(dc_reasons)
     return gaps
+
+
+def _ca_record_reasons(c: CaAuthority) -> list[str]:
+    """Сборщик прочитал ЦС не целиком (есть ошибка): каждое непрочитанное значение — свои ESC.
+    Не прочитано ничего — одна общая причина."""
+    if unread(c):
+        return [f"ЦС {c.name}: данные не прочитаны ({c.error})"]
+    reasons = [f"ЦС {c.name}: дескриптор прав не разобран"] if broken_security(c) else []
+    if c.error:
+        if c.security is None:
+            reasons.append(f"ЦС {c.name}: ESC7 не проверен — права ЦС не прочитаны ({c.error})")
+        if c.edit_flags is None:
+            reasons.append(f"ЦС {c.name}: ESC6, 16 не проверены — флаги политики не прочитаны ({c.error})")
+        if c.interface_flags is None:
+            reasons.append(f"ЦС {c.name}: ESC11 не проверен — флаги интерфейса не прочитаны ({c.error})")
+    return reasons
+
+
+def _dc_record_reasons(d: DcBinding) -> list[str]:
+    if not d.error:
+        return []
+    if d.strong_binding is None and d.mapping_methods is None:
+        return [f"контроллер {d.host}: реестр не прочитан ({d.error})"]
+    if d.mapping_methods is None:
+        return [f"контроллер {d.host}: сопоставление по UPN (ESC10) не проверено ({d.error})"]
+    if d.strong_binding is None:
+        return [f"контроллер {d.host}: привязка (ESC10) не проверена ({d.error})"]
+    return []

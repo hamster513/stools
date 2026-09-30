@@ -9,11 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.modules.ad.core.ca_data import CaData, parse_ca_data
+from api.modules.ad.core.checks import ANALYZER_VERSION
 from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
 from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
 from api.modules.ad.core.checks.coverage import coverage_gaps
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex, load_export
+from api.modules.ad.models import AdSnapshot
 from tests.ad.synthetic import build_ca_data, build_export
 
 FULL_CA = parse_ca_data(build_ca_data())
@@ -149,7 +151,48 @@ def test_records_with_data_and_error_are_checked() -> None:
     idx = ExportIndex(load_export(json.dumps(build_export()).encode()), ca)
     assert [f.key_extra for f in check_adcs_mapping(idx, AdConfig())] == ["ESC10"]
     assert [f.key_extra for f in check_adcs_ca(idx, AdConfig())] == ["ESC8"]
+    # Веб-выдача с ответом проверена; у контроллера непрочитанное значение — своя причина.
+    assert _gaps(build_export(), ca) == {
+        "ADCS_MAPPING": "контроллер dc01.corp.local: сопоставление по UPN (ESC10) не проверено (CertificateMappingMethods не прочитан)",
+    }
+
+
+@pytest.mark.parametrize(
+    ("missing", "reason"),
+    [
+        ("security", "ЦС CORP-CA: ESC7 не проверен — права ЦС не прочитаны (частично)"),
+        ("edit_flags", "ЦС CORP-CA: ESC6, 16 не проверены — флаги политики не прочитаны (частично)"),
+        ("interface_flags", "ЦС CORP-CA: ESC11 не проверен — флаги интерфейса не прочитаны (частично)"),
+    ],
+    ids=["security", "edit_flags", "interface_flags"],
+)
+def test_partly_read_ca_names_unchecked_esc(missing: str, reason: str) -> None:
+    ca = parse_ca_data(build_ca_data(cas=[_ca_entry(**{missing: None}, error="частично")]))
+    assert _gaps(build_export(), ca) == {"ADCS_CA": reason}
+
+
+def test_ca_missing_several_fields_lists_each() -> None:
+    ca = parse_ca_data(build_ca_data(cas=[_ca_entry(security=None, interface_flags=None, error="частично")]))
+    reasons = _gaps(build_export(), ca)["ADCS_CA"].split("; ")
+    assert [r.split(": ")[1].split(" —")[0] for r in reasons] == ["ESC7 не проверен", "ESC11 не проверен"]
+
+
+def test_ca_field_missing_without_error_is_not_a_reason() -> None:
+    ca = parse_ca_data(build_ca_data(cas=[_ca_entry(security=None)]))
     assert _gaps(build_export(), ca) == {}
+
+
+@pytest.mark.parametrize(
+    ("dc", "reason"),
+    [
+        ({"strong_binding": 2}, "контроллер dc01.corp.local: сопоставление по UPN (ESC10) не проверено (частично)"),
+        ({"mapping_methods": 0x18}, "контроллер dc01.corp.local: привязка (ESC10) не проверена (частично)"),
+    ],
+    ids=["mapping_methods", "strong_binding"],
+)
+def test_partly_read_dc_names_unchecked_value(dc: dict[str, Any], reason: str) -> None:
+    ca = parse_ca_data(build_ca_data(dcs=[{"host": "dc01.corp.local", **dc, "error": "частично"}]))
+    assert _gaps(build_export(), ca) == {"ADCS_MAPPING": reason}
 
 
 def _upload(client: TestClient, raw: dict[str, Any]) -> dict[str, Any]:
@@ -187,3 +230,34 @@ def test_overview_marks_adcs_ca_unchecked_until_ca_data_upload(auth_client: Test
     assert "пункт 5" in unchecked("ADCS_CA") and "пункт 6" in unchecked("ADCS_MAPPING")
     assert _upload(auth_client, build_ca_data())["status"] == "done"
     assert unchecked("ADCS_CA") is None and unchecked("ADCS_MAPPING") is None
+
+
+def test_snapshot_of_previous_analyzer_marks_empty_checks_unchecked(auth_client: TestClient, db_session: Any) -> None:
+    """Проверки, данные для которых появились в новой версии анализатора, у старого
+    снапшота тихо пусты: пустая проверка такого снапшота — не «без находок»."""
+    raw = build_export()
+    raw["sysvol"] = {}
+    assert _upload(auth_client, raw)["status"] == "done"
+    assert _upload(auth_client, build_ca_data())["status"] == "done"
+    domain_id = auth_client.get("/api/ad/domains").json()[0]["id"]
+    fresh = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()
+    assert fresh["snapshot"]["analyzer_version"] == ANALYZER_VERSION and fresh["snapshot"]["stale_analysis"] is False
+    snap = db_session.get(AdSnapshot, fresh["snapshot"]["id"])
+    snap.analyzer_version = "1"
+    db_session.commit()
+
+    overview = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()
+    assert overview["snapshot"]["analyzer_version"] == "1" and overview["snapshot"]["stale_analysis"] is True
+    before = {c["code"]: c for c in fresh["checks"]}
+    stale = "снапшот посчитан прежней версией анализатора (1) — пересчитайте"
+    for c in overview["checks"]:
+        if before[c["code"]]["unchecked"]:
+            assert c["unchecked"] == before[c["code"]]["unchecked"], c["code"]
+        elif c["total"] == 0:
+            assert c["unchecked"] == stale, c["code"]
+        else:
+            assert c["unchecked"] is None, c["code"]
+    # Все три случая на месте: сохранённая причина (SYSVOL), пустые (ЦС, привязка) и непустые проверки.
+    after = {c["code"]: c for c in overview["checks"]}
+    assert "SYSVOL" in after["UserRightsAssignment"]["unchecked"] and after["DCSync"]["total"]
+    assert after["ADCS_CA"]["unchecked"] == stale and after["ADCS_MAPPING"]["unchecked"] == stale

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ from api.deps import get_current_user
 from api.export_files import file_sha256
 from api.jobs import JobCancelled, JobHandle
 from api.modules.ad.core.ca_data import load_ca_data_path, sniff_format
-from api.modules.ad.core.checks import CHECK_BY_CODE, CHECKS
+from api.modules.ad.core.checks import ANALYZER_VERSION, CHECK_BY_CODE, CHECKS
 from api.modules.ad.core.export import ExportFormatError
 from api.modules.ad.core.findings import SEVERITIES
 from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
@@ -43,6 +44,7 @@ from api.modules.ad.services.snapshots import (
 from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ad"])
+log = logging.getLogger("stools.ad")
 
 
 class JobStarted(BaseModel):
@@ -123,15 +125,26 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
     accepted = accepted_keys(db, domain_id)
     rows = db.execute(select(AdFinding.check, AdFinding.severity, AdFinding.key).where(AdFinding.snapshot_id == snap.id)).all()
     counts = severity_counts(db, snap.id)
+    unchecked: dict[str, str] = json.loads(snap.unchecked_json or "{}")
+    stale = snap.analyzer_version != ANALYZER_VERSION
+    if stale:
+        # Данные части проверок появились в новой версии: у старого снапшота такая проверка
+        # пуста не потому, что чисто. Сохранённые причины точнее — их не заменяем.
+        with_findings = {check for check, _, _ in rows}
+        reason = f"снапшот посчитан прежней версией анализатора ({snap.analyzer_version or '—'}) — пересчитайте"
+        for spec in CHECKS:
+            if spec.code not in with_findings:
+                unchecked.setdefault(spec.code, reason)
     return {
         "domain": {"id": domain.id, "dns_root": domain.dns_root, "netbios": domain.netbios, "dn": domain.dn, "sid": domain.sid},
         "snapshot": {
             "id": snap.id, "collected_at": snap.collected_at.isoformat(), "source": snap.source, "collector": snap.collector,
             "objects": snap.objects, "findings": snap.findings, "by_severity": {sev: counts.get(sev, 0) for sev in SEVERITIES},
+            "analyzer_version": snap.analyzer_version, "stale_analysis": stale,
         },
         "compared_to": comparison_summary(cmp_),
         "accepted_total": len(accepted & {key for _, _, key in rows}),
-        "checks": checks_overview(rows, CHECKS, SEVERITIES, cmp_, accepted, json.loads(snap.unchecked_json or "{}")),
+        "checks": checks_overview(rows, CHECKS, SEVERITIES, cmp_, accepted, unchecked),
     }
 
 
@@ -193,7 +206,13 @@ def _load_ca_data(session: Session, handle: JobHandle, upload: Path, name: str, 
     except JobCancelled:
         raise
     except Exception as exc:
-        raise ValueError(f"данные ЦС сохранены, но снапшот #{snap.id} не пересчитан: {exc}") from exc
+        # Свой текст — только у ошибок данных; у прочих в тексте бывают внутренности (пути, SQL).
+        if isinstance(exc, (ValueError, FileNotFoundError)):
+            cause = str(exc)
+        else:
+            log.exception("данные ЦС: пересчёт снапшота #%s не удался", snap.id)
+            cause = exc.__class__.__name__
+        raise ValueError(f"данные ЦС сохранены, но снапшот #{snap.id} не пересчитан: {cause}") from exc
     return f"{summary}; снапшот #{snap.id} пересчитан"
 
 

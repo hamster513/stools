@@ -14,6 +14,7 @@ from api.collector_routes import reject_if_running, start_reanalyze
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.jobs import fail_job
 from api.modules.ad.models import AdCaData, AdDomain, AdJob, AdSnapshot
 from api.modules.ad.routers.snapshots import JobStarted
 from api.modules.ad.services.ca_data import delete_ca_data, list_ca_data
@@ -61,17 +62,23 @@ def remove_ca_data(
     row = db.get(AdCaData, ca_data_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="данные ЦС не найдены")
-    # Пересчёт не начнётся, пока идёт другая задача: проверяем до удаления,
-    # иначе данные исчезли бы, а снапшот остался посчитанным по ним.
-    reject_if_running(db, AdJob)
-    domain_id = row.domain_id
-    delete_ca_data(db, row)
-    snap = latest_snapshot(db, domain_id)
+    snap = latest_snapshot(db, row.domain_id)
     if snap is None:
+        reject_if_running(db, AdJob)
+        delete_ca_data(db, row)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Задача пересчёта занимается до удаления: идёт другая — 409, данные на месте;
+    # иначе данные исчезли бы, а снапшот остался посчитанным по ним. Сам пересчёт —
+    # фоновая задача, она начнётся после ответа, то есть уже после удаления.
     data_dir = settings.data_dir
     job_id = start_reanalyze(
         background_tasks, db, user, snap.id, job_model=AdJob, snapshot_model=AdSnapshot,
         reanalyze=lambda session, handle, s: reanalyze(session, handle, s, load_config(session), data_dir),
     )
+    try:
+        delete_ca_data(db, row)
+    except Exception:
+        db.rollback()
+        fail_job(db, AdJob, job_id, "данные ЦС не удалены")
+        raise
     return JobStarted(job_id=job_id)

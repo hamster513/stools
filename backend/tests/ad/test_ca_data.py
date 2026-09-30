@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import gzip
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from fastapi.testclient import TestClient
 from api.modules.ad.core.ca_data import CA_FORMAT, CaDataFormatError, parse_ca_data, sniff_format
 from api.modules.ad.core.checks import ANALYZER_VERSION
 from api.modules.ad.core.export import ExportFormatError, ExportIndex, load_export, load_export_path
-from api.modules.ad.models import AdCaData, AdDomain, AdSnapshot
+from api.modules.ad.models import AdCaData, AdDomain, AdJob, AdSnapshot
 from api.modules.ad.services.ca_data import delete_ca_data, effective_ca_data, store_ca_data
 from api.modules.ad.services.snapshots import snapshot_path
 from tests.ad.synthetic import DOMAIN_SID, NOW, build_ca_data, build_export
@@ -314,7 +315,45 @@ def test_delete_ca_data_reanalyzes_latest_snapshot(auth_client: TestClient, db_s
     assert job["status"] == "done" and job["kind"] == "reanalyze"
     assert auth_client.get(f"/api/ad/domains/{domain_id}/ca-data").json() == []
     assert db_session.get(AdSnapshot, snap_id).ca_data_id is None
+    # Только пересчёт возвращает причину «нужны данные ЦС»: с загрузкой её не было.
+    assert "пункт 5" in _unchecked(auth_client, domain_id, "ADCS_CA")
     assert auth_client.delete(f"/api/ad/ca-data/{ca_id}").status_code == 404
+
+
+def _unchecked(client: TestClient, domain_id: int, code: str) -> Any:
+    checks = client.get(f"/api/ad/domains/{domain_id}/overview").json()["checks"]
+    return next(c["unchecked"] for c in checks if c["code"] == code)
+
+
+def test_delete_ca_data_during_other_job_keeps_data(auth_client: TestClient, db_session: Any) -> None:
+    assert _upload(auth_client, build_export(), "ad.json")["status"] == "done"
+    assert _upload(auth_client, build_ca_data())["status"] == "done"
+    domain_id = auth_client.get("/api/ad/domains").json()[0]["id"]
+    ca_id = auth_client.get(f"/api/ad/domains/{domain_id}/ca-data").json()[0]["id"]
+    db_session.add(AdJob(kind="reanalyze", stage="pending", status="running", message="", started_by=TEST_LOGIN))
+    db_session.commit()
+    r = auth_client.delete(f"/api/ad/ca-data/{ca_id}")
+    assert r.status_code == 409, r.text
+    assert len(auth_client.get(f"/api/ad/domains/{domain_id}/ca-data").json()) == 1
+    assert _unchecked(auth_client, domain_id, "ADCS_CA") is None
+
+
+def test_failed_reanalyze_after_ca_upload_hides_internal_error_text(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    assert _upload(auth_client, build_export(), "ad.json")["status"] == "done"
+    domain_id = auth_client.get("/api/ad/domains").json()[0]["id"]
+    snap_id = auth_client.get(f"/api/ad/snapshots?domain_id={domain_id}").json()[0]["id"]
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("password=hunter2 at /srv/internal")
+
+    monkeypatch.setattr("api.modules.ad.routers.snapshots.reanalyze", broken)
+    with caplog.at_level(logging.ERROR, logger="stools.ad"):
+        job = _upload(auth_client, build_ca_data())
+    assert job["status"] == "failed"
+    assert job["error"] == f"данные ЦС сохранены, но снапшот #{snap_id} не пересчитан: RuntimeError"
+    assert any(r.name == "stools.ad" and r.exc_info and "hunter2" in str(r.exc_info[1]) for r in caplog.records)
 
 
 def test_ca_data_list_of_unknown_domain_is_404(auth_client: TestClient) -> None:

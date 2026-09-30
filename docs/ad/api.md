@@ -1,7 +1,6 @@
 # API модуля Active Directory
 
 Все ручки под `/api/ad`, требуют сессию платформы. Ошибки — `{"detail": "…"}`.
-Дизайн — `docs/superpowers/specs/2026-09-09-ad-module-design.md`.
 
 ## Домены и снапшоты
 
@@ -9,10 +8,19 @@
 GET  /domains                          [{id, sid, dns_root, netbios, dn, snapshots, last_snapshot_id, last_snapshot_at}]
 GET  /domains/{id}/overview            {domain, snapshot|null, compared_to, accepted_total,
                                         checks: [{code, title, description, total, by_severity, new, fixed, accepted, unchecked}]}
+                                        snapshot: {id, collected_at, source, collector, objects, findings,
+                                        by_severity, analyzer_version, stale_analysis}
                                         unchecked: null | причина — в выгрузке не было данных для проверки
                                         (SYSVOL не прочитан, нет дат входа, нет шаблонов); это не «без находок».
                                         Бывает и при total > 0: проверка проверена частично
-                                        (у ADCS_CA и ADCS_MAPPING — нет разделов данных ЦС)
+                                        (у ADCS_CA и ADCS_MAPPING — нет разделов данных ЦС или
+                                        сборщик прочитал ЦС и контроллер не целиком: причина называет,
+                                        какие ESC не проверены). В домене без AD CS (нет ни шаблонов,
+                                        ни ЦС) причин про данные ЦС нет: проверять нечего.
+                                        stale_analysis: снапшот посчитан прежней версией анализатора
+                                        (analyzer_version не текущая) — у каждой проверки без находок
+                                        и без своей причины unchecked «снапшот посчитан прежней
+                                        версией анализатора (<версия>) — пересчитайте»
 GET  /snapshots?domain_id              [{id, domain_id, collected_at, imported_at, source, collector, filename,
                                         objects, findings, by_severity, new, fixed, previous_id}]
 GET  /snapshots/{id}
@@ -23,21 +31,26 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 
 ## Данные центра сертификации
 
-Файл `stools-ad-ca/1` от PowerShell-сборщика (спека
-`docs/superpowers/specs/2026-09-30-adcs-esc-design.md`, §2) загружается той же
-ручкой `POST /snapshots/file`: формат определяется по полю `format`.
+Файл `stools-ad-ca/1` от PowerShell-сборщика (JSON, можно gzip; поля `format`,
+`collected_at`, `collector`, `domain: {sid, dns_root}`, `sections` и записи разделов:
+`cas` — `name, host, os_build, edit_flags, interface_flags, disable_extension_list,
+security` (дескриптор прав ЦС, base64), `dcs` — `host, strong_binding,
+mapping_methods`, `web` — `url, status, auth`; у каждой записи `error` — что
+сборщик не прочитал) загружается той же ручкой `POST /snapshots/file`: формат
+определяется по полю `format`.
 `stools-ad/1` — выгрузка домена (снапшот); `stools-ad-ca/*` — данные ЦС: домен
 ищется по `domain.sid` (нет — задача падает «сначала загрузите выгрузку
 домена»), данные сохраняются у домена, последний снапшот пересчитывается. Другая
 версия `stools-ad-ca/*` — отказ с текстом про формат. Пересчёт не удался —
 задача `failed`, но данные уже сохранены (текст начинается с «данные ЦС
-сохранены»).
+сохранены»; у ошибок не из данных — только имя класса ошибки, подробности в
+журнале сервера, логгер `stools.ad`).
 
 ```
 GET    /domains/{id}/ca-data           [{id, collected_at, imported_at, filename, uploaded_by,
                                         sections, cas, dcs, web}]   — cas/dcs/web: число записей
 DELETE /ca-data/{id}                   {job_id} 202 — пересчёт последнего снапшота без них;
-                                       204 — снапшотов домена нет
+                                       204 — снапшотов домена нет; 409 — идёт задача, данные не удалены
 ```
 
 Анализ берёт каждый раздел (`ca`, `dc`, `web`) из самой свежей по
@@ -61,6 +74,12 @@ ESC10 контроллер). В `details`: `esc`, `details` (текст); у ESC
 (`[{name, sid, kind, rights}]`, у владельца в `rights` — `owner`) и
 `principals_broad`; у шаблонов — `display_name`, `published`; у ESC9 —
 `binding`; у находок по данным ЦС — `ca_data_collected_at`, `ca_data_id`.
+
+ESC10: находка — `StrongCertificateBindingEnforcement` 0 или 1 либо бит UPN (0x4) в
+`CertificateMappingMethods`. Значения `StrongCertificateBindingEnforcement` в
+реестре нет — находки нет: на сборках контроллеров с обновлениями от февраля
+2025 это полный режим. На более старых сборках отсутствие значения означает
+режим совместимости — проверьте уровень обновлений контроллеров.
 
 ## Находки и вердикты
 
