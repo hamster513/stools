@@ -1,14 +1,19 @@
 """«Не проверено: нет данных» — пустая проверка отличается от непроверенной."""
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.modules.ad.core.ca_data import CaData, parse_ca_data
+from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
+from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
 from api.modules.ad.core.checks.coverage import coverage_gaps
-from api.modules.ad.core.export import load_export
+from api.modules.ad.core.config import AdConfig
+from api.modules.ad.core.export import ExportIndex, load_export
 from tests.ad.synthetic import build_ca_data, build_export
 
 FULL_CA = parse_ca_data(build_ca_data())
@@ -94,6 +99,57 @@ def test_ca_reasons_join_with_esc5_reason() -> None:
 def test_unread_ca_is_a_reason() -> None:
     ca = parse_ca_data(build_ca_data(cas=[{"name": "CORP-CA", "host": "ca01.corp.local", "error": "доступ запрещён"}]))
     assert _gaps(build_export(), ca) == {"ADCS_CA": "ЦС CORP-CA: данные не прочитаны (доступ запрещён)"}
+
+
+def test_domain_without_adcs_has_no_ca_data_reasons() -> None:
+    """Нет ни шаблонов, ни ЦС — в домене нет AD CS: проверкам ЦС и привязки проверять нечего."""
+    raw = build_export()
+    raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pKICertificateTemplate", "pKIEnrollmentService")]
+    assert set(_gaps(raw, None)) == {"ADCS_ESC"}
+
+
+def test_templates_without_ca_objects_still_need_ca_data() -> None:
+    raw = build_export()
+    raw["objects"] = [o for o in raw["objects"] if o["class"] != "pKIEnrollmentService"]
+    assert set(_gaps(raw, None)) == {"ADCS_CA", "ADCS_MAPPING"}
+
+
+def test_ca_object_without_templates_still_needs_ca_data() -> None:
+    raw = build_export()
+    raw["objects"] = [o for o in raw["objects"] if o["class"] != "pKICertificateTemplate"]
+    assert set(_gaps(raw, None)) == {"ADCS_ESC", "ADCS_CA", "ADCS_MAPPING"}
+
+
+def _ca_entry(**fields: Any) -> dict[str, Any]:
+    return {**build_ca_data()["cas"][0], **fields}
+
+
+@pytest.mark.parametrize("security", ["!!!", base64.b64encode(b"garbage").decode()])
+def test_broken_ca_security_is_a_reason(security: str) -> None:
+    ca = parse_ca_data(build_ca_data(cas=[_ca_entry(security=security), _ca_entry(name="CORP-CA2")]))
+    assert _gaps(build_export(), ca) == {"ADCS_CA": "ЦС CORP-CA: дескриптор прав не разобран"}
+
+
+def test_unread_dc_is_a_reason() -> None:
+    dcs = [{"host": "dc01.corp.local", "error": "нет доступа к реестру"}, {"host": "dc02.corp.local", "strong_binding": 2, "mapping_methods": 0x18}]
+    gaps = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
+    assert gaps == {"ADCS_MAPPING": "контроллер dc01.corp.local: реестр не прочитан (нет доступа к реестру)"}
+
+
+def test_unchecked_web_is_a_reason() -> None:
+    web = [{"url": "http://ca01.corp.local/certsrv/", "error": "таймаут"}]
+    gaps = _gaps(build_export(), parse_ca_data(build_ca_data(web=web)))
+    assert gaps == {"ADCS_CA": "веб-выдача http://ca01.corp.local/certsrv/: не проверена (таймаут)"}
+
+
+def test_records_with_data_and_error_are_checked() -> None:
+    dcs = [{"host": "dc01.corp.local", "strong_binding": 0, "error": "CertificateMappingMethods не прочитан"}]
+    web = [{"url": "http://ca01.corp.local/certsrv/", "status": 401, "auth": ["NTLM"], "error": "сертификат не проверен"}]
+    ca = parse_ca_data(build_ca_data(dcs=dcs, web=web))
+    idx = ExportIndex(load_export(json.dumps(build_export()).encode()), ca)
+    assert [f.key_extra for f in check_adcs_mapping(idx, AdConfig())] == ["ESC10"]
+    assert [f.key_extra for f in check_adcs_ca(idx, AdConfig())] == ["ESC8"]
+    assert _gaps(build_export(), ca) == {}
 
 
 def _upload(client: TestClient, raw: dict[str, Any]) -> dict[str, Any]:

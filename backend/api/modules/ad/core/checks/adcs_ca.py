@@ -3,6 +3,7 @@ ESC6, 7, 8, 11, 16 по данным ЦС (`stools-ad-ca/1`)."""
 from __future__ import annotations
 
 import base64
+import struct
 
 from api.modules.ad.core import sd
 from api.modules.ad.core.ca_data import CaAuthority, WebEndpoint
@@ -52,6 +53,20 @@ def unread(ca: CaAuthority) -> bool:
     return bool(ca.error) and ca.edit_flags is None and ca.interface_flags is None and ca.security is None and not ca.disable_extension_list
 
 
+def ca_descriptor(ca: CaAuthority) -> SecurityDescriptor | None:
+    """Дескриптор прав ЦС; нет его или он не разобран (не base64, битые байты) — None."""
+    if not ca.security:
+        return None
+    try:
+        return sd.parse_sd(base64.b64decode(ca.security, validate=True))
+    except (ValueError, struct.error, IndexError):  # binascii.Error — подкласс ValueError
+        return None
+
+
+def broken_security(ca: CaAuthority) -> bool:
+    return bool(ca.security) and ca_descriptor(ca) is None
+
+
 def _ca_managers(idx: ExportIndex, cfg: AdConfig, desc: SecurityDescriptor) -> list[Writer]:
     """Небезопасные субъекты с ManageCA или ManageCertificates в разрешающих ACE за вычетом запретов того же SID."""
     denied = denials(desc, lambda a: a.mask & CA_MANAGE_MASK)
@@ -76,8 +91,9 @@ def _esc_by_ca(idx: ExportIndex, cfg: AdConfig, ca: CaAuthority) -> list[Finding
     if ca.edit_flags is not None and ca.edit_flags & EDITF_ATTRIBUTESUBJECTALTNAME2:
         text = "EDITF_ATTRIBUTESUBJECTALTNAME2: SAN в запросе; после обновлений мая 2022 эксплуатируется вместе со слабой привязкой (ESC9/ESC10/ESC16)"
         out.append(_finding(cfg, "ESC6", "High", ca.name, {"details": text, **base}))
-    if ca.security:
-        managers = _ca_managers(idx, cfg, sd.parse_sd(base64.b64decode(ca.security)))
+    desc = ca_descriptor(ca)
+    if desc is not None:
+        managers = _ca_managers(idx, cfg, desc)
         if managers:
             severity, common = writers_details(idx, managers, "право управлять ЦС (ManageCA) или выдавать и отзывать сертификаты (ManageCertificates)", "High")
             granted = {r for _, _, rights in managers for r in rights}

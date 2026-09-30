@@ -6,6 +6,7 @@ import datetime as dt
 import json
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.modules.ad.core import sd
@@ -160,6 +161,8 @@ def test_ca_findings_carry_section_date_and_source() -> None:
 def test_ca_findings_fall_back_to_file_date() -> None:
     fs = run_ca(cas=ca_entry(edit_flags=0x40000))
     assert fs[0].details["ca_data_collected_at"] == NOW.isoformat() and "ca_data_id" not in fs[0].details
+    naive = run_ca(cas=ca_entry(edit_flags=0x40000), collected_at=NOW.replace(tzinfo=None).isoformat())
+    assert naive[0].details["ca_data_collected_at"] == NOW.isoformat() and NOW.isoformat().endswith("+00:00")
 
 
 def ca_security(*aces: bytes) -> str:
@@ -240,6 +243,14 @@ def test_esc16_security_extension_disabled() -> None:
 
 def test_esc16_not_for_other_extensions() -> None:
     assert run_ca(cas=ca_entry(disable_extension_list=["1.3.6.1.4.1.311.21.7"])) == []
+
+
+@pytest.mark.parametrize("security", ["!!!", base64.b64encode(b"garbage").decode()])
+def test_broken_ca_security_skips_esc7_only_for_that_ca(security: str) -> None:
+    broad = ca_security(sd.build_ace("S-1-5-11", MANAGE_CA))
+    cas = [*ca_entry(security=security, edit_flags=0x40000), *ca_entry(name="CORP-CA2", security=broad)]
+    fs = run_ca(cas=cas)
+    assert sorted((f.target, f.key_extra) for f in fs) == [("CORP-CA", "ESC6"), ("CORP-CA2", "ESC7")]
 
 
 def test_unread_ca_gives_no_findings() -> None:
