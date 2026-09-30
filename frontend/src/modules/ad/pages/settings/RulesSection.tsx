@@ -11,6 +11,8 @@ const AREA = FIELD + ' font-mono text-xs min-h-[72px]'
 
 function lines(v: string[]): string { return v.join('\n') }
 function parseLines(s: string): string[] { return s.split('\n').map((x) => x.trim()).filter(Boolean) }
+function rids(v: number[]): string { return v.join(', ') }
+function parseRids(s: string): number[] { return s.split(/[\s,]+/).filter(Boolean).map(Number).filter(Number.isInteger) }
 
 /** Правила проверок — то, что в прототипе лежало в AD_audit.config.json. */
 export function RulesSection({ settings }: { settings: SettingsView }) {
@@ -19,7 +21,9 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
   const save = useSaveAdSettings()
   const [cfg, setCfg] = useState<AdConfig>(settings.config)
   const [dirty, setDirty] = useState(false)
-  useEffect(() => { setCfg(settings.config); setDirty(false) }, [settings.config])
+  // RID вводятся через запятую: текст держим отдельно, иначе запятая в конце стиралась бы при вводе.
+  const [ridsText, setRidsText] = useState(rids(settings.config.adcs_safe_rids))
+  useEffect(() => { setCfg(settings.config); setRidsText(rids(settings.config.adcs_safe_rids)); setDirty(false) }, [settings.config])
   const patch = (p: Partial<AdConfig>) => { setDirty(true); setCfg((c) => ({ ...c, ...p })) }
 
   return (
@@ -56,11 +60,20 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
             </tbody>
           </table>
         </div>
+        <div className="md:col-span-2">
+          <div className="text-xs font-medium text-text">AD CS: безопасные заявители</div>
+          <p className="mb-2 text-xs text-text-secondary">Все остальные субъекты с правом Enroll считаются заявителями под вопросом.</p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="SID" hint="По одному в строке"><textarea className={AREA} value={lines(cfg.adcs_safe_sids)} onChange={(e) => patch({ adcs_safe_sids: parseLines(e.target.value) })} disabled={!write} /></Field>
+            <Field label="RID доменов своего леса" hint="Числа через запятую"><textarea className={AREA} value={ridsText} onChange={(e) => { setRidsText(e.target.value); patch({ adcs_safe_rids: parseRids(e.target.value) }) }} spellCheck={false} disabled={!write} /></Field>
+            <Field label="Имена групп" hint="По одному в строке; свои группы администраторов ЦС"><textarea className={AREA} value={lines(cfg.adcs_safe_principals)} onChange={(e) => patch({ adcs_safe_principals: parseLines(e.target.value) })} disabled={!write} /></Field>
+          </div>
+        </div>
       </div>
       {write && (
         <div className="mt-4 flex items-center gap-2 border-t border-grid pt-3">
           <Button variant="primary" onClick={() => save.mutate(cfg, { onSuccess: () => setDirty(false) })} loading={save.isPending} disabled={!dirty}><Save size={13} aria-hidden /> Сохранить</Button>
-          <Button onClick={() => { setDirty(true); setCfg(settings.defaults) }}><RotateCcw size={13} aria-hidden /> По умолчанию</Button>
+          <Button onClick={() => { setDirty(true); setCfg(settings.defaults); setRidsText(rids(settings.defaults.adcs_safe_rids)) }}><RotateCcw size={13} aria-hidden /> По умолчанию</Button>
           {save.error && <span className="text-xs text-kind-1">{save.error instanceof ApiRequestError ? save.error.message : 'Не удалось сохранить'}</span>}
         </div>
       )}

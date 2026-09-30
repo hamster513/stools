@@ -4,6 +4,7 @@ import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
 import type {
   AdConfig,
+  CaData,
   Connection,
   ConnectionIn,
   Domain,
@@ -19,7 +20,7 @@ import type {
 export const FINDINGS_PAGE_SIZE = 200
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
-  for (const key of ['ad-domains', 'ad-snapshots', 'ad-overview', 'ad-findings', 'ad-finding', 'ad-connections', 'ad-jobs']) {
+  for (const key of ['ad-domains', 'ad-snapshots', 'ad-overview', 'ad-findings', 'ad-finding', 'ad-connections', 'ad-jobs', 'ad-ca-data']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -112,6 +113,26 @@ export function useDeleteSnapshot() {
   return useMutation<void, ApiRequestError, number>({
     mutationFn: (id) => api.del(`/api/ad/snapshots/${id}`),
     onSuccess: () => invalidateAll(qc),
+  })
+}
+
+export function useCaData(domainId: number | undefined) {
+  return useQuery<CaData[], ApiRequestError>({
+    queryKey: ['ad-ca-data', domainId],
+    queryFn: () => api.get(`/api/ad/domains/${domainId}/ca-data`),
+    enabled: domainId !== undefined,
+  })
+}
+
+/** 202 — пересчёт последнего снапшота запущен; 204 (undefined) — снапшотов домена нет. */
+export function useDeleteCaData() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number } | undefined, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/ad/ca-data/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['ad-ca-data'] })
+      qc.invalidateQueries({ queryKey: ['ad-jobs'] })
+    },
   })
 }
 

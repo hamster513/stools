@@ -1,6 +1,7 @@
 import { useAdSettings } from '@/modules/ad/api/queries'
 import { useCan } from '@/lib/can'
 import { ModuleSettingsPage } from '@/platform/collector/SettingsPage'
+import { CaDataSection } from './settings/CaDataSection'
 import { CollectorScript } from './settings/CollectorScript'
 import { ExportUpload } from './settings/ExportUpload'
 import { ConnectionsSection } from './settings/ConnectionsSection'
@@ -17,6 +18,7 @@ export function SettingsPage() {
         <>
           <CollectorScript />
           {write && <ExportUpload />}
+          <CaDataSection />
           <ConnectionsSection />
           <RulesSection settings={data} />
         </>

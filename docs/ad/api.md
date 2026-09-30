@@ -10,7 +10,9 @@ GET  /domains                          [{id, sid, dns_root, netbios, dn, snapsho
 GET  /domains/{id}/overview            {domain, snapshot|null, compared_to, accepted_total,
                                         checks: [{code, title, description, total, by_severity, new, fixed, accepted, unchecked}]}
                                         unchecked: null | причина — в выгрузке не было данных для проверки
-                                        (SYSVOL не прочитан, нет дат входа, нет шаблонов); это не «без находок»
+                                        (SYSVOL не прочитан, нет дат входа, нет шаблонов); это не «без находок».
+                                        Бывает и при total > 0: проверка проверена частично
+                                        (у ADCS_CA и ADCS_MAPPING — нет разделов данных ЦС)
 GET  /snapshots?domain_id              [{id, domain_id, collected_at, imported_at, source, collector, filename,
                                         objects, findings, by_severity, new, fixed, previous_id}]
 GET  /snapshots/{id}
@@ -44,6 +46,21 @@ DELETE /ca-data/{id}                   {job_id} 202 — пересчёт пос�
 в `sections` — берётся из более ранней загрузки. Записи раздела, не указанного
 в `sections`, и неизвестный раздел — отказ разбора. `collected_at` без пояса
 считается UTC.
+
+### Проверки AD CS
+
+| Код | Что | Данные |
+|---|---|---|
+| `ADCS_ESC` | шаблоны сертификатов: ESC1–4, 9, 13, 15 | снапшот (ESC9 — серьёзность по разделу `dc`) |
+| `ADCS_CA` | центр сертификации: ESC5–8, 11, 16 (ESC12 удалённо не определяется) | ESC5 — снапшот; 6, 7, 11, 16 — раздел `ca`; 8 — `web` |
+| `ADCS_MAPPING` | привязка сертификатов к учётным записям: ESC10, 14 | ESC10 — раздел `dc`; 14 — снапшот |
+
+Ключ находки — код ESC и объект (у шаблона `cn`, у ЦС имя, у ESC8 URL, у
+ESC10 контроллер). В `details`: `esc`, `details` (текст); у ESC на выпуск —
+`requesters`, `requesters_broad`; у ESC4/ESC5 — `principals`
+(`[{name, sid, kind, rights}]`, у владельца в `rights` — `owner`) и
+`principals_broad`; у шаблонов — `display_name`, `published`; у ESC9 —
+`binding`; у находок по данным ЦС — `ca_data_collected_at`, `ca_data_id`.
 
 ## Находки и вердикты
 
@@ -84,6 +101,16 @@ GET  /jobs  GET /jobs/{id}  POST /jobs/{id}/cancel
 ```
 
 `kind` задач: `import_file | collect | reanalyze`.
+
+Правило заявителя AD CS (поля `AdConfig`): безопасны только перечисленные
+субъекты, любой другой с правом Enroll (или записи на объект PKI) — заявитель
+под вопросом; `low_priv_*` задают «широкие» группы, у них серьёзность выше.
+
+- `adcs_safe_sids` — SID (по умолчанию `S-1-5-18`, `S-1-5-32-544`, `S-1-5-9`);
+- `adcs_safe_rids` — RID доменов своего леса: свой домен и доверия внутри леса
+  (по умолчанию 500, 512, 516, 518, 519, 498, 521, 517);
+- `adcs_safe_principals` — имена или SID своих групп администраторов ЦС
+  (по умолчанию пусто).
 
 ## ATT&CK
 

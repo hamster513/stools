@@ -11,11 +11,13 @@ import { Section } from './ui'
  * Загрузка файла выгрузки: зона для перетаскивания и ход задачи импорта.
  * useJob — хук модуля: задачу он опрашивает по номеру, который вернула загрузка.
  */
-export function CollectorExportUpload({ upload, useJob, fileError, about }: {
+export function CollectorExportUpload({ upload, useJob, fileError, about, label }: {
   upload: UseMutationResult<{ job_id: number }, ApiRequestError, File>
   useJob: (jobId: number | undefined) => UseQueryResult<Job, ApiRequestError>
   fileError: string
   about: string
+  /** Подпись над зоной для файла: что в неё можно положить. */
+  label?: string
 }) {
   const [dragOver, setDragOver] = useState(false)
   const [jobId, setJobId] = useState<number | undefined>()
@@ -35,7 +37,8 @@ export function CollectorExportUpload({ upload, useJob, fileError, about }: {
 
   return (
     <Section title="Загрузить выгрузку" about={about}>
-      <div onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={onDrop} onClick={() => !busy && inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !busy) inputRef.current?.click() }} aria-label="Выбрать файл выгрузки" className={cn('flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed px-6 py-10 text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', dragOver ? 'border-primary bg-primary/5' : 'border-grid bg-surface', busy ? 'cursor-default opacity-80' : 'cursor-pointer hover:border-border')}>
+      {label && <div className="mb-1 text-xs font-medium text-text">{label}</div>}
+      <div onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={onDrop} onClick={() => !busy && inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !busy) inputRef.current?.click() }} aria-label={label ?? 'Выбрать файл выгрузки'} className={cn('flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed px-6 py-10 text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', dragOver ? 'border-primary bg-primary/5' : 'border-grid bg-surface', busy ? 'cursor-default opacity-80' : 'cursor-pointer hover:border-border')}>
         <input ref={inputRef} type="file" accept=".json,.gz" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = '' }} />
         {!busy && job.data?.status !== 'done' && <><UploadCloud size={28} strokeWidth={1.5} className="text-text-secondary" aria-hidden /><div className="text-sm text-text">Перетащите файл сюда или нажмите, чтобы выбрать</div></>}
         {busy && <div className="w-full max-w-sm"><FileText size={28} strokeWidth={1.5} className="mx-auto mb-3 text-text-secondary" aria-hidden /><div className="text-xs text-text">{upload.isPending ? 'загрузка файла…' : `${STAGE_LABELS[job.data?.stage ?? ''] ?? job.data?.stage} — ${job.data?.message ?? ''}`}</div></div>}

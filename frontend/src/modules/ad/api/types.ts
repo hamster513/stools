@@ -58,6 +58,9 @@ export interface AdConfig {
   low_priv_groups: string[]
   low_priv_sids: string[]
   low_priv_rids: number[]
+  adcs_safe_sids: string[]
+  adcs_safe_rids: number[]
+  adcs_safe_principals: string[]
   sensitive_acl_scope: string
   sensitive_acl_search_base: string
   sensitive_acl_exclude_ous: string[]
@@ -70,6 +73,25 @@ export interface SettingsView {
   config: AdConfig
   defaults: AdConfig
   checks: { code: string; title: string; description: string }[]
+}
+
+/** Загрузка данных центра сертификации (stools-ad-ca/1); cas/dcs/web — число записей. */
+export interface CaData {
+  id: number
+  collected_at: string
+  imported_at: string
+  filename: string
+  uploaded_by: string
+  sections: string[]
+  cas: number
+  dcs: number
+  web: number
+}
+
+export const CA_SECTION_LABELS: Record<string, string> = {
+  ca: 'настройки и права ЦС',
+  dc: 'реестр контроллеров',
+  web: 'веб-выдача',
 }
 
 export interface Connection {

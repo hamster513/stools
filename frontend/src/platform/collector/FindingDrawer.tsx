@@ -13,6 +13,13 @@ import { STATUS_LABELS, type FindingBase, type FindingDetail } from './types'
 function fmt(v: unknown, key = ''): string {
   if (v === null || v === undefined || v === '') return '—'
   if (typeof v === 'boolean') return v ? 'да' : 'нет'
+  // Субъекты с правами (principals у AD CS) — «имя — права», по одному в строке.
+  if (Array.isArray(v) && v.some((x) => x !== null && typeof x === 'object')) {
+    return v.map((x) => {
+      const p = x as { name?: unknown; rights?: unknown }
+      return p && typeof p === 'object' && 'name' in p ? `${fmt(p.name)} — ${fmt(p.rights)}` : fmt(x)
+    }).join('\n')
+  }
   if (Array.isArray(v)) return v.map(String).join(key === 'samples' ? '\n' : ', ')
   if (typeof v === 'object') return Object.entries(v).map(([k, x]) => `${k}: ${fmt(x)}`).join(', ')
   return String(v)
