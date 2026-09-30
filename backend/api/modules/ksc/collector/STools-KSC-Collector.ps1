@@ -76,7 +76,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $FormatVersion = "stools-ksc/1"
-$CollectorVersion = "1.0"
+$CollectorVersion = "1.1"
 #: Имя секции или ключ на любой глубине её параметров с одним из этих слов (подстрокой, без учёта
 #: регистра) — всё поддерево под ним в режиме скрытия: строки → "<скрыто>", ключи остаются; двоичные
 #: значения скрываются всегда (см. Hide-Value). Список совпадает с SECRET_MARKERS в
@@ -186,7 +186,15 @@ namespace STools {
 $base = "{0}://{1}:{2}/api/v1.0/" -f $Scheme, $Server, $Port
 $script:session = $null
 
-function Write-Step([string]$text) { Write-Host ("  " + $text) -ForegroundColor Cyan }
+# Ход работы: у каждой строки — время от начала сбора. Строка без отступа открывает шаг (его имя
+# попадёт в сообщение об ошибке), с отступом — уточняет текущий: счётчик или итог шага.
+$script:started = Get-Date
+$script:stage = ""
+function Write-Step([string]$text) {
+  if (-not $text.StartsWith(" ")) { $script:stage = $text }
+  $t = (Get-Date) - $script:started
+  Write-Host ("  [{0:00}:{1:00}] {2}" -f [int][math]::Floor($t.TotalMinutes), $t.Seconds, $text) -ForegroundColor Cyan
+}
 
 function B64([string]$s) { return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
 
@@ -209,7 +217,9 @@ function Test-SecretMarker([string]$name) {
 # Типизированное значение KSC: @{ type = <вид>; value = ... } — ровно два свойства, type — строка.
 function Test-TypedWrapper($v) {
   if ($null -eq $v -or $v -isnot [System.Management.Automation.PSCustomObject]) { return $false }
-  $names = @($v.PSObject.Properties.Name)
+  # Не `.Properties.Name`: в строгом режиме перечисление свойства у пустого набора — ошибка, а пустой
+  # объект `{}` в параметрах задач и политик встречается (задача без расписания).
+  $names = @($v.PSObject.Properties | ForEach-Object { $_.Name })
   return ($names.Count -eq 2) -and ($names -contains "type") -and ($names -contains "value") -and ($v.type -is [string])
 }
 # Обход поддерева с режимом скрытия. Ключ с признаком секрета включает режим для всего, что под ним.
@@ -417,10 +427,12 @@ try {
     Write-Step "Группы"
     $ga = (Invoke-Ksc "HostGroup.FindGroups" @{ wstrFilter = ""; vecFieldsToReturn = $GroupFields; vecFieldsToOrder = @(); lMaxLifeTime = 600 }).strAccessor
     $groups = Read-Accessor $ga
+    Write-Step ("  Группы: {0}" -f $groups.Count)
 
     Write-Step "Хосты"
     $ha = (Invoke-Ksc "HostGroup.FindHosts" @{ wstrFilter = ""; vecFieldsToReturn = $HostFields; vecFieldsToOrder = @(); pParams = @{ KLGRP_FIND_FROM_CUR_VS_ONLY = $true }; lMaxLifeTime = 600 }).strAccessor
     $hosts = Read-Accessor $ha
+    Write-Step ("  Хосты: {0}" -f $hosts.Count)
 
     $products = @{}
     $components = @{}
@@ -454,6 +466,7 @@ try {
 
     Write-Step "Политики"
     $policies = @((Prop (Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ })
+    Write-Step ("  Политики: {0}" -f $policies.Count)
     $effective = @{}
     foreach ($g in $groups) {
       $gid = AsInt (Prop (Unwrap $g) "id")
@@ -470,6 +483,7 @@ try {
         $product = [string](Prop $pv "KLPOL_PRODUCT")
         if ($product -in @("1103", "1093")) { continue }   # не продукт защиты (агент, сервер)
         $policyCount++
+        if ($policyCount % 10 -eq 0) { Write-Step ("  политик прочитано: {0}" -f $policyCount) }
         $npolicy = AsInt (Prop $pv "KLPOL_ID")
         $version = [string](Prop $pv "KLPOL_VERSION")
         if ($policyCount -gt $PolicyContentsMaxPolicies) {
@@ -509,22 +523,37 @@ try {
 
     Write-Step "Задачи"
     $tasks = New-Object System.Collections.ArrayList
-    $it = (Invoke-Ksc "Tasks.ResetTasksIterator" @{ nGroupId = -1; bGroupIdSignificant = $false; strProductName = ""; strVersion = ""; strComponentName = ""; strInstanceId = ""; strTaskName = ""; bIncludeSupergroups = $false }).strTaskIteratorId
-    while ($true) {
-      $t = Prop (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }) "pTaskData"
-      if ($null -eq $t -or @($t.PSObject.Properties).Count -eq 0) { break }
-      $tid = [string](Prop (Unwrap $t) "TASK_UNIQUE_ID")
-      # Статистика кладётся в сам объект задачи: у живого KSC он приходит в обёртке @{ type = "params"; value = ... },
-      # и лишнее свойство рядом с type/value перестало бы быть обёрткой — задача потерялась бы при разборе.
-      if ($tid) { try { (Unwrap $t) | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Prop (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }) "PxgRetVal") -Force } catch {} }
-      # Параметры задачи несут и учётные данные запуска: то же скрытие, что у содержимого политик.
-      $taskBody = Unwrap $t
-      foreach ($k in @("TASK_ADDITIONAL_PARAMS", "TASK_INFO_PARAMS")) {
-        if ($taskBody.PSObject.Properties[$k]) { $hiddenParams = Hide-Secrets "" $taskBody.$k; $taskBody.$k = $hiddenParams }
+    # Задачи не повод терять собранные хосты: отказ на шаге — предупреждение, выгрузка пишется без задач.
+    try {
+      $it = (Invoke-Ksc "Tasks.ResetTasksIterator" @{ nGroupId = -1; bGroupIdSignificant = $false; strProductName = ""; strVersion = ""; strComponentName = ""; strInstanceId = ""; strTaskName = ""; bIncludeSupergroups = $false }).strTaskIteratorId
+      try {
+        while ($true) {
+          $t = Prop (Invoke-Ksc "Tasks.GetNextTask" @{ strTaskIteratorId = $it }) "pTaskData"
+          if ($null -eq $t -or @($t.PSObject.Properties).Count -eq 0) { break }
+          $tid = [string](Prop (Unwrap $t) "TASK_UNIQUE_ID")
+          # Статистика кладётся в сам объект задачи: у живого KSC он приходит в обёртке @{ type = "params"; value = ... },
+          # и лишнее свойство рядом с type/value перестало бы быть обёрткой — задача потерялась бы при разборе.
+          if ($tid) { try { (Unwrap $t) | Add-Member -NotePropertyName "statistics" -NotePropertyValue (Prop (Invoke-Ksc "Tasks.GetTaskStatistics" @{ strTask = $tid }) "PxgRetVal") -Force } catch {} }
+          # Параметры задачи несут и учётные данные запуска: то же скрытие, что у содержимого политик.
+          # Не разобрались — параметры в файл не идут вовсе: неразобранное могло бы унести секрет.
+          $taskBody = Unwrap $t
+          foreach ($k in @("TASK_ADDITIONAL_PARAMS", "TASK_INFO_PARAMS")) {
+            if ($taskBody.PSObject.Properties[$k]) {
+              try { $hiddenParams = Hide-Secrets "" $taskBody.$k; $taskBody.$k = $hiddenParams }
+              catch {
+                $taskBody.$k = "<не разобрано>"
+                Write-Warning ("задача {0}, {1}: {2}" -f $tid, $k, $_.Exception.Message); [void]$warnings.Add("задача $($tid), $($k): $($_.Exception.Message)")
+              }
+            }
+          }
+          [void]$tasks.Add($t)
+          if ($tasks.Count % 50 -eq 0) { Write-Step ("  задач прочитано: {0}" -f $tasks.Count) }
+        }
+      } finally {
+        try { Invoke-Ksc "Tasks.ReleaseTasksIterator" @{ strTaskIteratorId = $it } | Out-Null } catch {}
       }
-      [void]$tasks.Add($t)
-    }
-    Invoke-Ksc "Tasks.ReleaseTasksIterator" @{ strTaskIteratorId = $it } | Out-Null
+    } catch { Write-Warning ("задачи: {0}" -f $_.Exception.Message); [void]$warnings.Add("задачи: $($_.Exception.Message)") }
+    Write-Step ("  Задачи: {0}" -f $tasks.Count)
 
     Write-Step "Лицензии"
     $licenses = New-Object System.Collections.ArrayList
@@ -539,6 +568,7 @@ try {
       }
       Invoke-Ksc "GroupSyncIterator.ReleaseIterator" @{ szwIterator = $li } | Out-Null
     }
+    Write-Step ("  Лицензии: {0}" -f $licenses.Count)
 
     Write-Step "Роли и внутренние учётки"
     $roleAssignments = @()
@@ -622,6 +652,15 @@ try {
     try { Remove-Item -LiteralPath $ConfigPath -Force; Write-Host "Файл настроек удалён: $ConfigPath" }
     catch { Write-Warning ("файл настроек не удалён ({0}): удалите его вручную" -f $_.Exception.Message) }
   }
+} catch {
+  # Где оборвалось: шаг, строка скрипта и стек — чтобы отказ можно было разобрать по одному выводу.
+  Write-Host ""
+  Write-Host ("Сбор прерван на шаге «{0}»: {1}" -f $script:stage, $_.Exception.Message) -ForegroundColor Red
+  $pos = $_.InvocationInfo
+  if ($pos -and $pos.ScriptLineNumber) { Write-Host ("  строка {0}: {1}" -f $pos.ScriptLineNumber, ([string]$pos.Line).Trim()) -ForegroundColor Red }
+  if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
+  Write-Host "Файл выгрузки не записан." -ForegroundColor Red
+  throw
 } finally {
   if ($tlsHook) { [STools.KscTls]::Restore() }
 }

@@ -74,6 +74,8 @@ def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, objec
             cmd = [*docker, *mounts, "-ConfigPath", "/out/config.json", *extra_args]
         run = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
         assert (run.returncode == 0) is expect_ok, run.stdout + run.stderr
+        # Вывод скрипта — рядом с каталогом прогона, не в нём: тесты считают файлы каталога.
+        (tmp_path / f"{out.name}.console.txt").write_text(run.stdout + run.stderr, encoding="utf-8")
     finally:
         server.terminate()
     return out / "ksc.json.gz"
@@ -453,3 +455,41 @@ def test_init_config_aborts_when_permissions_cannot_be_set(tmp_path: Path) -> No
     assert run.returncode != 0, run.stdout + run.stderr
     assert "Не удалось закрыть доступ к файлу настроек" in run.stdout + run.stderr
     assert "Шаблон записан" not in run.stdout
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_survives_empty_objects_in_tasks_and_policies(tmp_path: Path) -> None:
+    """Регресс: пустой объект `{}` в параметрах задачи ронял сбор на шаге «Задачи» (строгий режим,
+    `.Properties.Name` у объекта без свойств), а в секции политики молча превращался в ошибку секции."""
+    path = _run_script(tmp_path, 18360, "empty_objects")
+    export = load_export(path.read_bytes())
+    assert len(export.tasks) == 2
+    first = next(t for t in export.tasks if "TASK_ADDITIONAL_PARAMS" in t)
+    assert first["TASK_ADDITIONAL_PARAMS"] == {"Mode": "full", "Schedule": {}, "Nested": {"Inner": {}, "Items": [{}]}}
+    assert any(t["TASK_INFO_PARAMS"].get("Extra") == {} for t in export.tasks)
+    policy = export.policy_contents["1"]
+    assert policy["sections"]["KLPRSS_Empty"] == {"Settings": {}, "Enabled": True} and policy["errors"] == []
+    assert export.server.warnings == []
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_keeps_the_export_when_tasks_fail(tmp_path: Path) -> None:
+    """Задачи — не повод терять собранные хосты: отказ на шаге уходит в предупреждения."""
+    path = _run_script(tmp_path, 18361, "tasks_failed")
+    export = load_export(path.read_bytes())
+    assert export.tasks == [] and len(export.hosts) == len(build_export()["hosts"])
+    assert any(w.startswith("задачи:") for w in export.server.warnings)
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_reports_progress_and_where_it_failed(tmp_path: Path) -> None:
+    """Ход работы виден по шагам со счётчиками, а отказ называет шаг и строку скрипта."""
+    _run_script(tmp_path, 18362, "")
+    console = (tmp_path / "default.console.txt").read_text(encoding="utf-8")
+    for line in ("Хосты: 14", "Политики: 3", "Задачи: 2", "Лицензии: 1"):
+        assert line in console, console
+    assert re.search(r"\[\d\d:\d\d\]", console), console   # время от начала у каждого шага
+    failed = _run_script(tmp_path, 18363, "hosts_failed", expect_ok=False)
+    console = (tmp_path / "hosts_failed.console.txt").read_text(encoding="utf-8")
+    assert "Сбор прерван на шаге «Хосты»" in console and re.search(r"строка \d+", console), console
+    assert not failed.exists()

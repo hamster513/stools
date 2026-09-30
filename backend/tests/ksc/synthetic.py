@@ -357,3 +357,13 @@ def add_ws02_twin(raw: dict[str, Any]) -> dict[str, Any]:
 
 def export_bytes(**kwargs: Any) -> bytes:
     return json.dumps(build_export(**kwargs), ensure_ascii=False).encode("utf-8")
+
+
+def add_empty_objects(raw: dict[str, Any]) -> dict[str, Any]:
+    """Пустые объекты `{}` в параметрах задач и в секции политики: живой KSC отдаёт их у задач без
+    расписания и у пустых наборов настроек. В строгом режиме PowerShell перечисление свойств пустого
+    объекта через `.Properties.Name` — ошибка: сбор падал на шаге «Задачи»."""
+    raw["tasks"][0]["TASK_ADDITIONAL_PARAMS"] = {"Mode": "full", "Schedule": {}, "Nested": {"Inner": {}, "Items": [{}]}}
+    raw["tasks"][1]["TASK_INFO_PARAMS"]["Extra"] = {}
+    raw["policy_contents"]["1"]["sections"]["KLPRSS_Empty"] = {"Settings": {}, "Enabled": True}
+    return raw

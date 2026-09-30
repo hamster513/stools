@@ -16,7 +16,12 @@ from typing import Any
 
 import httpx
 
-from tests.ksc.synthetic import add_inactive_policy, add_secret_bait, build_export
+from tests.ksc.synthetic import (
+    add_empty_objects,
+    add_inactive_policy,
+    add_secret_bait,
+    build_export,
+)
 
 USER = "audit"
 PASSWORD = "audit-pass"
@@ -99,6 +104,8 @@ class FakeKsc:
         if data is None and variant == "params":
             # KLPOL_ACTIVE как типизированный ноль — сборщики не должны читать его как безусловную правду.
             self.data = add_inactive_policy(self.data)
+        if data is None and variant == "empty_objects":
+            self.data = add_empty_objects(self.data)
         if data is None and variant == "secrets":
             # Секреты под новыми маркерами, двоичное значение, параметры задач, имя сервера с «/».
             self.data = add_secret_bait(self.data)
@@ -126,7 +133,8 @@ class FakeKsc:
         self.accessors: dict[str, list[dict[str, Any]]] = {}
         self.iterators: dict[str, list[dict[str, Any]]] = {}
         self.fail_login = False
-        self.fail_after: str | None = None  # имя метода, на котором отвечать PxgError
+        #: Имя метода, на котором отвечать PxgError; variant="tasks_failed" / "hosts_failed" — для прогона скрипта.
+        self.fail_after: str | None = {"tasks_failed": "Tasks.ResetTasksIterator", "hosts_failed": "HostGroup.FindHosts"}.get(variant)
 
     def _auth_ok(self, headers: dict[str, str]) -> bool:
         auth = headers.get("authorization", "")
