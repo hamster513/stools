@@ -8,7 +8,9 @@
 ```
 GET  /domains                          [{id, sid, dns_root, netbios, dn, snapshots, last_snapshot_id, last_snapshot_at}]
 GET  /domains/{id}/overview            {domain, snapshot|null, compared_to, accepted_total,
-                                        checks: [{code, title, description, total, by_severity, new, fixed, accepted}]}
+                                        checks: [{code, title, description, total, by_severity, new, fixed, accepted, unchecked}]}
+                                        unchecked: null | причина — в выгрузке не было данных для проверки
+                                        (SYSVOL не прочитан, нет дат входа, нет шаблонов); это не «без находок»
 GET  /snapshots?domain_id              [{id, domain_id, collected_at, imported_at, source, collector, filename,
                                         objects, findings, by_severity, new, fixed, previous_id}]
 GET  /snapshots/{id}

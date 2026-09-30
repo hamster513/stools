@@ -123,3 +123,11 @@ def test_timestamp_without_raw_bytes_is_converted_from_datetime() -> None:
     assert _filetime(entry, "lastLogonTimestamp") == int((moment - dt.datetime(1601, 1, 1, tzinfo=dt.UTC)).total_seconds()) * 10_000_000
     assert _filetime({"dn": "CN=u", "attributes": {}, "raw_attributes": {}}, "lastLogonTimestamp") is None
 
+
+def test_collector_notes_reach_the_coverage_reason() -> None:
+    from api.modules.ad.core.checks.coverage import coverage_gaps
+
+    fake = FakeLdap()
+    raw = LdapCollector(fake.search, fake.root_dse(), smb_reader=None, notes=["SYSVOL недоступен по SMB: ConnectionError"]).collect()
+    gaps = coverage_gaps(load_export(json.dumps(raw).encode()))
+    assert "ConnectionError" in gaps["UserRightsAssignment"]

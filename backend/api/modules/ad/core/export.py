@@ -161,6 +161,8 @@ class CollectorInfo(BaseModel):
     version: str = ""
     host: str = ""
     account: str = ""
+    #: Что сборщик не смог или не стал читать — попадает в «не проверено».
+    notes: list[str] = Field(default_factory=list)
 
 
 class Guids(BaseModel):

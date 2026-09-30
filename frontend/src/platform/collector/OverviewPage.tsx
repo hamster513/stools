@@ -50,7 +50,8 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
   const snap: Snap<O> = o.snapshot
   const cmp = o.compared_to
   const withFindings = o.checks.filter((c) => c.total > 0 || c.fixed > 0)
-  const clean = o.checks.filter((c) => c.total === 0 && c.fixed === 0)
+  const unchecked = o.checks.filter((c) => c.total === 0 && c.unchecked)
+  const clean = o.checks.filter((c) => c.total === 0 && c.fixed === 0 && !c.unchecked)
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -102,6 +103,14 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
           )
         })}
       </div>
+      {unchecked.length > 0 && (
+        <div className="mt-4 text-xs text-text-secondary">
+          <p className="text-kind-1">Не проверено — в выгрузке не было данных:</p>
+          <ul className="mt-1 space-y-0.5">
+            {unchecked.map((c) => <li key={c.code}><span className="text-text">{c.title}</span> — {c.unchecked}</li>)}
+          </ul>
+        </div>
+      )}
       {clean.length > 0 && (
         <p className="mt-4 text-xs text-text-secondary">
           Без находок: {clean.map((c) => c.title).join(' · ')}.

@@ -105,18 +105,23 @@ def collect_snapshot(
         # Один дозатор на LDAP и SMB: пауза между любыми двумя запросами к контроллеру.
         pacer = Pacer(conn.pause_ms, check_cancel=check_cancel)
         reader = None
+        # Почему SYSVOL не прочитан, уходит в выгрузку: обзор покажет «не проверено», а не «без находок».
+        notes: list[str] = []
         if conn.collect_sysvol:
             try:
                 reader = smb_reader(conn.host, conn.username, decrypt(conn.password), pacer=pacer)
             except Exception as exc:  # noqa: BLE001 — без SYSVOL сбор всё равно полезен
+                notes.append(f"SYSVOL недоступен по SMB: {exc.__class__.__name__}")
                 handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; User Rights пропущены")
+        else:
+            notes.append("чтение SYSVOL выключено в подключении")
         handle.stage("collecting", message="объекты и дескрипторы")
 
         # tick фиксирует сессию задачи: на этой стадии в ней нет ничего, кроме строки задачи.
         searcher = ldap3_searcher(
             c, page_size=conn.page_size, pacer=pacer, on_page=lambda n: handle.tick(n, message=f"прочитано объектов {n}"),
         )
-        export = LdapCollector(searcher, root, smb_reader=reader, host=conn.host, account=conn.username).collect()
+        export = LdapCollector(searcher, root, smb_reader=reader, host=conn.host, account=conn.username, notes=notes).collect()
     finally:
         with contextlib.suppress(Exception):
             c.unbind()

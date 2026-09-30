@@ -116,6 +116,7 @@ class LdapCollector:
         host: str = "",
         account: str = "",
         include_computer_sd: bool = True,
+        notes: list[str] | None = None,
     ) -> None:
         self.search = search
         self.root = root_dse
@@ -123,6 +124,7 @@ class LdapCollector:
         self.host = host
         self.account = account
         self.include_computer_sd = include_computer_sd
+        self.notes = list(notes or [])
         self.principals: dict[str, dict[str, str]] = {}
         self._pending_sids: set[str] = set()
 
@@ -257,7 +259,7 @@ class LdapCollector:
         return {
             "format": FORMAT,
             "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "collector": {"kind": "ldap", "version": "1.0", "host": self.host, "account": self.account},
+            "collector": {"kind": "ldap", "version": "1.0", "host": self.host, "account": self.account, "notes": self.notes},
             "domain": domain,
             "guids": {"extended_rights": ext, "schema_attributes": schema_attrs},
             "objects": objects,

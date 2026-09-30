@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from api.export_files import file_sha256, store_gz
 from api.jobs import JobHandle, insert_chunked
 from api.modules.ad.core.checks import ANALYZER_VERSION, run_all
+from api.modules.ad.core.checks.coverage import coverage_gaps
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import AdExport, ExportIndex, load_export_path
 from api.modules.ad.core.findings import SEVERITY_RANK, Finding
@@ -40,7 +41,7 @@ def _domain_for(db: Session, export: AdExport) -> AdDomain:
     return domain
 
 
-def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding], handle: JobHandle | None = None) -> None:
+def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding], gaps: dict[str, str], handle: JobHandle | None = None) -> None:
     db.execute(delete(AdFinding).where(AdFinding.snapshot_id == snapshot.id))
     rows = (
         {
@@ -66,6 +67,7 @@ def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding], 
     snapshot.findings = len(findings)
     snapshot.stats_json = json.dumps(stats, ensure_ascii=False)
     snapshot.analyzer_version = ANALYZER_VERSION
+    snapshot.unchecked_json = json.dumps(gaps, ensure_ascii=False)
 
 
 def analyze(export: AdExport, cfg: AdConfig) -> list[Finding]:
@@ -93,6 +95,7 @@ def import_export(
     if handle:
         handle.stage("analyzing", message=f"объектов {len(export.objects)}")
     findings = analyze(export, cfg)
+    gaps = coverage_gaps(export)
     if handle:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     domain = _domain_for(db, export)
@@ -109,7 +112,7 @@ def import_export(
     db.flush()
     # Разобранная выгрузка больше не нужна: находки пишутся без неё рядом.
     del export
-    _store_findings(db, snapshot, findings, handle)
+    _store_findings(db, snapshot, findings, gaps, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
     return snapshot
@@ -121,10 +124,13 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: 
         raise FileNotFoundError(f"файл выгрузки снапшота #{snapshot.id} не найден — пересчитать нельзя")
     if handle:
         handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
-    findings = analyze(load_export_path(path), cfg)
+    export = load_export_path(path)
+    findings = analyze(export, cfg)
+    gaps = coverage_gaps(export)
+    del export
     if handle:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
-    _store_findings(db, snapshot, findings, handle)
+    _store_findings(db, snapshot, findings, gaps, handle)
     db.commit()
     return snapshot
 

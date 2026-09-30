@@ -61,6 +61,8 @@ export interface CheckSummary {
   by_severity: Record<Severity, number>
   new: number
   fixed: number
+  /** Почему результат проверки не проверка: в выгрузке не было данных. */
+  unchecked?: string | null
   accepted: number
 }
 

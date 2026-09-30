@@ -212,8 +212,10 @@ def start_reanalyze(
 
 def checks_overview(
     rows: Iterable[Sequence[Any]], checks: Iterable[Any], severities: Iterable[str], cmp_: Comparison, accepted: set[str],
+    unchecked: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Сводка по проверкам последнего снапшота: `rows` — (check, severity, key) его находок."""
+    """Сводка по проверкам последнего снапшота: `rows` — (check, severity, key) его находок.
+    `unchecked` — код проверки → почему её результат не проверка (в выгрузке не было данных)."""
     per_check: dict[str, dict[str, Any]] = {
         c.code: {"code": c.code, "title": c.title, "description": c.description, "total": 0, "by_severity": dict.fromkeys(severities, 0), "new": 0, "accepted": 0}
         for c in checks
@@ -233,6 +235,7 @@ def checks_overview(
         fixed_by_check[f.check] = fixed_by_check.get(f.check, 0) + 1
     for code, entry in per_check.items():
         entry["fixed"] = fixed_by_check.get(code, 0)
+        entry["unchecked"] = (unchecked or {}).get(code)
     return list(per_check.values())
 
 

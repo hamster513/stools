@@ -70,6 +70,8 @@ class AdSnapshot(Base):
     #: {check: {severity: n}} — для обзора и списка снапшотов.
     stats_json: Mapped[str] = mapped_column(Text, default="{}")
     analyzer_version: Mapped[str] = mapped_column(String(16), default="")
+    #: {check: причина} — проверки, для которых в выгрузке не было данных.
+    unchecked_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
 
 
 class AdFinding(Base):

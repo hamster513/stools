@@ -128,7 +128,7 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
         },
         "compared_to": comparison_summary(cmp_),
         "accepted_total": len(accepted & {key for _, _, key in rows}),
-        "checks": checks_overview(rows, CHECKS, SEVERITIES, cmp_, accepted),
+        "checks": checks_overview(rows, CHECKS, SEVERITIES, cmp_, accepted, json.loads(snap.unchecked_json or "{}")),
     }
 
 
