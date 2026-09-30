@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import uuid
-from collections import Counter
 
 from api.modules.ad.core import sd
 from api.modules.ad.core.checks.adcs_rules import (
     Kind,
+    denials,
     requester_kind,
     requesters_details,
     unsafe_writers,
@@ -15,7 +15,7 @@ from api.modules.ad.core.checks.adcs_rules import (
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import AdObject, ExportIndex
 from api.modules.ad.core.findings import Finding, finalize
-from api.modules.ad.core.sd import SecurityDescriptor
+from api.modules.ad.core.sd import Ace, SecurityDescriptor
 
 EKU_CLIENT_AUTH = "1.3.6.1.5.5.7.3.2"
 EKU_SMARTCARD = "1.3.6.1.4.1.311.20.2.2"
@@ -24,7 +24,6 @@ EKU_ANY = "2.5.29.37.0"
 EKU_ENROLL_AGENT = "1.3.6.1.4.1.311.20.2.1"
 LOGON_EKU = (EKU_CLIENT_AUTH, EKU_SMARTCARD, EKU_PKINIT, EKU_ANY)
 GUID_ENROLL_DEFAULT = "0e10c968-78fb-11d2-90d4-00c04f79dc55"
-GUID_AUTOENROLL_DEFAULT = "a05b8cc2-17bc-4802-a710-e7c15ab866a2"
 
 PEND_ALL_REQUESTS = 0x2
 NO_SECURITY_EXTENSION = 0x80000
@@ -48,25 +47,25 @@ def unobstructed(t: AdObject) -> bool:
     return not (t.enrollment_flag or 0) & PEND_ALL_REQUESTS and not t.ra_signature
 
 
+def _grants_enroll(ace: Ace, enroll_rights: tuple[uuid.UUID | None, ...]) -> int:
+    """1, если ACE даёт (или запрещает) Enroll: GenericAll или расширенное право Enroll.
+    object_type None у EXTENDED_RIGHT — «все расширенные права», Enroll среди них.
+    AutoEnroll без Enroll выпуска не даёт."""
+    return int(ace.has(sd.GENERIC_ALL) or (ace.has(sd.EXTENDED_RIGHT) and ace.object_type in enroll_rights))
+
+
 def _requesters(idx: ExportIndex, cfg: AdConfig, desc: SecurityDescriptor, enroll_rights: tuple[uuid.UUID | None, ...]) -> list[tuple[str, Kind]]:
+    denied = denials(desc, lambda a: _grants_enroll(a, enroll_rights))
     out: dict[str, Kind] = {}
     for ace in desc.dacl:
         if not ace.allow or ace.inherit_only or ace.sid in out:
             continue
-        # object_type None у EXTENDED_RIGHT — «все расширенные права», Enroll среди них.
-        if not (ace.has(sd.GENERIC_ALL) or (ace.has(sd.EXTENDED_RIGHT) and ace.object_type in enroll_rights)):
+        if not _grants_enroll(ace, enroll_rights) or denied(ace):
             continue
         kind = requester_kind(idx, cfg, ace.sid)
         if kind != "safe":
             out[ace.sid] = kind
     return list(out.items())
-
-
-def _target_names(templates: list[AdObject]) -> dict[str, str]:
-    """displayName или cn; у совпавших имён дописывается cn — ключи находок не должны слипнуться."""
-    names = {t.dn: t.displayName or t.rdn_value for t in templates}
-    seen = Counter(n.lower() for n in names.values())
-    return {t.dn: f"{names[t.dn]} ({t.rdn_value})" if seen[names[t.dn].lower()] > 1 else names[t.dn] for t in templates}
 
 
 def _on_behalf_templates(idx: ExportIndex, templates: list[AdObject]) -> int:
@@ -88,13 +87,8 @@ def _linked_groups(idx: ExportIndex) -> dict[str, str]:
 
 
 def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
-    enroll_rights = (
-        uuid.UUID(idx.extended_right("Enroll") or GUID_ENROLL_DEFAULT),
-        uuid.UUID(idx.extended_right("AutoEnroll") or GUID_AUTOENROLL_DEFAULT),
-        None,
-    )
+    enroll_rights = (uuid.UUID(idx.extended_right("Enroll") or GUID_ENROLL_DEFAULT), None)
     templates = idx.objects("pKICertificateTemplate")
-    names = _target_names(templates)
     links = _linked_groups(idx)
     on_behalf: int | None = None
     out: list[Finding] = []
@@ -139,8 +133,9 @@ def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
                 **common,
                 "published": PUBLICATION_UNKNOWN if published is None else published,
                 "template_dn": t.dn,
+                "display_name": t.displayName or t.rdn_value,
                 "eku": eku,
                 **extra,
             }
-            out.append(finalize(Finding(check="ADCS_ESC", severity=severity, target=names[t.dn], key_extra=code, details=details), cfg))
+            out.append(finalize(Finding(check="ADCS_ESC", severity=severity, target=t.rdn_value, key_extra=code, details=details), cfg))
     return out

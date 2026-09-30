@@ -12,7 +12,17 @@ from api.modules.ad.core.checks.adcs_rules import requester_kind, severity_for, 
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex, load_export
 from api.modules.ad.core.findings import Finding
-from tests.ad.synthetic import GUID_ENROLL, OTHER_SID, PKI, b64sd, build_export, rid, user_dn
+from tests.ad.synthetic import (
+    DN,
+    GUID_AUTOENROLL,
+    GUID_ENROLL,
+    OTHER_SID,
+    PKI,
+    b64sd,
+    build_export,
+    rid,
+    user_dn,
+)
 
 CLIENT_AUTH = "1.3.6.1.5.5.7.3.2"
 SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
@@ -88,6 +98,48 @@ def test_safe_principal_by_name() -> None:
     assert requester_kind(idx, AdConfig(adcs_safe_principals=["helpdesk"]), HELPDESK) == "safe"
 
 
+def _group(name: str, n: int, members: list[str]) -> dict[str, Any]:
+    return {"dn": user_dn(name), "class": "group", "sid": rid(n), "sam": name, "name": name, "member": members}
+
+
+def _kind_with_groups(sid: str, *groups: dict[str, Any]) -> str:
+    raw = build_export()
+    raw["objects"].extend(groups)
+    return requester_kind(_idx(raw), AdConfig(), sid)
+
+
+def test_group_with_nested_domain_users_is_broad() -> None:
+    inner = _group("Inner", 1502, [user_dn("Domain Users")])
+    assert _kind_with_groups(rid(1501), _group("Outer", 1501, [user_dn("Inner")]), inner) == "broad"
+    assert _kind_with_groups(rid(1502), inner) == "broad"
+
+
+def test_group_with_foreign_authenticated_users_is_broad() -> None:
+    fsp = f"CN=S-1-5-11,CN=ForeignSecurityPrincipals,{DN}"
+    assert _kind_with_groups(rid(1501), _group("Outer", 1501, [fsp])) == "broad"
+
+
+def test_group_with_only_admin_is_other() -> None:
+    assert _kind_with_groups(rid(1501), _group("Outer", 1501, [user_dn("admin1")])) == "other"
+
+
+def test_group_cycle_is_other() -> None:
+    a, b = _group("CycA", 1501, [user_dn("CycB")]), _group("CycB", 1502, [user_dn("CycA"), user_dn("helpdesk")])
+    assert _kind_with_groups(rid(1501), a, b) == "other"
+
+
+def test_safe_principal_by_sid() -> None:
+    assert requester_kind(_idx(), AdConfig(adcs_safe_principals=[HELPDESK.lower()]), HELPDESK) == "safe"
+
+
+def test_adcs_broad_extras() -> None:
+    idx, cfg = _idx(), AdConfig()
+    assert requester_kind(idx, cfg, "S-1-5-32-554") == "broad"
+    assert requester_kind(idx, cfg, "S-1-5-32-546") == "broad"
+    assert requester_kind(idx, cfg, rid(514)) == "broad"
+    assert requester_kind(idx, cfg, f"{OTHER_SID}-514") == "broad"
+
+
 def test_severity_steps() -> None:
     assert severity_for("High", ["other"]) == "Medium"
     assert severity_for("High", ["other", "broad"]) == "High"
@@ -149,6 +201,39 @@ def test_esc1_via_generic_all() -> None:
     assert len(esc(run(t), "ESC1")) == 1
 
 
+def test_deny_enroll_cancels_allow() -> None:
+    deny = sd.build_ace(HELPDESK, sd.EXTENDED_RIGHT, allow=False, object_type=uuid.UUID(GUID_ENROLL))
+    assert on(run(template(aces=[deny, enroll(HELPDESK)]))) == []
+    assert on(run(template(aces=[enroll(HELPDESK), deny]))) == []
+
+
+def test_deny_all_extended_rights_cancels_generic_all() -> None:
+    deny = sd.build_ace(HELPDESK, sd.EXTENDED_RIGHT, allow=False)
+    fs = run(template(aces=[deny, sd.build_ace(HELPDESK, sd.GENERIC_ALL)]))
+    assert [f.key_extra for f in on(fs)] == ["ESC4"]
+
+
+def test_deny_for_other_sid_does_not_cancel() -> None:
+    deny = sd.build_ace(rid(1109), sd.EXTENDED_RIGHT, allow=False, object_type=uuid.UUID(GUID_ENROLL))
+    assert len(esc(run(template(aces=[deny, enroll(HELPDESK)])), "ESC1")) == 1
+
+
+def test_inherit_only_deny_does_not_cancel() -> None:
+    deny = sd.build_ace(HELPDESK, sd.EXTENDED_RIGHT, allow=False, flags=sd.ACE_FLAG_INHERIT_ONLY, object_type=uuid.UUID(GUID_ENROLL))
+    assert len(esc(run(template(aces=[deny, enroll(HELPDESK)])), "ESC1")) == 1
+
+
+def test_inherited_deny_does_not_cancel_explicit_allow() -> None:
+    """Канонический порядок DACL: явное разрешение проверяется раньше унаследованного запрета."""
+    deny = sd.build_ace(HELPDESK, sd.EXTENDED_RIGHT, allow=False, flags=sd.ACE_FLAG_INHERITED, object_type=uuid.UUID(GUID_ENROLL))
+    assert len(esc(run(template(aces=[enroll(HELPDESK), deny])), "ESC1")) == 1
+
+
+def test_autoenroll_alone_is_not_enrollment() -> None:
+    auto = sd.build_ace(HELPDESK, sd.EXTENDED_RIGHT, object_type=uuid.UUID(GUID_AUTOENROLL))
+    assert on(run(template(aces=[auto, sd.build_ace(rid(512), sd.GENERIC_ALL)]))) == []
+
+
 def test_inherit_only_ace_is_not_a_requester() -> None:
     t = template(aces=[sd.build_ace(HELPDESK, sd.GENERIC_ALL, flags=sd.ACE_FLAG_INHERIT_ONLY)])
     assert on(run(t)) == []
@@ -166,16 +251,16 @@ def test_publication_unknown_without_ca_objects() -> None:
     assert f.details["published"] == "неизвестно" and f.severity == "Medium"
 
 
+def test_target_is_cn_display_name_in_details() -> None:
+    """Ключ находки — по cn: он уникален и по нему ЦС публикует шаблон; displayName меняется свободно."""
+    fs = esc(run(template("TplA", displayName="Pretty name")), "ESC1", target="TplA")
+    assert len(fs) == 1 and fs[0].details["display_name"] == "Pretty name"
+
+
 def test_two_templates_with_same_display_name_are_two_findings() -> None:
     fs = [f for f in run(template("TplA", displayName="Dup"), template("TplB", displayName="Dup")) if f.key_extra == "ESC1"]
-    fs = [f for f in fs if f.details["template_dn"].startswith(("CN=TplA,", "CN=TplB,"))]
-    assert len(fs) == 2 and len({f.key for f in fs}) == 2 and len({f.target for f in fs}) == 2
-
-
-def test_target_is_display_name_or_cn() -> None:
-    t = template("NoDisplay")
-    del t["displayName"]
-    assert len(esc(run(t), "ESC1", target="NoDisplay")) == 1
+    assert sorted(f.target for f in fs if f.target.startswith("Tpl")) == ["TplA", "TplB"]
+    assert len({f.key for f in fs}) == len(fs)
 
 
 # ---- ESC2, ESC3, ESC4 ---------------------------------------------------------
@@ -240,6 +325,25 @@ def test_esc4_owner_is_writer() -> None:
     t["sd"] = base64.b64encode(sd.build_sd([sd.build_ace(rid(512), sd.GENERIC_ALL)], owner=HELPDESK)).decode()
     fs = esc(run(t), "ESC4")
     assert len(fs) == 1 and fs[0].severity == "Medium" and fs[0].details["principals"][0]["rights"] == ["owner"]
+
+
+def test_esc4_deny_cancels_write() -> None:
+    deny = sd.build_ace(HELPDESK, sd.WRITE_DACL, allow=False)
+    t = _writer(HELPDESK, sd.WRITE_DACL)
+    t["sd"] = b64sd([deny, sd.build_ace(HELPDESK, sd.WRITE_DACL), sd.build_ace(rid(512), sd.GENERIC_ALL)])
+    assert on(run(t)) == []
+
+
+def test_esc4_partial_deny_leaves_other_rights() -> None:
+    t = _writer(HELPDESK, sd.WRITE_DACL)
+    t["sd"] = b64sd([sd.build_ace(HELPDESK, sd.WRITE_DACL, allow=False), sd.build_ace(HELPDESK, sd.GENERIC_ALL)])
+    assert esc(run(t), "ESC4")[0].details["principals"][0]["rights"] == ["WriteOwner", "WriteProperty"]
+
+
+def test_esc4_deny_generic_all_cancels_everything() -> None:
+    t = _writer(HELPDESK, sd.WRITE_DACL)
+    t["sd"] = b64sd([sd.build_ace(HELPDESK, sd.GENERIC_ALL, allow=False), sd.build_ace(HELPDESK, sd.GENERIC_ALL)])
+    assert on(run(t)) == []
 
 
 def test_esc4_not_for_create_child() -> None:
