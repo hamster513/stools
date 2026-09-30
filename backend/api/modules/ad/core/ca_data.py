@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import zlib
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, Field, field_validator
 
 from api.export_files import GZIP_MAGIC
-from api.modules.ad.core.export import CollectorInfo, StrList, _describe_validation
+from api.modules.ad.core.export import CollectorInfo, StrList, describe_validation
 from kbaudit.safe_io import MB, decompress_gzip_file
 
 CA_FORMAT = "stools-ad-ca/1"
@@ -74,6 +75,21 @@ class CaData(BaseModel):
     cas: Annotated[list[CaAuthority], BeforeValidator(_as_records)] = Field(default_factory=list)
     dcs: Annotated[list[DcBinding], BeforeValidator(_as_records)] = Field(default_factory=list)
     web: Annotated[list[WebEndpoint], BeforeValidator(_as_records)] = Field(default_factory=list)
+    #: Только у сведённых данных (`effective_ca_data`): раздел → дата сбора и
+    #: id загрузки, откуда он взят. В файле и в базе их нет.
+    section_dates: dict[str, dt.datetime] = Field(default_factory=dict)
+    section_sources: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("collected_at")
+    @classmethod
+    def _utc_if_naive(cls, value: dt.datetime) -> dt.datetime:
+        return value if value.tzinfo is not None else value.replace(tzinfo=dt.UTC)
+
+
+#: Раздел → поле CaData с его записями.
+SECTION_FIELD = {"ca": "cas", "dc": "dcs", "web": "web"}
+#: Служебные поля сведённых данных: в хранимый файл не пишутся.
+MERGED_FIELDS = {"section_dates", "section_sources"}
 
 
 class CaDataFormatError(ValueError):
@@ -81,13 +97,27 @@ class CaDataFormatError(ValueError):
 
 
 def parse_ca_data(raw: Any) -> CaData:
-    if not isinstance(raw, dict) or raw.get("format") != CA_FORMAT:
-        found = raw.get("format") if isinstance(raw, dict) else "—"
-        raise CaDataFormatError(f"это не данные ЦС формата {CA_FORMAT}: в файле «{found}»")
+    found = raw.get("format") if isinstance(raw, dict) else None
+    if isinstance(found, str) and found.startswith("stools-ad-ca/") and found != CA_FORMAT:
+        raise CaDataFormatError(f"данные ЦС формата {found} не поддерживаются, нужен {CA_FORMAT}")
+    if found != CA_FORMAT:
+        raise CaDataFormatError(f"это не данные ЦС формата {CA_FORMAT}: в файле «{found if isinstance(raw, dict) else '—'}»")
     try:
-        return CaData.model_validate(raw)
+        data = CaData.model_validate(raw)
     except ValueError as exc:
-        raise CaDataFormatError("данные ЦС неполные: " + _describe_validation(exc)) from exc
+        raise CaDataFormatError("данные ЦС неполные: " + describe_validation(exc)) from exc
+    _check_sections(data)
+    return data
+
+
+def _check_sections(data: CaData) -> None:
+    """Проверка здесь, а не валидатором модели: pydantic завернул бы текст в свой."""
+    unknown = [s for s in data.sections if s not in SECTIONS]
+    if unknown:
+        raise CaDataFormatError(f"данные ЦС: неизвестный раздел «{unknown[0]}», допустимы {', '.join(SECTIONS)}")
+    for section, field in SECTION_FIELD.items():
+        if getattr(data, field) and section not in data.sections:
+            raise CaDataFormatError(f"данные ЦС противоречивы: есть записи раздела «{section}», но его нет в sections")
 
 
 def _read_capped(path: Path, max_bytes: int) -> bytes | bytearray | None:
@@ -98,7 +128,7 @@ def _read_capped(path: Path, max_bytes: int) -> bytes | bytearray | None:
         if packed:
             try:
                 return decompress_gzip_file(f, max_bytes)
-            except (ValueError, OSError, EOFError):
+            except (ValueError, OSError, EOFError, zlib.error):
                 return None
         data = f.read(max_bytes + 1)
         return data if len(data) <= max_bytes else None

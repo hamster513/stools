@@ -12,11 +12,8 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.modules.ad.core.ca_data import SECTIONS, CaData
+from api.modules.ad.core.ca_data import MERGED_FIELDS, SECTION_FIELD, SECTIONS, CaData
 from api.modules.ad.models import AdCaData, AdDomain
-
-#: Раздел → поле CaData с его записями.
-_SECTION_FIELD = {"ca": "cas", "dc": "dcs", "web": "web"}
 
 
 def store_ca_data(db: Session, data: CaData, *, filename: str, sha256: str, uploaded_by: str) -> AdCaData:
@@ -31,7 +28,7 @@ def store_ca_data(db: Session, data: CaData, *, filename: str, sha256: str, uplo
         sha256=sha256,
         uploaded_by=uploaded_by,
         sections_json=json.dumps(list(data.sections)),
-        data=data.model_dump(mode="json"),
+        data=data.model_dump(mode="json", exclude=MERGED_FIELDS),
     )
     db.add(row)
     db.flush()
@@ -48,6 +45,7 @@ def _rows(db: Session, domain_id: int) -> list[AdCaData]:
 
 def effective_ca_data(db: Session, domain_id: int) -> tuple[CaData | None, int | None]:
     """Самые свежие данные по каждому разделу отдельно (по collected_at), сведённые в один CaData;
+    у каждого раздела — дата сбора и id загрузки, откуда он взят (`section_dates`, `section_sources`);
     второй элемент — id самой свежей загрузки. Нет загрузок — (None, None)."""
     rows = _rows(db, domain_id)
     if not rows:
@@ -58,9 +56,12 @@ def effective_ca_data(db: Session, domain_id: int) -> tuple[CaData | None, int |
         row = next((r for r in rows if section in json.loads(r.sections_json)), None)
         if row is None:
             continue
-        field = _SECTION_FIELD[section]
-        setattr(merged, field, getattr(CaData.model_validate(row.data), field))
+        field = SECTION_FIELD[section]
+        source = CaData.model_validate(row.data)
+        setattr(merged, field, getattr(source, field))
         merged.sections.append(section)
+        merged.section_dates[section] = source.collected_at
+        merged.section_sources[section] = row.id
     return merged, rows[0].id
 
 

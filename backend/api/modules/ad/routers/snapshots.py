@@ -23,8 +23,8 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.export_files import file_sha256
-from api.jobs import JobHandle
-from api.modules.ad.core.ca_data import CA_FORMAT, load_ca_data_path, sniff_format
+from api.jobs import JobCancelled, JobHandle
+from api.modules.ad.core.ca_data import load_ca_data_path, sniff_format
 from api.modules.ad.core.checks import CHECK_BY_CODE, CHECKS
 from api.modules.ad.core.export import ExportFormatError
 from api.modules.ad.core.findings import SEVERITIES
@@ -161,7 +161,8 @@ async def upload_snapshot(
     login = user.login
 
     def load(session: Session, handle: JobHandle, upload: Path, name: str) -> str:
-        if sniff_format(upload) == CA_FORMAT:
+        # Любая версия stools-ad-ca/* — к разбору данных ЦС: он объяснит, что версия не та.
+        if (sniff_format(upload) or "").startswith("stools-ad-ca/"):
             return _load_ca_data(session, handle, upload, name, login, data_dir)
         try:
             snap = import_export(session, handle, upload, "file", name, load_config(session), data_dir)
@@ -177,7 +178,8 @@ async def upload_snapshot(
 
 def _load_ca_data(session: Session, handle: JobHandle, upload: Path, name: str, login: str, data_dir: Path) -> str:
     """Данные ЦС — не снапшот: сохраняются у домена, последний снапшот пересчитывается с ними.
-    Ошибки формата и неизвестный домен — ValueError, задача падает с их текстом."""
+    Ошибки формата и неизвестный домен — ValueError, задача падает с их текстом.
+    Пересчёт не удался — данные уже сохранены, и текст ошибки говорит об этом."""
     handle.stage("parsing", message=name)
     ca = load_ca_data_path(upload)
     row = store_ca_data(session, ca, filename=name, sha256=file_sha256(upload), uploaded_by=login)
@@ -186,7 +188,12 @@ def _load_ca_data(session: Session, handle: JobHandle, upload: Path, name: str, 
     snap = latest_snapshot(session, row.domain_id)
     if snap is None:
         return f"{summary}; снапшотов домена пока нет"
-    reanalyze(session, handle, snap, load_config(session), data_dir)
+    try:
+        reanalyze(session, handle, snap, load_config(session), data_dir)
+    except JobCancelled:
+        raise
+    except Exception as exc:
+        raise ValueError(f"данные ЦС сохранены, но снапшот #{snap.id} не пересчитан: {exc}") from exc
     return f"{summary}; снапшот #{snap.id} пересчитан"
 
 

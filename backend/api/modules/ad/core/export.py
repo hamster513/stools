@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import json
+import zlib
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -215,12 +216,23 @@ class ExportFormatError(ValueError):
     pass
 
 
+#: Превышение потолка — ValueError; битый заголовок — OSError, обрыв — EOFError,
+#: битый поток deflate — zlib.error (он не OSError).
+_GZIP_ERRORS = (ValueError, OSError, EOFError, zlib.error)
+
+
+def _unpack_error(exc: BaseException) -> ExportFormatError:
+    """Текст превышения потолка русский и с лимитом; тексты zlib и gzip — нет."""
+    reason = str(exc) if type(exc) is ValueError else "сжатый файл повреждён или обрезан"
+    return ExportFormatError(f"выгрузка не распакована: {reason}")
+
+
 def load_export(data: bytes | bytearray) -> AdExport:
     if data[:2] == GZIP_MAGIC:
         try:
             data = decompress_gzip(data, MAX_UNPACKED)
-        except ValueError as exc:
-            raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
+        except _GZIP_ERRORS as exc:
+            raise _unpack_error(exc) from exc
     return _validated(_parsed(data))
 
 
@@ -238,8 +250,8 @@ def _read(path: Path) -> bytes | bytearray:
             return f.read()
         try:
             return decompress_gzip_file(f, MAX_UNPACKED)
-        except ValueError as exc:
-            raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
+        except _GZIP_ERRORS as exc:
+            raise _unpack_error(exc) from exc
 
 
 def _parsed(data: bytes | bytearray) -> Any:
@@ -255,10 +267,10 @@ def _validated(raw: Any) -> AdExport:
     try:
         return AdExport.model_validate(raw)
     except ValueError as exc:
-        raise ExportFormatError("выгрузка неполная: " + _describe_validation(exc)) from exc
+        raise ExportFormatError("выгрузка неполная: " + describe_validation(exc)) from exc
 
 
-def _describe_validation(exc: ValueError) -> str:
+def describe_validation(exc: ValueError) -> str:
     errors = getattr(exc, "errors", None)
     if errors is None:
         return str(exc).splitlines()[0][:200]

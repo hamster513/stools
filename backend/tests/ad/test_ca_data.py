@@ -12,11 +12,15 @@ from fastapi.testclient import TestClient
 
 from api.modules.ad.core.ca_data import CA_FORMAT, CaDataFormatError, parse_ca_data, sniff_format
 from api.modules.ad.core.checks import ANALYZER_VERSION
-from api.modules.ad.core.export import ExportIndex, load_export
+from api.modules.ad.core.export import ExportFormatError, ExportIndex, load_export, load_export_path
 from api.modules.ad.models import AdCaData, AdDomain, AdSnapshot
 from api.modules.ad.services.ca_data import delete_ca_data, effective_ca_data, store_ca_data
+from api.modules.ad.services.snapshots import snapshot_path
 from tests.ad.synthetic import DOMAIN_SID, NOW, build_ca_data, build_export
 from tests.api.conftest import TEST_LOGIN
+
+#: Заголовок gzip цел, а поток deflate битый: zlib.error, не OSError.
+CORRUPT_GZIP = b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\xff" * 20
 
 # ---- Формат ----------------------------------------------------------------
 
@@ -81,6 +85,46 @@ def test_sniff_format_gives_up_on_large_or_foreign_files(tmp_path: Path) -> None
     assert sniff_format(array) is None
 
 
+def test_sniff_format_gives_up_on_corrupt_deflate(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.json.gz"
+    broken.write_bytes(CORRUPT_GZIP)
+    assert sniff_format(broken) is None
+
+
+def test_export_reader_explains_corrupt_deflate(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.json.gz"
+    broken.write_bytes(CORRUPT_GZIP)
+    with pytest.raises(ExportFormatError, match="^выгрузка не распакована: ") as exc:
+        load_export_path(broken)
+    assert "Error -3" not in str(exc.value)
+    with pytest.raises(ExportFormatError, match="^выгрузка не распакована: "):
+        load_export(CORRUPT_GZIP)
+
+
+def test_parse_rejects_unknown_section() -> None:
+    with pytest.raises(CaDataFormatError, match="неизвестный раздел «pki»"):
+        parse_ca_data(build_ca_data(sections=["ca", "pki"]))
+
+
+def test_parse_rejects_records_of_unlisted_section() -> None:
+    with pytest.raises(CaDataFormatError, match="«dc»"):
+        parse_ca_data(build_ca_data(sections=["ca", "web"]))
+    # Пустой список раздела, которого нет в sections, — не противоречие.
+    assert parse_ca_data(build_ca_data(sections=["ca"], dcs=[], web=None)).sections == ["ca"]
+
+
+def test_parse_explains_other_ca_format_version() -> None:
+    raw = build_ca_data()
+    raw["format"] = "stools-ad-ca/2"
+    with pytest.raises(CaDataFormatError, match="^данные ЦС формата stools-ad-ca/2 не поддерживаются, нужен stools-ad-ca/1$"):
+        parse_ca_data(raw)
+
+
+def test_naive_collected_at_is_utc() -> None:
+    data = parse_ca_data(build_ca_data(now=NOW.replace(tzinfo=None)))
+    assert data.collected_at.tzinfo is not None and data.collected_at == NOW
+
+
 def test_export_index_carries_ca_data() -> None:
     export = load_export(json.dumps(build_export()).encode())
     ca = parse_ca_data(build_ca_data())
@@ -122,6 +166,19 @@ def test_effective_ca_data_takes_freshest_section_each(db_session: Any) -> None:
     assert [c.name for c in ca.cas] == ["CORP-CA2"]
     assert [d.host for d in ca.dcs] == ["dc01.corp.local"]
     assert ca.web == [] and ca.sections == ["ca", "dc"] and ca.collected_at == NOW
+
+
+def test_effective_ca_data_dates_each_section_by_its_upload(db_session: Any) -> None:
+    domain = _domain(db_session)
+    yesterday = NOW - dt.timedelta(days=1)
+    first = _store(db_session, build_ca_data(now=yesterday, sections=["ca", "dc"], web=[]))
+    second = _store(db_session, build_ca_data(sections=["ca"], dcs=[], web=[]))
+    ca, _ = effective_ca_data(db_session, domain.id)
+    assert ca is not None
+    assert ca.section_dates == {"ca": NOW, "dc": yesterday}
+    assert ca.section_sources == {"ca": second.id, "dc": first.id}
+    # В хранимый файл служебные поля не пишутся.
+    assert "section_dates" not in second.data and "section_sources" not in second.data
 
 
 def test_effective_ca_data_ignores_upload_order(db_session: Any) -> None:
@@ -173,6 +230,34 @@ def test_broken_ca_data_fails_job_with_message(auth_client: TestClient) -> None:
     raw["cas"] = "не список"
     job = _upload(auth_client, raw)
     assert job["status"] == "failed" and "данные ЦС неполные" in job["error"]
+
+
+def test_corrupt_gzip_upload_fails_with_readable_message(auth_client: TestClient) -> None:
+    r = auth_client.post("/api/ad/snapshots/file", files={"file": ("adca.json.gz", CORRUPT_GZIP, "application/octet-stream")})
+    assert r.status_code == 202, r.text
+    job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()
+    assert job["status"] == "failed" and job["error"].startswith("выгрузка не распакована: ")
+    assert "Error -3" not in job["error"]
+
+
+def test_other_ca_format_version_upload_is_explained(auth_client: TestClient) -> None:
+    assert _upload(auth_client, build_export(), "ad.json")["status"] == "done"
+    raw = build_ca_data()
+    raw["format"] = "stools-ad-ca/2"
+    job = _upload(auth_client, raw)
+    assert job["status"] == "failed"
+    assert job["error"] == "данные ЦС формата stools-ad-ca/2 не поддерживаются, нужен stools-ad-ca/1"
+
+
+def test_failed_reanalyze_after_ca_upload_says_data_is_stored(auth_client: TestClient, app_settings: Any) -> None:
+    assert _upload(auth_client, build_export(), "ad.json")["status"] == "done"
+    domain_id = auth_client.get("/api/ad/domains").json()[0]["id"]
+    snap_id = auth_client.get(f"/api/ad/snapshots?domain_id={domain_id}").json()[0]["id"]
+    snapshot_path(app_settings.data_dir, snap_id).unlink()
+    job = _upload(auth_client, build_ca_data())
+    assert job["status"] == "failed"
+    assert job["error"].startswith(f"данные ЦС сохранены, но снапшот #{snap_id} не пересчитан: ")
+    assert len(auth_client.get(f"/api/ad/domains/{domain_id}/ca-data").json()) == 1
 
 
 def test_ca_data_upload_is_stored_and_reanalyzes_latest_snapshot(auth_client: TestClient, db_session: Any) -> None:

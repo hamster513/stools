@@ -34,7 +34,7 @@ def _too_big(what: str, max_bytes: int) -> ValueError:
 
 
 def decompress_gzip(data: bytes | bytearray, max_bytes: int) -> bytearray:
-    """Распаковать gzip, но не больше `max_bytes`. Битый gzip — `OSError`/`EOFError`, как у `gzip.decompress`."""
+    """Распаковать gzip, но не больше `max_bytes`. Битый gzip — `OSError`/`EOFError`, битый поток deflate — `zlib.error` (не `OSError`), как у `gzip.decompress`."""
     return decompress_gzip_file(io.BytesIO(data), max_bytes)
 
 
