@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useCaData, useDeleteCaData, useDomains } from '@/modules/ad/api/queries'
+import { useCaData, useDeleteCaData, useDomains, useJob } from '@/modules/ad/api/queries'
 import { CA_SECTION_LABELS, type CaData } from '@/modules/ad/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
@@ -20,6 +20,9 @@ export function CaDataSection() {
   const domainId = picked ?? list[0]?.id
   const data = useCaData(domainId)
   const remove = useDeleteCaData()
+  // Пересчёт после удаления — как после загрузки: useJob опрашивает задачу и по её окончании
+  // обновляет обзор, находки и снапшоты.
+  const job = useJob(remove.data?.job_id)
   const [confirm, setConfirm] = useState<CaData | null>(null)
 
   return (
@@ -56,7 +59,8 @@ export function CaDataSection() {
           )}
         </>
       )}
-      {remove.data && <p className="mt-2 text-xs text-text-secondary">пересчёт запущен, задача #{remove.data.job_id} — прогресс на экране «Задачи»</p>}
+      {remove.data && job.data?.status === 'failed' && <p className="mt-2 text-xs text-kind-1">пересчёт не удался, задача #{remove.data.job_id}: {job.data.error}</p>}
+      {remove.data && job.data?.status !== 'failed' && <p className="mt-2 text-xs text-text-secondary">{job.data && job.data.status !== 'running' ? `пересчёт завершён, задача #${remove.data.job_id}` : `пересчёт запущен, задача #${remove.data.job_id} — прогресс на экране «Задачи»`}</p>}
       {remove.error && <p className="mt-2 text-xs text-kind-1">{remove.error instanceof ApiRequestError ? remove.error.message : 'Не удалось удалить'}</p>}
       {confirm && (
         <div role="dialog" aria-label="Удалить данные ЦС" className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4">

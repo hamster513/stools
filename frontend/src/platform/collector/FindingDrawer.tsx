@@ -11,8 +11,10 @@ import { STATUS_LABELS, type FindingBase, type FindingDetail } from './types'
 
 // DN сами содержат запятые, поэтому списки DN (samples) — по одному в строке.
 function fmt(v: unknown, key = ''): string {
-  if (v === null || v === undefined || v === '') return '—'
+  if (v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) return '—'
   if (typeof v === 'boolean') return v ? 'да' : 'нет'
+  // Даты (например, дата сбора данных ЦС) — в том же виде, что история и вердикт ниже.
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) return new Date(v).toLocaleString('ru-RU')
   // Субъекты с правами (principals у AD CS) — «имя — права», по одному в строке.
   if (Array.isArray(v) && v.some((x) => x !== null && typeof x === 'object')) {
     return v.map((x) => {
