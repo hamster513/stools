@@ -37,7 +37,7 @@ ADCS_BROAD_RIDS = (514,)
 CHECK_MEMBERS_NOTE = "проверьте состав группы"
 
 
-def _forest_rid(sid: str) -> int | None:
+def _domain_rid(sid: str) -> int | None:
     """RID доменного SID любого домена (S-1-5-21-…); у прочих — None."""
     if not sid.startswith("S-1-5-21-"):
         return None
@@ -47,6 +47,15 @@ def _forest_rid(sid: str) -> int | None:
         return None
 
 
+def _forest_rid(idx: ExportIndex, sid: str) -> int | None:
+    """RID доменного SID домена своего леса; леса не знаем (старая выгрузка) — любого домена."""
+    rid = _domain_rid(sid)
+    forest = idx.forest_domain_sids
+    if rid is None or forest is None:
+        return rid
+    return rid if sid.rpartition("-")[0] in forest else None
+
+
 def _name_in(name: str, names: list[str]) -> bool:
     wanted = {n.upper().strip() for n in names}
     return name.upper().strip() in wanted or short_name(name) in wanted
@@ -54,7 +63,7 @@ def _name_in(name: str, names: list[str]) -> bool:
 
 def _broad(cfg: AdConfig, sid: str | None, name: str) -> bool:
     """low_priv_sids и ADCS_BROAD_SIDS, low_priv_rids и ADCS_BROAD_RIDS любого домена, low_priv_groups по имени."""
-    rid = _forest_rid(sid) if sid else None
+    rid = _domain_rid(sid) if sid else None
     return (
         sid in cfg.low_priv_sids
         or sid in ADCS_BROAD_SIDS
@@ -93,14 +102,14 @@ def _nested_broad(idx: ExportIndex, cfg: AdConfig, group: AdObject) -> bool:
 
 
 def requester_kind(idx: ExportIndex, cfg: AdConfig, sid: str) -> Kind:
-    """safe — из adcs_safe_* (RID — для любого домена S-1-5-21-…, имя или SID из
+    """safe — из adcs_safe_* (RID — для доменов своего леса, имя или SID из
     adcs_safe_principals); broad — широкая группа сама или среди вложенных членов
     своей группы; иначе other."""
-    rid = _forest_rid(sid)
+    forest_rid = _forest_rid(idx, sid)
     name = idx.principal_name(sid)
     if (
         sid in cfg.adcs_safe_sids
-        or (rid is not None and rid in cfg.adcs_safe_rids)
+        or (forest_rid is not None and forest_rid in cfg.adcs_safe_rids)
         or _name_in(name, cfg.adcs_safe_principals)
         or sid.upper() in {p.upper().strip() for p in cfg.adcs_safe_principals}
     ):

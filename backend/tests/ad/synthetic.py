@@ -20,6 +20,11 @@ DN = "DC=corp,DC=local"
 CONF_DN = "CN=Configuration,DC=corp,DC=local"
 PKI = f"CN=Public Key Services,CN=Services,{CONF_DN}"
 OTHER_SID = "S-1-5-21-111-222-333"
+#: Внешнее доверие (не домен леса): безопасные RID администраторов на него не распространяются.
+EXT_SID = "S-1-5-21-444-555-666"
+TRUST_WITHIN_FOREST = 0x20
+TRUST_FOREST_TRANSITIVE = 0x8
+TRUST_EXTERNAL = 0x4
 
 GUID_GET_CHANGES = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2"
 GUID_GET_CHANGES_ALL = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2"
@@ -205,7 +210,8 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
             "msPKI-Cert-Template-OID": "1.3.6.1.4.1.311.21.8.1.1",
             "msDS-OIDToGroupLink": "",
         },
-        {"dn": f"CN=other.local,CN=System,{DN}", "class": "trustedDomain", "flatName": "OTHER", "sid": OTHER_SID},
+        {"dn": f"CN=other.local,CN=System,{DN}", "class": "trustedDomain", "flatName": "OTHER", "sid": OTHER_SID, "trustAttributes": TRUST_WITHIN_FOREST},
+        {"dn": f"CN=ext.local,CN=System,{DN}", "class": "trustedDomain", "flatName": "EXT", "sid": EXT_SID, "trustAttributes": TRUST_EXTERNAL},
     ]
     principals = {rid(r): {"name": f"CORP\\{sam}", "class": cls} for sam, (r, cls) in ACCOUNTS.items()}
     return {

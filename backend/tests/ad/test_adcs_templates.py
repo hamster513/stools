@@ -14,6 +14,7 @@ from api.modules.ad.core.export import ExportIndex, load_export
 from api.modules.ad.core.findings import Finding
 from tests.ad.synthetic import (
     DN,
+    EXT_SID,
     GUID_AUTOENROLL,
     GUID_ENROLL,
     OTHER_SID,
@@ -90,6 +91,24 @@ def test_requester_kind() -> None:
     assert requester_kind(idx, cfg, f"{OTHER_SID}-519") == "safe"
     assert requester_kind(idx, cfg, "S-1-5-18") == "safe"
     assert requester_kind(idx, cfg, HELPDESK) == "other"
+
+
+def test_safe_rids_only_for_forest_domains() -> None:
+    idx, cfg = _idx(), AdConfig()
+    assert requester_kind(idx, cfg, f"{OTHER_SID}-512") == "safe"
+    assert requester_kind(idx, cfg, f"{EXT_SID}-512") == "other"
+    assert requester_kind(idx, cfg, f"{EXT_SID}-513") == "broad"
+    assert requester_kind(idx, cfg, "S-1-5-21-9-9-9-519") == "other"
+
+
+def test_safe_rids_for_any_domain_in_old_export() -> None:
+    raw = build_export()
+    raw["objects"] = [o for o in raw["objects"] if o["class"] != "trustedDomain"]
+    assert requester_kind(_idx(raw), AdConfig(), f"{EXT_SID}-512") == "safe"
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("trustAttributes", None)
+    assert requester_kind(_idx(raw), AdConfig(), f"{EXT_SID}-512") == "safe"
 
 
 def test_safe_principal_by_name() -> None:

@@ -42,6 +42,9 @@ RID_ENTERPRISE_ADMINS = 519
 RID_PROTECTED_USERS = 525
 RID_KRBTGT = 502
 
+#: trustAttributes: доверенный домен — домен того же леса (MS-ADTS 6.1.6.7.9).
+TRUST_ATTRIBUTE_WITHIN_FOREST = 0x20
+
 WELL_KNOWN_SIDS: dict[str, str] = {
     "S-1-1-0": "Everyone",
     "S-1-3-0": "CREATOR OWNER",
@@ -130,6 +133,7 @@ class AdObject(BaseModel):
     enrollment_servers: StrList = Field(default_factory=list, alias="msPKI-Enrollment-Servers")
     oid_group_link: str | None = Field(default=None, alias="msDS-OIDToGroupLink")
     flatName: str | None = None
+    trustAttributes: int | None = None
     altSecurityIdentities: StrList = Field(default_factory=list)
     sd: str | None = None
 
@@ -308,6 +312,16 @@ class ExportIndex:
     def trusted_domains(self) -> dict[str, str]:
         """SID доверенного домена → его NetBIOS-имя."""
         return {o.sid: o.flatName for o in self.objects("trustedDomain") if o.sid and o.flatName}
+
+    @cached_property
+    def forest_domain_sids(self) -> set[str] | None:
+        """SID доменов своего леса: свой и доверия с TRUST_ATTRIBUTE_WITHIN_FOREST.
+        None — состав леса неизвестен: доверий в выгрузке нет или у них нет
+        trustAttributes (выгрузка старого сборщика)."""
+        trusts = self.objects("trustedDomain")
+        if not trusts or any(t.trustAttributes is None for t in trusts):
+            return None
+        return {self.domain_sid} | {t.sid for t in trusts if t.sid and (t.trustAttributes or 0) & TRUST_ATTRIBUTE_WITHIN_FOREST}
 
     @cached_property
     def _publication(self) -> dict[str, list[str]] | None:

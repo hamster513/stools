@@ -11,7 +11,7 @@ from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex, load_export
 from api.modules.ad.core.ldap_collector import LdapCollector, LdapResultError
 from tests.ad.fake_ldap import FakeLdap
-from tests.ad.synthetic import DN, OTHER_SID, PKI, b64sd, export_bytes, rid, user_dn
+from tests.ad.synthetic import DN, EXT_SID, OTHER_SID, PKI, b64sd, export_bytes, rid, user_dn
 
 
 def test_ldap_collector_matches_powershell_export() -> None:
@@ -79,8 +79,9 @@ def test_collector_reads_pki_objects_and_trusts() -> None:
     assert containers == {PKI, f"CN=NTAuthCertificates,{PKI}", f"CN=OID,{PKI}"}
     oid = next(o for o in raw["objects"] if o["class"] == "msPKI-Enterprise-Oid")
     assert oid["displayName"] == "Corp Policy" and oid["msPKI-Cert-Template-OID"] == "1.3.6.1.4.1.311.21.8.1.1"
-    trust = next(o for o in raw["objects"] if o["class"] == "trustedDomain")
-    assert trust["flatName"] == "OTHER" and trust["sid"] == OTHER_SID
+    trusts = {o["flatName"]: o for o in raw["objects"] if o["class"] == "trustedDomain"}
+    assert trusts["OTHER"]["sid"] == OTHER_SID and trusts["OTHER"]["trustAttributes"] == 0x20
+    assert trusts["EXT"]["sid"] == EXT_SID and trusts["EXT"]["trustAttributes"] == 0x4
     tpl = next(o for o in raw["objects"] if o["class"] == "pKICertificateTemplate")
     assert tpl["cn"] and "msPKI-Certificate-Policy" in tpl and "msPKI-Cert-Template-OID" in tpl
 
@@ -107,7 +108,7 @@ def test_trusts_are_searched_one_level_below_system() -> None:
 
     raw = LdapCollector(search, fake.root_dse(), smb_reader=fake.smb).collect()
     assert scopes == ["LEVEL"]
-    assert [o["sid"] for o in raw["objects"] if o["class"] == "trustedDomain"] == [OTHER_SID]
+    assert [o["sid"] for o in raw["objects"] if o["class"] == "trustedDomain"] == [OTHER_SID, EXT_SID]
 
 
 def test_foreign_security_principal_does_not_hide_trusted_domain_name() -> None:

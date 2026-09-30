@@ -317,7 +317,7 @@ class LdapCollector:
 
     def _trusts(self, default_nc: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        for e in self._search_optional(f"CN=System,{default_nc}", "(objectClass=trustedDomain)", ["flatName", "securityIdentifier"], "LEVEL"):
+        for e in self._search_optional(f"CN=System,{default_nc}", "(objectClass=trustedDomain)", ["flatName", "securityIdentifier", "trustAttributes"], "LEVEL"):
             raw_sid = _raw(e, "securityIdentifier")
             out.append(
                 {
@@ -325,6 +325,7 @@ class LdapCollector:
                     "class": "trustedDomain",
                     "flatName": str(_first(e["attributes"].get("flatName")) or ""),
                     "sid": sd.sid_to_str(raw_sid) if raw_sid else None,
+                    "trustAttributes": _int(e["attributes"].get("trustAttributes")),
                 }
             )
         return out

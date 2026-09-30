@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from api.modules.ad.core.export import ExportIndex, load_export
-from tests.ad.synthetic import OTHER_SID, build_export
+from tests.ad.synthetic import DOMAIN_SID, EXT_SID, OTHER_SID, build_export
 
 
 def _idx(raw: dict[str, Any] | None = None) -> ExportIndex:
@@ -56,7 +56,7 @@ def test_template_without_cn_uses_first_rdn() -> None:
 
 def test_foreign_domain_sids_get_domain_and_rid_names() -> None:
     idx = _idx()
-    assert idx.trusted_domains == {OTHER_SID: "OTHER"}
+    assert idx.trusted_domains == {OTHER_SID: "OTHER", EXT_SID: "EXT"}
     assert idx.principal_name(f"{OTHER_SID}-513") == "OTHER\\Domain Users"
     assert idx.principal_name(f"{OTHER_SID}-4711") == "OTHER\\RID-4711"
     assert idx.principal_name("S-1-5-21-9-9-9-513") == "S-1-5-21-9-9-9-513"
@@ -79,3 +79,19 @@ def test_old_export_without_new_fields_still_loads() -> None:
     raw = build_export()
     raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pKIEnrollmentService", "pkiContainer", "msPKI-Enterprise-Oid", "trustedDomain")]
     assert _idx(raw).trusted_domains == {}
+
+
+def test_forest_domain_sids_from_trust_attributes() -> None:
+    """Свой домен и доверия с TRUST_ATTRIBUTE_WITHIN_FOREST (0x20); внешнее доверие — не лес."""
+    assert _idx().forest_domain_sids == {DOMAIN_SID, OTHER_SID}
+
+
+def test_forest_unknown_without_trusts_or_trust_attributes() -> None:
+    """Старая выгрузка: доверий нет или у них нет trustAttributes — состав леса неизвестен."""
+    raw = build_export()
+    raw["objects"] = [o for o in raw["objects"] if o["class"] != "trustedDomain"]
+    assert _idx(raw).forest_domain_sids is None
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("trustAttributes", None)
+    assert _idx(raw).forest_domain_sids is None

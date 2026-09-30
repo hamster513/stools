@@ -58,6 +58,7 @@ class FakeLdap:
             "msPKI-Enrollment-Servers": o.get("msPKI-Enrollment-Servers", []),
             "msDS-OIDToGroupLink": o.get("msDS-OIDToGroupLink"),
             "flatName": o.get("flatName"),
+            "trustAttributes": o.get("trustAttributes"),
             "altSecurityIdentities": o.get("altSecurityIdentities", []),
             "objectClass": ["top", o["class"]],
             "ms-DS-MachineAccountQuota": self.raw["domain"]["machine_account_quota"] if o["class"] == "domainDNS" else None,
