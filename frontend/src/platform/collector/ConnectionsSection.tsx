@@ -84,14 +84,18 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
                 <td className="py-2 pr-3 text-text">{c.title || `#${c.id}`}{linked(c)}</td>
                 <td className="py-2 pr-3 font-mono text-text-secondary">{address(c)}</td>
                 <td className="py-2 pr-3 font-mono text-text-secondary">{account(c)}{c.password_set ? '' : ' (нет пароля)'}</td>
-                <td className="py-2 text-right whitespace-nowrap">
+                <td className="py-2 text-right">
                   {write && (
                     <>
-                      <Button variant="ghost" onClick={() => test.mutate(c.id, { onSuccess: (r) => setTestResult({ id: c.id, ...r }) })} loading={test.isPending}><PlugZap size={13} aria-hidden /> проверить</Button>
-                      <Button variant="ghost" onClick={() => collect.mutate(c.id)} loading={collect.isPending} disabled={!c.password_set}><ServerCog size={13} aria-hidden /> собрать</Button>
-                      <Button variant="ghost" onClick={() => setEditing(toForm(c))}>изменить</Button>
-                      <Button variant="ghost" onClick={() => remove.mutate(c.id)} aria-label="Удалить подключение"><Trash2 size={13} aria-hidden /></Button>
-                      {testResult?.id === c.id && <div className={cn('mt-1 inline-flex items-center gap-1 text-[11px]', testResult.ok ? 'text-kind-accepted' : 'text-kind-1')}>{testResult.ok ? <CheckCircle2 size={12} aria-hidden /> : <XCircle size={12} aria-hidden />} {testResult.message}</div>}
+                      <div className="whitespace-nowrap">
+                        <Button variant="ghost" onClick={() => test.mutate(c.id, { onSuccess: (r) => setTestResult({ id: c.id, ...r }) })} loading={test.isPending}><PlugZap size={13} aria-hidden /> проверить</Button>
+                        <Button variant="ghost" onClick={() => collect.mutate(c.id)} loading={collect.isPending} disabled={!c.password_set}><ServerCog size={13} aria-hidden /> собрать</Button>
+                        <Button variant="ghost" onClick={() => setEditing(toForm(c))}>изменить</Button>
+                        <Button variant="ghost" onClick={() => remove.mutate(c.id)} aria-label="Удалить подключение"><Trash2 size={13} aria-hidden /></Button>
+                      </div>
+                      {/* Результат проверки — отдельной строкой под кнопками: длинный DN
+                          домена или текст ошибки переносится, а не вылезает за блок. */}
+                      {testResult?.id === c.id && <div className={cn('mt-1 flex items-start justify-end gap-1 text-[11px] break-words', testResult.ok ? 'text-kind-accepted' : 'text-kind-1')}>{testResult.ok ? <CheckCircle2 size={12} className="mt-0.5 shrink-0" aria-hidden /> : <XCircle size={12} className="mt-0.5 shrink-0" aria-hidden />}<span className="min-w-0 text-left">{testResult.message}</span></div>}
                     </>
                   )}
                 </td>
