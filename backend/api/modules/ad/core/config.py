@@ -86,6 +86,11 @@ class AdConfig(BaseModel):
     sensitive_acl_search_base: str = ""
     sensitive_acl_exclude_ous: list[str] = Field(default_factory=list)
     sensitive_acl_max_objects: int = Field(default=0, ge=0)
+    #: Сворачивать унаследованные ACE к объекту-источнику, а одинаковые явные
+    #: права на множестве объектов — в одну находку.
+    sensitive_acl_collapse: bool = True
+    #: С какого числа объектов (строго больше) явная пара «кто + право» сворачивается.
+    sensitive_acl_collapse_threshold: int = Field(default=50, ge=1, le=100000)
 
 
 DEFAULT_CONFIG = AdConfig()

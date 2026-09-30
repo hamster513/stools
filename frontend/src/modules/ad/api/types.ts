@@ -62,6 +62,8 @@ export interface AdConfig {
   sensitive_acl_search_base: string
   sensitive_acl_exclude_ous: string[]
   sensitive_acl_max_objects: number
+  sensitive_acl_collapse: boolean
+  sensitive_acl_collapse_threshold: number
 }
 
 export interface SettingsView {

@@ -3,6 +3,9 @@ msDS-KeyCredentialLink, OU/компьютеры, GPO."""
 from __future__ import annotations
 
 import uuid
+from collections import Counter
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 
 from api.modules.ad.core import sd
 from api.modules.ad.core.config import AdConfig
@@ -151,6 +154,8 @@ def _sensitive_targets(idx: ExportIndex, cfg: AdConfig) -> list[AdObject]:
 
 
 def check_sensitive_acl(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    if cfg.sensitive_acl_collapse:
+        return _sensitive_acl_collapsed(idx, cfg)
     out: list[Finding] = []
     for obj in _sensitive_targets(idx, cfg):
         desc = idx.sd_of(obj)
@@ -177,6 +182,235 @@ def check_sensitive_acl(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
                     allowlist=False,
                 )
             )
+    return out
+
+
+#: Как AD разворачивает generic-права в конкретные (ActiveDirectoryRights .NET):
+#: на источнике может стоять GenericAll, а у потомка — те же права битами.
+GENERIC_MAP = {sd.GENERIC_ALL: 0xF01FF, sd.GENERIC_WRITE: 0x20028, sd.GENERIC_READ: 0x20094, sd.GENERIC_EXECUTE: 0x20004}
+SAMPLES = 20
+#: Флаги ACE: наследуется потомками; только детьми (не глубже).
+CONTAINER_INHERIT = 0x02
+NO_PROPAGATE = 0x04
+
+AceKey = tuple[int, int, str, uuid.UUID | None, uuid.UUID | None]
+
+
+def _ace_key(ace: sd.Ace) -> AceKey:
+    """Одна и та же ACE на источнике и у потомка; флаги наследования не сравниваются."""
+    mask = ace.mask
+    for bit, specific in GENERIC_MAP.items():
+        if mask & bit:
+            mask = (mask & ~bit) | specific
+    return (ace.type, mask, ace.sid, ace.object_type, ace.inherited_object_type)
+
+
+def _split_dn(dn: str) -> list[str]:
+    """RDN по запятым, кроме экранированных (`CN=Smith\\, John`)."""
+    parts: list[str] = []
+    cur: list[str] = []
+    escaped = False
+    for ch in dn:
+        if escaped:
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == ",":
+            parts.append("".join(cur).strip())
+            cur = []
+            continue
+        cur.append(ch)
+    parts.append("".join(cur).strip())
+    return parts
+
+
+def _parent_dn(dn: str) -> str | None:
+    rdns = _split_dn(dn)
+    return ",".join(rdns[1:]) if len(rdns) > 1 else None
+
+
+def _common_parent(dns: list[str]) -> str:
+    """Ближайший общий предок (строго выше каждого DN); пусто, если общего нет."""
+    chains = [_split_dn(dn)[1:] for dn in dns]
+    common: list[str] = []
+    for i in range(1, min(len(c) for c in chains) + 1):
+        if len({c[-i].lower() for c in chains}) != 1:
+            break
+        common.insert(0, chains[0][-i])
+    return ",".join(common)
+
+
+def _nearest_known(idx: ExportIndex, dn: str) -> AdObject | None:
+    cur: str | None = dn
+    while cur:
+        obj = idx.get(cur)
+        if obj is not None:
+            return obj
+        cur = _parent_dn(cur)
+    return None
+
+
+@dataclass
+class _Group:
+    """Будущая свёрнутая находка: цель, кто и какое право, кого затрагивает."""
+
+    target: str
+    cls: str
+    sid: str
+    right: str
+    key_extra: str = ""
+    explicit: bool = False
+    in_scope: bool = False
+    #: dn.lower() → объект: у потомка одна и та же ACE бывает дважды (действующая
+    #: и inherit-only копия generic-права, либо от двух предков) — считаем объект один раз.
+    inherited: dict[str, AdObject] = field(default_factory=dict)
+    explicit_on: list[AdObject] = field(default_factory=list)
+
+
+def _counts(objs: Iterable[AdObject]) -> dict[str, int]:
+    return dict(sorted(Counter(o.cls for o in objs).items()))
+
+
+def _samples(objs: Iterable[AdObject]) -> list[str]:
+    return sorted((o.dn for o in objs), key=str.lower)[:SAMPLES]
+
+
+def _sensitive_acl_collapsed(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    """Унаследованная ACE — одна находка на источнике (ближайший предок, где она
+    явная); одинаковая явная пара «кто + право» больше чем на пороге объектов —
+    одна находка на их общем предке."""
+    targets = _sensitive_targets(idx, cfg)
+    in_scope = {o.dn.lower() for o in targets}
+    Aces = dict[AceKey, sd.Ace]
+    explicit_cache: dict[str, tuple[Aces, Aces]] = {}
+    source_cache: dict[tuple[str, AceKey], tuple[AdObject, sd.Ace] | None] = {}
+
+    def explicit_of(dn: str) -> tuple[AdObject | None, Aces, Aces]:
+        """Явные ACE, которые могли дойти до потомков: всех (CI) и только до детей (CI+NP)."""
+        obj = idx.get(dn)
+        key = dn.lower()
+        if key not in explicit_cache:
+            desc = idx.sd_of(obj) if obj else None
+            deep: Aces = {}
+            children: Aces = {}
+            for a in desc.dacl if desc else []:
+                if not a.inherited and a.flags & CONTAINER_INHERIT:
+                    (children if a.flags & NO_PROPAGATE else deep).setdefault(_ace_key(a), a)
+            explicit_cache[key] = (deep, children)
+        return obj, *explicit_cache[key]
+
+    def source_of(parent: str | None, key: AceKey) -> tuple[AdObject, sd.Ace] | None:
+        """Ближайший предок, откуда ACE могла прийти; NP-источник — только родитель."""
+        if parent is None:
+            return None
+        obj, deep, children = explicit_of(parent)
+        if obj is not None and key not in deep and key in children:
+            return obj, children[key]
+        return deep_source_of(parent, key)
+
+    def deep_source_of(dn: str | None, key: AceKey) -> tuple[AdObject, sd.Ace] | None:
+        path: list[tuple[str, AceKey]] = []
+        found: tuple[AdObject, sd.Ace] | None = None
+        while dn is not None:
+            ck = (dn.lower(), key)
+            if ck in source_cache:
+                found = source_cache[ck]
+                break
+            path.append(ck)
+            obj, deep, _ = explicit_of(dn)
+            if obj is not None and key in deep:
+                found = (obj, deep[key])
+                break
+            dn = _parent_dn(dn)
+        for ck in path:
+            source_cache[ck] = found
+        return found
+
+    groups: dict[tuple[str, str, str], _Group] = {}
+    unknown: dict[tuple[str, str], dict[str, AdObject]] = {}
+    pairs: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    for obj in targets:
+        desc = idx.sd_of(obj)
+        if desc is None:
+            continue
+        parent = _parent_dn(obj.dn)
+        dn_key = obj.dn.lower()
+        for ace in desc.dacl:
+            if not ace.allow or not (ace.mask & WRITE_LIKE):
+                continue
+            if is_allowlisted(idx.principal_name(ace.sid), cfg):
+                continue
+            if not ace.inherited:
+                right = ", ".join(ace.rights)
+                gk = (dn_key, ace.sid, right)
+                g = groups.setdefault(gk, _Group(obj.dn, obj.cls, ace.sid, right, in_scope=True))
+                if not g.explicit:
+                    g.explicit = True
+                    pairs.setdefault((ace.sid, right), []).append(gk)
+                continue
+            found = source_of(parent, _ace_key(ace))
+            if found is None:
+                unknown.setdefault((ace.sid, ", ".join(ace.rights)), {})[dn_key] = obj
+                continue
+            src, src_ace = found
+            right = ", ".join(src_ace.rights)
+            g = groups.setdefault(
+                (src.dn.lower(), ace.sid, right),
+                _Group(src.dn, src.cls, ace.sid, right, in_scope=src.dn.lower() in in_scope),
+            )
+            g.inherited[dn_key] = obj
+
+    # Массовые явные права: пара стоит явно больше чем на пороге объектов.
+    mass: list[_Group] = []
+    for (sid_, right), keys in pairs.items():
+        if len(keys) <= cfg.sensitive_acl_collapse_threshold:
+            continue
+        members = [groups.pop(k) for k in keys]
+        target = _common_parent([m.target for m in members]) or idx.export.domain.dn
+        anchor = idx.get(target)
+        mg = _Group(target, anchor.cls if anchor else "", sid_, right, key_extra="mass", in_scope=target.lower() in in_scope)
+        for m in members:
+            obj_ = idx.get(m.target)
+            if obj_ is not None:
+                mg.explicit_on.append(obj_)
+            mg.inherited.update(m.inherited)
+        mass.append(mg)
+
+    for (sid_, right), objs in unknown.items():
+        common = _common_parent([o.dn for o in objs.values()])
+        anchor = _nearest_known(idx, common) if common else None
+        target = anchor.dn if anchor else (common or idx.export.domain.dn)
+        g = _Group(target, anchor.cls if anchor else "", sid_, right, key_extra="unknown", in_scope=False)
+        g.inherited = objs
+        mass.append(g)
+
+    out: list[Finding] = []
+    for g in [*groups.values(), *mass]:
+        details: dict[str, object] = {"object_type": g.cls, "is_inherited": False}
+        if g.inherited or g.key_extra:
+            details["inherited_to"] = _counts(g.inherited.values())
+            details["source_in_scope"] = g.in_scope
+            details["samples"] = _samples(g.explicit_on or g.inherited.values())
+        if g.key_extra == "mass":
+            details["explicit_on"] = _counts(g.explicit_on)
+        if g.key_extra == "unknown":
+            details["source"] = "unknown"
+        out.append(
+            finalize(
+                Finding(
+                    check="SensitiveAcl",
+                    severity="High",
+                    identity=idx.principal_name(g.sid),
+                    identity_sid=g.sid,
+                    target=g.target,
+                    right=g.right,
+                    details=details,
+                    key_extra=g.key_extra,
+                ),
+                cfg,
+                allowlist=False,
+            )
+        )
     return out
 
 

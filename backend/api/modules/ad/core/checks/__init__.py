@@ -52,7 +52,7 @@ CHECKS: list[CheckSpec] = [
     CheckSpec("KrbtgtPasswordAge", "Возраст пароля krbtgt", "Редкая смена пароля krbtgt увеличивает риск длительной компрометации Kerberos.", check_krbtgt_password_age, ("T1558.001",)),
     CheckSpec("WeakEncryption", "Слабое шифрование Kerberos (RC4)", "Разрешение RC4 и слабых шифров снижает стойкость Kerberos и упрощает атаки.", check_weak_encryption, ("T1558",)),
     CheckSpec("PreauthDisabled", "Preauth отключена", "Отключённая preauth позволяет получать ответы AS-REP для офлайн-подбора.", check_preauth_disabled, ("T1558.004",)),
-    CheckSpec("SensitiveAcl", "Опасные ACL на OU и компьютерах", "Опасные ACL на OU и компьютерах позволяют изменять объекты и продвигаться по привилегиям.", check_sensitive_acl, ("T1098", "T1484")),
+    CheckSpec("SensitiveAcl", "Опасные ACL на OU и компьютерах", "Опасные ACL на OU и компьютерах позволяют изменять объекты и продвигаться по привилегиям. Унаследованное право показывается одной находкой на объекте-источнике, а одинаковое явное право на множестве объектов — одной находкой на их общем предке.", check_sensitive_acl, ("T1098", "T1484")),
     CheckSpec("ADCS_ESC", "Шаблоны AD CS (ESC1–ESC4)", "Уязвимые шаблоны AD CS (ESC1–ESC4): риск выпуска сертификатов с привилегиями.", check_adcs_templates, ("T1649",)),
 ]
 

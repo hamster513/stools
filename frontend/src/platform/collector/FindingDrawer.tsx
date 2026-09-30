@@ -9,10 +9,12 @@ import { cn } from '@/lib/cn'
 import { SeverityBadge } from './SeverityBadge'
 import { STATUS_LABELS, type FindingBase, type FindingDetail } from './types'
 
-function fmt(v: unknown): string {
+// DN сами содержат запятые, поэтому списки DN (samples) — по одному в строке.
+function fmt(v: unknown, key = ''): string {
   if (v === null || v === undefined || v === '') return '—'
   if (typeof v === 'boolean') return v ? 'да' : 'нет'
-  if (Array.isArray(v)) return v.map(String).join(', ')
+  if (Array.isArray(v)) return v.map(String).join(key === 'samples' ? '\n' : ', ')
+  if (typeof v === 'object') return Object.entries(v).map(([k, x]) => `${k}: ${fmt(x)}`).join(', ')
   return String(v)
 }
 
@@ -70,7 +72,7 @@ export function CollectorFindingDrawer<F extends FindingBase, S extends object>(
                     {leadRows(d)}
                     <dt className="text-text-secondary">Статус</dt><dd className="text-text">{STATUS_LABELS[d.status]}{d.allowlisted && <span className="ml-1 text-text-secondary">· в allowlist, severity понижена с {d.severity_original}</span>}</dd>
                     {Object.entries(d.details).filter(([k]) => !hiddenDetails.has(k)).map(([k, v]) => (
-                      <span key={k} className="contents"><dt className="text-text-secondary">{k}</dt><dd className="font-mono break-all text-text">{fmt(v)}</dd></span>
+                      <span key={k} className="contents"><dt className="text-text-secondary">{k}</dt><dd className="font-mono break-all whitespace-pre-line text-text">{fmt(v, k)}</dd></span>
                     ))}
                     {trailRows?.(d)}
                   </dl>
