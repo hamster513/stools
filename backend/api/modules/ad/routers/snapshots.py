@@ -22,11 +22,14 @@ from api.collector_routes import (
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.export_files import file_sha256
 from api.jobs import JobHandle
+from api.modules.ad.core.ca_data import CA_FORMAT, load_ca_data_path, sniff_format
 from api.modules.ad.core.checks import CHECK_BY_CODE, CHECKS
 from api.modules.ad.core.export import ExportFormatError
 from api.modules.ad.core.findings import SEVERITIES
 from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
+from api.modules.ad.services.ca_data import store_ca_data
 from api.modules.ad.services.settings import load_config
 from api.modules.ad.services.snapshots import (
     accepted_keys,
@@ -155,8 +158,11 @@ async def upload_snapshot(
 ) -> JobStarted:
     data = await read_upload(db, AdJob, file)
     data_dir = settings.data_dir
+    login = user.login
 
     def load(session: Session, handle: JobHandle, upload: Path, name: str) -> str:
+        if sniff_format(upload) == CA_FORMAT:
+            return _load_ca_data(session, handle, upload, name, login, data_dir)
         try:
             snap = import_export(session, handle, upload, "file", name, load_config(session), data_dir)
         except ExportFormatError as exc:
@@ -167,6 +173,21 @@ async def upload_snapshot(
         background_tasks, db, user, data, file.filename, upload_dir=settings.data_dir / "ad", job_model=AdJob, load=load,
     )
     return JobStarted(job_id=job_id)
+
+
+def _load_ca_data(session: Session, handle: JobHandle, upload: Path, name: str, login: str, data_dir: Path) -> str:
+    """Данные ЦС — не снапшот: сохраняются у домена, последний снапшот пересчитывается с ними.
+    Ошибки формата и неизвестный домен — ValueError, задача падает с их текстом."""
+    handle.stage("parsing", message=name)
+    ca = load_ca_data_path(upload)
+    row = store_ca_data(session, ca, filename=name, sha256=file_sha256(upload), uploaded_by=login)
+    session.commit()
+    summary = f"данные ЦС: центров {len(ca.cas)}, контроллеров {len(ca.dcs)}"
+    snap = latest_snapshot(session, row.domain_id)
+    if snap is None:
+        return f"{summary}; снапшотов домена пока нет"
+    reanalyze(session, handle, snap, load_config(session), data_dir)
+    return f"{summary}; снапшот #{snap.id} пересчитан"
 
 
 @router.post("/snapshots/{snapshot_id}/reanalyze", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)

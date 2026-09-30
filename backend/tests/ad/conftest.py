@@ -6,6 +6,8 @@ from tests.api.conftest import (  # noqa: F401 — реэкспорт фикст
     app_settings,
     auth_client,
     client,
+    client_as,
     db_session,
+    make_user,
     test_user,
 )

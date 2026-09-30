@@ -8,8 +8,10 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.db.models import Base, _utcnow
@@ -72,6 +74,27 @@ class AdSnapshot(Base):
     analyzer_version: Mapped[str] = mapped_column(String(16), default="")
     #: {check: причина} — проверки, для которых в выгрузке не было данных.
     unchecked_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
+    #: По каким данным ЦС посчитан снапшот (самая свежая из учтённых загрузок).
+    ca_data_id: Mapped[int | None] = mapped_column(ForeignKey("ad_ca_data.id", ondelete="SET NULL"), nullable=True)
+
+
+class AdCaData(Base):
+    """Загрузка данных ЦС (`stools-ad-ca/1`) — сущность домена, не снапшота:
+    собирается отдельно и реже, анализ берёт самые свежие разделы."""
+
+    __tablename__ = "ad_ca_data"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("ad_domain.id", ondelete="CASCADE"), index=True)
+    collected_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    imported_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    filename: Mapped[str] = mapped_column(String(255), default="")
+    sha256: Mapped[str] = mapped_column(String(64), default="")
+    uploaded_by: Mapped[str] = mapped_column(String(255), default="")
+    #: ["ca", "dc", "web"] — какие разделы собраны.
+    sections_json: Mapped[str] = mapped_column(Text, default="[]")
+    #: Файл целиком.
+    data: Mapped[dict[str, Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
 
 
 class AdFinding(Base):

@@ -11,13 +11,14 @@ from fastapi import APIRouter
 from api.jobs import make_jobs_router
 from api.modules.ad import models as models  # таблицы должны попасть в metadata
 from api.modules.ad.models import AdJob
-from api.modules.ad.routers import collector, connections, findings, settings, snapshots
+from api.modules.ad.routers import ca_data, collector, connections, findings, settings, snapshots
 from api.modules.ad.services.attack_layer import LAYER as ATTACK_LAYER
 from api.modules.attack.layers import register_layer
 
 router = APIRouter(prefix="/api/ad")
 for sub in (
     snapshots.router,
+    ca_data.router,
     findings.router,
     settings.router,
     connections.router,

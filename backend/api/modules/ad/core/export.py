@@ -11,13 +11,16 @@ import datetime as dt
 import json
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from api.export_files import GZIP_MAGIC
 from api.modules.ad.core.sd import SecurityDescriptor, parse_sd
 from kbaudit.safe_io import MB, decompress_gzip, decompress_gzip_file
+
+if TYPE_CHECKING:
+    from api.modules.ad.core.ca_data import CaData
 
 FORMAT = "stools-ad/1"
 #: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
@@ -278,8 +281,10 @@ def datetime_to_filetime(value: dt.datetime) -> int:
 class ExportIndex:
     """Ускорители для проверок; строится один раз на выгрузку."""
 
-    def __init__(self, export: AdExport) -> None:
+    def __init__(self, export: AdExport, ca: CaData | None = None) -> None:
         self.export = export
+        #: Данные ЦС домена (самые свежие разделы); None — не загружались.
+        self.ca = ca
         self.domain_sid = export.domain.sid
         self.by_dn: dict[str, AdObject] = {o.dn.lower(): o for o in export.objects}
         # У объекта доверия в sid — SID чужого домена, это не учётная запись.

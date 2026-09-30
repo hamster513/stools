@@ -7,10 +7,11 @@
 """
 from __future__ import annotations
 
+from api.modules.ad.core.ca_data import CaData
 from api.modules.ad.core.export import AdExport
 
 
-def coverage_gaps(export: AdExport) -> dict[str, str]:
+def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     users = gpos = templates = pki_objects = 0
     logon_dates = False
     for o in export.objects:

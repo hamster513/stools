@@ -246,3 +246,31 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
 
 def export_bytes(**kwargs: Any) -> bytes:
     return json.dumps(build_export(**kwargs), ensure_ascii=False).encode("utf-8")
+
+
+def build_ca_data(*, now: dt.datetime = NOW, **overrides: Any) -> dict[str, Any]:
+    """Файл `stools-ad-ca/1` для домена CORP: всё настроено безопасно."""
+    data: dict[str, Any] = {
+        "format": "stools-ad-ca/1",
+        "collected_at": now.isoformat(),
+        "collector": {"kind": "powershell", "version": "2.0", "host": "DC01", "account": "CORP\\auditor"},
+        "domain": {"sid": DOMAIN_SID, "dns_root": "corp.local"},
+        "sections": ["ca", "dc", "web"],
+        "cas": [
+            {
+                "name": "CORP-CA",
+                "host": "ca01.corp.local",
+                "os_build": "20348",
+                "edit_flags": 0x11014E,
+                "interface_flags": 0x641,
+                "disable_extension_list": [],
+                # ManageCA | ManageCertificates
+                "security": b64sd([sd.build_ace(rid(512), 0x1 | 0x2)]),
+                "error": "",
+            }
+        ],
+        "dcs": [{"host": "dc01.corp.local", "strong_binding": 2, "mapping_methods": 0x18, "error": ""}],
+        "web": [{"url": "http://ca01.corp.local/certsrv/", "status": 404, "auth": [], "error": ""}],
+    }
+    data.update(overrides)
+    return data
