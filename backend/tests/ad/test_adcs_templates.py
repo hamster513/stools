@@ -250,6 +250,11 @@ def test_esc9_needs_flag() -> None:
     assert esc(run(template(aces=[enroll(rid(513))])), "ESC9") == []
 
 
+def test_esc9_not_with_manager_approval() -> None:
+    t = template(aces=[enroll(rid(513))], **{"msPKI-Enrollment-Flag": 0x80000 | 0x2, "msPKI-Certificate-Name-Flag": 0})
+    assert esc(run(t), "ESC9") == []
+
+
 def _linked(raw: dict[str, Any], link: str) -> dict[str, Any]:
     oid = next(o for o in raw["objects"] if o["class"] == "msPKI-Enterprise-Oid")
     oid["msDS-OIDToGroupLink"] = link
@@ -267,6 +272,11 @@ def test_esc13_not_without_group_link() -> None:
     assert esc(run(t), "ESC13") == []
 
 
+def test_esc13_not_with_manager_approval() -> None:
+    t = template(**{"msPKI-Certificate-Policy": [POLICY_OID], "msPKI-Certificate-Name-Flag": 0, "msPKI-Enrollment-Flag": 0x2})
+    assert esc(run(raw=_linked(_raw(t), user_dn("Tier0"))), "ESC13") == []
+
+
 def test_esc15_schema_v1_with_supplied_subject() -> None:
     t = template(pKIExtendedKeyUsage=[SERVER_AUTH], **{"msPKI-Template-Schema-Version": 1})
     fs = esc(run(t), "ESC15")
@@ -275,3 +285,19 @@ def test_esc15_schema_v1_with_supplied_subject() -> None:
 
 def test_esc15_not_for_schema_v2() -> None:
     assert esc(run(template(pKIExtendedKeyUsage=[SERVER_AUTH])), "ESC15") == []
+
+
+def test_esc15_not_with_manager_approval() -> None:
+    t = template(pKIExtendedKeyUsage=[SERVER_AUTH], **{"msPKI-Template-Schema-Version": 1, "msPKI-Enrollment-Flag": 0x2})
+    assert esc(run(t), "ESC15") == []
+
+
+def test_esc9_13_15_not_with_agent_signature() -> None:
+    t = template(**{
+        "msPKI-Enrollment-Flag": 0x80000,
+        "msPKI-Template-Schema-Version": 1,
+        "msPKI-Certificate-Policy": [POLICY_OID],
+        "msPKI-RA-Signature": 1,
+    })
+    fs = run(raw=_linked(_raw(t), user_dn("Tier0")))
+    assert esc(fs, "ESC9") == esc(fs, "ESC13") == esc(fs, "ESC15") == []

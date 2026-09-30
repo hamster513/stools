@@ -116,12 +116,12 @@ def check_adcs_templates(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
                 if on_behalf is None:
                     on_behalf = _on_behalf_templates(idx, templates)
                 hits.append(("ESC3", "High", "сертификат агента регистрации: выпуск сертификатов от имени других", requesters, {"on_behalf_templates": on_behalf}))
-            if (t.enrollment_flag or 0) & NO_SECURITY_EXTENSION and logon:
+            if free and (t.enrollment_flag or 0) & NO_SECURITY_EXTENSION and logon:
                 hits.append(("ESC9", "Medium", "в сертификат не пишется расширение безопасности с SID (NO_SECURITY_EXTENSION), сертификат годится для входа", requesters, {}))
             groups = sorted({links[p] for p in t.issuance_policies if p in links})
-            if groups and logon:
+            if free and groups and logon:
                 hits.append(("ESC13", "High", "политика выдачи шаблона связана с группой: сертификат даёт её права", requesters, {"group": "; ".join(groups)}))
-            if t.schema_version == 1 and supplies:
+            if free and t.schema_version == 1 and supplies:
                 hits.append(("ESC15", "High", "шаблон схемы v1, субъект задаёт заявитель: политики приложений подставляются из запроса (закрыто обновлением ноября 2024)", requesters, {}))
         writers = unsafe_writers(idx, cfg, desc)
         if writers:

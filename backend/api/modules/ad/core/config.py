@@ -86,8 +86,9 @@ class AdConfig(BaseModel):
     #: SYSTEM, BUILTIN\Administrators, Enterprise Domain Controllers.
     adcs_safe_sids: list[str] = Field(default_factory=lambda: ["S-1-5-18", "S-1-5-32-544", "S-1-5-9"])
     #: RID любого домена леса: Administrator, Domain Admins, Domain Controllers,
-    #: Schema Admins, Enterprise Admins, Enterprise Read-only DCs, Read-only DCs.
-    adcs_safe_rids: list[int] = Field(default_factory=lambda: [500, 512, 516, 518, 519, 498, 521])
+    #: Schema Admins, Enterprise Admins, Enterprise Read-only DCs, Read-only DCs,
+    #: Cert Publishers (серверы ЦС; AD по умолчанию даёт ей запись в AIA, CDP и Certification Authorities).
+    adcs_safe_rids: list[int] = Field(default_factory=lambda: [500, 512, 516, 518, 519, 498, 521, 517])
     #: Имена (свои группы администраторов ЦС).
     adcs_safe_principals: list[str] = Field(default_factory=list)
     #: OUs | Computers | Both
