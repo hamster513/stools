@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from api.modules.ad.core import sd
-from tests.ad.synthetic import CONF_DN, DN, GUID_KEYCRED, build_export
+from tests.ad.synthetic import CONF_DN, DN, GUID_KEYCRED, PKI, b64sd, build_export, rid
 
 _SID_FILTER = re.compile(r"\(objectSid=(S-[0-9-]+)\)")
 
@@ -25,6 +25,8 @@ class FakeLdap:
     def __init__(self) -> None:
         self.raw = build_export()
         self.objects = self.raw["objects"]
+        # В настоящем AD сам контейнер CN=OID тоже класса msPKI-Enterprise-Oid.
+        self.objects.append({"dn": f"CN=OID,{PKI}", "class": "msPKI-Enterprise-Oid", "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)])})
 
     def entry(self, o: dict[str, Any]) -> dict[str, Any]:
         attrs: dict[str, Any] = {

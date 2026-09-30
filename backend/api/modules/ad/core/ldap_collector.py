@@ -317,7 +317,7 @@ class LdapCollector:
 
     def _trusts(self, default_nc: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        for e in self._search_optional(f"CN=System,{default_nc}", "(objectClass=trustedDomain)", ["flatName", "securityIdentifier"], "SUBTREE"):
+        for e in self._search_optional(f"CN=System,{default_nc}", "(objectClass=trustedDomain)", ["flatName", "securityIdentifier"], "LEVEL"):
             raw_sid = _raw(e, "securityIdentifier")
             out.append(
                 {
@@ -372,9 +372,14 @@ class LdapCollector:
             for e in self.search(default_nc, flt, ["sAMAccountName", "objectSid", "objectClass"], "SUBTREE"):
                 a = e["attributes"]
                 sid_ = _sid_str(a.get("objectSid"))
+                sam = _first(a.get("sAMAccountName"))
                 classes = [c.lower() for c in _list(a.get("objectClass"))]
+                # Запись foreignSecurityPrincipal — SID чужого домена в локальной группе, без имени:
+                # не регистрируется, чтобы имя дал доверенный домен (ExportIndex.principal_name).
+                if not sam or "foreignsecurityprincipal" in classes:
+                    continue
                 cls = "computer" if "computer" in classes else "group" if "group" in classes else "user"
-                self._register(sid_, f"{netbios}\\{_first(a.get('sAMAccountName')) or sid_}", cls)
+                self._register(sid_, f"{netbios}\\{sam}", cls)
 
 
 def _decode_inf(content: bytes) -> str:
