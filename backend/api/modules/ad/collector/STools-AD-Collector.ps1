@@ -23,12 +23,15 @@
   Оба файла загружаются в STools → Active Directory → Настройки и данные тем же
   полем «Загрузить выгрузку».
 
-  Без -Mode скрипт показывает меню, печатает план (какие серверы и что будет
-  прочитано) и спрашивает подтверждение.
+  Без параметров (или только с -Server и -Yes) скрипт показывает меню, печатает
+  план (какие серверы и что будет прочитано) и спрашивает подтверждение.
 
 .PARAMETER Mode
-  Menu (по умолчанию) — меню и подтверждение; All — выгрузка AD и данные ЦС;
-  AD — только выгрузка AD; CA — только данные ЦС. С All, AD и CA вопросов нет.
+  Menu — меню и подтверждение; All — выгрузка AD и данные ЦС; AD — только
+  выгрузка AD; CA — только данные ЦС. С All, AD и CA вопросов нет.
+  Без -Mode: если указан -SkipComputerAcl, -SkipSysvol или -OutputPath — AD
+  (как команды сборщика 1.x); если указан -Sections — CA, а вместе с
+  -SkipComputerAcl или -SkipSysvol — All; иначе — Menu.
 
 .PARAMETER Sections
   Разделы данных ЦС для -Mode All и CA: ca, dc, web (по умолчанию все).
@@ -405,10 +408,16 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   }
   Write-Step ("  доверенных доменов: {0}" -f ($objects.Count - $n0))
 
+  # Что не прочитано: анализатор показывает это в «не проверено». Отказ по центрам сертификации
+  # мог прийти дважды (план и выгрузка) — повторы убираются.
+  $notes = @()
+  if ($noSysvol) { $notes += "чтение SYSVOL выключено (-SkipSysvol)" }
+  $notes += @($script:warnings | Select-Object -Unique)
+
   return @{
     format = $FormatVersion
     collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    collector = @{ kind = "powershell"; version = $CollectorVersion; host = $env:COMPUTERNAME; account = ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) }
+    collector = @{ kind = "powershell"; version = $CollectorVersion; host = $env:COMPUTERNAME; account = ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME); notes = [string[]]$notes }
     domain = $domainInfo
     guids = @{ extended_rights = $extRights; schema_attributes = $schemaAttrs }
     objects = $objects.ToArray()
@@ -647,6 +656,13 @@ function Write-GzipJson($data, [string]$path) {
 
 Write-Host "STools AD Collector $CollectorVersion (форматы $FormatVersion, $CaFormatVersion)" -ForegroundColor Green
 $written = New-Object System.Collections.Generic.List[string]
+# Без -Mode команды сборщика 1.x (-SkipSysvol -OutputPath …) и команды с -Sections работают без
+# вопросов; меню — только когда кроме -Server и -Yes ничего не указано.
+if (-not $PSBoundParameters.ContainsKey("Mode")) {
+  $adSwitch = $PSBoundParameters.ContainsKey("SkipComputerAcl") -or $PSBoundParameters.ContainsKey("SkipSysvol")
+  if ($PSBoundParameters.ContainsKey("Sections")) { $Mode = $(if ($adSwitch) { "All" } else { "CA" }) }
+  elseif ($adSwitch -or $PSBoundParameters.ContainsKey("OutputPath")) { $Mode = "AD" }
+}
 try {
   if ($Mode -eq "Menu") {
     while ($true) {

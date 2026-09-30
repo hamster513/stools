@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import threading
+import uuid
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -243,7 +244,7 @@ $Objects = @(
      dNSHostName = $Web; OperatingSystemVersion = "10.0 (17763)" }
   @{ dn = "CN=Domain Admins,CN=Users,$Dom"; cls = @("group"); sAMAccountName = "Domain Admins"; objectSid = (Sid "$Base-512"); member = @("CN=alice,CN=Users,$Dom") }
   @{ dn = "OU=Servers,$Dom"; cls = @("organizationalUnit") }
-  @{ dn = "CN={11111111-2222-3333-4444-555555555555},CN=Policies,CN=System,$Dom"; cls = @("groupPolicyContainer"); displayName = "Default"; gPCFileSysPath = "/nonexistent" }
+  @{ dn = "CN={11111111-2222-3333-4444-555555555555},CN=Policies,CN=System,$Dom"; cls = @("groupPolicyContainer"); displayName = "Default"; gPCFileSysPath = $env:STUB_GPO }
   @{ dn = "CN=VulnTemplate,CN=Certificate Templates,$Pki"; cls = @("pKICertificateTemplate"); cn = "VulnTemplate"; displayName = "Vuln Template"
      pKIExtendedKeyUsage = @("1.3.6.1.5.5.7.3.2"); "msPKI-Certificate-Name-Flag" = 1; "msPKI-Enrollment-Flag" = 0; "msPKI-RA-Signature" = 0
      "msPKI-Template-Schema-Version" = 2; "msPKI-Certificate-Policy" = @("1.3.6.1.4.1.311.21.8.1.1"); "msPKI-Cert-Template-OID" = "1.3.6.1.4.1.311.21.8.9" }
@@ -283,6 +284,11 @@ function Get-ADObject {
   [CmdletBinding()]
   param([string]$Identity, [string]$SearchBase, [string]$LDAPFilter, [object[]]$Properties, [string]$SearchScope = "Subtree", [string]$Server)
   $props = @($Properties | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
+  # STUB_DENY — начало базы поиска, чтение которой запрещено (как отказ доступа в настоящем домене).
+  if ($env:STUB_DENY -and $SearchBase.StartsWith("$env:STUB_DENY,")) {
+    $err = [System.Management.Automation.ErrorRecord]::new([System.UnauthorizedAccessException]::new("Access is denied"), "AccessDenied", "PermissionDenied", $SearchBase)
+    $PSCmdlet.ThrowTerminatingError($err)
+  }
   foreach ($row in $Objects) {
     $hit = $(if ($Identity) { $row.dn -eq $Identity } else { Test-Row $row $SearchBase $LDAPFilter $SearchScope })
     if ($hit) { New-AdEntity $row $props }
@@ -318,20 +324,32 @@ Export-ModuleMember -Function Get-ADObject, Get-ADComputer, Get-ADRootDSE, Get-A
 TRUST_SID = "S-1-5-21-111-222-333"
 
 
-def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str | None = None) -> tuple[str, Path]:
-    """Весь скрипт в контейнере с поддельным модулем ActiveDirectory; отдаёт вывод и каталог результата."""
+def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str | None = None,
+                   env_extra: dict[str, str] | None = None, timeout: int = 300) -> tuple[str, Path]:
+    """Весь скрипт в контейнере с поддельным модулем ActiveDirectory; отдаёт вывод и каталог результата.
+    Не уложился в `timeout` (например, ждёт ввода) — контейнер снимается, тест падает."""
     module = tmp_path / "modules" / "ActiveDirectory"
     module.mkdir(parents=True)
     (module / "ActiveDirectory.psm1").write_text(STUB_AD_MODULE, encoding="utf-8")
+    secedit = tmp_path / "modules" / "gpo" / "MACHINE" / "Microsoft" / "Windows NT" / "SecEdit"
+    secedit.mkdir(parents=True)
+    (secedit / "GptTmpl.inf").write_text("[Privilege Rights]\nSeDebugPrivilege = *S-1-5-32-544\n", encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir()
     env = {"STUB_WEB": f"host.docker.internal:{port}", "STUB_TRUST_SID": base64.b64encode(sd.str_to_sid(TRUST_SID)).decode(),
-           "PSModulePath": "/t/modules", "COMPUTERNAME": "WS01", "USERDOMAIN": "CORP", "USERNAME": "auditor"}
-    cmd = ["docker", "run", "--rm", "-i", "--add-host=host.docker.internal:host-gateway",
+           "STUB_GPO": "/t/modules/gpo", "PSModulePath": "/t/modules", "COMPUTERNAME": "WS01", "USERDOMAIN": "CORP",
+           "USERNAME": "auditor", **(env_extra or {})}
+    name = f"stools-collector-test-{uuid.uuid4().hex[:12]}"
+    cmd = ["docker", "run", "--rm", "-i", "--name", name, "--add-host=host.docker.internal:host-gateway",
            *[a for k, v in env.items() for a in ("-e", f"{k}={v}")],
            "-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{tmp_path / 'modules'}:/t/modules:ro", "-v", f"{out}:/out", "-w", "/out",
            IMAGE, "pwsh", "-NoProfile", "-File", f"/script/{SCRIPT.name}", *args]
-    run = subprocess.run(cmd, input=stdin or "", capture_output=True, text=True, timeout=300, check=False)
+    try:
+        run = subprocess.run(cmd, input=stdin or "", capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+        tail = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
+        pytest.fail(f"скрипт не завершился за {timeout} с (ждёт ввода?): …{tail[-1500:]}")
     assert run.returncode == 0, run.stdout + run.stderr
     return run.stdout + run.stderr, out
 
@@ -366,6 +384,8 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     [trust] = by_class["trustedDomain"]
     assert trust.flatName == "OTHER" and trust.sid == TRUST_SID
     assert _gz_json(ad_file)["objects"][-1]["trustAttributes"] == 8
+    assert list(export.sysvol) == ["CN={11111111-2222-3333-4444-555555555555},CN=Policies,CN=System,DC=corp,DC=local"]
+    assert export.collector.notes == []
     [user] = by_class["user"]
     assert user.altSecurityIdentities == ["X509:<I>DC=local,DC=corp,CN=CORP-CA<S>CN=alice"]
 
@@ -393,3 +413,33 @@ def test_script_menu_rejects_bad_choice_and_waits_for_confirmation(tmp_path: Pat
     assert not list(out.glob("ad-CORP-*")), console
     data = parse_ca_data(_gz_json(ca_file))
     assert data.sections == ["web"] and data.cas == [] and data.dcs == [] and len(data.web) == 3
+
+
+SKIP_SYSVOL_NOTE = "чтение SYSVOL выключено (-SkipSysvol)"
+
+
+@needs_pwsh
+def test_script_old_command_line_collects_ad_without_menu(tmp_path: Path, web_server: int) -> None:
+    """Команда сборщика 1.x (без -Mode) не открывает меню: пишет выгрузку AD в указанный файл, учитывает
+    -SkipSysvol; пропуск SYSVOL и отказ чтения CN=OID попадают в collector.notes."""
+    console, out = _run_collector(tmp_path, web_server, ("-SkipSysvol", "-OutputPath", "/out/old.json.gz"),
+                                  env_extra={"STUB_DENY": "CN=OID"}, timeout=120)
+    assert "Выбор" not in console and "Продолжить?" not in console and "Сбор прерван" not in console, console
+    assert sorted(p.name for p in out.iterdir()) == ["old.json.gz"]
+    export = load_export((out / "old.json.gz").read_bytes())
+    assert export.sysvol == {}
+    assert export.collector.notes[0] == SKIP_SYSVOL_NOTE
+    assert [n for n in export.collector.notes if n.startswith("политики выдачи (CN=OID): ")], export.collector.notes
+    assert not [o for o in export.objects if o.cls == "msPKI-Enterprise-Oid"]
+
+
+@needs_pwsh
+def test_script_sections_without_mode_collects_ca_data(tmp_path: Path, web_server: int) -> None:
+    """-Sections без -Mode — только данные ЦС; вместе с -SkipComputerAcl или -SkipSysvol — оба файла."""
+    console, out = _run_collector(tmp_path / "ca", web_server, ("-Sections", "ca", "-OutputPath", "/out/"), timeout=120)
+    assert "Выбор" not in console and not list(out.glob("ad-CORP-*")), console
+    [ca_file] = list(out.glob("adca-CORP-*.json.gz"))
+    assert parse_ca_data(_gz_json(ca_file)).sections == ["ca"]
+    console, out = _run_collector(tmp_path / "all", web_server, ("-Sections", "dc", "-SkipComputerAcl"), timeout=120)
+    assert "Выбор" not in console, console
+    assert len(list(out.glob("ad-CORP-*.json.gz"))) == 1 and len(list(out.glob("adca-CORP-*.json.gz"))) == 1, console
