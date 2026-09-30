@@ -18,6 +18,8 @@ from api.modules.ad.core.export import datetime_to_filetime
 DOMAIN_SID = "S-1-5-21-1000-2000-3000"
 DN = "DC=corp,DC=local"
 CONF_DN = "CN=Configuration,DC=corp,DC=local"
+PKI = f"CN=Public Key Services,CN=Services,{CONF_DN}"
+OTHER_SID = "S-1-5-21-111-222-333"
 
 GUID_GET_CHANGES = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2"
 GUID_GET_CHANGES_ALL = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2"
@@ -161,6 +163,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         {
             "dn": f"CN=VulnTemplate,CN=Certificate Templates,CN=Public Key Services,CN=Services,{CONF_DN}",
             "class": "pKICertificateTemplate",
+            "cn": "VulnTemplate",
             "displayName": "VulnTemplate",
             "pKIExtendedKeyUsage": ["1.3.6.1.5.5.7.3.2"],
             "msPKI-Certificate-Name-Flag": 1,
@@ -170,6 +173,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         {
             "dn": f"CN=AgentTemplate,CN=Certificate Templates,CN=Public Key Services,CN=Services,{CONF_DN}",
             "class": "pKICertificateTemplate",
+            "cn": "AgentTemplate",
             "displayName": "AgentTemplate",
             "pKIExtendedKeyUsage": ["1.3.6.1.4.1.311.20.2.1"],
             "msPKI-Certificate-Name-Flag": 0,
@@ -178,11 +182,30 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         {
             "dn": f"CN=SafeTemplate,CN=Certificate Templates,CN=Public Key Services,CN=Services,{CONF_DN}",
             "class": "pKICertificateTemplate",
+            "cn": "SafeTemplate",
             "displayName": "SafeTemplate",
             "pKIExtendedKeyUsage": ["1.3.6.1.5.5.7.3.1"],
             "msPKI-Certificate-Name-Flag": 0,
             "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)]),
         },
+        {
+            "dn": f"CN=CORP-CA,CN=Enrollment Services,{PKI}",
+            "class": "pKIEnrollmentService",
+            "cn": "CORP-CA",
+            "dNSHostName": "ca01.corp.local",
+            "certificateTemplates": ["VulnTemplate", "AgentTemplate"],
+            "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)]),
+        },
+        {"dn": PKI, "class": "pkiContainer", "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)])},
+        {"dn": f"CN=NTAuthCertificates,{PKI}", "class": "pkiContainer", "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)])},
+        {
+            "dn": f"CN=corp-policy,CN=OID,{PKI}",
+            "class": "msPKI-Enterprise-Oid",
+            "displayName": "Corp Policy",
+            "msPKI-Cert-Template-OID": "1.3.6.1.4.1.311.21.8.1.1",
+            "msDS-OIDToGroupLink": "",
+        },
+        {"dn": f"CN=other.local,CN=System,{DN}", "class": "trustedDomain", "flatName": "OTHER", "sid": OTHER_SID},
     ]
     principals = {rid(r): {"name": f"CORP\\{sam}", "class": cls} for sam, (r, cls) in ACCOUNTS.items()}
     return {

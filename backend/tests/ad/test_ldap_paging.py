@@ -40,8 +40,8 @@ class FakeLdap3:
 
     def search(self, search_base: str, search_filter: str, search_scope: Any = None, attributes: Any = None,
                controls: Any = None, paged_size: int | None = None, paged_cookie: bytes | None = None, **_: Any) -> bool:
-        self.calls.append({"base": search_base, "filter": search_filter, "attributes": attributes, "controls": controls,
-                           "paged_size": paged_size, "paged_cookie": paged_cookie})
+        self.calls.append({"base": search_base, "filter": search_filter, "scope": search_scope, "attributes": attributes,
+                           "controls": controls, "paged_size": paged_size, "paged_cookie": paged_cookie})
         if len(self.calls) in self.fail:
             code, description = self.fail[len(self.calls)]
             self.response = []
@@ -76,6 +76,14 @@ def test_page_size_and_cookie_are_passed() -> None:
     assert got[0] == {"dn": "CN=o0,DC=corp,DC=local", "attributes": {"name": ["CN=o0,DC=corp,DC=local"]}, "raw_attributes": {}}
     # Автоматический переход по ссылкам с постраничным поиском несовместим — выключен, как в ldap3.
     assert conn.auto_referrals is False
+
+
+def test_one_level_scope_is_passed_to_ldap3() -> None:
+    from ldap3 import LEVEL
+
+    conn = FakeLdap3({"(objectClass=*)": _rows(1)})
+    list(_searcher(conn, [], pause_ms=0)("CN=Public Key Services,CN=Services,CN=Configuration,DC=corp,DC=local", "(objectClass=*)", ["name"], "LEVEL"))
+    assert conn.calls[0]["scope"] == LEVEL
 
 
 def test_defaults_page_500_pause_half_second() -> None:

@@ -30,7 +30,7 @@ class FakeLdap:
         attrs: dict[str, Any] = {
             "sAMAccountName": o.get("sam"),
             "name": o.get("name"),
-            "objectSid": o.get("sid"),
+            "objectSid": o.get("sid") if o["class"] != "trustedDomain" else None,
             "userAccountControl": o.get("uac"),
             "lastLogonTimestamp": o.get("lastLogonTimestamp"),
             "pwdLastSet": o.get("pwdLastSet"),
@@ -46,6 +46,17 @@ class FakeLdap:
             "msPKI-Certificate-Name-Flag": o.get("msPKI-Certificate-Name-Flag"),
             "msPKI-RA-Signature": o.get("msPKI-RA-Signature"),
             "msPKI-Template-Schema-Version": o.get("msPKI-Template-Schema-Version"),
+            "msPKI-Certificate-Policy": o.get("msPKI-Certificate-Policy", []),
+            "msPKI-Certificate-Application-Policy": o.get("msPKI-Certificate-Application-Policy", []),
+            "msPKI-RA-Application-Policies": o.get("msPKI-RA-Application-Policies", []),
+            "msPKI-Cert-Template-OID": o.get("msPKI-Cert-Template-OID"),
+            "cn": o.get("cn"),
+            "dNSHostName": o.get("dNSHostName"),
+            "certificateTemplates": o.get("certificateTemplates", []),
+            "msPKI-Enrollment-Servers": o.get("msPKI-Enrollment-Servers", []),
+            "msDS-OIDToGroupLink": o.get("msDS-OIDToGroupLink"),
+            "flatName": o.get("flatName"),
+            "altSecurityIdentities": o.get("altSecurityIdentities", []),
             "objectClass": ["top", o["class"]],
             "ms-DS-MachineAccountQuota": self.raw["domain"]["machine_account_quota"] if o["class"] == "domainDNS" else None,
         }
@@ -54,6 +65,8 @@ class FakeLdap:
             raw["nTSecurityDescriptor"] = [base64.b64decode(o["sd"])]
         if o.get("allowedToActOnBehalf"):
             raw["msDS-AllowedToActOnBehalfOfOtherIdentity"] = [base64.b64decode(o["allowedToActOnBehalf"])]
+        if o["class"] == "trustedDomain" and o.get("sid"):
+            raw["securityIdentifier"] = [sd.str_to_sid(o["sid"])]
         return {"dn": o["dn"], "attributes": attrs, "raw_attributes": raw}
 
     def search(self, base: str, flt: str, attrs: list[str], scope: str) -> list[dict[str, Any]]:
@@ -82,10 +95,20 @@ class FakeLdap:
             "(objectClass=organizationalUnit)": "organizationalUnit",
             "(objectClass=groupPolicyContainer)": "groupPolicyContainer",
             "(objectClass=pKICertificateTemplate)": "pKICertificateTemplate",
+            "(objectClass=pKIEnrollmentService)": "pKIEnrollmentService",
+            "(objectClass=msPKI-Enterprise-Oid)": "msPKI-Enterprise-Oid",
+            "(objectClass=trustedDomain)": "trustedDomain",
+            "(objectClass=*)": "*",
         }.get(flt)
         if wanted is None:
             return []
-        return [self.entry(o) for o in self.objects if o["class"] == wanted and o["dn"].lower().endswith(base_l)]
+
+        def in_scope(dn: str) -> bool:
+            if scope == "LEVEL":
+                return dn.split(",", 1)[-1].lower() == base_l
+            return dn.lower().endswith(base_l)
+
+        return [self.entry(o) for o in self.objects if wanted in ("*", o["class"]) and in_scope(o["dn"])]
 
     def root_dse(self) -> dict[str, str]:
         return {"defaultNamingContext": DN, "configurationNamingContext": CONF_DN, "schemaNamingContext": f"CN=Schema,{CONF_DN}"}

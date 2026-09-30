@@ -117,6 +117,17 @@ class AdObject(BaseModel):
     name_flag: int | None = Field(default=None, alias="msPKI-Certificate-Name-Flag")
     ra_signature: int | None = Field(default=None, alias="msPKI-RA-Signature")
     schema_version: int | None = Field(default=None, alias="msPKI-Template-Schema-Version")
+    cn: str | None = None
+    issuance_policies: StrList = Field(default_factory=list, alias="msPKI-Certificate-Policy")
+    application_policies: StrList = Field(default_factory=list, alias="msPKI-Certificate-Application-Policy")
+    ra_application_policies: StrList = Field(default_factory=list, alias="msPKI-RA-Application-Policies")
+    template_oid: str | None = Field(default=None, alias="msPKI-Cert-Template-OID")
+    dNSHostName: str | None = None
+    certificateTemplates: StrList = Field(default_factory=list)
+    enrollment_servers: StrList = Field(default_factory=list, alias="msPKI-Enrollment-Servers")
+    oid_group_link: str | None = Field(default=None, alias="msDS-OIDToGroupLink")
+    flatName: str | None = None
+    altSecurityIdentities: StrList = Field(default_factory=list)
     sd: str | None = None
 
     @property
@@ -134,6 +145,11 @@ class AdObject(BaseModel):
     @property
     def protocol_transition(self) -> bool:
         return self.trustedToAuthForDelegation or bool((self.uac or 0) & UAC_TRUSTED_TO_AUTH_FOR_DELEGATION)
+
+    @property
+    def rdn_value(self) -> str:
+        """cn, а без него — значение первого RDN из dn (экранирование не снимается)."""
+        return self.cn or self.dn.split(",", 1)[0].partition("=")[2]
 
     @property
     def rid(self) -> int | None:
@@ -266,7 +282,8 @@ class ExportIndex:
         self.export = export
         self.domain_sid = export.domain.sid
         self.by_dn: dict[str, AdObject] = {o.dn.lower(): o for o in export.objects}
-        self.by_sid: dict[str, AdObject] = {o.sid: o for o in export.objects if o.sid}
+        # У объекта доверия в sid — SID чужого домена, это не учётная запись.
+        self.by_sid: dict[str, AdObject] = {o.sid: o for o in export.objects if o.sid and o.cls != "trustedDomain"}
         self.by_class: dict[str, list[AdObject]] = {}
         for o in export.objects:
             self.by_class.setdefault(o.cls, []).append(o)
@@ -281,6 +298,28 @@ class ExportIndex:
     @cached_property
     def root(self) -> AdObject | None:
         return self.get(self.export.domain.dn)
+
+    @cached_property
+    def trusted_domains(self) -> dict[str, str]:
+        """SID доверенного домена → его NetBIOS-имя."""
+        return {o.sid: o.flatName for o in self.objects("trustedDomain") if o.sid and o.flatName}
+
+    @cached_property
+    def _publication(self) -> dict[str, list[str]] | None:
+        cas = self.objects("pKIEnrollmentService")
+        if not cas:
+            return None
+        out: dict[str, list[str]] = {}
+        for ca in cas:
+            for name in {t.lower() for t in ca.certificateTemplates}:
+                out.setdefault(name, []).append(ca.rdn_value)
+        return out
+
+    def published_on(self, template: AdObject) -> list[str] | None:
+        """Имена ЦС, где шаблон опубликован; None — объектов ЦС в выгрузке нет, публикация неизвестна."""
+        if self._publication is None:
+            return None
+        return list(self._publication.get(template.rdn_value.lower(), []))
 
     def domain_rid_sid(self, rid: int) -> str:
         return f"{self.domain_sid}-{rid}"
@@ -332,6 +371,12 @@ class ExportIndex:
             rid = int(sid.rsplit("-", 1)[1])
             if rid in DOMAIN_RID_NAMES:
                 return f"{self.export.domain.netbios or self.export.domain.dns_root}\\{DOMAIN_RID_NAMES[rid]}"
+            return sid
+        domain_part, _, rid_text = sid.rpartition("-")
+        foreign = self.trusted_domains.get(domain_part)
+        if foreign is not None:
+            rid = int(rid_text)
+            return f"{foreign}\\{DOMAIN_RID_NAMES.get(rid, f'RID-{rid}')}"
         return sid
 
     def sd_of(self, obj: AdObject) -> SecurityDescriptor | None:

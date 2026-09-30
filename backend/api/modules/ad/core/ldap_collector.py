@@ -23,13 +23,18 @@ SmbReader = Callable[[str], bytes | None]
 USER_ATTRS = [
     "sAMAccountName", "name", "objectSid", "userAccountControl", "lastLogonTimestamp", "pwdLastSet",
     "servicePrincipalName", "msDS-AllowedToDelegateTo", "msDS-SupportedEncryptionTypes", "adminCount",
+    "altSecurityIdentities",
 ]
 COMPUTER_ATTRS = [*USER_ATTRS, "msDS-AllowedToActOnBehalfOfOtherIdentity", "nTSecurityDescriptor"]
 GROUP_ATTRS = ["sAMAccountName", "name", "objectSid", "member", "adminCount"]
 TEMPLATE_ATTRS = [
-    "displayName", "pKIExtendedKeyUsage", "msPKI-Enrollment-Flag", "msPKI-Certificate-Name-Flag",
-    "msPKI-RA-Signature", "msPKI-Template-Schema-Version", "nTSecurityDescriptor",
+    "cn", "displayName", "pKIExtendedKeyUsage", "msPKI-Enrollment-Flag", "msPKI-Certificate-Name-Flag",
+    "msPKI-RA-Signature", "msPKI-Template-Schema-Version", "msPKI-Certificate-Policy",
+    "msPKI-Certificate-Application-Policy", "msPKI-RA-Application-Policies", "msPKI-Cert-Template-OID",
+    "nTSecurityDescriptor",
 ]
+CA_ATTRS = ["cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor"]
+OID_ATTRS = ["displayName", "msPKI-Cert-Template-OID", "msDS-OIDToGroupLink"]
 EXTENDED_RIGHTS = ["DS-Replication-Get-Changes", "DS-Replication-Get-Changes-All", "DS-Replication-Get-Changes-In-Filtered-Set", "Enroll", "AutoEnroll"]
 GPT_TMPL = "\\MACHINE\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf"
 #: Код LDAP noSuchObject: базы поиска нет.
@@ -236,24 +241,31 @@ class LdapCollector:
                 if content:
                     sysvol[e["dn"]] = {"GptTmpl.inf": _decode_inf(content)}
 
-        tpl_base = f"CN=Certificate Templates,CN=Public Key Services,CN=Services,{config_nc}"
-        for e in self._search_optional(tpl_base, "(objectClass=pKICertificateTemplate)", TEMPLATE_ATTRS, "SUBTREE"):
+        pki = f"CN=Public Key Services,CN=Services,{config_nc}"
+        for e in self._search_optional(f"CN=Certificate Templates,{pki}", "(objectClass=pKICertificateTemplate)", TEMPLATE_ATTRS, "SUBTREE"):
             a = e["attributes"]
             tsd = _raw(e, "nTSecurityDescriptor")
             objects.append(
                 {
                     "dn": e["dn"],
                     "class": "pKICertificateTemplate",
+                    "cn": str(_first(a.get("cn")) or ""),
                     "displayName": str(_first(a.get("displayName")) or ""),
                     "pKIExtendedKeyUsage": _list(a.get("pKIExtendedKeyUsage")),
                     "msPKI-Enrollment-Flag": _int(a.get("msPKI-Enrollment-Flag")),
                     "msPKI-Certificate-Name-Flag": _int(a.get("msPKI-Certificate-Name-Flag")),
                     "msPKI-RA-Signature": _int(a.get("msPKI-RA-Signature")),
                     "msPKI-Template-Schema-Version": _int(a.get("msPKI-Template-Schema-Version")),
+                    "msPKI-Certificate-Policy": _list(a.get("msPKI-Certificate-Policy")),
+                    "msPKI-Certificate-Application-Policy": _list(a.get("msPKI-Certificate-Application-Policy")),
+                    "msPKI-RA-Application-Policies": _list(a.get("msPKI-RA-Application-Policies")),
+                    "msPKI-Cert-Template-OID": _first(a.get("msPKI-Cert-Template-OID")),
                     "sd": _b64(tsd),
                 }
             )
             self._note_sd(tsd)
+        objects.extend(self._pki_objects(pki))
+        objects.extend(self._trusts(default_nc))
 
         self._resolve_pending(default_nc, netbios)
         return {
@@ -266,6 +278,56 @@ class LdapCollector:
             "sysvol": sysvol,
             "principals": self.principals,
         }
+
+    def _pki_objects(self, pki: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for e in self._search_optional(f"CN=Enrollment Services,{pki}", "(objectClass=pKIEnrollmentService)", CA_ATTRS, "SUBTREE"):
+            a = e["attributes"]
+            csd = _raw(e, "nTSecurityDescriptor")
+            out.append(
+                {
+                    "dn": e["dn"],
+                    "class": "pKIEnrollmentService",
+                    "cn": str(_first(a.get("cn")) or ""),
+                    "dNSHostName": str(_first(a.get("dNSHostName")) or ""),
+                    "certificateTemplates": _list(a.get("certificateTemplates")),
+                    "msPKI-Enrollment-Servers": _list(a.get("msPKI-Enrollment-Servers")),
+                    "sd": _b64(csd),
+                }
+            )
+            self._note_sd(csd)
+        for scope in ("BASE", "LEVEL"):
+            for e in self._search_optional(pki, "(objectClass=*)", ["nTSecurityDescriptor"], scope):
+                psd = _raw(e, "nTSecurityDescriptor")
+                out.append({"dn": e["dn"], "class": "pkiContainer", "sd": _b64(psd)})
+                self._note_sd(psd)
+        # На один уровень: сам контейнер CN=OID тоже класса msPKI-Enterprise-Oid и уже записан как pkiContainer.
+        for e in self._search_optional(f"CN=OID,{pki}", "(objectClass=msPKI-Enterprise-Oid)", OID_ATTRS, "LEVEL"):
+            a = e["attributes"]
+            out.append(
+                {
+                    "dn": e["dn"],
+                    "class": "msPKI-Enterprise-Oid",
+                    "displayName": str(_first(a.get("displayName")) or ""),
+                    "msPKI-Cert-Template-OID": _first(a.get("msPKI-Cert-Template-OID")),
+                    "msDS-OIDToGroupLink": _first(a.get("msDS-OIDToGroupLink")),
+                }
+            )
+        return out
+
+    def _trusts(self, default_nc: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for e in self._search_optional(f"CN=System,{default_nc}", "(objectClass=trustedDomain)", ["flatName", "securityIdentifier"], "SUBTREE"):
+            raw_sid = _raw(e, "securityIdentifier")
+            out.append(
+                {
+                    "dn": e["dn"],
+                    "class": "trustedDomain",
+                    "flatName": str(_first(e["attributes"].get("flatName")) or ""),
+                    "sid": sd.sid_to_str(raw_sid) if raw_sid else None,
+                }
+            )
+        return out
 
     def _account(self, e: Entry, cls: str, netbios: str, *, with_sd: bool) -> dict[str, Any]:
         a = e["attributes"]
@@ -287,6 +349,7 @@ class LdapCollector:
             "allowedToDelegateTo": _list(a.get("msDS-AllowedToDelegateTo")),
             "supportedEncryptionTypes": _int(a.get("msDS-SupportedEncryptionTypes")),
             "adminCount": _int(a.get("adminCount")),
+            "altSecurityIdentities": _list(a.get("altSecurityIdentities")),
         }
         if cls == "computer":
             rbcd = _raw(e, "msDS-AllowedToActOnBehalfOfOtherIdentity")
@@ -370,10 +433,10 @@ def ldap3_searcher(
     страницы — `on_page(прочитано всего)`: прогресс и проверка отмены.
     Исключение из них прерывает сбор до следующего запроса.
     Ответ контроллера с кодом ошибки — `LdapResultError`."""
-    from ldap3 import BASE, SUBTREE
+    from ldap3 import BASE, LEVEL, SUBTREE
     from ldap3.protocol.microsoft import security_descriptor_control
 
-    scopes = {"BASE": BASE, "SUBTREE": SUBTREE}
+    scopes = {"BASE": BASE, "LEVEL": LEVEL, "SUBTREE": SUBTREE}
     before_request = pacer or Pacer()
     # По ссылкам (referrals) на другие серверы сбор не ходит: все базы поиска — разделы
     # этого контроллера (домен, конфигурация, схема). Прежний paged_search при включённом

@@ -10,7 +10,7 @@ from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex, load_export
 from api.modules.ad.core.ldap_collector import LdapCollector, LdapResultError
 from tests.ad.fake_ldap import FakeLdap
-from tests.ad.synthetic import export_bytes
+from tests.ad.synthetic import OTHER_SID, PKI, export_bytes
 
 
 def test_ldap_collector_matches_powershell_export() -> None:
@@ -64,6 +64,47 @@ def test_busy_on_templates_is_an_error() -> None:
     fake = FakeLdap()
     with pytest.raises(LdapResultError):
         LdapCollector(_failing(fake, "CN=Certificate Templates,", 51, "busy"), fake.root_dse()).collect()
+
+
+def test_collector_reads_pki_objects_and_trusts() -> None:
+    fake = FakeLdap()
+    raw = LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb).collect()
+    classes = {o["class"] for o in raw["objects"]}
+    assert {"pKIEnrollmentService", "pkiContainer", "msPKI-Enterprise-Oid", "trustedDomain"} <= classes
+    ca = next(o for o in raw["objects"] if o["class"] == "pKIEnrollmentService")
+    assert ca["cn"] == "CORP-CA" and ca["certificateTemplates"] == ["VulnTemplate", "AgentTemplate"] and ca["sd"]
+    assert ca["dNSHostName"] == "ca01.corp.local"
+    containers = {o["dn"] for o in raw["objects"] if o["class"] == "pkiContainer"}
+    assert containers == {PKI, f"CN=NTAuthCertificates,{PKI}"}
+    oid = next(o for o in raw["objects"] if o["class"] == "msPKI-Enterprise-Oid")
+    assert oid["displayName"] == "Corp Policy" and oid["msPKI-Cert-Template-OID"] == "1.3.6.1.4.1.311.21.8.1.1"
+    trust = next(o for o in raw["objects"] if o["class"] == "trustedDomain")
+    assert trust["flatName"] == "OTHER" and trust["sid"] == OTHER_SID
+    tpl = next(o for o in raw["objects"] if o["class"] == "pKICertificateTemplate")
+    assert tpl["cn"] and "msPKI-Certificate-Policy" in tpl and "msPKI-Cert-Template-OID" in tpl
+
+
+def test_collector_reads_alt_security_identities() -> None:
+    fake = FakeLdap()
+    user = next(o for o in fake.objects if o.get("sam") == "helpdesk")
+    user["altSecurityIdentities"] = ["X509:<I>DC=local,DC=corp,CN=CORP-CA<SR>0a1b"]
+    raw = LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb).collect()
+    by_sam = {o.get("sam"): o for o in raw["objects"]}
+    assert by_sam["helpdesk"]["altSecurityIdentities"] == user["altSecurityIdentities"]
+    assert by_sam["admin1"]["altSecurityIdentities"] == [] and by_sam["WS01$"]["altSecurityIdentities"] == []
+
+
+def test_missing_pki_containers_are_tolerated() -> None:
+    fake = FakeLdap()
+    raw = LdapCollector(_failing(fake, "cn=enrollment services,", 32, "noSuchObject"), fake.root_dse(), smb_reader=fake.smb).collect()
+    assert not [o for o in raw["objects"] if o["class"] == "pKIEnrollmentService"]
+    assert [o for o in raw["objects"] if o["class"] == "trustedDomain"]
+
+
+def test_busy_on_pki_container_is_an_error() -> None:
+    fake = FakeLdap()
+    with pytest.raises(LdapResultError):
+        LdapCollector(_failing(fake, "cn=oid,", 51, "busy"), fake.root_dse(), smb_reader=fake.smb).collect()
 
 
 def test_wrong_base_dn_keeps_the_hint() -> None:
