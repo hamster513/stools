@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import gzip
-import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass
@@ -17,10 +15,11 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from api.export_files import file_sha256, store_gz
 from api.jobs import JobHandle, insert_chunked
 from api.modules.ksc.core.checks import ANALYZER_VERSION, run_all
 from api.modules.ksc.core.config import KscConfig
-from api.modules.ksc.core.export import ExportIndex, KscExport, load_export
+from api.modules.ksc.core.export import ExportIndex, KscExport, load_export_path
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding
 from api.modules.ksc.models import KscFinding, KscHost, KscServer, KscSnapshot, KscVerdict
 from api.modules.ksc.services.coverage import ad_computers_for
@@ -104,10 +103,15 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
     snapshot.analyzer_version = ANALYZER_VERSION
 
 
-def import_export(db: Session, handle: JobHandle | None, data: bytes, source: str, filename: str, cfg: KscConfig, data_dir: Path) -> KscSnapshot:
+def import_export(
+    db: Session, handle: JobHandle | None, path: Path, source: str, filename: str, cfg: KscConfig, data_dir: Path,
+    sha256: str | None = None,
+) -> KscSnapshot:
+    """Как у AD: `path` — файл выгрузки в каталоге данных, становится файлом снапшота;
+    `sha256` — отпечаток исходного текста, не задан — по байтам файла."""
     if handle:
         handle.stage("parsing", message=filename)
-    export = load_export(data)
+    export = load_export_path(path)
     if handle:
         handle.stage("analyzing", message=f"хостов {len(export.hosts)}")
     idx, findings = analyze(db, export, cfg, data_dir)
@@ -117,14 +121,12 @@ def import_export(db: Session, handle: JobHandle | None, data: bytes, source: st
     snapshot = KscSnapshot(
         server_id=server.id, collected_at=export.server.collected_at, source=source,
         collector=f"{export.server.collector} {export.server.collector_version}".strip(), filename=filename[:255],
-        sha256=hashlib.sha256(data).hexdigest(),
+        sha256=sha256 or file_sha256(path),
     )
     db.add(snapshot)
     db.flush()
     _store(db, snapshot, idx, findings, cfg, handle)
-    path = snapshot_path(data_dir, snapshot.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data if data[:2] == b"\x1f\x8b" else gzip.compress(data))
+    store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
     return snapshot
 
@@ -135,8 +137,7 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg:
         raise FileNotFoundError(f"файл выгрузки снапшота #{snapshot.id} не найден — пересчитать нельзя")
     if handle:
         handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
-    export = load_export(path.read_bytes())
-    idx, findings = analyze(db, export, cfg, data_dir)
+    idx, findings = analyze(db, load_export_path(path), cfg, data_dir)
     if handle:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     _store(db, snapshot, idx, findings, cfg, handle)

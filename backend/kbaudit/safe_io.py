@@ -18,6 +18,7 @@ from __future__ import annotations
 import gzip
 import io
 import zipfile
+from typing import BinaryIO
 
 MB = 1024 * 1024
 #: Потолок одного члена zip-архива и всех членов вместе. Действуют
@@ -34,8 +35,13 @@ def _too_big(what: str, max_bytes: int) -> ValueError:
 
 def decompress_gzip(data: bytes | bytearray, max_bytes: int) -> bytearray:
     """Распаковать gzip, но не больше `max_bytes`. Битый gzip — `OSError`/`EOFError`, как у `gzip.decompress`."""
+    return decompress_gzip_file(io.BytesIO(data), max_bytes)
+
+
+def decompress_gzip_file(fileobj: BinaryIO, max_bytes: int) -> bytearray:
+    """То же для открытого файла: сжатые байты не читаются в память целиком."""
     out = bytearray()
-    with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+    with gzip.GzipFile(fileobj=fileobj) as gz:
         while chunk := gz.read(_CHUNK):
             if len(out) + len(chunk) > max_bytes:
                 raise _too_big("", max_bytes)

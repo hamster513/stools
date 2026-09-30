@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from api.crypto import SecretUnreadable, decrypt
+from api.export_files import write_json_gz
 from api.hosts import LOGIN_REJECTED, NO_LINK, NO_RIGHTS, TLS_FAILED, is_tls_error, server_error
 from api.jobs import JobCancelled, JobHandle
 from api.modules.ad.core.config import AdConfig
@@ -116,13 +116,20 @@ def collect_snapshot(
         searcher = ldap3_searcher(
             c, page_size=conn.page_size, pacer=pacer, on_page=lambda n: handle.tick(n, message=f"прочитано объектов {n}"),
         )
-        collector = LdapCollector(searcher, root, smb_reader=reader, host=conn.host, account=conn.username)
-        export = collector.collect()
+        export = LdapCollector(searcher, root, smb_reader=reader, host=conn.host, account=conn.username).collect()
     finally:
         with contextlib.suppress(Exception):
             c.unbind()
-    data = json.dumps(export, ensure_ascii=False).encode("utf-8")
-    snap = import_export(db, handle, data, "ldap", f"{conn.host} ({conn.title or conn.username})", cfg, data_dir)
+    # Собранное — сразу в gzip-файл потоком и из памяти вон: словарь, его текст и
+    # разобранная выгрузка не живут одновременно. Файл станет файлом снапшота.
+    path = data_dir / "ad" / f"collect-{handle.id}.json.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        sha256 = write_json_gz(export, path)
+        del export
+        snap = import_export(db, handle, path, "ldap", f"{conn.host} ({conn.title or conn.username})", cfg, data_dir, sha256=sha256)
+    finally:
+        path.unlink(missing_ok=True)
     conn.domain_id = snap.domain_id
     db.commit()
     return snap

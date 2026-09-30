@@ -6,8 +6,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import gzip
-import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass
@@ -16,10 +14,11 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from api.export_files import file_sha256, store_gz
 from api.jobs import JobHandle, insert_chunked
 from api.modules.ad.core.checks import ANALYZER_VERSION, run_all
 from api.modules.ad.core.config import AdConfig
-from api.modules.ad.core.export import AdExport, ExportIndex, load_export
+from api.modules.ad.core.export import AdExport, ExportIndex, load_export_path
 from api.modules.ad.core.findings import SEVERITY_RANK, Finding
 from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot, AdVerdict
 
@@ -78,15 +77,19 @@ def analyze(export: AdExport, cfg: AdConfig) -> list[Finding]:
 def import_export(
     db: Session,
     handle: JobHandle | None,
-    data: bytes,
+    path: Path,
     source: str,
     filename: str,
     cfg: AdConfig,
     data_dir: Path,
+    sha256: str | None = None,
 ) -> AdSnapshot:
+    """`path` — файл выгрузки (JSON или gzip) в каталоге данных: разбирается с диска
+    и становится файлом снапшота (gzip — переносом, JSON — сжатием потоком).
+    `sha256` — отпечаток исходного текста; не задан — по байтам файла, как у загрузки."""
     if handle:
         handle.stage("parsing", message=filename)
-    export = load_export(data)
+    export = load_export_path(path)
     if handle:
         handle.stage("analyzing", message=f"объектов {len(export.objects)}")
     findings = analyze(export, cfg)
@@ -99,16 +102,15 @@ def import_export(
         source=source,
         collector=f"{export.collector.kind} {export.collector.version}".strip(),
         filename=filename,
-        sha256=hashlib.sha256(data).hexdigest(),
+        sha256=sha256 or file_sha256(path),
         objects=len(export.objects),
     )
     db.add(snapshot)
     db.flush()
+    # Разобранная выгрузка больше не нужна: находки пишутся без неё рядом.
+    del export
     _store_findings(db, snapshot, findings, handle)
-    path = snapshot_path(data_dir, snapshot.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    raw = data if data[:2] == b"\x1f\x8b" else gzip.compress(data)
-    path.write_bytes(raw)
+    store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
     return snapshot
 
@@ -119,8 +121,7 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: 
         raise FileNotFoundError(f"файл выгрузки снапшота #{snapshot.id} не найден — пересчитать нельзя")
     if handle:
         handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
-    export = load_export(path.read_bytes())
-    findings = analyze(export, cfg)
+    findings = analyze(load_export_path(path), cfg)
     if handle:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     _store_findings(db, snapshot, findings, handle)

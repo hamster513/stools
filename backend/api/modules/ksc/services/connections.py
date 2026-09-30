@@ -1,13 +1,13 @@
 """Онлайн-подключения к KSC: проверка и сбор выгрузки."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from api.crypto import SecretUnreadable, decrypt
+from api.export_files import write_json_gz
 from api.hosts import (
     LOGIN_REJECTED,
     NO_LINK,
@@ -58,8 +58,15 @@ def collect_snapshot(db: Session, handle: JobHandle, conn: KscConnection, cfg: K
         handle.stage("collecting", message="группы, хосты, продукты, политики, задачи")
         raw = collect(c, skip_policy_contents=conn.skip_policy_contents, max_policies=cfg.policy_contents_max_policies,
                       progress=lambda done, total: handle.tick(done, total=total, message=f"продукты хостов {done} из {total}"), username=conn.username, host=conn.host)
-    data = json.dumps(raw, ensure_ascii=False).encode("utf-8")
-    snap = import_export(db, handle, data, "online", f"{conn.host} ({conn.title or conn.username})", cfg, data_dir)
+    # Как у AD: собранное — в gzip-файл потоком, файл станет файлом снапшота.
+    path = data_dir / "ksc" / f"collect-{handle.id}.json.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        sha256 = write_json_gz(raw, path)
+        del raw
+        snap = import_export(db, handle, path, "online", f"{conn.host} ({conn.title or conn.username})", cfg, data_dir, sha256=sha256)
+    finally:
+        path.unlink(missing_ok=True)
     conn.server_id = snap.server_id
     db.commit()
     return snap

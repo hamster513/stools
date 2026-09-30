@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections.abc import Callable
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.export_files import GZIP_MAGIC
 from api.modules.ksc.core.secrets import hide_secrets, hide_task_params
-from kbaudit.safe_io import MB, decompress_gzip
+from kbaudit.safe_io import MB, decompress_gzip, decompress_gzip_file
 
 if TYPE_CHECKING:
     from api.modules.ksc.core.coverage import AdComputer, Coverage
@@ -24,7 +26,7 @@ if TYPE_CHECKING:
 FORMAT = "stools-ksc/1"
 #: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
 #: но gzip разворачивается до ~1000:1 (аудит H2). Распакованные байты плюс
-#: разобранный JSON должны помещаться в `mem_limit` контейнера API (2 ГБ).
+#: разобранный JSON должны помещаться в `mem_limit` контейнера API (STOOLS_API_MEM).
 MAX_UNPACKED = 512 * MB
 
 STATUS_VISIBLE = 1 << 0
@@ -160,17 +162,41 @@ def _hide_export_secrets(raw: dict[str, Any]) -> None:
 
 
 def load_export(data: bytes | bytearray) -> KscExport:
-    if data[:2] == b"\x1f\x8b":
-        try:
-            data = decompress_gzip(data, MAX_UNPACKED)
-        except (OSError, EOFError) as exc:
-            raise ExportFormatError("файл не разобран как JSON выгрузки (битый gzip)") from exc
-        except ValueError as exc:
-            raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
+    if data[:2] == GZIP_MAGIC:
+        data = _unpacked(lambda: decompress_gzip(data, MAX_UNPACKED))
+    return _validated(_parsed(data))
+
+
+def load_export_path(path: Path) -> KscExport:
+    """Файл читается один раз, сжатый — распаковкой потоком с тем же потолком;
+    текст освобождается до проверки модели."""
+    return _validated(_parsed(_read(path)))
+
+
+def _read(path: Path) -> bytes | bytearray:
+    with path.open("rb") as f:
+        packed = f.read(2) == GZIP_MAGIC
+        f.seek(0)
+        return _unpacked(lambda: decompress_gzip_file(f, MAX_UNPACKED)) if packed else f.read()
+
+
+def _unpacked(unpack: Callable[[], bytearray]) -> bytearray:
     try:
-        raw = json.loads(data)
+        return unpack()
+    except (OSError, EOFError) as exc:
+        raise ExportFormatError("файл не разобран как JSON выгрузки (битый gzip)") from exc
+    except ValueError as exc:
+        raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
+
+
+def _parsed(data: bytes | bytearray) -> Any:
+    try:
+        return json.loads(data)
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise ExportFormatError("файл не разобран как JSON выгрузки") from exc
+
+
+def _validated(raw: Any) -> KscExport:
     if not isinstance(raw, dict) or raw.get("format") != FORMAT:
         found = raw.get("format") if isinstance(raw, dict) else "—"
         raise ExportFormatError(f"это не выгрузка формата {FORMAT}: в файле «{found}»")
@@ -185,10 +211,6 @@ def load_export(data: bytes | bytearray) -> KscExport:
     except RecursionError as exc:
         # JSON-разбор держит вложенность глубже, чем рекурсивный разбор обёрток.
         raise ExportFormatError("выгрузка не разобрана: вложенность глубже допустимой") from exc
-
-
-def load_export_path(path: Path) -> KscExport:
-    return load_export(path.read_bytes())
 
 
 def _dt(value: Any) -> dt.datetime | None:

@@ -158,9 +158,9 @@ async def upload_snapshot(
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="файл больше 200 МБ")
     data_dir = settings.data_dir
 
-    def load(session: Session, handle: JobHandle, raw: bytes, name: str) -> str:
+    def load(session: Session, handle: JobHandle, upload: Path, name: str) -> str:
         try:
-            snap = import_export(session, handle, raw, "file", name, load_config(session), data_dir)
+            snap = import_export(session, handle, upload, "file", name, load_config(session), data_dir)
         except ExportFormatError as exc:
             raise ValueError(str(exc)) from exc
         return f"снапшот #{snap.id}: хостов {snap.hosts}, находок {snap.findings}"

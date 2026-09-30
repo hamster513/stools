@@ -11,7 +11,8 @@ SEVERITY_RANK = {"Critical": 1, "High": 2, "Medium": 3, "Low": 4, "Info": 5}
 SEVERITIES = ("Critical", "High", "Medium", "Low", "Info")
 
 
-@dataclass
+#: slots: у крупного домена сотни тысяч находок — без словаря атрибутов у каждой.
+@dataclass(slots=True)
 class Finding:
     check: str
     severity: str

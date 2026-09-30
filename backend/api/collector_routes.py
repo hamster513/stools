@@ -158,10 +158,11 @@ async def read_upload(db: Session, job_model: type[Any], file: UploadFile) -> by
 
 def start_import(
     background_tasks: BackgroundTasks, db: Session, user: AppUser, data: bytes, filename: str | None, *,
-    upload_dir: Path, job_model: type[Any], load: Callable[[Session, JobHandle, bytes, str], str],
+    upload_dir: Path, job_model: type[Any], load: Callable[[Session, JobHandle, Path, str], str],
 ) -> int:
-    """Разбор загруженной выгрузки в фоне; `load(session, handle, raw, name)`
-    возвращает текст итоговой стадии. Файл лежит на диске до конца задачи."""
+    """Разбор загруженной выгрузки в фоне; `load(session, handle, path, name)`
+    возвращает текст итоговой стадии. Файл лежит на диске до конца задачи: `load`
+    читает его сам и может перенести в хранилище, остаток убирается здесь."""
     name = filename or "export.json"
     job_id = start_job(db, job_model, "import_file", user.login, message=name)
     upload = upload_dir / f"upload-{job_id}.bin"
@@ -176,7 +177,7 @@ def start_import(
 
     def work(session: Session, handle: JobHandle) -> None:
         try:
-            handle.stage("done", message=load(session, handle, upload.read_bytes(), name))
+            handle.stage("done", message=load(session, handle, upload, name))
         finally:
             upload.unlink(missing_ok=True)
 

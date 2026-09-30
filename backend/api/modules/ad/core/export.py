@@ -15,13 +15,14 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
+from api.export_files import GZIP_MAGIC
 from api.modules.ad.core.sd import SecurityDescriptor, parse_sd
-from kbaudit.safe_io import MB, decompress_gzip
+from kbaudit.safe_io import MB, decompress_gzip, decompress_gzip_file
 
 FORMAT = "stools-ad/1"
 #: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
 #: но gzip разворачивается до ~1000:1 (аудит H2). Распакованные байты плюс
-#: разобранный JSON должны помещаться в `mem_limit` контейнера API (2 ГБ).
+#: разобранный JSON должны помещаться в `mem_limit` контейнера API (STOOLS_API_MEM).
 MAX_UNPACKED = 512 * MB
 
 UAC_DISABLED = 0x2
@@ -190,15 +191,40 @@ class ExportFormatError(ValueError):
 
 
 def load_export(data: bytes | bytearray) -> AdExport:
-    if data[:2] == b"\x1f\x8b":
+    if data[:2] == GZIP_MAGIC:
         try:
             data = decompress_gzip(data, MAX_UNPACKED)
         except ValueError as exc:
             raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
+    return _validated(_parsed(data))
+
+
+def load_export_path(path: Path) -> AdExport:
+    """Файл читается один раз, сжатый — распаковкой потоком с тем же потолком;
+    текст освобождается до проверки модели, а не живёт рядом с объектами."""
+    return _validated(_parsed(_read(path)))
+
+
+def _read(path: Path) -> bytes | bytearray:
+    with path.open("rb") as f:
+        packed = f.read(2) == GZIP_MAGIC
+        f.seek(0)
+        if not packed:
+            return f.read()
+        try:
+            return decompress_gzip_file(f, MAX_UNPACKED)
+        except ValueError as exc:
+            raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc
+
+
+def _parsed(data: bytes | bytearray) -> Any:
     try:
-        raw = json.loads(data)
+        return json.loads(data)
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
         raise ExportFormatError("файл не разобран как JSON выгрузки") from exc
+
+
+def _validated(raw: Any) -> AdExport:
     if not isinstance(raw, dict) or raw.get("format") != FORMAT:
         raise ExportFormatError(f"это не выгрузка формата {FORMAT}: в файле «{(raw or {}).get('format') if isinstance(raw, dict) else '—'}»")
     try:
@@ -216,10 +242,6 @@ def _describe_validation(exc: ValueError) -> str:
     first = items[0].get("input") if items else None
     sample = f"; значение первого поля ({type(first).__name__}): {first!r:.80}"
     return f"{len(items)} ошибок, первые: {shown}{sample}"[:500]
-
-
-def load_export_path(path: Path) -> AdExport:
-    return load_export(path.read_bytes())
 
 
 def filetime_to_datetime(value: int | None) -> dt.datetime | None:
