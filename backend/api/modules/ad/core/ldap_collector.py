@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from api.modules.ad.core import sd
-from api.modules.ad.core.export import FORMAT, WELL_KNOWN_SIDS
+from api.modules.ad.core.export import FORMAT, WELL_KNOWN_SIDS, datetime_to_filetime
 
 Entry = dict[str, Any]
 Searcher = Callable[[str, str, list[str], str], Iterable[Entry]]
@@ -77,6 +77,20 @@ def _raw(entry: Entry, attr: str) -> bytes | None:
     if isinstance(value, list):
         value = value[0] if value else None
     return bytes(value) if value else None
+
+
+def _filetime(entry: Entry, attr: str) -> int | None:
+    """Отметка времени AD (FILETIME). Со схемой (get_info=ALL) ldap3 отдаёт её уже
+    датой, без схемы — строкой; исходные байты есть всегда, с них и читаем."""
+    raw = _raw(entry, attr)
+    if raw is not None:
+        return _int(raw.decode("ascii", errors="replace"))
+    value = _first(entry["attributes"].get(attr))
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=dt.UTC)
+        return max(datetime_to_filetime(value), 0)
+    return _int(value)
 
 
 def _b64(data: bytes | None) -> str | None:
@@ -263,8 +277,8 @@ class LdapCollector:
             "sam": sam,
             "name": str(_first(a.get("name")) or sam),
             "uac": uac,
-            "lastLogonTimestamp": _int(a.get("lastLogonTimestamp")),
-            "pwdLastSet": _int(a.get("pwdLastSet")),
+            "lastLogonTimestamp": _filetime(e, "lastLogonTimestamp"),
+            "pwdLastSet": _filetime(e, "pwdLastSet"),
             "spn": _list(a.get("servicePrincipalName")),
             "trustedForDelegation": bool(uac & 0x80000),
             "trustedToAuthForDelegation": bool(uac & 0x1000000),

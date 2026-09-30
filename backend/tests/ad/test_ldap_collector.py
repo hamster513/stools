@@ -77,3 +77,49 @@ def test_wrong_base_dn_keeps_the_hint() -> None:
 
     with pytest.raises(ValueError, match="проверьте base DN"):
         LdapCollector(search, fake.root_dse()).collect()
+
+
+def _with_schema_types(fake: FakeLdap) -> Any:
+    """Как отдаёт настоящий ldap3 со схемой AD (get_info=ALL): отметки времени —
+    уже `datetime`, исходные байты — в raw_attributes."""
+    import datetime as dt
+
+    def as_datetime(filetime: int) -> dt.datetime:
+        return dt.datetime(1601, 1, 1, tzinfo=dt.UTC) + dt.timedelta(microseconds=filetime // 10)
+
+    def search(base: str, flt: str, attrs: list[str], scope: str) -> Any:
+        for e in fake.search(base, flt, attrs, scope):
+            for name in ("lastLogonTimestamp", "pwdLastSet"):
+                value = e["attributes"].get(name)
+                if value is not None:
+                    e["raw_attributes"][name] = [str(value).encode()]
+                    e["attributes"][name] = as_datetime(value)
+            yield e
+
+    return search
+
+
+def test_timestamps_survive_schema_formatting() -> None:
+    """Регресс: со схемой ldap3 отдаёт lastLogonTimestamp и pwdLastSet датой, сборщик
+    писал пусто — «Неактивные пользователи» и возраст пароля krbtgt молчали."""
+    fake = FakeLdap()
+    plain = LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb, host="dc01", account="a").collect()
+    typed = LdapCollector(_with_schema_types(fake), fake.root_dse(), smb_reader=fake.smb, host="dc01", account="a").collect()
+
+    def stamps(raw: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+        return {o["dn"]: (o.get("lastLogonTimestamp"), o.get("pwdLastSet")) for o in raw["objects"] if o["class"] in ("user", "computer")}
+
+    assert any(last for last, _ in stamps(plain).values())
+    assert stamps(typed) == stamps(plain)
+
+
+def test_timestamp_without_raw_bytes_is_converted_from_datetime() -> None:
+    import datetime as dt
+
+    from api.modules.ad.core.ldap_collector import _filetime
+
+    moment = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC)
+    entry = {"dn": "CN=u", "attributes": {"lastLogonTimestamp": moment}, "raw_attributes": {}}
+    assert _filetime(entry, "lastLogonTimestamp") == int((moment - dt.datetime(1601, 1, 1, tzinfo=dt.UTC)).total_seconds()) * 10_000_000
+    assert _filetime({"dn": "CN=u", "attributes": {}, "raw_attributes": {}}, "lastLogonTimestamp") is None
+
