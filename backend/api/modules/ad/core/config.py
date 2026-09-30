@@ -81,6 +81,15 @@ class AdConfig(BaseModel):
     #: Low-priv по SID: Everyone, Authenticated Users, BUILTIN\Users и RID 513/515 домена.
     low_priv_sids: list[str] = Field(default_factory=lambda: ["S-1-1-0", "S-1-5-11", "S-1-5-32-545"])
     low_priv_rids: list[int] = Field(default_factory=lambda: [513, 515])
+    #: AD CS: безопасны только заведомые администраторы, любой другой заявитель
+    #: под вопросом; low_priv_* выше задают «широкие» группы, у них серьёзность выше.
+    #: SYSTEM, BUILTIN\Administrators, Enterprise Domain Controllers.
+    adcs_safe_sids: list[str] = Field(default_factory=lambda: ["S-1-5-18", "S-1-5-32-544", "S-1-5-9"])
+    #: RID любого домена леса: Administrator, Domain Admins, Domain Controllers,
+    #: Schema Admins, Enterprise Admins, Enterprise Read-only DCs, Read-only DCs.
+    adcs_safe_rids: list[int] = Field(default_factory=lambda: [500, 512, 516, 518, 519, 498, 521])
+    #: Имена (свои группы администраторов ЦС).
+    adcs_safe_principals: list[str] = Field(default_factory=list)
     #: OUs | Computers | Both
     sensitive_acl_scope: str = "Both"
     sensitive_acl_search_base: str = ""

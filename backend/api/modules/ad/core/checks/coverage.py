@@ -11,7 +11,7 @@ from api.modules.ad.core.export import AdExport
 
 
 def coverage_gaps(export: AdExport) -> dict[str, str]:
-    users = gpos = templates = 0
+    users = gpos = templates = pki_objects = 0
     logon_dates = False
     for o in export.objects:
         if o.cls == "user":
@@ -21,6 +21,8 @@ def coverage_gaps(export: AdExport) -> dict[str, str]:
             gpos += 1
         elif o.cls == "pKICertificateTemplate":
             templates += 1
+        elif o.cls in ("pkiContainer", "pKIEnrollmentService"):
+            pki_objects += 1
     gaps: dict[str, str] = {}
     if users and not logon_dates:
         gaps["InactiveUsers"] = "в выгрузке нет дат последнего входа ни у одной учётной записи"
@@ -29,4 +31,6 @@ def coverage_gaps(export: AdExport) -> dict[str, str]:
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
     if not templates:
         gaps["ADCS_ESC"] = "шаблонов сертификатов в выгрузке нет: в лесу нет AD CS или контейнер шаблонов недоступен"
+    elif not pki_objects:
+        gaps["ADCS_CA"] = "ESC5 не проверен: выгрузка собрана без объектов PKI (старый сборщик)"
     return gaps

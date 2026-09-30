@@ -46,6 +46,19 @@ def test_missing_templates_mark_adcs_unchecked() -> None:
     assert set(_gaps(raw)) == {"ADCS_ESC"}
 
 
+def test_old_export_without_pki_objects_marks_esc5_unchecked() -> None:
+    raw = build_export()
+    raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pkiContainer", "pKIEnrollmentService")]
+    gaps = _gaps(raw)
+    assert set(gaps) == {"ADCS_CA"} and "ESC5" in gaps["ADCS_CA"]
+
+
+def test_ca_object_alone_is_enough_for_esc5() -> None:
+    raw = build_export()
+    raw["objects"] = [o for o in raw["objects"] if o["class"] != "pkiContainer"]
+    assert _gaps(raw) == {}
+
+
 def test_domain_without_gpo_is_not_a_gap() -> None:
     raw = build_export()
     raw["sysvol"] = {}

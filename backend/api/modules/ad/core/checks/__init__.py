@@ -20,6 +20,8 @@ from api.modules.ad.core.checks.acl import (
     check_shadow_admins,
 )
 from api.modules.ad.core.checks.adcs import check_adcs_templates
+from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
+from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
 from api.modules.ad.core.checks.common import CheckSpec
 from api.modules.ad.core.checks.domain import check_krbtgt_password_age, check_machine_account_quota
 from api.modules.ad.core.checks.gpo import check_user_rights_assignment
@@ -31,7 +33,7 @@ from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
-ANALYZER_VERSION = "1"
+ANALYZER_VERSION = "2"
 
 CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -53,7 +55,9 @@ CHECKS: list[CheckSpec] = [
     CheckSpec("WeakEncryption", "Слабое шифрование Kerberos (RC4)", "Разрешение RC4 и слабых шифров снижает стойкость Kerberos и упрощает атаки.", check_weak_encryption, ("T1558",)),
     CheckSpec("PreauthDisabled", "Preauth отключена", "Отключённая preauth позволяет получать ответы AS-REP для офлайн-подбора.", check_preauth_disabled, ("T1558.004",)),
     CheckSpec("SensitiveAcl", "Опасные ACL на OU и компьютерах", "Опасные ACL на OU и компьютерах позволяют изменять объекты и продвигаться по привилегиям. Унаследованное право показывается одной находкой на объекте-источнике, а одинаковое явное право на множестве объектов — одной находкой на их общем предке.", check_sensitive_acl, ("T1098", "T1484")),
-    CheckSpec("ADCS_ESC", "Шаблоны AD CS (ESC1–ESC4)", "Уязвимые шаблоны AD CS (ESC1–ESC4): риск выпуска сертификатов с привилегиями.", check_adcs_templates, ("T1649",)),
+    CheckSpec("ADCS_ESC", "Шаблоны AD CS (ESC1–4, 9, 13, 15)", "Шаблоны сертификатов, по которым небезопасный заявитель может выпустить сертификат для входа от чужого имени или с чужими правами, либо изменить сам шаблон. Безопасными заявителями считаются только заведомые администраторы; для широких групп серьёзность выше, для прочих — на ступень ниже. Неопубликованный шаблон даёт находку Low.", check_adcs_templates, ("T1649",)),
+    CheckSpec("ADCS_CA", "Центр сертификации (ESC5–8, 11, 16)", "Права на объекты PKI и центр сертификации, настройки ЦС и веб-выдачи, которые позволяют выпустить сертификат от чужого имени. ESC12 (доступ к HSM) удалённо не определяется.", check_adcs_ca, ("T1649",)),
+    CheckSpec("ADCS_MAPPING", "Привязка сертификатов к учётным записям (ESC10, 14)", "Слабая привязка сертификата к учётной записи на контроллерах домена и слабые явные сопоставления (altSecurityIdentities) позволяют войти по сертификату, выпущенному на другого.", check_adcs_mapping, ("T1649",)),
 ]
 
 CHECK_BY_CODE: dict[str, CheckSpec] = {c.code: c for c in CHECKS}

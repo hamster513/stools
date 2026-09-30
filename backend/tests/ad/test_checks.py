@@ -1,4 +1,4 @@
-"""Двадцать проверок на синтетическом домене CORP: известные ответы."""
+"""Двадцать две проверки на синтетическом домене CORP: известные ответы."""
 from __future__ import annotations
 
 import json
@@ -26,8 +26,8 @@ def idents(fs: list[Finding]) -> set[str]:
     return {f.identity for f in fs}
 
 
-def test_registry_has_twenty_checks() -> None:
-    assert len(CHECKS) == 20 and len({c.code for c in CHECKS}) == 20
+def test_registry_has_twenty_two_checks() -> None:
+    assert len(CHECKS) == 22 and len({c.code for c in CHECKS}) == 22
 
 
 def test_dcsync(findings: list[Finding]) -> None:
@@ -100,8 +100,13 @@ def test_user_rights_and_adcs(findings: list[Finding]) -> None:
         ("SeDebugPrivilege", "CORP\\helpdesk"): "High",
         ("SeBackupPrivilege", "BUILTIN\\Backup Operators"): "Medium",
     }
-    esc = {(f.target, f.details["esc"]) for f in by(findings, "ADCS_ESC")}
-    assert esc == {("VulnTemplate", "ESC1"), ("AgentTemplate", "ESC3"), ("AgentTemplate", "ESC4")}
+    esc = {(f.target, f.details["esc"]): (f.severity, f.details["requesters"]) for f in by(findings, "ADCS_ESC")}
+    assert esc == {
+        ("VulnTemplate", "ESC1"): ("High", ["CORP\\Domain Users"]),
+        ("AgentTemplate", "ESC3"): ("High", ["NT AUTHORITY\\Authenticated Users"]),
+        ("AgentTemplate", "ESC4"): ("High", ["NT AUTHORITY\\Authenticated Users"]),
+    }
+    assert by(findings, "ADCS_CA") == [] and by(findings, "ADCS_MAPPING") == []
 
 
 def test_keys_stable_and_unique(findings: list[Finding]) -> None:
