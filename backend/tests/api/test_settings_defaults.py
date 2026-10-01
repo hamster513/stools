@@ -18,3 +18,21 @@ def test_database_url_has_no_default(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_database_url_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STOOLS_DATABASE_URL", "postgresql+psycopg://u:p@db:5432/x")
     assert Settings(_env_file=None).database_url == "postgresql+psycopg://u:p@db:5432/x"
+
+
+def test_tz_defaults_to_utc(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("STOOLS_TZ", raising=False)
+    assert Settings(_env_file=None).tz == "UTC"
+
+
+def test_tz_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STOOLS_TZ", "Europe/Moscow")
+    assert Settings(_env_file=None).tz == "Europe/Moscow"
+
+
+@pytest.mark.parametrize("value", ["Mars/Olympus", "", "../etc/passwd"])
+def test_unknown_tz_stops_startup(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    # Окна расписаний считаются в этом поясе: опечатка не должна молча сдвинуть их на UTC.
+    monkeypatch.setenv("STOOLS_TZ", value)
+    with pytest.raises(ValidationError, match="STOOLS_TZ"):
+        Settings(_env_file=None)

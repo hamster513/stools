@@ -38,6 +38,8 @@ api = [
     "PyJWT[crypto]>=2.9",
     # Шифрование секретов подключений в базе (api/crypto.py).
     "cryptography>=42",
+    # База часовых поясов для STOOLS_TZ: в slim-образе системной zoneinfo может не быть.
+    "tzdata>=2024.1",
 ]
 
 [project.scripts]

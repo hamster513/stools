@@ -4,7 +4,9 @@ STOOLS_), значения по умолчанию годятся для лок�
 from __future__ import annotations
 
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +51,23 @@ class Settings(BaseSettings):
     #: инвентарь инфраструктуры, схема API наружу не нужна). Включать только
     #: для локальной отладки: STOOLS_EXPOSE_DOCS=true.
     expose_docs: bool = False
+
+    #: Часовой пояс окон расписаний планировщика (api/platform/scheduler.py),
+    #: имя IANA: STOOLS_TZ=Europe/Moscow. Сроки в базе — по-прежнему UTC.
+    tz: str = "UTC"
+
+    @field_validator("tz")
+    @classmethod
+    def _check_tz(cls, value: str) -> str:
+        # Опечатка не должна молча сдвинуть окна на UTC: без пояса API не стартует.
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(
+                f"STOOLS_TZ={value!r}: часовой пояс не найден. Укажите имя из базы IANA, "
+                "например Europe/Moscow или UTC."
+            ) from exc
+        return value
 
     @property
     def archive_dir(self) -> Path:

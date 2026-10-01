@@ -54,6 +54,7 @@ cp .env.example .env && chmod 600 .env
 - `STOOLS_CA_BUNDLE` — файл сертификатов сервера, если он не
   `/etc/ssl/certs/ca-certificates.crt` (Debian/Ubuntu). На RHEL, CentOS,
   Astra — `/etc/pki/tls/certs/ca-bundle.crt`.
+- `STOOLS_TZ` — часовой пояс окон расписаний, имя IANA, например `Europe/Moscow` (по умолчанию `UTC`).
 
 `STOOLS_SITE_ADDRESS`, `STOOLS_TLS` и `STOOLS_SESSION_COOKIE_SECURE` на
 сервере не используются: прод-compose задаёт их сам.
