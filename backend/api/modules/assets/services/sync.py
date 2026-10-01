@@ -23,13 +23,14 @@ from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle, active_job, run_job, start_job
 from api.modules.assets.core.matching import Observed, is_ip, normalize_fqdn, normalize_name
-from api.modules.assets.models import Asset, AssetJob, AssetObservation, AssetSettings
+from api.modules.assets.models import Asset, AssetJob, AssetObservation
 from api.modules.assets.services.assets import (
     MatchIndex,
     apply_observation,
     load_settings,
     observed,
     recompute,
+    settings_row,
 )
 from api.modules.assets.services.networks import load_networks
 from api.timeutil import utcnow
@@ -193,25 +194,15 @@ def _migrate_ksc_keys(db: Session) -> None:
     db.flush()
 
 
-def _settings_row(db: Session) -> AssetSettings:
-    row = db.execute(
-        select(AssetSettings).order_by(AssetSettings.id).with_for_update().execution_options(populate_existing=True)
-    ).scalars().first()
-    if row is None:
-        row = AssetSettings(data={})
-        db.add(row)
-    return row
-
-
 def _set_rerun(db: Session, value: bool) -> None:
-    row = _settings_row(db)
+    row = settings_row(db)
     row.data = {**(row.data or {}), "rerun_requested": value}
     db.commit()
 
 
 def _take_rerun(db: Session) -> bool:
     """Просили ли пройти ещё раз; просьба снимается."""
-    row = _settings_row(db)
+    row = settings_row(db)
     asked = bool((row.data or {}).get("rerun_requested"))
     if asked:
         row.data = {**row.data, "rerun_requested": False}

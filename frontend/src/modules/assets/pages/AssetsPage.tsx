@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, FilterX, RefreshCw, Search } from 'lucide-react'
+import { ChevronRight, FilterX, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAssets, useJob, useNetworks, useStartSync } from '@/modules/assets/api/queries'
+import { useAssets, useNetworks } from '@/modules/assets/api/queries'
 import {
   CODE_LABELS,
   CODES,
@@ -17,16 +16,14 @@ import {
   type Criticality,
   type DiscrepancyCode,
 } from '@/modules/assets/api/types'
-import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useVirtualRows } from '@/hooks/useVirtualRows'
-import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { useSearchParams } from '@/lib/router'
+import { useRouter, useSearchParams } from '@/lib/router'
 import { AssetDrawer } from './AssetDrawer'
 
 const ROW_HEIGHT = 40
@@ -173,32 +170,13 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd }
   )
 }
 
-/** Синхронизация кнопкой: страница следит за задачей и обновляет список, когда та закончится. */
-function SyncButton() {
-  const qc = useQueryClient()
-  const start = useStartSync()
-  const [jobId, setJobId] = useState<number | null>(null)
-  const job = useJob(jobId)
-  const status = job.data?.status
-  useEffect(() => {
-    if (status && status !== 'running') qc.invalidateQueries({ queryKey: ['assets-list'] })
-  }, [status, qc])
-  const running = start.isPending || status === 'running' || (jobId !== null && !job.data)
-  return (
-    <div className="flex items-center gap-2">
-      {start.error && <span className="text-xs text-kind-1">{start.error.message}</span>}
-      {job.data?.status === 'failed' && <span className="text-xs text-kind-1">{job.data.error ?? 'синхронизация не удалась'}</span>}
-      <Button onClick={() => start.mutate(undefined, { onSuccess: (r) => setJobId(r.job_id) })} loading={running} disabled={running}>
-        <RefreshCw size={13} aria-hidden /> Синхронизировать
-      </Button>
-    </div>
-  )
-}
-
-/** Реестр активов: таблица с фасетами слева, карточка справа. Адрес задаёт начальные фильтры — сюда ведут ссылки обзора. */
+/**
+ * Реестр активов: таблица с фасетами слева, карточка справа. Адрес задаёт начальные фильтры — сюда ведут
+ * ссылки обзора; `?asset=<id>` сразу открывает карточку — так ведут ссылки «в Assets» из антивируса и VM.
+ */
 export function AssetsPage() {
   const params = useSearchParams()
-  const { write } = useCan()
+  const { navigate } = useRouter()
   const [filters, setFilters] = useState<Filters>(() => ({
     source_has: (params.get('source_has') as AssetSource | null) ?? undefined,
     source_missing: (params.get('source_missing') as AssetSource | null) ?? undefined,
@@ -214,7 +192,7 @@ export function AssetsPage() {
   const port = useDebouncedValue(portInput, 250)
   const tag = useDebouncedValue(tagInput, 250)
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [openId, setOpenId] = useState<number | null>(null)
+  const [openId, setOpenId] = useState<number | null>(() => (Number(params.get('asset')) > 0 ? Number(params.get('asset')) : null))
   const searchRef = useRef<HTMLInputElement>(null)
 
   const queryArgs = useMemo<AssetsQuery>(
@@ -230,6 +208,13 @@ export function AssetsPage() {
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput(''); setPortInput(''); setTagInput('') }
+  // Карточка по ссылке открывается один раз: параметр снимается, и закрытая карточка не откроется снова при обновлении страницы.
+  useEffect(() => {
+    if (!params.has('asset')) return
+    const rest = new URLSearchParams(params)
+    rest.delete('asset')
+    navigate(`/assets/list${rest.size ? `?${rest}` : ''}`, { replace: true })
+  }, [params, navigate])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -257,7 +242,6 @@ export function AssetsPage() {
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
-        <div className="ml-auto">{write && <SyncButton />}</div>
       </header>
       <div className="flex min-h-0 flex-1">
         <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />
@@ -269,7 +253,7 @@ export function AssetsPage() {
               <EmptyState
                 icon={FilterX}
                 title={hasFilters ? 'Ничего не найдено' : 'Активов ещё нет'}
-                description={hasFilters ? 'Ни один актив не подходит под фильтры.' : 'Активы появятся после импорта в модулях VM, антивируса или AD — или после синхронизации кнопкой вверху.'}
+                description={hasFilters ? 'Ни один актив не подходит под фильтры.' : 'Активы появятся после импорта в модулях VM, антивируса или AD — или после синхронизации кнопкой на обзоре и в настройках.'}
               />
             </div>
           )}

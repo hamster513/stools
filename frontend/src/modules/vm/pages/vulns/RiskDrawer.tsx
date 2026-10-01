@@ -4,6 +4,7 @@ import { useRiskCard } from '@/modules/vm/api/queries'
 import type { Factor, VulnItem } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
+import { AssetLink } from '@/modules/assets/AssetLink'
 import { Spinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -140,6 +141,7 @@ export function RiskDrawer({ item, onClose }: Props) {
                   <div className="flex flex-wrap gap-3 text-[11px]">
                     <Link to={`/vm/vulns?host_id=${d.host.id}`} onNavigate={onClose} className="text-text underline">все уязвимости хоста</Link>
                     <Link to={`/vm/vulns?cve=${d.cve.cve_id}`} onNavigate={onClose} className="text-text underline">все хосты с этой CVE</Link>
+                    <AssetLink source="vm" hostKey={`${d.host.hostname}|${d.host.ip}`} onNavigate={onClose} />
                   </div>
                 </>
               )}

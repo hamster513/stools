@@ -52,6 +52,25 @@ def load_settings(db: Session) -> dict[str, Any]:
     return {**DEFAULT_SETTINGS, **(row.data if row else {})}
 
 
+def settings_row(db: Session) -> AssetSettings:
+    """Строка настроек под блокировкой; нет — заводится. В ней же служебная просьба синхронизации."""
+    row = db.execute(
+        select(AssetSettings).order_by(AssetSettings.id).with_for_update().execution_options(populate_existing=True)
+    ).scalars().first()
+    if row is None:
+        row = AssetSettings(data={})
+        db.add(row)
+    return row
+
+
+def save_settings(db: Session, values: dict[str, Any]) -> dict[str, Any]:
+    """Пороги и автосинхронизация; прочие ключи строки (просьба синхронизации) остаются."""
+    row = settings_row(db)
+    row.data = {**(row.data or {}), **{k: values[k] for k in DEFAULT_SETTINGS}}
+    db.flush()
+    return {k: row.data[k] for k in DEFAULT_SETTINGS}
+
+
 def scan_probes(db: Session) -> ScanProbes:
     """Чем расхождения узнают о скане: сканируется ли сеть адреса и ответил ли он последнему скану."""
     # Импорт здесь: services.scan сам импортирует этот модуль.
@@ -268,6 +287,17 @@ def _release_address(
     if old is not None:
         recompute(db, old, networks)
         idx.put(old, [observed(r, extra={}) for r in _observations(db, old.id)])
+
+
+def lookup_asset(db: Session, source: str, key: str) -> int:
+    """Актив по ключу наблюдения источника — ссылка «в Assets» у хоста модуля. Объединение
+    переносит наблюдения к первому активу, поэтому ссылка ведёт к живому."""
+    asset_id = db.execute(
+        select(AssetObservation.asset_id).where(AssetObservation.source == source, AssetObservation.source_key == key)
+    ).scalar()
+    if asset_id is None:
+        raise AssetNotFound("хост не сопоставлен с активом")
+    return int(asset_id)
 
 
 def _asset_or_404(db: Session, asset_id: int) -> Asset:

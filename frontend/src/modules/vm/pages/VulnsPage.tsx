@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, FilterX, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { exportUrl, useHost, useVulns } from '@/modules/vm/api/queries'
+import { AssetLink } from '@/modules/assets/AssetLink'
 import type { RiskLevel, VulnItem, VulnSort } from '@/modules/vm/api/types'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useRouter, useSearchParams } from '@/lib/router'
@@ -102,6 +103,7 @@ export function VulnsPage() {
             <button type="button" onClick={() => navigate('/vm/vulns')} aria-label="Снять фильтр по хосту" className="text-text-secondary hover:text-text"><X size={11} aria-hidden /></button>
           </span>
         )}
+        {host.data && <AssetLink source="vm" hostKey={`${host.data.host.hostname}|${host.data.host.ip}`} className="text-xs" />}
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input

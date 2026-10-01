@@ -267,3 +267,34 @@ export interface AdConnectionRef {
   title: string
   host: string
 }
+
+/** Пороги расхождений и автосинхронизация после импорта модулей. */
+export interface AssetSettings {
+  /** Компьютер AD без входа и без других источников дольше — «неактивный». */
+  inactive_days: number
+  /** Наблюдение старше опорного на столько дней — «данные устарели». */
+  stale_days: number
+  sync_after_import: boolean
+}
+
+export type SyncSource = 'vm' | 'ksc' | 'ad'
+
+/** `GET /sync/status`: последняя синхронизация и что лежит по каждому источнику модулей. */
+export interface SyncStatus {
+  last_sync_at: string | null
+  last_job_id: number | null
+  running_job_id: number | null
+  sources: Record<string, { live: number; gone: number; seen_at: string | null }>
+}
+
+export interface AssetsOverview {
+  assets_total: number
+  /** Ключ "" — активы без сети или в сети без зоны. */
+  by_zone: Record<string, number>
+  by_source: Record<AssetSource, number>
+  codes: Record<DiscrepancyCode, number>
+  networks: { total: number; scanned: number; no_network_assets: number }
+  last_scans: { network_id: number; cidr: string; title: string; last_scan_at: string | null; last_scan_alive: number | null }[]
+  last_dns: { dns_id: number; title: string; last_run_at: string | null }[]
+  sync: { last_sync_at: string | null; running_job_id: number | null }
+}

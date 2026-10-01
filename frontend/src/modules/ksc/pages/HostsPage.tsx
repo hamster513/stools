@@ -20,6 +20,7 @@ import {
   type HostsResponse,
 } from '@/modules/ksc/api/types'
 import { SeverityBadge } from '@/platform/collector/SeverityBadge'
+import { AssetLink } from '@/modules/assets/AssetLink'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { useSearchParams, Link } from '@/lib/router'
@@ -216,6 +217,7 @@ function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string 
                     <dt className="text-text-secondary">Без группы</dt><dd className="text-text">{h.unassigned ? 'да' : 'нет'}</dd>
                     <dt className="text-text-secondary">AD</dt><dd className="text-text">{h.in_ad ? IN_AD_LABELS[h.in_ad] : 'нет данных'}</dd>
                   </dl>
+                  <AssetLink source="ksc" hostKey={`${serverId}:${h.host_id}`} className="mb-4 text-[11px]" />
 
                   <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Система</div>
                   <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">

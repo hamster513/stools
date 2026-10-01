@@ -3,8 +3,8 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
 import type {
-  AdConnectionRef, AssetDetail, AssetPatch, AssetsQuery, AssetsResponse, DnsIn, DnsServer, Job, Network, NetworkIn, NetworkSchedule, PinnableField,
-  ScanStarted, ScheduleIn, Zone, ZoneIn,
+  AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, DnsIn, DnsServer, Job, Network, NetworkIn,
+  NetworkSchedule, PinnableField, ScanStarted, ScheduleIn, SyncStatus, Zone, ZoneIn,
 } from './types'
 
 export const ASSETS_PAGE_SIZE = 200
@@ -77,7 +77,47 @@ export function useStartSync() {
   const qc = useQueryClient()
   return useMutation<{ job_id: number }, ApiRequestError, void>({
     mutationFn: () => api.post('/api/assets/sync'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-jobs'] }),
+    onSuccess: () => {
+      for (const key of ['assets-jobs', 'assets-sync-status', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
+    },
+  })
+}
+
+export function useSyncStatus() {
+  return useQuery<SyncStatus, ApiRequestError>({ queryKey: ['assets-sync-status'], queryFn: () => api.get('/api/assets/sync/status') })
+}
+
+export function useOverview() {
+  return useQuery<AssetsOverview, ApiRequestError>({ queryKey: ['assets-overview'], queryFn: () => api.get('/api/assets/overview') })
+}
+
+export function useAssetSettings() {
+  return useQuery<AssetSettings, ApiRequestError>({ queryKey: ['assets-settings'], queryFn: () => api.get('/api/assets/settings') })
+}
+
+/** Пороги меняют расхождения у всех активов: обновить и список, и карточку, и обзор. */
+export function useSaveAssetSettings() {
+  const qc = useQueryClient()
+  return useMutation<AssetSettings, ApiRequestError, AssetSettings>({
+    mutationFn: (body) => api.put('/api/assets/settings', body),
+    onSuccess: (saved) => {
+      qc.setQueryData(['assets-settings'], saved)
+      for (const key of ['assets-list', 'assets-asset', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
+    },
+  })
+}
+
+/**
+ * Актив хоста другого модуля (ссылка «в Assets»): KSC — `server_id:host_id`, VM — `hostname|ip`.
+ * 404 — хост не сопоставлен: это не ошибка, а «ссылки нет», поэтому без повторов.
+ */
+export function useAssetLookup(source: 'ksc' | 'vm', key: string | null) {
+  return useQuery<{ asset_id: number }, ApiRequestError>({
+    queryKey: ['assets-lookup', source, key],
+    queryFn: () => api.get(`/api/assets/lookup${buildQuery({ source, key: key ?? '' })}`),
+    enabled: key !== null,
+    retry: false,
+    staleTime: 60_000,
   })
 }
 

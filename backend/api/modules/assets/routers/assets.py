@@ -22,6 +22,7 @@ from api.modules.assets.services.assets import (
     asset_detail,
     detach_observation,
     list_assets,
+    lookup_asset,
     merge_assets,
     pin_field,
     update_manual,
@@ -154,3 +155,19 @@ def start_sync(background_tasks: BackgroundTasks, db: Session = Depends(get_db),
 @router.get("/sync/status")
 def get_sync_status(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     return sync_status(db)
+
+
+@router.get("/lookup")
+def lookup(
+    source: str,
+    key: str = Query(min_length=1, max_length=512),
+    server_id: int | None = None,
+    db: Session = Depends(get_db),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, int]:
+    """Актив хоста модуля по ключу наблюдения: KSC — `server_id:host_id` (или `host_id` и
+    `server_id` отдельно), VM — `hostname|ip`, AD — SID компьютера; 404 — не сопоставлен."""
+    _check(source, SOURCES)
+    if source == "ksc" and server_id is not None:
+        key = f"{server_id}:{key}"
+    return {"asset_id": _errors(lookup_asset, db, source, key)}

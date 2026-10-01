@@ -1,16 +1,118 @@
 import { useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { ArrowRight, Plus, Save, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useCreateZone, useDeleteZone, useZones } from '@/modules/assets/api/queries'
+import { useAssetSettings, useCreateZone, useDeleteZone, useSaveAssetSettings, useSyncStatus, useZones } from '@/modules/assets/api/queries'
+import type { AssetSettings, SyncSource } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
+import { Link } from '@/lib/router'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
 import { DnsSection } from './settings/DnsSection'
+import { SyncButton } from './SyncButton'
 
 function message(error: unknown, fallback: string): string {
   return error instanceof ApiRequestError ? error.message : fallback
+}
+
+function when(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—'
+}
+
+// Пустое числовое поле — NaN: уходит как null, и API отвечает русским текстом о границах.
+const numberOrEmpty = (value: string) => (value === '' ? NaN : Number(value))
+const shown = (value: number) => (Number.isNaN(value) ? '' : value)
+
+/** Форма порогов: черновик живёт, пока не сохранён; без изменений кнопка выключена. */
+function ThresholdsForm({ saved }: { saved: AssetSettings }) {
+  const { write } = useCan()
+  const save = useSaveAssetSettings()
+  const [form, setForm] = useState(saved)
+  const dirty = form.inactive_days !== saved.inactive_days || form.stale_days !== saved.stale_days || form.sync_after_import !== saved.sync_after_import
+  return (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Устаревание, дней" hint="Значение источника старше актуального на столько дней — «данные устарели», моложе — «источники расходятся». 0 — любое отличие считается устаревшим.">
+          <input type="number" min={0} className={FIELD} disabled={!write} value={shown(form.stale_days)} onChange={(e) => setForm({ ...form, stale_days: numberOrEmpty(e.target.value) })} />
+        </Field>
+        <Field label="Неактивность AD, дней" hint="Компьютер AD без входа и без других источников дольше — «неактивный компьютер AD»; с входом не старше — нужен агент антивируса.">
+          <input type="number" min={1} className={FIELD} disabled={!write} value={shown(form.inactive_days)} onChange={(e) => setForm({ ...form, inactive_days: numberOrEmpty(e.target.value) })} />
+        </Field>
+      </div>
+      <label className="mt-3 flex items-center gap-2 text-xs text-text">
+        <input type="checkbox" disabled={!write} checked={form.sync_after_import} onChange={(e) => setForm({ ...form, sync_after_import: e.target.checked })} />
+        Синхронизировать сразу после импорта в модулях VM, антивирус и AD
+      </label>
+      {write && (
+        <div className="mt-3 flex items-center gap-3">
+          <Button variant="primary" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate(form)}>
+            <Save size={13} aria-hidden /> Сохранить
+          </Button>
+          {save.error && <span className="text-xs text-kind-1">{message(save.error, 'Настройки не сохранены')}</span>}
+        </div>
+      )}
+    </>
+  )
+}
+
+function ThresholdsSection() {
+  const settings = useAssetSettings()
+  return (
+    <Section title="Пороги и автосинхронизация" about="Пороги задают, когда отличие значения источника — устаревшие данные, а когда — расхождение, и какой компьютер AD считать неактивным. Меняются сразу для всего реестра: расхождения считаются при чтении.">
+      {settings.isLoading && <Spinner />}
+      {settings.isError && <ErrorState message={message(settings.error, 'Не удалось загрузить настройки')} onRetry={() => settings.refetch()} />}
+      {settings.data && <ThresholdsForm key={JSON.stringify(settings.data)} saved={settings.data} />}
+    </Section>
+  )
+}
+
+const SYNC_SOURCES: { source: SyncSource; title: string }[] = [
+  { source: 'vm', title: 'VM' },
+  { source: 'ksc', title: 'Антивирус (KSC)' },
+  { source: 'ad', title: 'Active Directory' },
+]
+
+/** Синхронизация с модулями: кнопка, время последней и что лежит по каждому источнику. */
+function SyncSection() {
+  const { write } = useCan()
+  const status = useSyncStatus()
+  const s = status.data
+  return (
+    <Section title="Синхронизация с модулями" about="Assets читает хосты VM, последние снапшоты антивируса и выгрузки AD и сопоставляет их с активами. Хосты, которых источник больше не отдаёт, помечаются пропавшими. Время источника — когда он видел хост: у VM это время импорта, у антивируса и AD — время сбора снапшота.">
+      {status.isLoading && <Spinner />}
+      {status.isError && <ErrorState message={message(status.error, 'Не удалось загрузить состояние синхронизации')} onRetry={() => status.refetch()} />}
+      {s && (
+        <>
+          <p className="mb-3 text-xs text-text-secondary">
+            {s.running_job_id ? <>Идёт синхронизация, <Link to="/assets/jobs" className="underline">задача #{s.running_job_id}</Link>.</> : <>Последняя синхронизация: <span className="text-text">{when(s.last_sync_at)}</span>.</>}
+          </p>
+          <table className="mb-3 w-full text-xs">
+            <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+              <tr><th className="py-1.5 pr-3 text-left">Источник</th><th className="py-1.5 pr-3 text-right">Видит хостов</th><th className="py-1.5 pr-3 text-right">Пропали</th><th className="py-1.5 text-right">Данные от</th></tr>
+            </thead>
+            <tbody>
+              {SYNC_SOURCES.map(({ source, title }) => {
+                const row = s.sources[source]
+                return (
+                  <tr key={source} className="border-t border-grid">
+                    <td className="py-2 pr-3 text-text">{title}</td>
+                    <td className="py-2 pr-3 text-right font-mono tabular-nums text-text">{row?.live ?? 0}</td>
+                    <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{row?.gone ?? 0}</td>
+                    <td className="py-2 text-right text-text-secondary">{when(row?.seen_at ?? null)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+      <div className="flex items-center justify-between gap-3">
+        <Link to="/assets/jobs" className="inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text">Задачи модуля <ArrowRight size={12} aria-hidden /></Link>
+        {write && <SyncButton label="Обновить сейчас" />}
+      </div>
+    </Section>
+  )
 }
 
 /** Справочник зон: зона сети выбирается из него; зону, заданную у сетей, удалить нельзя. */
@@ -65,7 +167,7 @@ function ZonesSection() {
   )
 }
 
-/** «Настройки и данные» модуля Assets: DNS-серверы и справочник зон; пороги и синхронизация — следующими блоками. */
+/** «Настройки и данные» модуля Assets: пороги, синхронизация с модулями, DNS-серверы, справочник зон. */
 export function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -74,6 +176,8 @@ export function SettingsPage() {
         <p className="max-w-2xl text-xs text-text-secondary">Справочники и настройки реестра активов.</p>
       </div>
       <div className="flex max-w-5xl flex-col gap-4">
+        <ThresholdsSection />
+        <SyncSection />
         <DnsSection />
         <ZonesSection />
       </div>
