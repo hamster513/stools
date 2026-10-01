@@ -54,6 +54,8 @@ class FakeLdap:
             "msPKI-Cert-Template-OID": o.get("msPKI-Cert-Template-OID"),
             "cn": o.get("cn"),
             "dNSHostName": o.get("dNSHostName"),
+            "operatingSystem": o.get("operatingSystem"),
+            "operatingSystemVersion": o.get("operatingSystemVersion"),
             "certificateTemplates": o.get("certificateTemplates", []),
             "msPKI-Enrollment-Servers": o.get("msPKI-Enrollment-Servers", []),
             "msDS-OIDToGroupLink": o.get("msDS-OIDToGroupLink"),

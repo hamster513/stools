@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -36,6 +37,8 @@ from api.modules.vm.services.scoring import (
     rescore_pairs,
 )
 from api.modules.vm.services.settings import VmSettings
+
+log = logging.getLogger(__name__)
 
 PAIR_BATCH = 50_000
 STAGE_HOST = cast(Table, VmStageHost.__table__)
@@ -174,6 +177,18 @@ def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tupl
     return stats, new_cves
 
 
+def _notify_assets(db: Session) -> None:
+    """Assets пересоберёт реестр хостов из записанного импорта. Его сбой не должен ронять импорт:
+    данные модуля уже зафиксированы. Импорт внутри функции — Assets сам читает таблицы модуля."""
+    try:
+        from api.modules.assets.services.sync import request_sync
+
+        request_sync(db, "vm")
+    except Exception:
+        db.rollback()
+        log.exception("синхронизация Assets после импорта VM не запущена")
+
+
 def run_import(
     db: Session,
     handle: JobHandle,
@@ -222,6 +237,7 @@ def run_import(
             )
         )
         db.commit()
+        _notify_assets(db)
         return stats
     finally:
         if temp is not None and temp.exists():

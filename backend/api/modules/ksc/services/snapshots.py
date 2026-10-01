@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,8 @@ from api.modules.ksc.core.export import ExportIndex, KscExport, load_export_path
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding
 from api.modules.ksc.models import KscFinding, KscHost, KscServer, KscSnapshot, KscVerdict
 from api.modules.ksc.services.coverage import ad_computers_for
+
+log = logging.getLogger(__name__)
 
 MAX_UPLOAD = 200 * 1024 * 1024
 
@@ -128,7 +131,20 @@ def import_export(
     _store(db, snapshot, idx, findings, cfg, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
+    _notify_assets(db)
     return snapshot
+
+
+def _notify_assets(db: Session) -> None:
+    """Assets пересоберёт реестр хостов из записанного импорта. Его сбой не должен ронять импорт:
+    данные модуля уже зафиксированы. Импорт внутри функции — Assets сам читает таблицы модуля."""
+    try:
+        from api.modules.assets.services.sync import request_sync
+
+        request_sync(db, "ksc")
+    except Exception:
+        db.rollback()
+        log.exception("синхронизация Assets после импорта KSC не запущена")
 
 
 def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg: KscConfig, data_dir: Path) -> KscSnapshot:

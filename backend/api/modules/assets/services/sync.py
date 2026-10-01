@@ -1,0 +1,233 @@
+"""Синхронизация с модулями VM, KSC и AD (спека §2 «Синхронизация»).
+
+Assets читает таблицы и файлы модулей сам; модули знают об Assets одним вызовом
+`request_sync(db, source)` в конце успешного импорта. Задача синхронизирует все
+источники сразу: пересчёт карточки зависит от наблюдений всех источников.
+
+`seen_at`: VM — время последнего импорта (другого у VM нет), KSC и AD — `collected_at`
+последнего снапшота каждого сервера и домена.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import threading
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from api.jobs import JobHandle, active_job, run_job, start_job
+from api.modules.assets.core.matching import Observed, is_ip, normalize_fqdn, normalize_name
+from api.modules.assets.models import Asset, AssetJob, AssetObservation
+from api.modules.assets.services.assets import (
+    MatchIndex,
+    apply_observation,
+    load_networks,
+    load_settings,
+    observed,
+    recompute,
+)
+from api.timeutil import utcnow
+
+log = logging.getLogger("stools.assets")
+
+SYNC_SOURCES = ("vm", "ksc", "ad")
+SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD"}
+#: Кто запустил задачу после импорта модуля: человека у неё нет.
+AUTO_STARTED_BY = "после импорта"
+#: Прогресс и проверка отмены — раз в столько наблюдений.
+TICK_EVERY = 500
+
+
+def _in_thread(fn: Callable[[], None]) -> None:
+    threading.Thread(target=fn, name="stools-assets-sync", daemon=True).start()
+
+
+#: Как задача уходит из потока импорта модуля: импорт не ждёт синхронизацию.
+#: Тесты подменяют на вызов на месте (поток пережил бы тест).
+spawn: Callable[[Callable[[], None]], None] = _in_thread
+
+
+def request_sync(db: Session, source: str) -> int | None:
+    """Если включено `sync_after_import` и синхронизация не идёт — запустить её; иначе None.
+    Вызывается после фиксации импорта модуля: задача читает уже записанные данные."""
+    if not load_settings(db)["sync_after_import"]:
+        return None
+    if active_job(db, AssetJob, ("sync",)) is not None:
+        return None
+    job_id = start_job(db, AssetJob, "sync", AUTO_STARTED_BY, message=source)
+    spawn(lambda: run_job(AssetJob, job_id, lambda s, h: sync_job(s, h, SOURCE_TITLES.get(source, source))))
+    return job_id
+
+
+def sync_job(db: Session, handle: JobHandle, trigger: str) -> None:
+    """Итог задачи — что её запустило и сколько наблюдений дал каждый источник."""
+    counts = run_sync(db, handle)
+    handle.stage("done", message=f"{trigger}: " + " · ".join(f"{SOURCE_TITLES[s]} {n}" for s, n in counts.items()))
+
+
+# ---- Чтение источников ----------------------------------------------------
+
+
+def _host_names(hostname: str) -> tuple[str, str, str]:
+    """(имя, FQDN, домен) из имени хоста VM: домен выводится из имени с точкой."""
+    if is_ip(hostname):
+        return "", "", ""
+    fqdn = normalize_fqdn(hostname)
+    short, domain = normalize_name(hostname)
+    name = hostname.strip().split(".", 1)[0] if short else ""
+    return name, fqdn, domain if fqdn else ""
+
+
+def observations_from_vm(db: Session) -> Iterator[Observed]:
+    from api.modules.vm.models import VmHost, VmHostCve, VmImport
+
+    seen_at = db.execute(select(func.max(VmImport.finished_at))).scalar() or utcnow()
+    cves = dict(db.execute(select(VmHostCve.host_id, func.count()).group_by(VmHostCve.host_id)).tuples().all())
+    for h in db.execute(select(VmHost).order_by(VmHost.id)).scalars():
+        name, fqdn, domain = _host_names(h.hostname)
+        yield Observed(
+            source="vm", source_key=f"{h.hostname}|{h.ip}", name=name, fqdn=fqdn, domain=domain, ip=h.ip,
+            ips=[h.ip] if h.ip else [], os=h.os_name, seen_at=seen_at,
+            extra={"zone": h.zone, "groups": h.groups, "cve_count": int(cves.get(h.id, 0))},
+        )
+
+
+def observations_from_ksc(db: Session) -> Iterator[Observed]:
+    from api.modules.ksc.models import KscHost, KscServer
+    from api.modules.ksc.services.snapshots import latest_snapshot
+
+    for server in db.execute(select(KscServer).order_by(KscServer.id)).scalars():
+        snap = latest_snapshot(db, server.id)
+        if snap is None:
+            continue
+        for h in db.execute(select(KscHost).where(KscHost.snapshot_id == snap.id).order_by(KscHost.id)).scalars():
+            fqdn = normalize_fqdn(h.fqdn)
+            extra = json.loads(h.extra_json or "{}")
+            yield Observed(
+                source="ksc", source_key=h.host_id, name=h.name or fqdn.partition(".")[0], fqdn=fqdn, domain=h.domain,
+                ip=h.ip, ips=[h.ip] if h.ip else [], os=h.os, seen_at=snap.collected_at,
+                extra={
+                    "group_path": h.group_path, "tags": extra.get("tags", []), "components": json.loads(h.components_json or "[]"),
+                    "agent_alive": h.agent_alive, "protection": h.protection, "server_id": server.id,
+                },
+            )
+
+
+def _ad_observations(db: Session, data_dir: Path) -> tuple[list[Observed], bool]:
+    """Компьютеры последнего снапшота каждого домена из файла выгрузки; второе — все ли файлы
+    прочитаны: без файла домена его компьютеры нельзя считать пропавшими."""
+    from api.modules.ad.core.export import ExportFormatError, filetime_to_datetime, load_export_path
+    from api.modules.ad.models import AdDomain
+    from api.modules.ad.services.snapshots import latest_snapshot, snapshot_path
+
+    out: list[Observed] = []
+    complete = True
+    for domain in db.execute(select(AdDomain).order_by(AdDomain.id)).scalars():
+        snap = latest_snapshot(db, domain.id)
+        if snap is None:
+            continue
+        try:
+            export = load_export_path(snapshot_path(data_dir, snap.id))
+        except (ExportFormatError, OSError, ValueError) as exc:
+            complete = False
+            log.warning("снапшот AD #%s не прочитан: %s", snap.id, type(exc).__name__)
+            continue
+        dns_root = export.domain.dns_root.lower()
+        for o in export.objects:
+            if o.cls != "computer":
+                continue
+            last = filetime_to_datetime(o.lastLogonTimestamp)
+            out.append(Observed(
+                source="ad", source_key=o.sid or o.dn, name=(o.sam or o.name or "").rstrip("$"),
+                fqdn=normalize_fqdn(o.dNSHostName or ""), domain=dns_root or export.domain.netbios.lower(),
+                os=o.operatingSystem or "", seen_at=snap.collected_at,
+                extra={
+                    "dn": o.dn, "enabled": o.enabled, "last_logon": last.isoformat() if last else None,
+                    "os_version": o.operatingSystemVersion or "", "domain_id": domain.id,
+                },
+            ))
+    return out, complete
+
+
+def observations_from_ad(db: Session, data_dir: Path) -> Iterator[Observed]:
+    yield from _ad_observations(db, data_dir)[0]
+
+
+def _read(db: Session, source: str, data_dir: Path) -> tuple[list[Observed], bool]:
+    if source == "vm":
+        return list(observations_from_vm(db)), True
+    if source == "ksc":
+        return list(observations_from_ksc(db)), True
+    if source == "ad":
+        return _ad_observations(db, data_dir)
+    raise ValueError(f"неизвестный источник «{source}»")
+
+
+# ---- Задача ---------------------------------------------------------------
+
+
+def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOURCES) -> dict[str, int]:
+    """Читает источники, для каждого наблюдения — match → upsert asset_observation → пересчёт
+    актива; пропавшим ставит gone_at. Возвращает число наблюдений по источникам."""
+    from api.settings import get_settings
+
+    data_dir = get_settings().data_dir
+    now = utcnow()
+    index = MatchIndex.load(db)
+    rows = {(r.source, r.source_key): r for r in db.execute(select(AssetObservation)).scalars()}
+    networks = load_networks(db)
+    counts: dict[str, int] = {}
+    for source in sources:
+        found, complete = _read(db, source, data_dir)
+        handle.stage("sync", total=len(found), message=f"{SOURCE_TITLES.get(source, source)}: хостов {len(found)}")
+        seen: set[str] = set()
+        for i, obs in enumerate(found, start=1):
+            # Один ключ дважды (одинаковый host_id на двух серверах KSC) — берётся первый.
+            if obs.source_key in seen:
+                continue
+            seen.add(obs.source_key)
+            apply_observation(db, obs, index=index, rows=rows, networks=networks)
+            if i % TICK_EVERY == 0:
+                handle.tick(i)
+        if complete:
+            touched: set[int] = set()
+            for (src, key), row in rows.items():
+                if src == source and key not in seen and row.gone_at is None:
+                    row.gone_at = now
+                    touched.add(row.asset_id)
+            db.flush()
+            for asset_id in sorted(touched):
+                asset = db.get(Asset, asset_id)
+                if asset is not None:
+                    recompute(db, asset, networks)
+                    index.put(asset, [observed(r) for r in rows.values() if r.asset_id == asset_id])
+        db.commit()
+        counts[source] = len(seen)
+    return counts
+
+
+def sync_status(db: Session) -> dict[str, Any]:
+    """Время последней синхронизации и что сейчас лежит по каждому источнику."""
+    last = db.execute(
+        select(AssetJob).where(AssetJob.kind == "sync", AssetJob.status == "done").order_by(AssetJob.finished_at.desc(), AssetJob.id.desc())
+    ).scalars().first()
+    running = active_job(db, AssetJob, ("sync",))
+    per_source: dict[str, dict[str, Any]] = {s: {"live": 0, "gone": 0, "seen_at": None} for s in SYNC_SOURCES}
+    stmt = select(
+        AssetObservation.source,
+        func.count().filter(AssetObservation.gone_at.is_(None)),
+        func.count().filter(AssetObservation.gone_at.is_not(None)),
+        func.max(AssetObservation.seen_at),
+    ).group_by(AssetObservation.source)
+    for source, live, gone, seen_at in db.execute(stmt).tuples():
+        per_source[source] = {"live": int(live), "gone": int(gone), "seen_at": seen_at.isoformat() if seen_at else None}
+    return {
+        "last_sync_at": last.finished_at.isoformat() if last and last.finished_at else None,
+        "last_job_id": last.id if last else None,
+        "running_job_id": running.id if running else None,
+        "sources": per_source,
+    }

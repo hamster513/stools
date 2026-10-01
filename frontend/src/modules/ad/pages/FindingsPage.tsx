@@ -12,6 +12,7 @@ export function FindingsPage({ domainId }: { domainId: number }) {
       loading={domains.isLoading}
       lastSnapshotId={domain?.last_snapshot_id ?? undefined}
       useFindings={useFindings}
+      searchFromUrl
       searchPlaceholder="Identity, цель, право… (/)"
       emptyDescription="Загрузите выгрузку или запустите сбор по LDAP в настройках модуля."
       table={(p) => <FindingsTable {...p} />}

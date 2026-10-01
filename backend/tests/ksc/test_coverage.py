@@ -55,9 +55,8 @@ def test_ad_computers_from_export_uses_enabled_computers() -> None:
         assert c.netbios == "CORP"
         year, month, day = c.last_logon.split("-")
         assert len(year) == 4 and len(month) == 2 and len(day) == 2
-    # Сборщики AD сегодня не выгружают operatingSystem — поле остаётся пустым,
-    # заполнится само, если выгрузка когда-нибудь станет его нести.
-    assert all(c.os == "" for c in computers)
+    # Оба сборщика AD выгружают operatingSystem компьютера — сверка берёт ОС из выгрузки.
+    assert {c.name: c.os for c in computers} == {"WS01": "Windows 11 Pro", "SRV01": "Windows Server 2022 Standard"}
 
     raw = build_ad()
     ws01 = next(o for o in raw["objects"] if o.get("sam") == "WS01$")

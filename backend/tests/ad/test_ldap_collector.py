@@ -39,6 +39,27 @@ def test_collector_without_computer_sd_and_sysvol() -> None:
     assert comps and all(o.sd is None for o in comps) and export.sysvol == {}
 
 
+def test_collector_reads_computer_host_attributes() -> None:
+    """Assets сопоставляет компьютер AD с хостами других источников по DNS-имени и показывает ОС."""
+    fake = FakeLdap()
+    asked: list[list[str]] = []
+
+    def search(base: str, flt: str, attrs: list[str], scope: str) -> Any:
+        if flt == "(objectClass=computer)":
+            asked.append(attrs)
+        return fake.search(base, flt, attrs, scope)
+
+    for with_sd in (True, False):
+        asked.clear()
+        raw = LdapCollector(search, fake.root_dse(), include_computer_sd=with_sd).collect()
+        assert asked and {"dNSHostName", "operatingSystem", "operatingSystemVersion"} <= set(asked[0])
+        export = load_export(json.dumps(raw).encode())
+        ws01 = next(o for o in export.objects if o.sam == "WS01$")
+        assert (ws01.dNSHostName, ws01.operatingSystem, ws01.operatingSystemVersion) == ("ws01.corp.local", "Windows 11 Pro", "10.0 (22631)")
+        admin = next(o for o in raw["objects"] if o.get("sam") == "admin1")
+        assert "operatingSystem" not in admin  # у пользователей этих полей нет
+
+
 def _failing(fake: FakeLdap, base_prefix: str, code: int, description: str) -> Any:
     def search(base: str, flt: str, attrs: list[str], scope: str) -> Any:
         if base.lower().startswith(base_prefix.lower()):

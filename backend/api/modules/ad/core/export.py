@@ -130,6 +130,8 @@ class AdObject(BaseModel):
     ra_application_policies: StrList = Field(default_factory=list, alias="msPKI-RA-Application-Policies")
     template_oid: str | None = Field(default=None, alias="msPKI-Cert-Template-OID")
     dNSHostName: str | None = None
+    operatingSystem: str | None = None
+    operatingSystemVersion: str | None = None
     certificateTemplates: StrList = Field(default_factory=list)
     enrollment_servers: StrList = Field(default_factory=list, alias="msPKI-Enrollment-Servers")
     oid_group_link: str | None = Field(default=None, alias="msDS-OIDToGroupLink")

@@ -150,6 +150,9 @@ def app_settings(
     monkeypatch.setenv("STOOLS_DATA_DIR", str(data_dir))
     monkeypatch.setenv("STOOLS_SESSION_COOKIE_SECURE", "false")
     monkeypatch.setenv("STOOLS_SESSION_SECRET", TEST_SESSION_SECRET)
+    # Синхронизацию Assets после импорта модуля API ведёт отдельным потоком; в тестах — на месте:
+    # поток пережил бы тест и писал в базу, которую уже чистит TRUNCATE.
+    monkeypatch.setattr("api.modules.assets.services.sync.spawn", lambda fn: fn())
     from api.settings import get_settings
 
     yield get_settings()

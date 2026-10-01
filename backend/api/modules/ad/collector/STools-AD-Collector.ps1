@@ -287,6 +287,9 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
       $rec["allowedToActOnBehalf"] = ToBase64Sd $o."msDS-AllowedToActOnBehalfOfOtherIdentity"
       if ($o."msDS-AllowedToActOnBehalfOfOtherIdentity") { Register-AceSids $o."msDS-AllowedToActOnBehalfOfOtherIdentity" }
       if ($withSd) { $rec["sd"] = ToBase64Sd $o.nTSecurityDescriptor; Register-AceSids $o.nTSecurityDescriptor }
+      $rec["dNSHostName"] = [string]$o.dNSHostName
+      $rec["operatingSystem"] = [string]$o.operatingSystem
+      $rec["operatingSystemVersion"] = [string]$o.operatingSystemVersion
     }
     if ($sid) { Register-Principal $sid ("{0}\{1}" -f $netbios, $o.sAMAccountName) $class }
     $objects.Add($rec) | Out-Null
@@ -300,7 +303,7 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
 
   Write-Step "Компьютеры"
   $n0 = $objects.Count
-  $compProps = $userProps + @("msDS-AllowedToActOnBehalfOfOtherIdentity")
+  $compProps = $userProps + @("msDS-AllowedToActOnBehalfOfOtherIdentity", "dNSHostName", "operatingSystem", "operatingSystemVersion")
   if (-not $noComputerAcl) { $compProps += "nTSecurityDescriptor" }
   Get-ADObject @ad -LDAPFilter "(objectClass=computer)" -Properties $compProps | ForEach-Object { Add-Account $_ "computer" (-not $noComputerAcl) }
   Write-Step ("  компьютеров: {0}" -f ($objects.Count - $n0))

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,8 @@ from api.modules.ad.core.export import AdExport, ExportIndex, load_export_path
 from api.modules.ad.core.findings import SEVERITY_RANK, Finding
 from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot, AdVerdict
 from api.modules.ad.services.ca_data import effective_ca_data
+
+log = logging.getLogger(__name__)
 
 
 def snapshot_path(data_dir: Path, snapshot_id: int) -> Path:
@@ -122,7 +125,20 @@ def import_export(
     _store_findings(db, snapshot, findings, gaps, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
+    _notify_assets(db)
     return snapshot
+
+
+def _notify_assets(db: Session) -> None:
+    """Assets пересоберёт реестр хостов из записанного импорта. Его сбой не должен ронять импорт:
+    данные модуля уже зафиксированы. Импорт внутри функции — Assets сам читает таблицы модуля."""
+    try:
+        from api.modules.assets.services.sync import request_sync
+
+        request_sync(db, "ad")
+    except Exception:
+        db.rollback()
+        log.exception("синхронизация Assets после импорта AD не запущена")
 
 
 def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: AdConfig, data_dir: Path) -> AdSnapshot:

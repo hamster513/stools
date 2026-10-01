@@ -46,6 +46,15 @@ def test_script_writes_the_fields_the_models_read() -> None:
         assert name in text, name
 
 
+def test_script_collects_computer_host_attributes() -> None:
+    """Те же три свойства компьютера, что у LDAP-сборщика: по ним Assets узнаёт хост."""
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    comp_props = next(line for line in text.splitlines() if line.strip().startswith("$compProps ="))
+    for name in ("dNSHostName", "operatingSystem", "operatingSystemVersion"):
+        assert f'"{name}"' in comp_props, name
+        assert f'$rec["{name}"]' in text, name
+
+
 def test_menu_lists_seven_items() -> None:
     text = SCRIPT.read_text(encoding="utf-8-sig")
     for line in ("1  Всё: выгрузка AD и данные ЦС", "5  Данные ЦС: настройки и права центров сертификации",
@@ -388,6 +397,8 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     assert export.collector.notes == []
     [user] = by_class["user"]
     assert user.altSecurityIdentities == ["X509:<I>DC=local,DC=corp,CN=CORP-CA<S>CN=alice"]
+    [comp] = by_class["computer"]
+    assert comp.dNSHostName == f"host.docker.internal:{web_server}" and comp.operatingSystemVersion == "10.0 (17763)" and comp.operatingSystem == ""
 
     data = parse_ca_data(_gz_json(ca_file))
     assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.0"

@@ -25,7 +25,12 @@ USER_ATTRS = [
     "servicePrincipalName", "msDS-AllowedToDelegateTo", "msDS-SupportedEncryptionTypes", "adminCount",
     "altSecurityIdentities",
 ]
-COMPUTER_ATTRS = [*USER_ATTRS, "msDS-AllowedToActOnBehalfOfOtherIdentity", "nTSecurityDescriptor"]
+#: DNS-имя и ОС компьютера — по ним Assets сопоставляет его с хостами других источников.
+#: nTSecurityDescriptor последним: без ACL компьютеров список берётся без него.
+COMPUTER_ATTRS = [
+    *USER_ATTRS, "msDS-AllowedToActOnBehalfOfOtherIdentity", "dNSHostName", "operatingSystem", "operatingSystemVersion",
+    "nTSecurityDescriptor",
+]
 GROUP_ATTRS = ["sAMAccountName", "name", "objectSid", "member", "adminCount"]
 TEMPLATE_ATTRS = [
     "cn", "displayName", "pKIExtendedKeyUsage", "msPKI-Enrollment-Flag", "msPKI-Certificate-Name-Flag",
@@ -356,6 +361,8 @@ class LdapCollector:
             rbcd = _raw(e, "msDS-AllowedToActOnBehalfOfOtherIdentity")
             rec["allowedToActOnBehalf"] = _b64(rbcd)
             self._note_sd(rbcd)
+            for name in ("dNSHostName", "operatingSystem", "operatingSystemVersion"):
+                rec[name] = str(_first(a.get(name)) or "")
             if with_sd:
                 csd = _raw(e, "nTSecurityDescriptor")
                 rec["sd"] = _b64(csd)
