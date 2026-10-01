@@ -2,7 +2,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
-import type { AssetDetail, AssetPatch, AssetsQuery, AssetsResponse, Job, PinnableField } from './types'
+import type { AssetDetail, AssetPatch, AssetsQuery, AssetsResponse, Job, Network, NetworkIn, PinnableField, Zone, ZoneIn } from './types'
 
 export const ASSETS_PAGE_SIZE = 200
 
@@ -86,4 +86,41 @@ export function useJob(id: number | null) {
     enabled: id !== null,
     refetchInterval: (q) => (q.state.data?.status === 'running' || !q.state.data ? 1500 : false),
   })
+}
+
+export function useNetworks() {
+  return useQuery<Network[], ApiRequestError>({ queryKey: ['assets-networks'], queryFn: () => api.get('/api/assets/networks') })
+}
+
+/** Сеть изменилась — активы могли переехать в другую сеть: обновить и список, и карточку, и зоны (счётчик сетей). */
+function useNetworkMutation<V, R>(fn: (vars: V) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation<R, ApiRequestError, V>({
+    mutationFn: fn,
+    onSuccess: () => {
+      for (const key of ['assets-networks', 'assets-zones', 'assets-list', 'assets-asset']) qc.invalidateQueries({ queryKey: [key] })
+    },
+  })
+}
+
+export function useSaveNetwork() {
+  return useNetworkMutation<{ id?: number; body: NetworkIn }, Network>(({ id, body }) =>
+    id === undefined ? api.post('/api/assets/networks', body) : api.put(`/api/assets/networks/${id}`, body),
+  )
+}
+
+export function useDeleteNetwork() {
+  return useNetworkMutation<number, void>((id) => api.del(`/api/assets/networks/${id}`))
+}
+
+export function useZones() {
+  return useQuery<Zone[], ApiRequestError>({ queryKey: ['assets-zones'], queryFn: () => api.get('/api/assets/zones') })
+}
+
+export function useCreateZone() {
+  return useNetworkMutation<ZoneIn, Zone>((body) => api.post('/api/assets/zones', body))
+}
+
+export function useDeleteZone() {
+  return useNetworkMutation<string, void>((name) => api.del(`/api/assets/zones/${encodeURIComponent(name)}`))
 }

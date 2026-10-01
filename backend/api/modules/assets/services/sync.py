@@ -25,11 +25,11 @@ from api.modules.assets.models import Asset, AssetJob, AssetObservation
 from api.modules.assets.services.assets import (
     MatchIndex,
     apply_observation,
-    load_networks,
     load_settings,
     observed,
     recompute,
 )
+from api.modules.assets.services.networks import load_networks
 from api.timeutil import utcnow
 
 log = logging.getLogger("stools.assets")

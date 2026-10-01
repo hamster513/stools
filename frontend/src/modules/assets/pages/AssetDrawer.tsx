@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Monitor, Pin, PinOff, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAsset, useAssets, useDetachObservation, useMergeAssets, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
+import { useAsset, useAssets, useDetachObservation, useMergeAssets, useNetworks, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
 import {
   CODE_LABELS,
   CRITICALITIES,
@@ -38,6 +38,7 @@ const CODE_TEXT: Record<string, string> = {
   unreachable: 'text-risk-high',
   unknown_host: 'text-risk-high',
   dns_orphan: 'text-risk-medium',
+  no_network: 'text-risk-medium',
 }
 
 function day(iso: string | null): string {
@@ -221,6 +222,10 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
   const [criticality, setCriticality] = useState<Criticality | ''>(a.criticality)
   const [tags, setTags] = useState(a.tags.join(', '))
   const [note, setNote] = useState(a.note)
+  const networks = useNetworks()
+  // '' — сеть по адресу (самая узкая, содержащая IP); иначе id сети, выбранной вручную.
+  const currentNetwork = a.network_manual && a.network ? String(a.network.id) : ''
+  const [network, setNetwork] = useState(currentNetwork)
 
   if (!write) {
     return (
@@ -231,7 +236,8 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
       </dl>
     )
   }
-  const dirty = criticality !== a.criticality || tags !== a.tags.join(', ') || note !== a.note
+  const dirty = criticality !== a.criticality || tags !== a.tags.join(', ') || note !== a.note || network !== currentNetwork
+  const networkPatch = network === currentNetwork ? {} : network ? { network_id: Number(network) } : { network_id: null, network_manual: false }
   return (
     <div className="flex flex-col gap-2">
       <label className="block">
@@ -246,11 +252,18 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
         <input value={tags} onChange={(e) => setTags(e.target.value)} className={cn(FIELD, 'text-xs')} />
       </label>
       <label className="block">
+        <span className="mb-1 block text-text-secondary">Сеть</span>
+        <select value={network} onChange={(e) => setNetwork(e.target.value)} className={cn(FIELD, 'text-xs')}>
+          <option value="">по адресу — самая узкая сеть, содержащая IP</option>
+          {(networks.data ?? []).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}{n.zone ? ` · ${n.zone}` : ''}</option>)}
+        </select>
+      </label>
+      <label className="block">
         <span className="mb-1 block text-text-secondary">Заметка</span>
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={cn(FIELD, 'text-xs')} />
       </label>
       <div className="flex items-center gap-2">
-        <Button variant="primary" disabled={!dirty} loading={patch.isPending} onClick={() => patch.mutate({ criticality, tags: tags.split(',').map((t) => t.trim()).filter(Boolean), note })}>Сохранить</Button>
+        <Button variant="primary" disabled={!dirty} loading={patch.isPending} onClick={() => patch.mutate({ criticality, tags: tags.split(',').map((t) => t.trim()).filter(Boolean), note, ...networkPatch })}>Сохранить</Button>
         {patch.error && <span className="text-kind-1">{patch.error.message}</span>}
       </div>
     </div>

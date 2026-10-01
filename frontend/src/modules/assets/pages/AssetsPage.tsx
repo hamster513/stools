@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, FilterX, RefreshCw, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAssets, useJob, useStartSync } from '@/modules/assets/api/queries'
+import { useAssets, useJob, useNetworks, useStartSync } from '@/modules/assets/api/queries'
 import {
   CODE_LABELS,
   CODES,
@@ -72,6 +72,7 @@ function FacetPanel({ facets, filters, onToggle, total, port, onPort, tag, onTag
   onTag: (v: string) => void
 }) {
   const zones = Object.entries(facets?.zone ?? {}).sort((a, b) => b[1] - a[1])
+  const networks = useNetworks()
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Активов <span className="font-mono tabular-nums text-text">{total}</span></div>
@@ -102,8 +103,12 @@ function FacetPanel({ facets, filters, onToggle, total, port, onPort, tag, onTag
           ))}
         </FacetSection>
       )}
-      <FacetSection title="Открытый порт и тег">
+      <FacetSection title="Сеть, открытый порт и тег">
         <div className="flex flex-col gap-1.5 px-2">
+          <select value={filters.network_id ?? ''} onChange={(e) => onToggle('network_id', e.target.value ? Number(e.target.value) : undefined)} aria-label="Сеть" className={INPUT}>
+            <option value="">все сети</option>
+            {(networks.data ?? []).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}</option>)}
+          </select>
           <input value={port} onChange={(e) => onPort(e.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="порт, например 3389" aria-label="Открытый порт" className={INPUT} />
           <input value={tag} onChange={(e) => onTag(e.target.value)} placeholder="тег" aria-label="Тег" className={INPUT} />
         </div>

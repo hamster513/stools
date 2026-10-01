@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Network, Server, Settings2 } from 'lucide-react'
+import { Server } from 'lucide-react'
 import { Redirect, useRouter } from '@/lib/router'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -7,6 +7,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { AssetsSidebar } from './AssetsSidebar'
 import { AssetsPage } from './pages/AssetsPage'
 import { JobsPage } from './pages/JobsPage'
+import { NetworksPage } from './pages/NetworksPage'
+import { SettingsPage } from './pages/SettingsPage'
 
 /** Раздел, у которого ещё нет данных: заголовок и подсказка, откуда они возьмутся. */
 function EmptyPage({ title, icon, empty, description }: { title: string; icon: LucideIcon; empty: string; description: string }) {
@@ -26,11 +28,9 @@ export function AssetsModule() {
   if (path === '/assets') {
     page = <EmptyPage title="Обзор" icon={Server} empty="Активов ещё нет" description="Активы появятся после синхронизации с модулями VM, антивируса и AD, скана сети или обновления DNS." />
   } else if (path === '/assets/list') page = <AssetsPage />
-  else if (path === '/assets/networks') {
-    page = <EmptyPage title="Сети" icon={Network} empty="Сетей ещё нет" description="Здесь будут сети с зоной, площадкой и настройками сканирования." />
-  } else if (path === '/assets/settings') {
-    page = <EmptyPage title="Настройки и данные" icon={Settings2} empty="Настроек ещё нет" description="Здесь будут DNS-серверы, пороги устаревания, синхронизация с модулями и справочник зон." />
-  } else if (path === '/assets/jobs') page = <JobsPage />
+  else if (path === '/assets/networks') page = <NetworksPage />
+  else if (path === '/assets/settings') page = <SettingsPage />
+  else if (path === '/assets/jobs') page = <JobsPage />
   else return <Redirect to="/assets" />
 
   return (

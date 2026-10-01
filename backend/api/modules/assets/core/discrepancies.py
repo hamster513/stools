@@ -14,7 +14,9 @@ from typing import Any
 
 from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize_name
 
-CODES = ("stale", "conflict", "no_av", "ad_inactive", "unreachable", "unknown_host", "dns_orphan")
+#: no_network — адрес актива не входит ни в одну описанную сеть; считается по реестру сетей,
+#: а не по наблюдениям, поэтому его добавляет services.assets, а не `discrepancies`.
+CODES = ("stale", "conflict", "no_av", "ad_inactive", "unreachable", "unknown_host", "dns_orphan", "no_network")
 COMPARED = ("name", "fqdn", "ip")
 FIELD_TITLES = {"name": "имя", "fqdn": "FQDN", "ip": "IP"}
 #: «в VM IP …», «данные VM устарели»

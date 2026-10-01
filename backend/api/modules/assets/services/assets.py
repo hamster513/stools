@@ -6,7 +6,6 @@ Assets читает таблицы модулей (находки AD, хосты
 from __future__ import annotations
 
 import datetime as dt
-import ipaddress
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -27,6 +26,7 @@ from api.modules.assets.core.matching import (
     tokens,
 )
 from api.modules.assets.models import Asset, AssetObservation, AssetSettings, Network
+from api.modules.assets.services.networks import NetworkList, network_for_ip
 from api.timeutil import utcnow
 
 DEFAULT_SETTINGS: dict[str, Any] = {"inactive_days": 30, "stale_days": 30, "sync_after_import": True}
@@ -34,7 +34,6 @@ SOURCES = ("vm", "ksc", "ad", "scan", "dns")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
 
 ScanProbes = tuple[Callable[[str], bool], Callable[[str], bool | None]]
-NetworkList = list[tuple[int, ipaddress.IPv4Network | ipaddress.IPv6Network]]
 
 
 class AssetNotFound(LookupError):
@@ -61,31 +60,6 @@ def observed(row: AssetObservation) -> Observed:
         source=row.source, source_key=row.source_key, name=row.name, fqdn=row.fqdn, domain=row.domain, ip=row.ip,
         ips=list(row.ips or []), os=row.os, seen_at=row.seen_at, extra=dict(row.extra or {}), gone_at=row.gone_at,
     )
-
-
-# ---- Сети -----------------------------------------------------------------
-
-
-def load_networks(db: Session) -> NetworkList:
-    out: NetworkList = []
-    for network_id, cidr in db.execute(select(Network.id, Network.cidr)):
-        try:
-            out.append((network_id, ipaddress.ip_network(cidr, strict=False)))
-        except ValueError:
-            continue
-    return out
-
-
-def narrowest_network(networks: NetworkList, ip: str) -> int | None:
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return None
-    best: tuple[int, int] | None = None
-    for network_id, net in networks:
-        if addr.version == net.version and addr in net and (best is None or net.prefixlen > best[1]):
-            best = (network_id, net.prefixlen)
-    return best[0] if best else None
 
 
 # ---- Индекс кандидатов ----------------------------------------------------
@@ -193,7 +167,7 @@ def recompute(db: Session, asset: Asset, networks: NetworkList | None = None) ->
     asset.first_seen = card["first_seen"]
     asset.last_seen = card["last_seen"]
     if not asset.network_manual:
-        asset.network_id = narrowest_network(networks if networks is not None else load_networks(db), asset.ip)
+        asset.network_id = network_for_ip(networks if networks is not None else db, asset.ip)
     db.flush()
 
 
@@ -354,10 +328,13 @@ def _network_view(network: Network | None) -> dict[str, Any] | None:
 
 def _found(asset: Asset, rows: list[AssetObservation], settings: dict[str, Any], probes: ScanProbes, now: dt.datetime) -> list[Discrepancy]:
     scanned, alive = probes
-    return discrepancies(
+    found = discrepancies(
         _card(asset), [observed(r) for r in rows], stale_days=int(settings["stale_days"]), inactive_days=int(settings["inactive_days"]),
         scanned_networks=scanned, scan_alive=alive, now=now,
     )
+    if asset.ip and asset.network_id is None and any(r.gone_at is None for r in rows):
+        found.append(Discrepancy("no_network", "", "network", asset.ip, "", f"сеть не описана: адрес {asset.ip} не входит ни в одну сеть"))
+    return found
 
 
 def _item(asset: Asset, rows: list[AssetObservation], found: list[Discrepancy], network: Network | None, now: dt.datetime, stale_days: int) -> dict[str, Any]:

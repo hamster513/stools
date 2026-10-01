@@ -19,8 +19,8 @@ export const SOURCE_LABELS: Record<AssetSource, string> = {
   dns: 'DNS',
 }
 
-export type DiscrepancyCode = 'stale' | 'conflict' | 'no_av' | 'ad_inactive' | 'unreachable' | 'unknown_host' | 'dns_orphan'
-export const CODES: DiscrepancyCode[] = ['stale', 'conflict', 'no_av', 'ad_inactive', 'unreachable', 'unknown_host', 'dns_orphan']
+export type DiscrepancyCode = 'stale' | 'conflict' | 'no_av' | 'ad_inactive' | 'unreachable' | 'unknown_host' | 'dns_orphan' | 'no_network'
+export const CODES: DiscrepancyCode[] = ['stale', 'conflict', 'no_av', 'ad_inactive', 'unreachable', 'unknown_host', 'dns_orphan', 'no_network']
 export const CODE_LABELS: Record<DiscrepancyCode, string> = {
   stale: 'данные устарели',
   conflict: 'источники расходятся',
@@ -29,6 +29,7 @@ export const CODE_LABELS: Record<DiscrepancyCode, string> = {
   unreachable: 'не отвечает',
   unknown_host: 'только сканер',
   dns_orphan: 'запись DNS без хоста',
+  no_network: 'сеть не описана',
 }
 /** Подсветка ячейки в таблице источников: те же токены, что у видов находок. */
 export const MARK_TEXT: Record<'stale' | 'conflict', string> = {
@@ -158,4 +159,52 @@ export interface AssetPatch {
   criticality?: Criticality | ''
   tags?: string[]
   note?: string
+  /** Сеть вручную; null вместе с network_manual: false — вернуть расчёт по адресу. */
+  network_id?: number | null
+  network_manual?: boolean
 }
+
+export const DEFAULT_PORTS = [22, 80, 135, 139, 443, 445, 3389]
+
+/** Поля сети, которые задаёт человек. */
+export interface NetworkIn {
+  cidr: string
+  title: string
+  description: string
+  zone: string | null
+  site: string
+  owner: string
+  vlan: number | null
+  tags: string[]
+  scan_enabled: boolean
+  ports: number[]
+  exclude: string[]
+  concurrency: number
+  icmp_timeout_ms: number
+  tcp_timeout_ms: number
+}
+
+export interface Network extends NetworkIn {
+  id: number
+  schedule_id: number | null
+  last_scan_at: string | null
+  last_scan_alive: number | null
+  created_at: string
+  updated_at: string
+  stats: {
+    assets: number
+    /** Живых при последнем скане; null — сеть ещё не сканировали. */
+    alive_last_scan: number | null
+    unknown_hosts: number
+  }
+}
+
+export interface Zone {
+  name: string
+  title: string
+  description: string
+  /** Сколько сетей ссылается на зону: пока не ноль, удалить её нельзя. */
+  networks: number
+}
+
+export type ZoneIn = Omit<Zone, 'networks'>
