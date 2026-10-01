@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from api.modules.assets.core.discrepancies import CODES, Discrepancy, discrepancies
 from api.modules.assets.core.matching import (
@@ -56,10 +56,12 @@ def scan_probes(db: Session) -> ScanProbes:
     return (lambda _ip: False), (lambda _ip: None)
 
 
-def observed(row: AssetObservation) -> Observed:
+def observed(row: AssetObservation, extra: dict[str, Any] | None = None) -> Observed:
+    """`extra` — вместо `row.extra`: сопоставлению он не нужен (`{}`), список читает его не у всех."""
     return Observed(
         source=row.source, source_key=row.source_key, name=row.name, fqdn=row.fqdn, domain=row.domain, ip=row.ip,
-        ips=list(row.ips or []), os=row.os, seen_at=row.seen_at, extra=dict(row.extra or {}), gone_at=row.gone_at,
+        ips=list(row.ips or []), os=row.os, seen_at=row.seen_at, gone_at=row.gone_at,
+        extra=dict(row.extra or {}) if extra is None else extra,
     )
 
 
@@ -110,11 +112,13 @@ class MatchIndex:
         assets = {a.id: a for a in db.execute(stmt).scalars()}
         per_asset: dict[int, list[Observed]] = defaultdict(list)
         if assets:
+            # extra сопоставлению не нужен, а у KSC и VM он самый тяжёлый.
             rows = db.execute(
-                select(AssetObservation).where(AssetObservation.asset_id.in_(list(assets))).order_by(AssetObservation.id)
+                select(AssetObservation).options(defer(AssetObservation.extra))
+                .where(AssetObservation.asset_id.in_(list(assets))).order_by(AssetObservation.id)
             ).scalars()
             for row in rows:
-                per_asset[row.asset_id].append(observed(row))
+                per_asset[row.asset_id].append(observed(row, extra={}))
         for asset_id, asset in assets.items():
             index.put(asset, per_asset[asset_id])
         return index
@@ -179,7 +183,7 @@ def _observations(db: Session, asset_id: int) -> list[AssetObservation]:
 def recompute(db: Session, asset: Asset, networks: NetworkList | None = None) -> None:
     """Каноническая карточка из наблюдений; ручные поля и закреплённые значения не трогаются."""
     rows = _observations(db, asset.id)
-    card = canonical([observed(r) for r in rows], dict(asset.pinned or {}), {f: getattr(asset, f) for f in FIELDS})
+    card = canonical([observed(r, extra={}) for r in rows], dict(asset.pinned or {}), {f: getattr(asset, f) for f in FIELDS})
     for name in FIELDS:
         setattr(asset, name, card[name])
     asset.name_key = normalize_name(asset.name)[0] or normalize_name(asset.fqdn)[0]
@@ -224,7 +228,7 @@ def apply_observation(
     row.gone_at = None
     db.flush()
     recompute(db, asset, networks)
-    idx.put(asset, [observed(r) for r in _observations(db, asset.id)])
+    idx.put(asset, [observed(r, extra={}) for r in _observations(db, asset.id)])
     return asset, rule
 
 
@@ -345,13 +349,13 @@ def _network_view(network: Network | None) -> dict[str, Any] | None:
     return {"id": network.id, "cidr": network.cidr, "title": network.title, "zone": network.zone}
 
 
-def _found(asset: Asset, rows: list[AssetObservation], settings: dict[str, Any], probes: ScanProbes, now: dt.datetime) -> list[Discrepancy]:
+def _found(asset: Asset, observations: list[Observed], settings: dict[str, Any], probes: ScanProbes, now: dt.datetime) -> list[Discrepancy]:
     scanned, alive = probes
     found = discrepancies(
-        _card(asset), [observed(r) for r in rows], stale_days=int(settings["stale_days"]), inactive_days=int(settings["inactive_days"]),
+        _card(asset), observations, stale_days=int(settings["stale_days"]), inactive_days=int(settings["inactive_days"]),
         scanned_networks=scanned, scan_alive=alive, now=now,
     )
-    if asset.ip and asset.network_id is None and any(r.gone_at is None for r in rows):
+    if asset.ip and asset.network_id is None and any(o.gone_at is None for o in observations):
         found.append(Discrepancy("no_network", "", "network", asset.ip, "", f"сеть не описана: адрес {asset.ip} не входит ни в одну сеть"))
     return found
 
@@ -372,8 +376,13 @@ def _matches_query(asset: Asset, rows: list[AssetObservation], needle: str) -> b
     return any(needle in (t or "").lower() for t in texts)
 
 
-def _open_ports(rows: list[AssetObservation]) -> set[int]:
-    return {int(p) for r in rows if r.source == "scan" and r.gone_at is None for p in (r.extra or {}).get("ports", [])}
+def _open_ports(observations: list[Observed]) -> set[int]:
+    return {int(p) for o in observations if o.source == "scan" and o.gone_at is None for p in o.extra.get("ports", [])}
+
+
+#: Чей extra нужен списку: порты скана, вход и включённость AD, тип записи DNS. У KSC и VM
+#: extra тяжёлый (компоненты, группы) и списку не нужен — его читает только карточка.
+LIST_EXTRA_SOURCES = ("scan", "ad", "dns")
 
 
 def list_assets(
@@ -399,14 +408,18 @@ def list_assets(
     probes = scan_probes(db)
     assets = list(db.execute(select(Asset).where(Asset.merged_into.is_(None))).scalars())
     per_asset: dict[int, list[AssetObservation]] = defaultdict(list)
-    for row in db.execute(select(AssetObservation).order_by(AssetObservation.id)).scalars():
+    for row in db.execute(select(AssetObservation).options(defer(AssetObservation.extra)).order_by(AssetObservation.id)).scalars():
         per_asset[row.asset_id].append(row)
+    extras: dict[int, dict[str, Any]] = dict(db.execute(
+        select(AssetObservation.id, AssetObservation.extra).where(AssetObservation.source.in_(LIST_EXTRA_SOURCES))
+    ).tuples().all())
     networks = {n.id: n for n in db.execute(select(Network)).scalars()}
     needle = (q or "").strip().lower()
 
     picked: list[tuple[Asset, list[AssetObservation], list[Discrepancy]]] = []
     for asset in assets:
         rows = per_asset[asset.id]
+        observations = [observed(r, extra=dict(extras.get(r.id) or {})) for r in rows]
         live = {r.source for r in rows if r.gone_at is None}
         if source_has and source_has not in live:
             continue
@@ -421,11 +434,11 @@ def list_assets(
             continue
         if criticality and asset.criticality != ("" if criticality == "none" else criticality):
             continue
-        if port is not None and port not in _open_ports(rows):
+        if port is not None and port not in _open_ports(observations):
             continue
         if needle and not _matches_query(asset, rows, needle):
             continue
-        found = _found(asset, rows, settings, probes, now)
+        found = _found(asset, observations, settings, probes, now)
         if code and code not in {d.code for d in found}:
             continue
         picked.append((asset, rows, found))
@@ -462,13 +475,19 @@ def _marks(row: AssetObservation, found: list[Discrepancy]) -> dict[str, str]:
     return marks
 
 
-def _like(text: str) -> str:
-    return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+def _computer_names(ad: AssetObservation, domains: Iterable[str]) -> set[str]:
+    """Как компьютер записан в находках AD: `CORP\\ws01$`, `ws01$`, `ws01`, FQDN, DN — целиком,
+    без учёта регистра (подстрока `ws01` нашла бы и `ws010`)."""
+    name = ad.name.lower()
+    names = {name, f"{name}$", ad.fqdn.lower(), str(ad.extra.get("dn") or "").lower()}
+    for prefix in (d.lower() for d in domains if d):
+        names |= {f"{prefix}\\{name}$", f"{prefix}\\{name}"}
+    return {n for n in names if n}
 
 
 def _links(db: Session, rows: list[AssetObservation]) -> dict[str, Any]:
     """«Где засветился»: находки AD по компьютеру, хост антивируса, хост VM."""
-    from api.modules.ad.models import AdFinding
+    from api.modules.ad.models import AdDomain, AdFinding
     from api.modules.ad.services.snapshots import latest_snapshot as latest_ad_snapshot
     from api.modules.vm.models import VmHost
 
@@ -483,12 +502,13 @@ def _links(db: Session, rows: list[AssetObservation]) -> dict[str, Any]:
         links["ad_query"] = ad.name
         snap = latest_ad_snapshot(db, int(ad.extra["domain_id"]))
         if snap is not None and ad.name:
-            pattern = _like(ad.name)
+            domain = db.get(AdDomain, int(ad.extra["domain_id"]))
+            names = _computer_names(ad, (domain.netbios, domain.dns_root) if domain is not None else ())
             links["ad_finding_count"] = int(db.execute(
                 select(func.count()).select_from(AdFinding).where(
                     AdFinding.snapshot_id == snap.id,
-                    or_(AdFinding.identity.ilike(pattern, escape="\\"), AdFinding.target.ilike(pattern, escape="\\"),
-                        AdFinding.right.ilike(pattern, escape="\\")),
+                    or_(func.lower(AdFinding.identity).in_(names), func.lower(AdFinding.target).in_(names),
+                        AdFinding.identity_sid == ad.source_key),
                 )
             ).scalar() or 0)
     ksc = next((r for r in live_first if r.source == "ksc"), None)
@@ -510,7 +530,7 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
     asset = _asset_or_404(db, asset_id)
     settings = load_settings(db)
     rows = _observations(db, asset.id)
-    found = _found(asset, rows, settings, scan_probes(db), now)
+    found = _found(asset, [observed(r) for r in rows], settings, scan_probes(db), now)
     network = db.get(Network, asset.network_id) if asset.network_id is not None else None
     return {
         **_item(asset, rows, found, network, now, int(settings["stale_days"])),

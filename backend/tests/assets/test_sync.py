@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
+from api.db.base import get_engine
 from api.jobs import run_job, start_job
 from api.modules.assets.core.matching import Observed
 from api.modules.assets.models import Asset, AssetJob, AssetObservation, AssetSettings
@@ -211,9 +212,77 @@ def test_ips_are_stored_normalised(db_session: Session, app_settings: Any, now: 
     assert (row.ip, row.ips, asset.ip) == ("2001:db8::5", ["2001:db8::5"], "2001:db8::5")
 
 
+def rerun_flag(db: Session) -> bool:
+    data = db.execute(select(AssetSettings.data)).scalar()
+    return bool((data or {}).get("rerun_requested"))
+
+
+def test_sync_is_single_flight(loaded: Session) -> None:
+    """Вторая синхронизация, пока первая держит блокировку, ничего не пишет и завершается."""
+    with get_engine().connect() as conn:
+        assert conn.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": sync_service.SYNC_LOCK_KEY}).scalar()
+        job_id = start_job(loaded, AssetJob, "sync", "tester")
+        run_job(AssetJob, job_id, lambda s, h: sync_service.sync_job(s, h, "вручную"))
+        conn.rollback()
+    job = loaded.get(AssetJob, job_id)
+    loaded.refresh(job)
+    assert job is not None and (job.status, job.message) == ("done", "синхронизация уже идёт")
+    assert loaded.execute(select(func.count()).select_from(AssetObservation)).scalar() == 0
+    assert rerun_flag(loaded)  # держатель блокировки пройдёт ещё раз
+    sync(loaded)
+    assert loaded.execute(select(func.count()).select_from(AssetObservation)).scalar() == 7
+
+
+def test_request_during_sync_runs_one_more_pass(loaded: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    set_settings(loaded, sync_after_import=True)
+    real_read = sync_service._read
+    reads: list[str] = []
+    asked: list[int | None] = []
+
+    def read(db: Session, source: str, data_dir: Path) -> Any:
+        reads.append(source)
+        if len(reads) == 1:
+            asked.append(request_sync(loaded, "ksc"))  # импорт KSC закончился посреди синхронизации
+        return real_read(db, source, data_dir)
+
+    monkeypatch.setattr(sync_service, "_read", read)
+    sync(loaded)
+    assert asked == [None]
+    assert reads == ["vm", "ksc", "ad"] * 2
+    assert not rerun_flag(loaded)
+    assert loaded.execute(select(func.count()).select_from(AssetJob)).scalar() == 1
+
+
+def test_ad_finding_count_matches_whole_computer_name(loaded: Session) -> None:
+    from api.modules.ad.models import AdFinding, AdSnapshot
+
+    sync(loaded)
+    ws01 = live_assets(loaded)["ws01"]
+
+    def count() -> int:
+        return int(asset_detail(loaded, ws01.id)["links"]["ad_finding_count"])
+
+    before = count()
+    snap_id = loaded.execute(select(AdSnapshot.id).order_by(AdSnapshot.id.desc())).scalars().first()
+
+    def finding(identity: str = "", target: str = "") -> None:
+        loaded.add(AdFinding(snapshot_id=snap_id, key=f"k-{identity}-{target}", check="X", severity="Low", severity_original="Low",
+                             identity=identity, target=target))
+        loaded.commit()
+
+    finding(identity="CORP\\WS010$")
+    finding(target="ws010.corp.local")
+    assert count() == before
+    finding(identity="CORP\\ws01$")
+    finding(target="WS01.corp.local")
+    finding(identity="ws01$")
+    assert count() == before + 3
+
+
 def test_request_sync_respects_running_job_and_setting(db_session: Session, app_settings: Any) -> None:
     start_job(db_session, AssetJob, "sync", "tester")
     assert request_sync(db_session, "vm") is None
+    assert rerun_flag(db_session)  # идущая синхронизация сделает ещё один проход
 
 
 def test_request_sync_disabled_by_setting(db_session: Session, app_settings: Any) -> None:

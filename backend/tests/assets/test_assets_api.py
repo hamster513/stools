@@ -41,7 +41,8 @@ def test_list_filters_and_facets(analyst: TestClient) -> None:
     body = analyst.get("/api/assets/assets").json()
     assert body["total"] == 4 and names(body) == {"msk1", "ws01", "srv01", "old01"}
     assert body["facets"]["source"] == {"vm": 2, "ksc": 2, "ad": 3, "scan": 0, "dns": 0}
-    assert body["facets"]["code"]["conflict"] == 1 and body["facets"]["code"]["no_av"] == 2
+    # no_av — только ws01: old01 давно не входил, это ad_inactive, а не «нет агента».
+    assert body["facets"]["code"]["conflict"] == 1 and body["facets"]["code"]["no_av"] == 1
     item = next(i for i in body["items"] if i["name"].lower() == "msk1")
     assert item["ip"] == "192.168.2.23" and item["discrepancy_count"] >= 1
     assert {s["source"] for s in item["sources"]} == {"vm", "ksc"}
@@ -148,6 +149,48 @@ def test_sync_conflicts_with_running_sync(analyst: TestClient, db_session: Sessi
 
     start_job(db_session, AssetJob, "sync", "tester")
     assert analyst.post("/api/assets/sync").status_code == 409
+
+
+def test_merge_and_detach_conflict_with_running_sync(analyst: TestClient, db_session: Session) -> None:
+    from api.jobs import start_job
+    from api.modules.assets.models import AssetJob
+
+    ws01, old01 = by_name(analyst, "ws01")["id"], by_name(analyst, "old01")["id"]
+    srv01 = analyst.get(f"/api/assets/assets/{by_name(analyst, 'srv01')['id']}").json()
+    start_job(db_session, AssetJob, "sync", "tester")
+    r = analyst.post(f"/api/assets/assets/{ws01}/merge", json={"other_id": old01})
+    assert r.status_code == 409 and "синхронизация" in r.json()["detail"]
+    assert analyst.post(f"/api/assets/observations/{srv01['observations'][0]['id']}/detach").status_code == 409
+    assert analyst.get("/api/assets/assets").json()["total"] == 4
+
+
+def test_scan_ports_in_list_filter_and_card(analyst: TestClient, db_session: Session) -> None:
+    from sqlalchemy import event
+
+    from api.db.base import get_engine
+    from api.modules.assets.core.matching import Observed
+    from api.modules.assets.services.assets import apply_observation, list_assets
+
+    asset, _ = apply_observation(db_session, Observed(source="scan", source_key="10.10.0.11", ip="10.10.0.11",
+                                                      seen_at=dt.datetime.now(dt.UTC), extra={"ports": [22, 445]}))
+    db_session.commit()
+    assert names(analyst.get("/api/assets/assets", params={"port": 445}).json()) == {"srv01"}
+    card = analyst.get(f"/api/assets/assets/{asset.id}").json()
+    assert next(o for o in card["observations"] if o["source"] == "scan")["extra"]["ports"] == [22, 445]
+
+    # Список не тянет extra наблюдений KSC и VM: только scan, ad и dns, которые нужны фильтрам и расхождениям.
+    statements: list[str] = []
+
+    def remember(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        statements.append(statement)
+
+    event.listen(get_engine(), "before_cursor_execute", remember)
+    try:
+        list_assets(db_session)
+    finally:
+        event.remove(get_engine(), "before_cursor_execute", remember)
+    with_extra = [s for s in statements if "asset_observation.extra" in s]
+    assert with_extra and all("asset_observation.source IN" in s for s in with_extra)
 
 
 def test_auditor_reads_but_cannot_write(analyst: TestClient, client_as: Callable[[str], TestClient]) -> None:

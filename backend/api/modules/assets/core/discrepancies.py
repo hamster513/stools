@@ -112,12 +112,14 @@ def discrepancies(
     sources = {o.source for o in live}
     ip = str(asset.get("ip") or "")
 
-    if "ksc" not in sources:
+    limit = now - dt.timedelta(days=inactive_days)
+    # Выключенный компьютер AD не «неактивный» и не «без агента»: он выключен.
+    ad = [o for o in live if o.source == "ad" and o.extra.get("enabled")]
+    ad_active = any((d := _iso(o.extra.get("last_logon"))) and d >= limit for o in ad)
+    if "ksc" not in sources and (sources & {"scan", "dns", "vm"} or ad_active):
         out.append(Discrepancy("no_av", "", "", "", "", "нет агента антивируса"))
 
-    ad = [o for o in live if o.source == "ad"]
     if ad:
-        limit = now - dt.timedelta(days=inactive_days)
         logons = [d for d in (_iso(o.extra.get("last_logon")) for o in ad) if d]
         others = [o for o in live if o.source != "ad" and o.seen_at and o.seen_at >= limit]
         if not others and not any(d >= limit for d in logons):

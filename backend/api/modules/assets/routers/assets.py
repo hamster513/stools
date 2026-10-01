@@ -118,8 +118,16 @@ def pin(asset_id: int, payload: PinIn, db: Session = Depends(get_db), _user: App
     return dict(asset_detail(db, asset_id))
 
 
+def _no_running_sync(db: Session) -> None:
+    """Синхронизация держит индекс активов в памяти и вернула бы наблюдения туда, где их видела."""
+    running = active_job(db, AssetJob, ("sync",))
+    if running is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт синхронизация #{running.id}, дождитесь её")
+
+
 @router.post("/assets/{asset_id}/merge")
 def merge(asset_id: int, payload: MergeIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+    _no_running_sync(db)
     _errors(merge_assets, db, asset_id, payload.other_id)
     db.commit()
     return dict(asset_detail(db, asset_id))
@@ -127,6 +135,7 @@ def merge(asset_id: int, payload: MergeIn, db: Session = Depends(get_db), _user:
 
 @router.post("/observations/{observation_id}/detach")
 def detach(observation_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+    _no_running_sync(db)
     fresh = _errors(detach_observation, db, observation_id)
     db.commit()
     return dict(asset_detail(db, fresh.id))

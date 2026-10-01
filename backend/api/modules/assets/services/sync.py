@@ -12,16 +12,18 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections import defaultdict
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Engine, func, select, text
 from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle, active_job, run_job, start_job
 from api.modules.assets.core.matching import Observed, is_ip, normalize_fqdn, normalize_name
-from api.modules.assets.models import Asset, AssetJob, AssetObservation
+from api.modules.assets.models import Asset, AssetJob, AssetObservation, AssetSettings
 from api.modules.assets.services.assets import (
     MatchIndex,
     apply_observation,
@@ -40,6 +42,9 @@ SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD"}
 AUTO_STARTED_BY = "после импорта"
 #: Прогресс и проверка отмены — раз в столько наблюдений.
 TICK_EVERY = 500
+#: Ключ advisory-блокировки синхронизации («SYNC» в ASCII): одна на всю базу.
+SYNC_LOCK_KEY = 0x53594E43
+BUSY_MESSAGE = "синхронизация уже идёт"
 
 
 def _in_thread(fn: Callable[[], None]) -> None:
@@ -53,10 +58,12 @@ spawn: Callable[[Callable[[], None]], None] = _in_thread
 
 def request_sync(db: Session, source: str) -> int | None:
     """Если включено `sync_after_import` и синхронизация не идёт — запустить её; иначе None.
+    Если идёт — попросить её пройти ещё раз: она читала источники до этого импорта.
     Вызывается после фиксации импорта модуля: задача читает уже записанные данные."""
     if not load_settings(db)["sync_after_import"]:
         return None
     if active_job(db, AssetJob, ("sync",)) is not None:
+        _set_rerun(db, True)
         return None
     job_id = start_job(db, AssetJob, "sync", AUTO_STARTED_BY, message=source)
     spawn(lambda: run_job(AssetJob, job_id, lambda s, h: sync_job(s, h, SOURCE_TITLES.get(source, source))))
@@ -66,6 +73,8 @@ def request_sync(db: Session, source: str) -> int | None:
 def sync_job(db: Session, handle: JobHandle, trigger: str) -> None:
     """Итог задачи — что её запустило и сколько наблюдений дал каждый источник."""
     counts = run_sync(db, handle)
+    if counts is None:
+        return
     handle.stage("done", message=f"{trigger}: " + " · ".join(f"{SOURCE_TITLES[s]} {n}" for s, n in counts.items()))
 
 
@@ -184,7 +193,66 @@ def _migrate_ksc_keys(db: Session) -> None:
     db.flush()
 
 
-def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOURCES) -> dict[str, int]:
+def _settings_row(db: Session) -> AssetSettings:
+    row = db.execute(
+        select(AssetSettings).order_by(AssetSettings.id).with_for_update().execution_options(populate_existing=True)
+    ).scalars().first()
+    if row is None:
+        row = AssetSettings(data={})
+        db.add(row)
+    return row
+
+
+def _set_rerun(db: Session, value: bool) -> None:
+    row = _settings_row(db)
+    row.data = {**(row.data or {}), "rerun_requested": value}
+    db.commit()
+
+
+def _take_rerun(db: Session) -> bool:
+    """Просили ли пройти ещё раз; просьба снимается."""
+    row = _settings_row(db)
+    asked = bool((row.data or {}).get("rerun_requested"))
+    if asked:
+        row.data = {**row.data, "rerun_requested": False}
+    db.commit()
+    return asked
+
+
+@contextmanager
+def _single_flight(db: Session) -> Iterator[bool]:
+    """Синхронизация одна на базу: две параллельные вставили бы одно наблюдение дважды.
+    Блокировка транзакционная, на отдельном соединении: задача фиксирует работу после каждого
+    источника, а блокировка нужна до конца всех проходов. Процесс умер — соединение закрылось,
+    блокировка снята."""
+    bind = db.get_bind()
+    engine = bind if isinstance(bind, Engine) else bind.engine
+    with engine.connect() as conn:
+        try:
+            yield bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": SYNC_LOCK_KEY}).scalar())
+        finally:
+            conn.rollback()
+
+
+def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOURCES) -> dict[str, int] | None:
+    """Проход по источникам; если за время прохода попросили ещё (`request_sync` во время
+    синхронизации) — ещё проход. None — синхронизацию уже ведёт другая задача: эта просит
+    её пройти ещё раз и завершается, ничего не записав. Остаётся окно: просьба, пришедшая между последней проверкой
+    и закрытием задачи, исполнится следующей синхронизацией."""
+    with _single_flight(db) as acquired:
+        if not acquired:
+            # Задачу завели не зря (импорт), а идущая могла прочитать источник раньше него.
+            _set_rerun(db, True)
+            handle.stage("done", message=BUSY_MESSAGE)
+            return None
+        _take_rerun(db)  # этот проход и так прочитает всё
+        counts = _sync_pass(db, handle, sources)
+        while _take_rerun(db):
+            counts = _sync_pass(db, handle, sources)
+        return counts
+
+
+def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict[str, int]:
     """Читает источники, для каждого наблюдения — match → upsert asset_observation → пересчёт
     актива; пропавшим ставит gone_at. Возвращает число наблюдений по источникам."""
     from api.settings import get_settings
@@ -215,11 +283,17 @@ def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOU
                     row.gone_at = now
                     touched.add(row.asset_id)
             db.flush()
+            # Наблюдения задетых активов группируются одним проходом: перебор всех строк
+            # на каждый актив был бы квадратичным на тысячах пропавших хостов.
+            per_asset: dict[int, list[AssetObservation]] = defaultdict(list)
+            for row in rows.values():
+                if row.asset_id in touched:
+                    per_asset[row.asset_id].append(row)
             for asset_id in sorted(touched):
                 asset = db.get(Asset, asset_id)
                 if asset is not None:
                     recompute(db, asset, networks)
-                    index.put(asset, [observed(r) for r in rows.values() if r.asset_id == asset_id])
+                    index.put(asset, [observed(r, extra={}) for r in per_asset[asset_id]])
         db.commit()
         counts[source] = len(seen)
     return counts

@@ -101,6 +101,28 @@ def test_no_av_without_live_ksc() -> None:
     assert "no_av" in codes(run([Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5", seen_at=days_ago(0))]))
 
 
+def test_no_av_only_for_hosts_that_live() -> None:
+    """Выключенный или давно не входивший компьютер AD без других источников — не «нет агента»."""
+    disabled = ad(0, 3)
+    disabled.extra["enabled"] = False
+    assert not codes(run([disabled])) & {"no_av", "ad_inactive"}
+    old = codes(run([ad(0, 120)]))
+    assert "no_av" not in old and "ad_inactive" in old
+    assert "no_av" in codes(run([ad(0, 3)]))
+    assert "no_av" in codes(run([vm("10.10.0.5", 0)]))
+    # Хост жив по VM — агента нет, даже если компьютер AD давно не входил.
+    assert "no_av" in codes(run([ad(0, 120), vm("10.10.0.5", 0)]))
+
+
+def test_ad_inactive_needs_enabled_live_computer() -> None:
+    disabled = ad(0, 120, name="OLD01")
+    disabled.extra["enabled"] = False
+    assert "ad_inactive" not in codes(run([disabled]))
+    gone = ad(0, 120, name="OLD01")
+    gone.gone_at = days_ago(0)
+    assert "ad_inactive" not in codes(run([gone, vm("10.10.0.7", 90)]))
+
+
 def test_no_av_negative_with_live_ksc() -> None:
     assert "no_av" not in codes(run([ad(0, 3), ksc("10.10.0.5", 0)]))
 
