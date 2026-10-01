@@ -22,6 +22,7 @@ from api.modules.assets.core.matching import (
     canonical,
     match,
     normalize_fqdn,
+    normalize_ip,
     normalize_name,
     tokens,
 )
@@ -65,6 +66,22 @@ def observed(row: AssetObservation) -> Observed:
 # ---- Индекс кандидатов ----------------------------------------------------
 
 
+def domain_map(db: Session) -> dict[str, str]:
+    """NetBIOS-имя домена → DNS-домен по доменам AD (их заполняет импорт выгрузки)."""
+    from api.modules.ad.models import AdDomain
+
+    return {
+        d.netbios.lower(): d.dns_root.lower()
+        for d in db.execute(select(AdDomain).order_by(AdDomain.id)).scalars() if d.netbios and d.dns_root
+    }
+
+
+def _short_name_sql(column: Any) -> Any:
+    """`normalize_name(...)[0]` в SQL: `CORP\\WS01$`, `ws01.corp.local.` → `ws01` (Postgres)."""
+    text = func.regexp_replace(func.lower(func.trim(column)), r"^.*\\", "")
+    return func.rtrim(func.split_part(text, ".", 1), "$")
+
+
 def _candidate(asset: Asset, observations: list[Observed]) -> Candidate:
     return Candidate(asset_id=asset.id, name=asset.name, fqdn=asset.fqdn, domain=asset.domain, ip=asset.ip, observations=observations)
 
@@ -78,10 +95,12 @@ class MatchIndex:
         self._tokens: dict[int, set[str]] = {}
         self._by_token: dict[str, set[int]] = defaultdict(set)
         self._by_key: dict[tuple[str, str], int] = {}
+        self.domain_map: dict[str, str] = {}
 
     @classmethod
     def load(cls, db: Session, asset_ids: Iterable[int] | None = None) -> MatchIndex:
         index = cls()
+        index.domain_map = domain_map(db)
         stmt = select(Asset).where(Asset.merged_into.is_(None))
         if asset_ids is not None:
             ids = list(asset_ids)
@@ -112,7 +131,7 @@ class MatchIndex:
             and_(AssetObservation.source == obs.source, AssetObservation.source_key == obs.source_key),
             AssetObservation.fqdn.in_(fqdns),
             AssetObservation.ip.in_(ips),
-            func.lower(AssetObservation.name).in_(shorts),
+            _short_name_sql(AssetObservation.name).in_(shorts),
         ))
         ids = set(db.execute(by_asset).scalars()) | set(db.execute(by_obs).scalars())
         return cls.load(db, ids)
@@ -182,7 +201,7 @@ def apply_observation(
     """match + upsert наблюдения + пересчёт актива; (актив, правило; 0 — новый актив).
     `index`, `rows`, `networks` — заготовки синхронизации; без них всё читается из базы."""
     idx = index if index is not None else MatchIndex.for_observation(db, obs)
-    asset_id, rule = match(obs, idx.candidates_for(obs))
+    asset_id, rule = match(obs, idx.candidates_for(obs), idx.domain_map)
     asset = db.get(Asset, asset_id) if asset_id is not None else None
     if asset is None:
         asset = Asset()
@@ -198,8 +217,8 @@ def apply_observation(
         if rows is not None:
             rows[key] = row
     row.asset_id = asset.id
-    row.name, row.fqdn, row.domain, row.ip, row.os = obs.name, obs.fqdn, obs.domain, obs.ip, obs.os
-    row.ips = list(obs.ips)
+    row.name, row.fqdn, row.domain, row.ip, row.os = obs.name, obs.fqdn, obs.domain, normalize_ip(obs.ip), obs.os
+    row.ips = list(dict.fromkeys(a for a in (normalize_ip(x) for x in obs.ips) if a))
     row.seen_at = obs.seen_at or utcnow()
     row.extra = dict(obs.extra)
     row.gone_at = None
@@ -474,7 +493,8 @@ def _links(db: Session, rows: list[AssetObservation]) -> dict[str, Any]:
             ).scalar() or 0)
     ksc = next((r for r in live_first if r.source == "ksc"), None)
     if ksc is not None:
-        links["ksc_host_id"] = ksc.source_key
+        # Ключ KSC — «server_id:host_id».
+        links["ksc_host_id"] = ksc.source_key.partition(":")[2] or ksc.source_key
         links["ksc_server_id"] = ksc.extra.get("server_id")
     vm = next((r for r in live_first if r.source == "vm"), None)
     if vm is not None:

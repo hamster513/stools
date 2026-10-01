@@ -100,7 +100,7 @@ class AssetObservation(Base):
     asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id", ondelete="CASCADE"), index=True)
     #: vm | ksc | ad | scan | dns
     source: Mapped[str] = mapped_column(String(16))
-    #: KSC host_id, SID компьютера AD, VM «hostname|ip», IP для scan, FQDN или IP для dns.
+    #: KSC «server_id:host_id», SID компьютера AD, VM «hostname|ip», IP для scan, FQDN или IP для dns.
     source_key: Mapped[str] = mapped_column(String(512))
     name: Mapped[str] = mapped_column(String(255), default="")
     fqdn: Mapped[str] = mapped_column(String(255), default="", index=True)

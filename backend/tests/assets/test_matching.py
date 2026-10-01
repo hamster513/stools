@@ -121,6 +121,56 @@ def test_rules_are_checked_in_order_across_candidates() -> None:
     assert match(obs, [by_ip, by_fqdn]) == (2, 2)
 
 
+def test_rule4_two_assets_with_other_domains_is_ambiguous() -> None:
+    """Короткое имя без домена подходит к двум активам из разных доменов — не «самый старый», а новый актив."""
+    a = cand(1, name="ws01", fqdn="ws01.corp.local", domain="corp.local")
+    b = cand(2, name="ws01", fqdn="ws01.other.local", domain="other.local")
+    vm = Observed(source="vm", source_key="ws01|", name="ws01")
+    assert match(vm, [a, b]) == (None, 0)
+    assert match(vm, [b, a]) == (None, 0)
+
+
+def test_netbios_first_label_is_ambiguous_with_two_domains() -> None:
+    a = cand(1, name="ws01", fqdn="ws01.corp.local", domain="corp.local")
+    b = cand(2, name="ws01", fqdn="ws01.corp.example", domain="corp.example")
+    obs = Observed(source="vm", source_key="CORP\\ws01|", name="CORP\\ws01")
+    assert match(obs, [a, b]) == (None, 0)
+    # Кандидат один, но второй домен с той же первой меткой известен по выгрузкам AD.
+    assert match(obs, [a], {"other": "corp.example"}) == (None, 0)
+
+
+def test_netbios_domain_resolved_by_ad_map() -> None:
+    a = cand(1, name="ws01", fqdn="ws01.corp.local", domain="corp.local")
+    b = cand(2, name="ws01", fqdn="ws01.corp.example", domain="corp.example")
+    hq = Observed(source="vm", source_key="HQ\\ws01|", name="HQ\\ws01")
+    assert match(hq, [a, b], {"HQ": "corp.local"}) == (1, 3)
+    corp = Observed(source="vm", source_key="CORP\\ws01|", name="CORP\\ws01")
+    # Карта важнее первой метки.
+    assert match(corp, [a], {"corp": "corp.example"}) == (None, 0)
+    assert match(corp, [a, b], {"corp": "corp.example"}) == (2, 3)
+
+
+def test_rule5_gone_ip_does_not_match() -> None:
+    gone = Observed(source="vm", source_key="10.10.0.5|10.10.0.5", ip="10.10.0.5", seen_at=days_ago(9), gone_at=days_ago(1))
+    scan = Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5")
+    assert match(scan, [cand(1, gone, ip="10.10.0.6")]) == (None, 0)
+
+
+def test_rule5_two_holders_prefer_canonical_ip() -> None:
+    a = cand(1, Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5"), ip="10.10.0.5")
+    b_obs = Observed(source="vm", source_key="10.10.0.5|10.10.0.5", ip="10.10.0.5")
+    scan = Observed(source="scan", source_key="10.10.0.5-again", ip="10.10.0.5")
+    assert match(scan, [cand(2, b_obs, ip="10.10.0.7"), a]) == (1, 5)
+    assert match(scan, [cand(2, b_obs, ip="10.10.0.5"), a]) == (None, 0)
+
+
+def test_rule5_ipv6_text_forms() -> None:
+    scan = Observed(source="scan", source_key="2001:DB8:0:0::5", ip="2001:DB8:0:0::5")
+    assert match(scan, [cand(3, ip="2001:db8::5")]) == (3, 5)
+    held = Observed(source="vm", source_key="x", ips=["2001:0db8:0000::0005"])
+    assert match(scan, [cand(4, held)]) == (4, 5)
+
+
 def test_no_candidates() -> None:
     assert match(Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5"), []) == (None, 0)
 
@@ -150,6 +200,27 @@ def test_canonical_gone_is_excluded_but_counts_for_first_seen() -> None:
     card = canonical([gone, first, live], {}, {})
     assert card["ip"] == "10.10.0.11"
     assert card["first_seen"] == days_ago(50) and card["last_seen"] == days_ago(3)
+
+
+def test_canonical_tie_prefers_ksc_over_vm() -> None:
+    vm = Observed(source="vm", source_key="msk1|192.168.6.53", name="msk1", ip="192.168.6.53", seen_at=days_ago(0))
+    ksc = Observed(source="ksc", source_key="1:h-1", name="MSK1", ip="192.168.2.23", seen_at=days_ago(0))
+    for order in ([vm, ksc], [ksc, vm]):
+        card = canonical(order, {}, {})
+        assert card["ip"] == "192.168.2.23" and card["name"] == "MSK1"
+
+
+def test_canonical_tie_order_dns_scan_ksc_ad_vm() -> None:
+    def o(source: str) -> Observed:
+        return Observed(source=source, source_key=source, os=source, seen_at=days_ago(0))
+    sources = ["vm", "ad", "ksc", "scan", "dns"]
+    for i in range(len(sources)):
+        assert canonical([o(s) for s in sources[: i + 1]], {}, {})["os"] == sources[i]
+
+
+def test_canonical_ip_is_normalised() -> None:
+    card = canonical([Observed(source="scan", source_key="x", ip="2001:DB8:0:0::5", seen_at=days_ago(0))], {}, {})
+    assert card["ip"] == "2001:db8::5"
 
 
 def test_canonical_all_gone_keeps_last_known_values() -> None:

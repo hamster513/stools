@@ -108,7 +108,7 @@ def observations_from_ksc(db: Session) -> Iterator[Observed]:
             fqdn = normalize_fqdn(h.fqdn)
             extra = json.loads(h.extra_json or "{}")
             yield Observed(
-                source="ksc", source_key=h.host_id, name=h.name or fqdn.partition(".")[0], fqdn=fqdn, domain=h.domain,
+                source="ksc", source_key=f"{server.id}:{h.host_id}", name=h.name or fqdn.partition(".")[0], fqdn=fqdn, domain=h.domain,
                 ip=h.ip, ips=[h.ip] if h.ip else [], os=h.os, seen_at=snap.collected_at,
                 extra={
                     "group_path": h.group_path, "tags": extra.get("tags", []), "components": json.loads(h.components_json or "[]"),
@@ -170,6 +170,20 @@ def _read(db: Session, source: str, data_dir: Path) -> tuple[list[Observed], boo
 # ---- Задача ---------------------------------------------------------------
 
 
+def _migrate_ksc_keys(db: Session) -> None:
+    """Ключ KSC был `host_id`, стал `server_id:host_id` (одинаковые host_id на двух серверах
+    терялись). Старое наблюдение получает новый ключ — сервер записан в его `extra`, — а не
+    уходит в пропавшие рядом с новой копией."""
+    old = db.execute(
+        select(AssetObservation).where(AssetObservation.source == "ksc", AssetObservation.source_key.not_like("%:%"))
+    ).scalars()
+    for row in old:
+        server_id = (row.extra or {}).get("server_id")
+        if server_id is not None:
+            row.source_key = f"{server_id}:{row.source_key}"
+    db.flush()
+
+
 def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOURCES) -> dict[str, int]:
     """Читает источники, для каждого наблюдения — match → upsert asset_observation → пересчёт
     актива; пропавшим ставит gone_at. Возвращает число наблюдений по источникам."""
@@ -177,6 +191,7 @@ def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOU
 
     data_dir = get_settings().data_dir
     now = utcnow()
+    _migrate_ksc_keys(db)
     index = MatchIndex.load(db)
     rows = {(r.source, r.source_key): r for r in db.execute(select(AssetObservation)).scalars()}
     networks = load_networks(db)
@@ -186,7 +201,7 @@ def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOU
         handle.stage("sync", total=len(found), message=f"{SOURCE_TITLES.get(source, source)}: хостов {len(found)}")
         seen: set[str] = set()
         for i, obs in enumerate(found, start=1):
-            # Один ключ дважды (одинаковый host_id на двух серверах KSC) — берётся первый.
+            # Один ключ дважды (два одинаковых хоста в выгрузке VM) — берётся первый.
             if obs.source_key in seen:
                 continue
             seen.add(obs.source_key)

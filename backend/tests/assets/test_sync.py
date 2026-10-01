@@ -10,11 +10,12 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from api.jobs import run_job, start_job
+from api.modules.assets.core.matching import Observed
 from api.modules.assets.models import Asset, AssetJob, AssetObservation, AssetSettings
 from api.modules.assets.services import sync as sync_service
-from api.modules.assets.services.assets import asset_detail, pin_field
+from api.modules.assets.services.assets import apply_observation, asset_detail, pin_field
 from api.modules.assets.services.sync import request_sync, run_sync
-from api.modules.ksc.models import KscHost
+from api.modules.ksc.models import KscHost, KscServer
 from api.modules.vm.models import VmHost
 from tests.assets.synthetic import load_all, load_ksc
 
@@ -140,6 +141,74 @@ def test_pinned_name_survives_resync(loaded: Session, now: dt.datetime) -> None:
     sync(loaded)
     loaded.refresh(srv01)
     assert srv01.name == "CORE01"
+
+
+def ksc_keys(db: Session) -> list[str]:
+    return sorted(db.execute(select(AssetObservation.source_key).where(AssetObservation.source == "ksc")).scalars())
+
+
+def test_ksc_key_is_server_and_host(loaded: Session) -> None:
+    sync(loaded)
+    server_id = loaded.execute(select(KscServer.id)).scalar_one()
+    assert ksc_keys(loaded) == [f"{server_id}:h-msk1", f"{server_id}:h-srv01"]
+    srv01 = live_assets(loaded)["srv01"]
+    links = asset_detail(loaded, srv01.id)["links"]
+    assert links["ksc_host_id"] == "h-srv01" and links["ksc_server_id"] == server_id
+
+
+def test_same_host_id_on_two_ksc_servers_is_kept(loaded: Session, app_settings: Any, now: dt.datetime) -> None:
+    load_ksc(loaded, Path(app_settings.data_dir), [("SRV01", "10.10.0.11")], now, server="ksc02")
+    counts = sync(loaded)
+    assert counts["ksc"] == 3 and len(ksc_keys(loaded)) == 3
+    srv01 = live_assets(loaded)["srv01"]
+    assert sorted(o["source"] for o in asset_detail(loaded, srv01.id)["observations"]) == ["ad", "ksc", "ksc", "vm"]
+
+
+def test_old_ksc_keys_are_migrated_not_duplicated(loaded: Session) -> None:
+    sync(loaded)
+    for row in loaded.execute(select(AssetObservation).where(AssetObservation.source == "ksc")).scalars():
+        row.source_key = row.source_key.partition(":")[2]  # ключ до исправления — только host_id
+    loaded.commit()
+    sync(loaded)
+    server_id = loaded.execute(select(KscServer.id)).scalar_one()
+    assert ksc_keys(loaded) == [f"{server_id}:h-msk1", f"{server_id}:h-srv01"]
+    assert loaded.execute(select(func.count()).select_from(AssetObservation).where(AssetObservation.gone_at.is_not(None))).scalar() == 0
+
+
+def test_netbios_vm_name_is_matched_by_ad_domain_map(loaded: Session, now: dt.datetime) -> None:
+    """У VM имя `CORP\\ws01`; рядом есть домен `corp.example` — первая метка неоднозначна,
+    но выгрузка AD говорит, что CORP — это corp.local."""
+    sync(loaded)
+    apply_observation(loaded, Observed(source="dns", source_key="ws01.corp.example", fqdn="ws01.corp.example", ip="10.30.0.1", seen_at=now))
+    loaded.add(VmHost(hostname="CORP\\ws01", ip="", os_name="Windows 11"))
+    loaded.commit()
+    sync(loaded)
+    vm_obs = loaded.execute(select(AssetObservation).where(AssetObservation.source == "vm", AssetObservation.source_key == "CORP\\ws01|")).scalar_one()
+    ad_obs = loaded.execute(select(AssetObservation).where(AssetObservation.source == "ad", AssetObservation.name == "WS01")).scalar_one()
+    assert vm_obs.asset_id == ad_obs.asset_id
+
+
+def test_single_observation_finds_asset_by_normalised_observation_name(db_session: Session, app_settings: Any, now: dt.datetime) -> None:
+    """Одиночная привязка (скан, DNS) ищет кандидатов в базе: имя наблюдения `WS01$` или с точкой — то же `ws01`."""
+    for canonical_name, obs_name in (("core", "WS01$"), ("edge", "SRV01.corp.local"), ("hub", "CORP\\WS02$")):
+        asset = Asset(name=canonical_name, name_key=canonical_name, pinned={"name": True})
+        db_session.add(asset)
+        db_session.flush()
+        db_session.add(AssetObservation(asset_id=asset.id, source="ksc", source_key=f"1:{obs_name}", name=obs_name, seen_at=now))
+    db_session.commit()
+    ids = dict(db_session.execute(select(Asset.name_key, Asset.id)).tuples().all())
+    got, rule = apply_observation(db_session, Observed(source="vm", source_key="ws01|", name="ws01", seen_at=now))
+    assert (got.id, rule) == (ids["core"], 4)
+    got, rule = apply_observation(db_session, Observed(source="vm", source_key="srv01|", name="srv01", seen_at=now))
+    assert (got.id, rule) == (ids["edge"], 4)
+    got, rule = apply_observation(db_session, Observed(source="vm", source_key="ws02|", name="ws02", seen_at=now))
+    assert (got.id, rule) == (ids["hub"], 4)
+
+
+def test_ips_are_stored_normalised(db_session: Session, app_settings: Any, now: dt.datetime) -> None:
+    asset, _ = apply_observation(db_session, Observed(source="scan", source_key="v6", ip="2001:DB8:0:0::5", ips=["2001:DB8:0:0::5"], seen_at=now))
+    row = db_session.execute(select(AssetObservation).where(AssetObservation.source_key == "v6")).scalar_one()
+    assert (row.ip, row.ips, asset.ip) == ("2001:db8::5", ["2001:db8::5"], "2001:db8::5")
 
 
 def test_request_sync_respects_running_job_and_setting(db_session: Session, app_settings: Any) -> None:

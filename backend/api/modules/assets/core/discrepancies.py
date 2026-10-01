@@ -12,7 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize_name
+from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize_ip, normalize_name
 
 #: no_network — адрес актива не входит ни в одну описанную сеть; считается по реестру сетей,
 #: а не по наблюдениям, поэтому его добавляет services.assets, а не `discrepancies`.
@@ -42,7 +42,7 @@ def _norm(name: str, value: str) -> str:
         return normalize_name(value)[0]
     if name == "fqdn":
         return normalize_fqdn(value)
-    return value.strip()
+    return normalize_ip(value) or value.strip()
 
 
 def _day(value: dt.datetime | None) -> str:
@@ -79,7 +79,7 @@ def _field_discrepancies(asset: dict[str, Any], live: list[Observed], stale_days
         for o in live:
             value = getattr(o, name)
             mine = _norm(name, value)
-            if not mine or mine == reference or (name == "ip" and current in o.ips):
+            if not mine or mine == reference or (name == "ip" and reference in {normalize_ip(x) for x in o.ips}):
                 continue
             title = FIELD_TITLES[name]
             ref_text = f"{TITLES[ref.source]}, {_day(ref.seen_at)}" if ref else "закреплено вручную"

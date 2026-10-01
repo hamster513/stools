@@ -43,9 +43,10 @@ def load_vm(db: Session, hosts: list[tuple[str, str, str]], finished_at: dt.date
     db.commit()
 
 
-def ksc_export(hosts: list[tuple[str, str]], collected_at: dt.datetime) -> dict[str, Any]:
-    """Выгрузка KSC с хостами (имя, IP) вместо стандартного набора синтетики."""
+def ksc_export(hosts: list[tuple[str, str]], collected_at: dt.datetime, server: str = "ksc01") -> dict[str, Any]:
+    """Выгрузка KSC с хостами (имя, IP) вместо стандартного набора синтетики; `server` — имя сервера KSC."""
     raw = build_ksc_export(now=collected_at)
+    raw["server"]["name"] = server
     ok = 1 | 4 | 8 | 16
     raw["hosts"] = [
         _host(i, name, 3, ok, 7, now=collected_at, KLHST_WKS_IP_LONG={"type": "long", "value": ip_long(ip)})
@@ -58,10 +59,10 @@ def ksc_export(hosts: list[tuple[str, str]], collected_at: dt.datetime) -> dict[
     return raw
 
 
-def load_ksc(db: Session, data_dir: Path, hosts: list[tuple[str, str]], collected_at: dt.datetime) -> KscSnapshot:
+def load_ksc(db: Session, data_dir: Path, hosts: list[tuple[str, str]], collected_at: dt.datetime, server: str = "ksc01") -> KscSnapshot:
     path = data_dir / "ksc-upload.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(ksc_export(hosts, collected_at)), encoding="utf-8")
+    path.write_text(json.dumps(ksc_export(hosts, collected_at, server)), encoding="utf-8")
     return import_ksc(db, None, path, "file", "ksc.json", KscConfig(), data_dir)
 
 

@@ -80,6 +80,11 @@ def test_same_values_are_not_a_discrepancy() -> None:
     assert not codes(found) & {"stale", "conflict"}
 
 
+def test_ip_text_forms_are_not_a_discrepancy() -> None:
+    v6 = Observed(source="vm", source_key="x", name="srv", ip="2001:DB8:0:0::5", seen_at=days_ago(1))
+    assert not codes(run([v6, Observed(source="ksc", source_key="1:h", name="SRV", ip="2001:db8::5", seen_at=days_ago(0))])) & {"stale", "conflict"}
+
+
 def test_gone_observation_is_not_compared() -> None:
     old = vm("192.168.6.53", 40)
     old.gone_at = days_ago(1)
