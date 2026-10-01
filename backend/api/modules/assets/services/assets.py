@@ -35,6 +35,8 @@ from api.timeutil import utcnow
 DEFAULT_SETTINGS: dict[str, Any] = {"inactive_days": 30, "stale_days": 30, "sync_after_import": True}
 SOURCES = ("vm", "ksc", "ad", "scan", "dns")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
+#: Фильтр и фасет «хоть одно расхождение».
+ANY_CODE = "any"
 
 ScanProbes = tuple[Callable[[str], bool], Callable[[str], bool | None]]
 
@@ -470,7 +472,8 @@ def list_assets(
     now: dt.datetime | None = None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
     """items, total, facets. Расхождения считаются на лету, поэтому фильтры и фасеты — в памяти,
-    как у хостов KSC; `criticality='none'` — критичность не задана."""
+    как у хостов KSC; `criticality='none'` — критичность не задана; `code='any'` — хоть одно расхождение
+    (фасет `code.any` — сколько таких)."""
     now = now or utcnow()
     settings = load_settings(db)
     probes = scan_probes(db)
@@ -507,12 +510,14 @@ def list_assets(
         if needle and not _matches_query(asset, rows, needle):
             continue
         found = _found(asset, observations, settings, probes, now)
-        if code and code not in {d.code for d in found}:
+        if code == ANY_CODE and not found:
+            continue
+        if code and code != ANY_CODE and code not in {d.code for d in found}:
             continue
         picked.append((asset, rows, found))
 
     facets: dict[str, Any] = {
-        "source": dict.fromkeys(SOURCES, 0), "code": dict.fromkeys(CODES, 0), "zone": {},
+        "source": dict.fromkeys(SOURCES, 0), "code": dict.fromkeys((*CODES, ANY_CODE), 0), "zone": {},
         "criticality": dict.fromkeys([*CRITICALITY, "none"], 0),
     }
     for asset, rows, found in picked:
@@ -520,6 +525,8 @@ def list_assets(
             facets["source"][source] += 1
         for c in {d.code for d in found}:
             facets["code"][c] += 1
+        if found:
+            facets["code"][ANY_CODE] += 1
         net = networks.get(asset.network_id) if asset.network_id is not None else None
         if net is not None and net.zone:
             facets["zone"][net.zone] = facets["zone"].get(net.zone, 0) + 1

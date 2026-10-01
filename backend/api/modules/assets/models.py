@@ -62,6 +62,8 @@ class Network(Base):
     )
     last_scan_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_scan_alive: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Шёл ли последний скан с ICMP; False — «только порты» (ICMP-сокет не открылся), None — не сканировали.
+    last_scan_icmp: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

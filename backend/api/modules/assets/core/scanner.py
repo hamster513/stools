@@ -90,6 +90,38 @@ def addresses(target: ScanTarget, own_ips: Iterable[str]) -> list[str]:
     ]
 
 
+def count_addresses(target: ScanTarget) -> int:
+    """Сколько адресов даст `addresses(target, [])`, без списка: адреса сети минус служебные
+    (адрес сети и широковещательный у IPv4 шире /31, anycast-адрес подсети у IPv6 шире /127) минус
+    исключения. Те же ValueError, что у `addresses`."""
+    net = ipaddress.ip_network(target.cidr.strip(), strict=False)
+    if net.version == 4 and net.prefixlen < MAX_IPV4_PREFIX:
+        raise ValueError(f"сеть {net} шире /{MAX_IPV4_PREFIX} — сканер её не берёт")
+    if net.num_addresses > MAX_ADDRESSES:
+        raise ValueError(f"сеть {net}: больше {MAX_ADDRESSES} адресов — сканер её не берёт")
+    service: list[ipaddress.IPv4Address | ipaddress.IPv6Address]
+    if net.version == 4:
+        service = [net.network_address, net.broadcast_address] if net.prefixlen < 31 else []
+    else:
+        service = [net.network_address] if net.prefixlen < 127 else []
+    # Сети CIDR либо вложены, либо не пересекаются: исключение внутри сети или накрывает её целиком.
+    clipped = []
+    for e in target.exclude:
+        if not e.strip():
+            continue
+        x = ipaddress.ip_network(e.strip(), strict=False)
+        if x.version != net.version:
+            continue
+        if x.subnet_of(net):  # type: ignore[arg-type]
+            clipped.append(x)
+        elif net.subnet_of(x):  # type: ignore[arg-type]
+            clipped.append(net)
+    excluded = list(ipaddress.collapse_addresses(clipped))  # type: ignore[type-var]
+    removed = sum(x.num_addresses for x in excluded)
+    removed += sum(1 for a in service if not any(a in x for x in excluded))
+    return int(net.num_addresses - removed)
+
+
 def _is_ip(text: str) -> bool:
     try:
         ipaddress.ip_address(text)

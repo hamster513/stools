@@ -96,6 +96,7 @@ export function OverviewPage() {
 
       <div className="mb-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <Counter to="/assets/list" label="всего активов" value={o.assets_total} />
+        <Counter to="/assets/list?code=any" label="с расхождениями" value={o.codes.any ?? 0} tone="text-risk-high" />
         {CODES.map((c) => <Counter key={c} to={`/assets/list?code=${c}`} label={CODE_LABELS[c]} value={o.codes[c] ?? 0} tone={ALERT[c]} />)}
       </div>
 

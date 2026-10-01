@@ -129,7 +129,8 @@ def test_scan_job_creates_observations_and_codes(analyst: TestClient, db_session
     assert rows["10.10.0.5"].extra["os_hint"] == "Windows"
 
     db_session.refresh(network)
-    assert network.last_scan_alive == 2 and network.last_scan_at is not None
+    assert network.last_scan_alive == 2 and network.last_scan_at is not None and network.last_scan_icmp is True
+    assert analyst.get(f"/api/assets/networks/{network.id}").json()["last_scan_icmp"] is True
 
     assert codes(analyst, "unknown_host") == {"10.10.0.5", "10.10.0.7"}
     assert codes(analyst, "unreachable") == {"10.10.0.11"}
@@ -175,6 +176,10 @@ def test_ports_only_mode_without_icmp(analyst: TestClient, db_session: Session, 
     assert job.status == "done" and "только порты" in job.message
     row = db_session.execute(select(AssetObservation).where(AssetObservation.source == "scan")).scalar_one()
     assert row.extra["icmp"] is None and row.extra["ttl"] is None and row.extra["os_hint"] == ""
+    db_session.refresh(network)
+    assert network.last_scan_icmp is False
+    assert analyst.get(f"/api/assets/networks/{network.id}").json()["last_scan_icmp"] is False
+    assert analyst.get("/api/assets/networks").json()[0]["last_scan_icmp"] is False
 
 
 def test_one_scan_at_a_time(analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan) -> None:

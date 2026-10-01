@@ -50,6 +50,11 @@ def test_list_filters_and_facets(analyst: TestClient) -> None:
     assert names(analyst.get("/api/assets/assets", params={"source_missing": "ksc"}).json()) == {"ws01", "old01"}
     assert names(analyst.get("/api/assets/assets", params={"source_has": "vm", "source_missing": "ad"}).json()) == {"msk1"}
     assert names(analyst.get("/api/assets/assets", params={"code": "conflict"}).json()) == {"msk1"}
+    # Любое расхождение: у каждого актива есть хоть одно, кроме тех, у кого их нет.
+    with_codes = {i["name"].lower() for i in body["items"] if i["discrepancy_count"] > 0}
+    anyc = analyst.get("/api/assets/assets", params={"code": "any"}).json()
+    assert names(anyc) == with_codes and anyc["total"] == len(with_codes)
+    assert body["facets"]["code"]["any"] == len(with_codes)
     assert names(analyst.get("/api/assets/assets", params={"q": "srv"}).json()) == {"srv01"}
     assert names(analyst.get("/api/assets/assets", params={"q": "192.168.6.53"}).json()) == {"msk1"}  # старый адрес из VM
     page = analyst.get("/api/assets/assets", params={"limit": 1, "offset": 1}).json()

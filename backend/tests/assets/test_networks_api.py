@@ -134,6 +134,10 @@ def test_estimated_seconds(analyst: TestClient) -> None:
     slow = add_network(analyst, "10.50.0.0/24", concurrency=256, rate_per_s=10, ports=[1, 2, 3, 4, 5, 6, 7])
     assert slow["estimated_seconds"] == round(254 * 8 / 10)
     assert add_network(analyst, "fd00:40::/64")["estimated_seconds"] is None
+    # Исключения вычитаются: 254 − 127 (10.60.0.0/25 без адреса сети) − 1 = 126 адресов по 2 с.
+    excl = add_network(analyst, "10.60.0.0/24", concurrency=1, icmp_timeout_ms=1000, tcp_timeout_ms=1000, exclude=["10.60.0.0/25", "10.60.0.200"])
+    assert excl["estimated_seconds"] == 126 * 2
+    assert excl["last_scan_icmp"] is None
 
 
 def test_duplicate_cidr(analyst: TestClient) -> None:

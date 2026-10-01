@@ -49,6 +49,10 @@ def test_overview_counts_match_synthetic(analyst: TestClient) -> None:
     assert body["codes"]["no_av"] == 1 and body["codes"]["ad_inactive"] == 1 and body["codes"]["conflict"] == 1
     # Адреса есть у msk1 и srv01, сетей не описано.
     assert body["codes"]["no_network"] == 2
+    # Активы хотя бы с одним расхождением — ссылка «с расхождениями» ведёт в список с code=any.
+    listed = analyst.get("/api/assets/assets", params={"code": "any"}).json()
+    assert body["codes"]["any"] == listed["total"] == sum(1 for i in listed["items"] if i["discrepancy_count"] > 0)
+    assert body["codes"]["any"] >= 3
     assert body["by_zone"] == {"": 4}
     assert body["networks"] == {"total": 0, "scanned": 0, "no_network_assets": 2}
     assert body["last_scans"] == [] and body["last_dns"] == []

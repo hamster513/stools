@@ -26,6 +26,7 @@ from api.modules.assets.core.scanner import (
     ScanCancelled,
     ScanTarget,
     addresses,
+    count_addresses,
     icmp_available,
     os_hint,
     probe,
@@ -78,6 +79,33 @@ def test_own_addresses_include_ipv6(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     own = scanner.own_addresses()
     assert {"::1", "fe80::5", "2001:db8::7", "10.10.0.6", "fe80::9"} <= set(own)
     assert addresses(target("2001:db8::/125"), own) == [f"2001:db8::{i}" for i in range(1, 8) if i != 7]
+
+
+@pytest.mark.parametrize(("cidr", "exclude"), [
+    ("10.0.0.0/24", []),
+    ("10.0.0.0/24", ["10.0.0.0/25", "10.0.0.5", "10.0.0.0/26", "10.0.0.255"]),
+    ("10.0.0.0/24", ["10.0.0.0/16"]),
+    ("10.0.0.0/24", ["10.1.0.0/24", "fd00::/64", ""]),
+    ("10.0.0.0/24", ["10.0.0.128/25", "10.0.0.0/25"]),
+    ("10.0.0.0/31", []),
+    ("10.0.0.0/31", ["10.0.0.1"]),
+    ("10.0.0.7/32", []),
+    ("10.0.0.0/30", ["10.0.0.0"]),
+    ("10.0.0.0/16", ["10.0.128.0/17", "10.0.1.0/24"]),
+    ("fd00::/120", ["fd00::", "fd00::80/121", "fd00::ff"]),
+    ("fd00::/127", []),
+    ("fd00::1/128", []),
+])
+def test_count_addresses_matches_address_list(cidr: str, exclude: list[str]) -> None:
+    """Число адресов считается арифметикой, без списка: то же, что даёт сам список."""
+    t = target(cidr, exclude=exclude)
+    assert count_addresses(t) == len(addresses(t, []))
+
+
+def test_count_addresses_rejects_what_scanner_rejects() -> None:
+    for cidr in ("10.0.0.0/15", "fd00::/64"):
+        with pytest.raises(ValueError):
+            count_addresses(target(cidr))
 
 
 def test_wide_networks_rejected() -> None:

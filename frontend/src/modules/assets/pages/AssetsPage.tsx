@@ -3,6 +3,7 @@ import { ChevronRight, FilterX, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useAssets, useNetworks } from '@/modules/assets/api/queries'
 import {
+  ANY_CODE_LABEL,
   CODE_LABELS,
   CODES,
   CRITICALITIES,
@@ -13,8 +14,8 @@ import {
   type AssetsFacets,
   type AssetSource,
   type AssetsQuery,
+  type CodeFilter,
   type Criticality,
-  type DiscrepancyCode,
 } from '@/modules/assets/api/types'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -74,6 +75,7 @@ function FacetPanel({ facets, filters, onToggle, total, port, onPort, tag, onTag
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Активов <span className="font-mono tabular-nums text-text">{total}</span></div>
       <FacetSection title="Расхождения">
+        <FacetRow active={filters.code === 'any'} count={facets?.code.any} onClick={() => onToggle('code', filters.code === 'any' ? undefined : 'any')}>{ANY_CODE_LABEL}</FacetRow>
         {CODES.map((c) => (
           <FacetRow key={c} active={filters.code === c} count={facets?.code[c]} onClick={() => onToggle('code', filters.code === c ? undefined : c)}>{CODE_LABELS[c]}</FacetRow>
         ))}
@@ -180,7 +182,7 @@ export function AssetsPage() {
   const [filters, setFilters] = useState<Filters>(() => ({
     source_has: (params.get('source_has') as AssetSource | null) ?? undefined,
     source_missing: (params.get('source_missing') as AssetSource | null) ?? undefined,
-    code: (params.get('code') as DiscrepancyCode | null) ?? undefined,
+    code: (params.get('code') as CodeFilter | null) ?? undefined,
     zone: params.get('zone') ?? undefined,
     criticality: (params.get('criticality') as Criticality | 'none' | null) ?? undefined,
     network_id: params.get('network_id') ? Number(params.get('network_id')) : undefined,

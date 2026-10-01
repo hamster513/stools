@@ -17,6 +17,7 @@ from api.modules.assets.core.discrepancies import CODES
 from api.modules.assets.models import AssetJob
 from api.modules.assets.routers.scan import ScheduleIn, ScheduleView, schedule_view
 from api.modules.assets.services.assets import (
+    ANY_CODE,
     CRITICALITY,
     SOURCES,
     AssetConflict,
@@ -100,7 +101,7 @@ def get_assets(
 ) -> dict[str, Any]:
     _check(source_has, SOURCES)
     _check(source_missing, SOURCES)
-    _check(code, CODES)
+    _check(code, (*CODES, ANY_CODE))
     _check(criticality, (*CRITICALITY, "none"))
     items, total, facets = list_assets(
         db, q=q, source_has=source_has, source_missing=source_missing, code=code, network_id=network_id, zone=zone,

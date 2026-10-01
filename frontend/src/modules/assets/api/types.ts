@@ -31,6 +31,9 @@ export const CODE_LABELS: Record<DiscrepancyCode, string> = {
   dns_orphan: 'запись DNS без хоста',
   no_network: 'сеть не описана',
 }
+/** Фильтр списка: код расхождения или `any` — хоть одно расхождение. */
+export type CodeFilter = DiscrepancyCode | 'any'
+export const ANY_CODE_LABEL = 'любое расхождение'
 /** Подсветка ячейки в таблице источников: те же токены, что у видов находок. */
 export const MARK_TEXT: Record<'stale' | 'conflict', string> = {
   stale: 'text-kind-1',
@@ -85,7 +88,7 @@ export interface AssetItem {
 
 export interface AssetsFacets {
   source: Record<AssetSource, number>
-  code: Record<DiscrepancyCode, number>
+  code: Record<CodeFilter, number>
   zone: Record<string, number>
   criticality: Record<Criticality | 'none', number>
 }
@@ -100,7 +103,7 @@ export interface AssetsQuery {
   q?: string
   source_has?: AssetSource
   source_missing?: AssetSource
-  code?: DiscrepancyCode
+  code?: CodeFilter
   network_id?: number
   zone?: string
   port?: number
@@ -166,6 +169,11 @@ export interface AssetPatch {
 
 export const DEFAULT_PORTS = [22, 80, 135, 139, 443, 445, 3389]
 
+/** «≈ N мин» из `estimated_seconds` API (минуты вверх, не меньше одной); null — сеть сканеру не по силам. */
+export function scanEstimate(seconds: number | null): string {
+  return seconds === null ? '—' : `≈ ${Math.max(1, Math.ceil(seconds / 60))} мин`
+}
+
 /** Поля сети, которые задаёт человек. */
 export interface NetworkIn {
   cidr: string
@@ -182,6 +190,8 @@ export interface NetworkIn {
   concurrency: number
   icmp_timeout_ms: number
   tcp_timeout_ms: number
+  /** Новых сокетов (ICMP echo или SYN) в секунду на весь скан, 10–5000. */
+  rate_per_s: number
 }
 
 /** Расписание сканов сети; окно — местное время пояса STOOLS_TZ (`tz`). */
@@ -216,6 +226,10 @@ export interface Network extends NetworkIn {
   schedule: NetworkSchedule | null
   last_scan_at: string | null
   last_scan_alive: number | null
+  /** false — последний скан шёл в режиме «только порты»; null — сеть не сканировали. */
+  last_scan_icmp: boolean | null
+  /** Секунд на скан, если никто не ответит; null — сеть сканеру не по силам. */
+  estimated_seconds: number | null
   created_at: string
   updated_at: string
   stats: {
@@ -292,7 +306,7 @@ export interface AssetsOverview {
   /** Ключ "" — активы без сети или в сети без зоны. */
   by_zone: Record<string, number>
   by_source: Record<AssetSource, number>
-  codes: Record<DiscrepancyCode, number>
+  codes: Record<CodeFilter, number>
   networks: { total: number; scanned: number; no_network_assets: number }
   last_scans: { network_id: number; cidr: string; title: string; last_scan_at: string | null; last_scan_alive: number | null }[]
   last_dns: { dns_id: number; title: string; last_run_at: string | null }[]

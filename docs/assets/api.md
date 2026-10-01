@@ -12,7 +12,8 @@ GET  /overview                         {assets_total, by_zone, by_source, codes,
                                         last_dns, sync}
                                         by_zone: {зона: n, "": n} — "" — актив без сети или в сети без зоны
                                         by_source: {vm, ksc, ad, scan, dns: n} — источник видит актив сейчас
-                                        codes: {код: n} — активов с этим расхождением (коды ниже)
+                                        codes: {код: n, any: n} — активов с этим расхождением (коды ниже);
+                                        any — хотя бы с одним (ссылка в список с code=any)
                                         networks: {total, scanned, no_network_assets} — сетей описано,
                                         сканировалось хоть раз, активов вне описанных сетей
                                         last_scans: [{network_id, cidr, title, last_scan_at, last_scan_alive}]
@@ -32,7 +33,9 @@ GET   /assets                          q, source_has, source_missing, code, netw
                                        items: [{id, name, fqdn, domain, ip, os, network: {id, cidr, title,
                                        zone}|null, first_seen, last_seen, criticality, tags, pinned,
                                        sources: [{source, live, fresh, seen_at}], discrepancy_count, codes}]
-                                       facets: {source, code, zone, criticality} — только при offset=0
+                                       facets: {source, code, zone, criticality} — только при offset=0;
+                                       code.any — активов хотя бы с одним расхождением
+                                       code: код ниже или any — хотя бы одно расхождение
                                        неизвестное значение source_*/code/criticality — 422
 GET   /assets/{id}                     + network_manual, note, merged_into, created_at, updated_at,
                                        observations: [{id, source, source_key, name, fqdn, domain, ip, ips,
@@ -44,9 +47,11 @@ PATCH /assets/{id}  {criticality?, tags?, note?, network_id?, network_manual?}  
                                        только ручные поля; network_id без network_manual — сеть ручная;
                                        network_id: null, network_manual: false — вернуть расчёт по адресу
 POST  /assets/{id}/pin    {field: name|fqdn|domain|ip|os, pinned}   → карточка
-POST  /assets/{id}/merge  {other_id}   → карточка первого; 409 — уже объединён или идёт синхронизация
-POST  /observations/{id}/detach        → карточка нового актива; 409 — у актива одно наблюдение
-                                       или идёт синхронизация
+POST  /assets/{id}/merge  {other_id}   → карточка первого; 409 — уже объединён, идёт синхронизация
+                                       или запись результатов скана/DNS («идёт запись результатов
+                                       задачи — повторите позже»)
+POST  /observations/{id}/detach        → карточка нового актива; 409 — у актива одно наблюдение,
+                                       идёт синхронизация или запись результатов скана/DNS
 GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост модуля не сопоставлен
 ```
 
@@ -88,13 +93,22 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 POST /sync                             {job_id} 202 | 409 идёт синхронизация
 GET  /sync/status                      {last_sync_at, last_job_id, running_job_id,
                                         sources: {vm|ksc|ad: {live, gone, seen_at}}}
+GET    /sync/schedule                  {id, interval_hours, …, tz} | null — как у сетей
+PUT    /sync/schedule  {interval_hours 1–720, window_from?, window_to?, enabled}   422 — окно не HH:MM
+DELETE /sync/schedule                  204
 ```
 
 Читает `vm_host`, хосты последнего снапшота каждого сервера KSC и компьютеры
 последней выгрузки каждого домена AD. `seen_at`: VM — время последнего
 импорта, KSC и AD — `collected_at` снапшота. Модули после успешного импорта
 вызывают `request_sync(db, source)`: при `sync_after_import` синхронизация
-запускается сама; если уже идёт — пройдёт ещё раз после текущей.
+запускается сама; если уже идёт — пройдёт ещё раз после текущей. Расписание
+синхронизации одно на модуль (`platform_schedule`: `assets/sync`,
+`target_id = 0`); пока идёт другая синхронизация, запуск откладывается на
+следующий тик. Синхронизация делит блокировку с записью результатов скана и
+DNS: если блокировку держит такая запись, задача ждёт её окончания (стадия
+`pending`); отказывается («синхронизация уже идёт») только когда идёт другая
+синхронизация, заведённая раньше. Скан и DNS между собой не блокируются.
 
 ## Сети
 
@@ -102,7 +116,7 @@ GET  /sync/status                      {last_sync_at, last_job_id, running_job_i
 GET    /networks                       [{id, cidr, title, description, zone, site, owner, vlan, tags,
                                         scan_enabled, ports, exclude, concurrency, icmp_timeout_ms,
                                         tcp_timeout_ms, rate_per_s, estimated_seconds, schedule_id,
-                                        last_scan_at, last_scan_alive, created_at, updated_at,
+                                        last_scan_at, last_scan_alive, last_scan_icmp, created_at, updated_at,
                                         stats: {assets, alive_last_scan, unknown_hosts}, schedule|null}]
 POST   /networks                       201 | 409 такой CIDR уже есть | 422
 GET    /networks/{id}  PUT /networks/{id}  DELETE /networks/{id}   204
@@ -116,7 +130,12 @@ GET    /networks/{id}  PUT /networks/{id}  DELETE /networks/{id}   204
 удаляется. Поля по умолчанию: `ports` `[22, 80, 135, 139, 443, 445, 3389]`
 (≤ 64), `concurrency` 64 (1–256), `icmp_timeout_ms` 1000 (50–10000),
 `tcp_timeout_ms` 2000 (50–30000), `rate_per_s` 500 (10–5000 новых сокетов в
-секунду), `vlan` 1–4094, `exclude` — IP и CIDR.
+секунду), `vlan` 1–4094, `exclude` — IP и CIDR. `estimated_seconds` — секунд
+на скан, если никто не ответит: адресов (CIDR минус служебные и исключения,
+считается арифметикой) × (таймаут ICMP + таймаут TCP) / `concurrency`, но не
+меньше адресов × (1 + портов) / `rate_per_s`; `null` — сеть сканеру не по
+силам. `last_scan_icmp` — `false`, если последний скан шёл в режиме «только
+порты», `null` — сеть не сканировали.
 
 ## Скан и расписание
 
@@ -151,7 +170,11 @@ PUT    /dns/{id}/schedule  DELETE /dns/{id}/schedule   как у сетей
 бы один из `forward`, `reverse`. `mode: ad` — чтение зон `zones` из
 AD-integrated DNS через подключение модуля AD `ad_connection_id`
 (`zone_read: true`, хотя бы одна зона); записи `@` и `_`-служб пропускаются.
-`rate_per_s` 1–1000 (50), `timeout_ms` 100–30000 (3000).
+`rate_per_s` 1–1000 (50) — запросов в секунду: на имя уходят A и AAAA (два
+запроса; AAAA не спрашивается, если имени нет), на адрес — PTR. Стадии
+задачи пишут оценку «~N запросов при R/с ≈ T мин» (минуты вверх, без учёта
+таймаутов). `timeout_ms` 100–30000 (3000). Выключенный сервер по расписанию
+не запускается: строка в лог, повтор на следующем тике.
 
 ## Зоны сетей
 

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Network as NetworkIcon, Plus, Radar, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useDeleteNetwork, useJob, useNetworks, useStartScan } from '@/modules/assets/api/queries'
-import type { Network, NetworkSchedule } from '@/modules/assets/api/types'
+import { scanEstimate, type Network, type NetworkSchedule } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -126,6 +126,7 @@ export function NetworksPage() {
               <th className="px-3 py-2 text-right" title="ответили при последнем скане">Живых</th>
               <th className="px-3 py-2 text-right" title="найдено сканером, нигде не описано">Только сканер</th>
               <th className="px-3 py-2 text-left">Последний скан</th>
+              <th className="px-3 py-2 text-right" title="если никто не ответит; по таймаутам, параллельности и темпу">Скан займёт</th>
               <th className="px-3 py-2 text-left">Расписание</th>
               <th className="px-3 py-2" />
             </tr>
@@ -144,7 +145,11 @@ export function NetworksPage() {
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">
                   {n.stats.unknown_hosts > 0 ? <Link to={`/assets/list?network_id=${n.id}&code=unknown_host`} className="text-risk-high hover:underline">{n.stats.unknown_hosts}</Link> : 0}
                 </td>
-                <td className="px-3 py-2 text-text-secondary">{when(n.last_scan_at)}</td>
+                <td className="px-3 py-2 text-text-secondary">
+                  {when(n.last_scan_at)}
+                  {n.last_scan_icmp === false && <span className="ml-1 rounded border border-grid px-1 text-[11px] text-kind-1" title="ICMP недоступен — скан шёл только по портам">только порты</span>}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{scanEstimate(n.estimated_seconds)}</td>
                 <td className="px-3 py-2 text-text-secondary">{scheduleText(n.schedule, n.scan_enabled)}</td>
                 <td className="px-3 py-2">
                   {write && (

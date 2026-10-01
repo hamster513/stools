@@ -73,7 +73,7 @@ def estimated_seconds(network: Network) -> int | None:
     `concurrency` адресов разом, но не быстрее темпа (echo и SYN на каждый порт). None —
     сеть сканеру не по силам (широкая IPv6)."""
     try:
-        count = len(scanner.addresses(scan_target(network), []))
+        count = scanner.count_addresses(scan_target(network))
     except ValueError:
         return None
     by_timeouts = count * (network.icmp_timeout_ms + network.tcp_timeout_ms) / 1000 / max(1, network.concurrency)

@@ -122,7 +122,7 @@ def ptr_resolver(db: Session) -> scanner.Resolver | None:
 
 def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
     """scanner.scan → наблюдения scan (apply_observation), gone_at не ответившим адресам цели,
-    network.last_scan_at/last_scan_alive. Без ICMP-сокета — режим «только порты» (extra.icmp = None).
+    network.last_scan_at/last_scan_alive/last_scan_icmp. Без ICMP-сокета — режим «только порты» (extra.icmp = None).
 
     Пока идёт скан, сессия задачи не держит открытую транзакцию. Запись результатов — под той же
     блокировкой, что синхронизация (обе заводят активы: параллельно завели бы один хост дважды),
@@ -190,6 +190,7 @@ def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
                 recompute(db, asset, networks)
         current.last_scan_at = started
         current.last_scan_alive = len(found)
+        current.last_scan_icmp = use_icmp
         db.commit()
     gone = f" · пропало {len(touched)}" if touched else ""
     handle.stage("done", message=f"сеть {cidr}: живых {len(found)} из {len(scanned)}{gone}{mode}")

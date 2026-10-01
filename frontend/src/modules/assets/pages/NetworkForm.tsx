@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ApiRequestError } from '@/api/client'
 import { useDeleteSchedule, useSaveNetwork, useSaveSchedule, useZones } from '@/modules/assets/api/queries'
-import { DEFAULT_PORTS, type Network, type NetworkIn } from '@/modules/assets/api/types'
+import { DEFAULT_PORTS, scanEstimate, type Network, type NetworkIn } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { Field, FIELD } from '@/platform/collector/ui'
 import { ScheduleBlock } from './ScheduleBlock'
@@ -15,7 +15,7 @@ interface FormState extends Omit<NetworkIn, 'tags' | 'ports' | 'exclude'> {
 
 const EMPTY: NetworkIn = {
   cidr: '', title: '', description: '', zone: null, site: '', owner: '', vlan: null, tags: [],
-  scan_enabled: false, ports: DEFAULT_PORTS, exclude: [], concurrency: 64, icmp_timeout_ms: 1000, tcp_timeout_ms: 2000,
+  scan_enabled: false, ports: DEFAULT_PORTS, exclude: [], concurrency: 64, icmp_timeout_ms: 1000, tcp_timeout_ms: 2000, rate_per_s: 500,
 }
 
 const split = (text: string) => text.split(/[\s,;]+/).map((t) => t.trim()).filter(Boolean)
@@ -84,7 +84,13 @@ export function NetworkForm({ network, onDone, onCancel }: { network: Network | 
         <Field label="Параллельно адресов" hint="1–256"><input className={FIELD} type="number" min={1} max={256} value={shown(f.concurrency)} onChange={(e) => patch({ concurrency: numberOrEmpty(e.target.value) })} /></Field>
         <Field label="Таймаут ICMP, мс" hint="50–10000"><input className={FIELD} type="number" min={50} max={10000} step={100} value={shown(f.icmp_timeout_ms)} onChange={(e) => patch({ icmp_timeout_ms: numberOrEmpty(e.target.value) })} /></Field>
         <Field label="Таймаут TCP, мс" hint="50–30000"><input className={FIELD} type="number" min={50} max={30000} step={100} value={shown(f.tcp_timeout_ms)} onChange={(e) => patch({ tcp_timeout_ms: numberOrEmpty(e.target.value) })} /></Field>
+        <Field label="Темп, пакетов в секунду" hint="10–5000: ICMP echo и SYN на весь скан"><input className={FIELD} type="number" min={10} max={5000} step={10} value={shown(f.rate_per_s)} onChange={(e) => patch({ rate_per_s: numberOrEmpty(e.target.value) })} /></Field>
       </div>
+      {network && (
+        <p className="mt-2 text-xs text-text-secondary">
+          Скан по сохранённым настройкам займёт {scanEstimate(network.estimated_seconds)}, если никто не ответит{network.estimated_seconds === null ? ' — сеть сканеру не по силам' : ''}. Оценка пересчитывается после сохранения.
+        </p>
+      )}
 
       {network ? <NetworkScheduleBlock network={network} /> : <p className="mt-3 text-xs text-text-secondary">Расписание сканов задаётся после сохранения сети.</p>}
 
