@@ -8,6 +8,10 @@
 ICMP — непривилегированный сокет `SOCK_DGRAM`/`IPPROTO_ICMP` (Linux: `net.ipv4.ping_group_range`
 должен включать группу процесса). Ядро Linux само ставит идентификатор и пропускает в сокет
 только ответы на его запросы; TTL ответа приходит вспомогательными данными `IP_RECVTTL`.
+
+Нагрузка: открытых сокетов на весь проход не больше `MAX_SOCKETS`, сколько бы ни было
+параллельности и портов, и новых не чаще `rate_per_s` в секунду (сокет — один echo или один SYN).
+Ошибка сокета на одном адресе (нет маршрута, кончились дескрипторы) — «не ответил», а не конец скана.
 """
 from __future__ import annotations
 
@@ -18,13 +22,21 @@ import socket
 import struct
 import sys
 import time
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 #: Шире /16 — 65 тысяч адресов на проход; такую сеть описывают частями (как и в описании сетей).
 MAX_IPV4_PREFIX = 16
 #: Для IPv6 тот же потолок по числу адресов: /64 перебором не сканируют.
 MAX_ADDRESSES = 2**16
+#: Открытых сокетов на весь проход (ICMP и TCP вместе).
+MAX_SOCKETS = 512
+#: Новых сокетов (пакетов) в секунду, если у сети не задано другое.
+DEFAULT_RATE_PER_S = 500
+
+PROC_FIB_TRIE = "/proc/net/fib_trie"
+PROC_IF_INET6 = "/proc/net/if_inet6"
 
 #: Python знает IP_RECVTTL не на всех платформах; значения из заголовков ядра.
 IP_RECVTTL = getattr(socket, "IP_RECVTTL", 24 if sys.platform == "darwin" else 12)
@@ -46,6 +58,7 @@ class ScanTarget:
     #: Секунды.
     icmp_timeout: float
     tcp_timeout: float
+    rate_per_s: float = DEFAULT_RATE_PER_S
 
 
 @dataclass(slots=True)
@@ -86,14 +99,23 @@ def _is_ip(text: str) -> bool:
 
 
 def own_addresses() -> list[str]:
-    """Адреса этого хоста (контейнера API): по имени и, в Linux, все локальные из fib_trie."""
+    """Адреса этого хоста (контейнера API): по имени и, в Linux, все локальные IPv4 из fib_trie
+    и IPv6 из if_inet6."""
     found: set[str] = set()
     try:
-        found.update(socket.gethostbyname_ex(socket.gethostname())[2])
+        for *_rest, sockaddr in socket.getaddrinfo(socket.gethostname(), None):
+            found.add(str(sockaddr[0]).partition("%")[0])
     except OSError:
         pass
     try:
-        with open("/proc/net/fib_trie", encoding="ascii") as f:
+        with open(PROC_IF_INET6, encoding="ascii") as f:
+            for line in f:
+                if line.strip():
+                    found.add(str(ipaddress.IPv6Address(int(line.split()[0], 16))))
+    except (OSError, ValueError):
+        pass
+    try:
+        with open(PROC_FIB_TRIE, encoding="ascii") as f:
             last = ""
             for line in f:
                 text = line.strip()
@@ -162,7 +184,14 @@ async def _readable(loop: asyncio.AbstractEventLoop, sock: socket.socket, timeou
 
 
 async def icmp_echo(ip: str, timeout: float) -> tuple[bool, int | None, float | None]:
-    """Один echo: (ответил, TTL ответа или None, RTT мс)."""
+    """Один echo: (ответил, TTL ответа или None, RTT мс). Ошибка сокета — не ответил."""
+    try:
+        return await _icmp_echo(ip, timeout)
+    except OSError:
+        return False, None, None
+
+
+async def _icmp_echo(ip: str, timeout: float) -> tuple[bool, int | None, float | None]:
     loop = asyncio.get_running_loop()
     payload = b"stools" + os.urandom(8)
     with _icmp_socket() as sock:
@@ -194,15 +223,15 @@ async def icmp_echo(ip: str, timeout: float) -> tuple[bool, int | None, float | 
 
 
 async def tcp_open(ip: str, port: int, timeout: float) -> bool:
-    """Рукопожатие и сразу закрытие; данных не отправляется."""
+    """Рукопожатие и сразу закрытие; данных не отправляется. Ошибка сокета — порт закрыт."""
     loop = asyncio.get_running_loop()
     family = socket.AF_INET6 if ":" in ip else socket.AF_INET
-    with socket.socket(family, socket.SOCK_STREAM) as sock:
-        sock.setblocking(False)
-        try:
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.setblocking(False)
             await asyncio.wait_for(loop.sock_connect(sock, (ip, port)), timeout)
-        except (OSError, TimeoutError):
-            return False
+    except (OSError, TimeoutError):
+        return False
     return True
 
 
@@ -227,20 +256,64 @@ def os_hint(ttl: int | None) -> str:
     return "сетевое устройство"
 
 
+# ---- Сокеты и темп ---------------------------------------------------------
+
+
+class Budget:
+    """На весь проход: не больше `sockets` открытых сокетов и не чаще `rate_per_s` новых в секунду."""
+
+    def __init__(self, sockets: int, rate_per_s: float) -> None:
+        self._slots = asyncio.Semaphore(sockets)
+        self._gap = 1.0 / rate_per_s
+        self._next = 0.0
+
+    @asynccontextmanager
+    async def socket(self) -> AsyncIterator[None]:
+        async with self._slots:
+            now = time.monotonic()
+            at = max(now, self._next)
+            self._next = at + self._gap
+            if at > now:
+                await asyncio.sleep(at - now)
+            yield
+
+
+def raise_open_files_limit() -> None:
+    """Мягкий предел открытых файлов — до жёсткого: MAX_SOCKETS сокетов сверх того, что держит API.
+    Не вышло (не Linux, жёсткий предел бесконечен) — остаётся как есть."""
+    try:
+        import resource
+
+        _soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+    except (ImportError, OSError, ValueError):
+        pass
+
+
 # ---- Хост и сеть ----------------------------------------------------------
 
 
-async def probe(ip: str, target: ScanTarget, *, resolver: Resolver, use_icmp: bool | None = None) -> HostResult | None:
+async def probe(
+    ip: str, target: ScanTarget, *, resolver: Resolver, use_icmp: bool | None = None, budget: Budget | None = None,
+) -> HostResult | None:
     """ICMP, затем TCP по всем портам; жив, если ответил на ICMP или открыт хоть один порт.
-    None — не ответил. `use_icmp=None` — проверить доступность сокета здесь же."""
+    None — не ответил. `use_icmp=None` — проверить доступность сокета здесь же; `budget` —
+    общий на проход (без него — свой у пробы)."""
     icmp: bool | None = None
     ttl: int | None = None
     rtt: float | None = None
+    slots = budget or Budget(MAX_SOCKETS, target.rate_per_s)
     if use_icmp is None:
         use_icmp = icmp_available()
     if use_icmp and ":" not in ip:
-        icmp, ttl, rtt = await icmp_echo(ip, target.icmp_timeout)
-    opened = await asyncio.gather(*(tcp_open(ip, port, target.tcp_timeout) for port in target.ports))
+        async with slots.socket():
+            icmp, ttl, rtt = await icmp_echo(ip, target.icmp_timeout)
+
+    async def port_open(port: int) -> bool:
+        async with slots.socket():
+            return await tcp_open(ip, port, target.tcp_timeout)
+
+    opened = await asyncio.gather(*(port_open(port) for port in target.ports))
     ports = sorted(port for port, ok in zip(target.ports, opened, strict=True) if ok)
     if not icmp and not ports:
         return None
@@ -256,13 +329,15 @@ async def scan(
     own_ips: Iterable[str] | None = None,
     use_icmp: bool | None = None,
 ) -> list[HostResult]:
-    """Проход по адресам цели: `concurrency` проб одновременно, каждый адрес один раз.
+    """Проход по адресам цели: `concurrency` проб одновременно (сокеты и темп — `Budget`), каждый адрес один раз.
     `on_progress(сделано, всего)` после каждого адреса; `cancelled()` проверяется перед
     каждым следующим адресом — тогда ScanCancelled. Живые — по возрастанию адреса."""
     ips = addresses(target, own_addresses() if own_ips is None else own_ips)
     if use_icmp is None:
         use_icmp = icmp_available()
     resolve = resolver or system_ptr
+    raise_open_files_limit()
+    budget = Budget(MAX_SOCKETS, target.rate_per_s)
     pending = iter(ips)
     found: list[HostResult] = []
     done = 0
@@ -277,7 +352,7 @@ async def scan(
             ip = next(pending, None)
             if ip is None:
                 return
-            result = await probe(ip, target, resolver=resolve, use_icmp=use_icmp)
+            result = await probe(ip, target, resolver=resolve, use_icmp=use_icmp, budget=budget)
             if result is not None:
                 found.append(result)
             done += 1

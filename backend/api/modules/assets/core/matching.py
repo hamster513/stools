@@ -207,6 +207,25 @@ def match(
     return None, 0
 
 
+def keyed_by_address(o: Observed) -> bool:
+    """Ключ наблюдения — адрес (скан, обратная запись DNS): DHCP отдаёт адрес другому хосту, а ключ тот же."""
+    return o.source == "scan" or (o.source == "dns" and o.extra.get("record_type") == "PTR")
+
+
+def address_reused(obs: Observed, held: Candidate) -> bool:
+    """Наблюдение с ключом-адресом пришло с именем, которого актив `held` (нашёлся по правилу 1)
+    не знает: адрес достался другому хосту, старый актив не переименовывается. Имена актива —
+    каноническое имя и FQDN и живые наблюдения с другими ключами. Без имени — тот же хост."""
+    mine = _obs_keys(obs).shorts
+    if not mine:
+        return False
+    known = _keys(held.name, held.fqdn, "", "").shorts
+    for o in held.observations:
+        if o.gone_at is None and (o.source, o.source_key) != (obs.source, obs.source_key):
+            known |= _obs_keys(o).shorts
+    return bool(known) and not mine & known
+
+
 def _seen(o: Observed) -> dt.datetime:
     return o.seen_at or _EPOCH
 

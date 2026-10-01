@@ -24,6 +24,7 @@ from api.modules.assets.services.networks import (
     all_network_stats,
     create_network,
     delete_network,
+    estimated_seconds,
     get_network,
     network_stats,
     normalize_cidr,
@@ -67,6 +68,7 @@ class NetworkIn(BaseModel):
     concurrency: int = Field(default=64, ge=1, le=256)
     icmp_timeout_ms: int = Field(default=1000, ge=50, le=10000)
     tcp_timeout_ms: int = Field(default=2000, ge=50, le=30000)
+    rate_per_s: int = Field(default=500, ge=10, le=5000)
 
     @field_validator("cidr")
     @classmethod
@@ -109,6 +111,7 @@ class NetworkUpdate(NetworkIn):
     concurrency: int | None = Field(default=None, ge=1, le=256)  # type: ignore[assignment]
     icmp_timeout_ms: int | None = Field(default=None, ge=50, le=10000)  # type: ignore[assignment]
     tcp_timeout_ms: int | None = Field(default=None, ge=50, le=30000)  # type: ignore[assignment]
+    rate_per_s: int | None = Field(default=None, ge=10, le=5000)  # type: ignore[assignment]
 
     def changes(self) -> dict[str, Any]:
         data = self.model_dump(include=self.model_fields_set)
@@ -142,6 +145,9 @@ class NetworkView(BaseModel):
     concurrency: int
     icmp_timeout_ms: int
     tcp_timeout_ms: int
+    rate_per_s: int
+    #: Секунд на скан, если никто не ответит; None — сеть сканеру не по силам.
+    estimated_seconds: int | None
     schedule_id: int | None
     last_scan_at: dt.datetime | None
     last_scan_alive: int | None
@@ -163,7 +169,8 @@ def _view(n: Network, stats: dict[str, Any], schedules: dict[int, PlatformSchedu
     return NetworkView(
         id=n.id, cidr=n.cidr, title=n.title, description=n.description, zone=n.zone, site=n.site, owner=n.owner, vlan=n.vlan,
         tags=list(n.tags or []), scan_enabled=n.scan_enabled, ports=list(n.ports or []), exclude=list(n.exclude or []),
-        concurrency=n.concurrency, icmp_timeout_ms=n.icmp_timeout_ms, tcp_timeout_ms=n.tcp_timeout_ms, schedule_id=n.schedule_id,
+        concurrency=n.concurrency, icmp_timeout_ms=n.icmp_timeout_ms, tcp_timeout_ms=n.tcp_timeout_ms,
+        rate_per_s=n.rate_per_s, estimated_seconds=estimated_seconds(n), schedule_id=n.schedule_id,
         last_scan_at=n.last_scan_at, last_scan_alive=n.last_scan_alive, created_at=n.created_at, updated_at=n.updated_at,
         stats=NetworkStats(**stats), schedule=schedule_view(sched) if sched is not None else None,
     )

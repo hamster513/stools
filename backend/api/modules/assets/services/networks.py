@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
+from api.modules.assets.core import scanner
 from api.modules.assets.models import Asset, AssetObservation, AssetZone, Network
 from api.platform.scheduler import PlatformSchedule, delete_schedule
 
@@ -21,6 +22,9 @@ NetworkList = list[tuple[int, ipaddress.IPv4Network | ipaddress.IPv6Network]]
 #: Шире /16 — 65 тысяч адресов на проход сканера; такую сеть описывают частями.
 MAX_IPV4_PREFIX = 16
 TOO_WIDE = "сеть шире /16 не принимается — разбейте на несколько"
+#: Параллельность × порты — столько соединений проход открыл бы разом; больше не принимается.
+MAX_PARALLEL_SOCKETS = 2048
+SCAN_FIELDS = ("cidr", "scan_enabled", "ports", "concurrency")
 
 
 class NetworkNotFound(LookupError):
@@ -49,6 +53,40 @@ def normalize_exclude(value: str) -> str:
         return str(ipaddress.ip_network(text, strict=False)) if "/" in text else str(ipaddress.ip_address(text))
     except ValueError:
         raise ValueError(f"исключение «{value}» — не адрес и не сеть CIDR") from None
+
+
+def check_scan_settings(cidr: str, scan_enabled: bool, ports: list[int], concurrency: int) -> None:
+    """Итоговые настройки сети (после правки): ValueError с русским текстом, если скан был бы
+    слишком тяжёлым — параллельность × порты больше 2048 или IPv6-сеть больше 2^16 адресов."""
+    if concurrency * len(ports) > MAX_PARALLEL_SOCKETS:
+        raise ValueError(
+            f"параллельность × число портов = {concurrency * len(ports)}, больше {MAX_PARALLEL_SOCKETS} — "
+            "уменьшите параллельность или число портов"
+        )
+    net = ipaddress.ip_network(cidr, strict=False)
+    if scan_enabled and net.version == 6 and net.num_addresses > scanner.MAX_ADDRESSES:
+        raise ValueError(f"IPv6-сеть больше {scanner.MAX_ADDRESSES} адресов не сканируется — опишите её частями (/112 и уже)")
+
+
+def estimated_seconds(network: Network) -> int | None:
+    """Сколько секунд займёт скан, если никто не ответит: каждый адрес ждёт оба таймаута,
+    `concurrency` адресов разом, но не быстрее темпа (echo и SYN на каждый порт). None —
+    сеть сканеру не по силам (широкая IPv6)."""
+    try:
+        count = len(scanner.addresses(scan_target(network), []))
+    except ValueError:
+        return None
+    by_timeouts = count * (network.icmp_timeout_ms + network.tcp_timeout_ms) / 1000 / max(1, network.concurrency)
+    by_rate = count * (1 + len(network.ports or [])) / max(1, network.rate_per_s)
+    return round(max(by_timeouts, by_rate))
+
+
+def scan_target(network: Network) -> scanner.ScanTarget:
+    return scanner.ScanTarget(
+        cidr=network.cidr, exclude=list(network.exclude or []), ports=list(network.ports or []),
+        concurrency=network.concurrency, icmp_timeout=network.icmp_timeout_ms / 1000,
+        tcp_timeout=network.tcp_timeout_ms / 1000, rate_per_s=network.rate_per_s,
+    )
 
 
 # ---- Привязка активов -----------------------------------------------------
@@ -119,6 +157,7 @@ def create_network(db: Session, data: dict[str, Any]) -> Network:
     """`data` — проверенные поля `NetworkIn`; CIDR уже нормализован схемой."""
     _check_unique(db, data["cidr"])
     _check_zone(db, data.get("zone"))
+    check_scan_settings(data["cidr"], data["scan_enabled"], data["ports"], data["concurrency"])
     network = Network(**data)
     db.add(network)
     db.flush()
@@ -134,6 +173,7 @@ def update_network(db: Session, network: Network, data: dict[str, Any]) -> Netwo
         _check_unique(db, data["cidr"], network.id)
     if "zone" in data:
         _check_zone(db, data["zone"])
+    check_scan_settings(*(data[f] if f in data else getattr(network, f) for f in SCAN_FIELDS))
     cidr_changed = "cidr" in data and data["cidr"] != network.cidr
     for name, value in data.items():
         setattr(network, name, value)

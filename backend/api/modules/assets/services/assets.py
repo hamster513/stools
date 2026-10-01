@@ -18,8 +18,10 @@ from api.modules.assets.core.matching import (
     FIELDS,
     Candidate,
     Observed,
+    address_reused,
     candidate_tokens,
     canonical,
+    keyed_by_address,
     match,
     normalize_fqdn,
     normalize_ip,
@@ -205,18 +207,22 @@ def apply_observation(
     networks: NetworkList | None = None,
 ) -> tuple[Asset, int]:
     """match + upsert наблюдения + пересчёт актива; (актив, правило; 0 — новый актив).
-    `index`, `rows`, `networks` — заготовки синхронизации; без них всё читается из базы."""
+    `index`, `rows`, `networks` — заготовки синхронизации; без них всё читается из базы.
+    Адрес, перешедший к другому хосту (скан или PTR с незнакомым активу именем), не переименовывает
+    старый актив: его наблюдение уходит в историю, а новое сопоставляется заново по правилам 2–5."""
     idx = index if index is not None else MatchIndex.for_observation(db, obs)
-    asset_id, rule = match(obs, idx.candidates_for(obs), idx.domain_map)
+    candidates = idx.candidates_for(obs)
+    asset_id, rule = match(obs, candidates, idx.domain_map)
+    if asset_id is not None and rule == 1 and keyed_by_address(obs) and address_reused(obs, next(c for c in candidates if c.asset_id == asset_id)):
+        _release_address(db, obs, asset_id, idx, rows, networks)
+        asset_id, rule = match(obs, idx.candidates_for(obs), idx.domain_map)
     asset = db.get(Asset, asset_id) if asset_id is not None else None
     if asset is None:
         asset = Asset()
         db.add(asset)
         db.flush()
     key = (obs.source, obs.source_key)
-    row = rows.get(key) if rows is not None else db.execute(
-        select(AssetObservation).where(AssetObservation.source == obs.source, AssetObservation.source_key == obs.source_key)
-    ).scalar_one_or_none()
+    row = _row(db, key, rows)
     if row is None:
         row = AssetObservation(source=obs.source, source_key=obs.source_key)
         db.add(row)
@@ -232,6 +238,36 @@ def apply_observation(
     recompute(db, asset, networks)
     idx.put(asset, [observed(r, extra={}) for r in _observations(db, asset.id)])
     return asset, rule
+
+
+def _row(db: Session, key: tuple[str, str], rows: dict[tuple[str, str], AssetObservation] | None) -> AssetObservation | None:
+    if rows is not None:
+        return rows.get(key)
+    return db.execute(
+        select(AssetObservation).where(AssetObservation.source == key[0], AssetObservation.source_key == key[1])
+    ).scalar_one_or_none()
+
+
+def _release_address(
+    db: Session, obs: Observed, asset_id: int, idx: MatchIndex,
+    rows: dict[tuple[str, str], AssetObservation] | None, networks: NetworkList | None,
+) -> None:
+    """Наблюдение старого хоста по этому адресу — в историю: ключ `<адрес>#<id строки>` (ключ
+    уникален, а адрес теперь у другого), gone_at; правило 1 его больше не находит."""
+    key = (obs.source, obs.source_key)
+    row = _row(db, key, rows)
+    if row is None:
+        return
+    row.source_key = f"{row.source_key}#{row.id}"
+    row.gone_at = obs.seen_at or utcnow()
+    if rows is not None:
+        del rows[key]
+        rows[(row.source, row.source_key)] = row
+    db.flush()
+    old = db.get(Asset, asset_id)
+    if old is not None:
+        recompute(db, old, networks)
+        idx.put(old, [observed(r, extra={}) for r in _observations(db, old.id)])
 
 
 def _asset_or_404(db: Session, asset_id: int) -> Asset:

@@ -104,6 +104,38 @@ def test_validation(analyst: TestClient) -> None:
     assert analyst.put(f"/api/assets/networks/{net['id']}", json={"cidr": "10.0.0.0/8"}).status_code == 422
 
 
+def test_scan_load_limits(analyst: TestClient) -> None:
+    """Параллельность × порты не больше 2048 сокетов, темп 10–5000 пакетов в секунду,
+    IPv6 со сканированием — не больше 2^16 адресов."""
+    r = analyst.post("/api/assets/networks", json={"cidr": "10.40.0.0/24", "concurrency": 64, "ports": list(range(1, 34))})
+    assert r.status_code == 422 and "2048" in detail(r)
+    net = add_network(analyst, "10.40.0.0/24", concurrency=64, ports=list(range(1, 33)))
+    assert net["rate_per_s"] == 500
+    # Проверка — по итоговым значениям: по отдельности поля в норме, вместе — нет.
+    r = analyst.put(f"/api/assets/networks/{net['id']}", json={"concurrency": 65})
+    assert r.status_code == 422 and "2048" in detail(r)
+    for rate in (9, 5001):
+        assert analyst.put(f"/api/assets/networks/{net['id']}", json={"rate_per_s": rate}).status_code == 422
+    assert analyst.put(f"/api/assets/networks/{net['id']}", json={"rate_per_s": 100}).json()["rate_per_s"] == 100
+
+    r = analyst.post("/api/assets/networks", json={"cidr": "fd00:20::/64", "scan_enabled": True})
+    assert r.status_code == 422 and "IPv6" in detail(r)
+    v6 = add_network(analyst, "fd00:20::/64")
+    assert analyst.put(f"/api/assets/networks/{v6['id']}", json={"scan_enabled": True}).status_code == 422
+    assert add_network(analyst, "fd00:30::/112", scan_enabled=True)["scan_enabled"] is True
+
+
+def test_estimated_seconds(analyst: TestClient) -> None:
+    net = add_network(analyst, "10.40.0.0/24", concurrency=16, icmp_timeout_ms=1000, tcp_timeout_ms=2000, ports=[22])
+    # 254 адреса × (1 + 2) с / 16 одновременно.
+    assert net["estimated_seconds"] == round(254 * 3 / 16)
+    assert analyst.get("/api/assets/networks").json()[0]["estimated_seconds"] == round(254 * 3 / 16)
+    # Темп ограничивает сильнее: 254 × (1 echo + 7 SYN) / 10 в секунду.
+    slow = add_network(analyst, "10.50.0.0/24", concurrency=256, rate_per_s=10, ports=[1, 2, 3, 4, 5, 6, 7])
+    assert slow["estimated_seconds"] == round(254 * 8 / 10)
+    assert add_network(analyst, "fd00:40::/64")["estimated_seconds"] is None
+
+
 def test_duplicate_cidr(analyst: TestClient) -> None:
     add_network(analyst, "10.10.0.0/24")
     r = analyst.post("/api/assets/networks", json={"cidr": "10.10.0.1/24"})

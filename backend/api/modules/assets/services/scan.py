@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -21,9 +22,12 @@ from api.modules.assets.core import scanner
 from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize_name
 from api.modules.assets.models import Asset, AssetJob, AssetObservation, Network
 from api.modules.assets.services.assets import apply_observation, recompute
-from api.modules.assets.services.networks import load_networks
+from api.modules.assets.services.networks import load_networks, scan_target
+from api.modules.assets.services.sync import sync_lock
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
+
+log = logging.getLogger("stools.assets")
 
 #: Кто запустил скан по расписанию: человека у задачи нет.
 SCHEDULE_STARTED_BY = "расписание"
@@ -67,7 +71,8 @@ def start_scan(db: Session, network: Network, started_by: str) -> int:
 
 
 def schedule_handler(db: Session, schedule: PlatformSchedule) -> int | None:
-    """Обработчик планировщика `assets/scan`: None — идёт другой скан (повтор на следующем тике)."""
+    """Обработчик планировщика `assets/scan`: None — идёт другой скан или у сети выключено
+    сканирование (строка в лог); планировщик попробует на следующем тике."""
     network = db.get(Network, schedule.target_id)
     if network is None:
         raise LookupError(f"сеть {schedule.target_id} расписания {schedule.id} не найдена")
@@ -75,13 +80,9 @@ def schedule_handler(db: Session, schedule: PlatformSchedule) -> int | None:
         return start_scan(db, network, SCHEDULE_STARTED_BY)
     except ScanBusy:
         return None
-
-
-def _target(network: Network) -> scanner.ScanTarget:
-    return scanner.ScanTarget(
-        cidr=network.cidr, exclude=list(network.exclude or []), ports=list(network.ports or []),
-        concurrency=network.concurrency, icmp_timeout=network.icmp_timeout_ms / 1000, tcp_timeout=network.tcp_timeout_ms / 1000,
-    )
+    except ScanDisabled as exc:
+        log.warning("расписание %s пропущено: %s", schedule.id, exc)
+        return None
 
 
 def _observation(host: scanner.HostResult, seen_at: Any) -> Observed:
@@ -97,16 +98,23 @@ def _observation(host: scanner.HostResult, seen_at: Any) -> Observed:
 
 def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
     """scanner.scan → наблюдения scan (apply_observation), gone_at не ответившим адресам цели,
-    network.last_scan_at/last_scan_alive. Без ICMP-сокета — режим «только порты» (extra.icmp = None)."""
+    network.last_scan_at/last_scan_alive. Без ICMP-сокета — режим «только порты» (extra.icmp = None).
+
+    Пока идёт скан, сессия задачи не держит открытую транзакцию. Запись результатов — под той же
+    блокировкой, что синхронизация (обе заводят активы: параллельно завели бы один хост дважды),
+    и по свежей строке сети: правка сети за время скана не теряется, а если сеть удалили —
+    результаты отбрасываются."""
     network = db.get(Network, network_id)
     if network is None:
         raise LookupError("сеть удалена")
-    target = _target(network)
+    target = scan_target(network)
+    cidr = network.cidr
     scanned = set(scanner.addresses(target, scanner.own_addresses()))
     use_icmp = scanner.icmp_available()
     mode = "" if use_icmp else f" · {PORTS_ONLY}"
-    handle.stage("scan", total=len(scanned), message=f"сеть {network.cidr}: адресов {len(scanned)}{mode}")
+    handle.stage("scan", total=len(scanned), message=f"сеть {cidr}: адресов {len(scanned)}{mode}")
     started = utcnow()
+    db.commit()
 
     last = [0.0, 0.0]  # когда писали прогресс и проверяли отмену
 
@@ -114,43 +122,52 @@ def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
         now = time.monotonic()
         if done == total or now - last[0] >= REPORT_EVERY_S:
             last[0] = now
-            handle.report_progress(done, total, f"сеть {network.cidr}: {done} из {total}{mode}")
+            handle.report_progress(done, total, f"сеть {cidr}: {done} из {total}{mode}")
 
     def cancelled() -> bool:
         now = time.monotonic()
         if now - last[1] < REPORT_EVERY_S:
             return False
         last[1] = now
-        return handle.cancelled()
+        try:
+            return handle.cancelled()
+        finally:
+            db.commit()  # чтение флага не оставляет транзакцию открытой до конца скана
 
     try:
         found = asyncio.run(scanner.scan(target, on_progress=on_progress, cancelled=cancelled, use_icmp=use_icmp))
     except scanner.ScanCancelled:
         raise JobCancelled() from None
 
-    alive = set()
-    for host in found:
-        apply_observation(db, _observation(host, started))
-        alive.add(host.ip)
-    previous = db.execute(
-        select(AssetObservation).where(AssetObservation.source == "scan", AssetObservation.gone_at.is_(None))
-    ).scalars().all()
-    touched = set()
-    for row in previous:
-        if row.ip in scanned and row.ip not in alive:
-            row.gone_at = started
-            touched.add(row.asset_id)
-    db.flush()
-    networks = load_networks(db)
-    for asset_id in sorted(touched):
-        asset = db.get(Asset, asset_id)
-        if asset is not None:
-            recompute(db, asset, networks)
-    network.last_scan_at = started
-    network.last_scan_alive = len(found)
-    db.commit()
+    with sync_lock(db, wait=True):
+        current = db.get(Network, network_id, with_for_update=True, populate_existing=True)
+        if current is None:
+            db.rollback()
+            handle.stage("done", message=f"сеть {cidr} удалена во время скана — результаты не записаны")
+            return
+        alive = set()
+        for host in found:
+            apply_observation(db, _observation(host, started))
+            alive.add(host.ip)
+        previous = db.execute(
+            select(AssetObservation).where(AssetObservation.source == "scan", AssetObservation.gone_at.is_(None))
+        ).scalars().all()
+        touched = set()
+        for row in previous:
+            if row.ip in scanned and row.ip not in alive:
+                row.gone_at = started
+                touched.add(row.asset_id)
+        db.flush()
+        networks = load_networks(db)
+        for asset_id in sorted(touched):
+            asset = db.get(Asset, asset_id)
+            if asset is not None:
+                recompute(db, asset, networks)
+        current.last_scan_at = started
+        current.last_scan_alive = len(found)
+        db.commit()
     gone = f" · пропало {len(touched)}" if touched else ""
-    handle.stage("done", message=f"сеть {network.cidr}: живых {len(found)} из {len(scanned)}{gone}{mode}")
+    handle.stage("done", message=f"сеть {cidr}: живых {len(found)} из {len(scanned)}{gone}{mode}")
 
 
 # ---- Что скан знает об адресе ----------------------------------------------

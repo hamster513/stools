@@ -81,6 +81,11 @@ def get_schedule(network_id: int, db: Session = Depends(get_db), _user: AppUser 
 @router.put("/{network_id}/schedule", response_model=ScheduleView)
 def put_schedule(network_id: int, payload: ScheduleIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ScheduleView:
     network = _network(db, network_id)
+    if not network.scan_enabled:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"сканирование сети {network.cidr} выключено — включите его в форме сети, потом задайте расписание",
+        )
     try:
         sched = upsert_schedule(
             db, module="assets", kind="scan", target_id=network.id, interval_hours=payload.interval_hours,

@@ -55,6 +55,8 @@ class Network(Base):
     concurrency: Mapped[int] = mapped_column(Integer, default=64)
     icmp_timeout_ms: Mapped[int] = mapped_column(Integer, default=1000)
     tcp_timeout_ms: Mapped[int] = mapped_column(Integer, default=2000)
+    #: Новых сокетов (ICMP echo или SYN) в секунду на весь скан сети.
+    rate_per_s: Mapped[int] = mapped_column(Integer, default=500, server_default="500")
     schedule_id: Mapped[int | None] = mapped_column(
         ForeignKey("platform_schedule.id", ondelete="SET NULL"), nullable=True,
     )

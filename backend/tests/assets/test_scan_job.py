@@ -3,22 +3,34 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from api.db.base import get_sessionmaker
 from api.jobs import start_job
 from api.modules.assets.core import scanner
 from api.modules.assets.core.matching import Observed
 from api.modules.assets.core.scanner import HostResult, ScanTarget
-from api.modules.assets.models import DEFAULT_ZONES, AssetJob, AssetObservation, AssetZone, Network
+from api.modules.assets.models import (
+    DEFAULT_ZONES,
+    Asset,
+    AssetJob,
+    AssetObservation,
+    AssetZone,
+    Network,
+)
 from api.modules.assets.services import scan as scan_service
 from api.modules.assets.services.assets import apply_observation
 from api.modules.assets.services.scan import ScanBusy, schedule_handler, start_scan
+from api.modules.assets.services.sync import SYNC_LOCK_KEY
 from api.platform.scheduler import PlatformSchedule, tick
 
 NOW = dt.datetime.now(dt.UTC)
@@ -31,14 +43,19 @@ def inline_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class FakeScan:
-    """Подмена `scanner.scan`: отдаёт заданных живых, запоминает цель."""
+    """Подмена `scanner.scan`: отдаёт заданных живых, запоминает цель; `during` — что сделать
+    посреди скана (правка сети другим запросом, проверка соединений)."""
 
     def __init__(self) -> None:
         self.alive: list[HostResult] = []
         self.targets: list[ScanTarget] = []
+        self.during: Callable[[], None] | None = None
 
-    async def __call__(self, target: ScanTarget, **_kw: Any) -> list[HostResult]:
+    async def __call__(self, target: ScanTarget, **kw: Any) -> list[HostResult]:
         self.targets.append(target)
+        kw["cancelled"]()
+        if self.during is not None:
+            self.during()
         return list(self.alive)
 
 
@@ -187,6 +204,147 @@ def test_api_scan_starts_job(analyst: TestClient, db_session: Session, network: 
     assert body["icmp"] is True
     job = analyst.get(f"/api/assets/jobs/{body['job_id']}").json()
     assert job["kind"] == "scan" and job["status"] == "done" and job["started_by"] == "user-analyst"
+
+
+def scan_rows(db: Session) -> dict[str, AssetObservation]:
+    db.expire_all()
+    return {r.source_key: r for r in db.execute(select(AssetObservation).where(AssetObservation.source == "scan")).scalars()}
+
+
+def test_address_taken_by_another_host_does_not_rename_old_asset(
+    analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan,
+) -> None:
+    """DHCP: адрес достался другому хосту. Старый актив держит имя, его наблюдение скана пропало;
+    новый хост — новый актив с наблюдением скана по этому адресу."""
+    srv = add(db_session, "ksc", "srv01", "10.10.0.5")
+    fake_scan.alive = [host("10.10.0.5", ptr="srv01.corp.local")]
+    start_scan(db_session, network, "tester")
+    assert scan_rows(db_session)["10.10.0.5"].asset_id == srv
+
+    fake_scan.alive = [host("10.10.0.5", ptr="ws09.corp.local")]
+    start_scan(db_session, network, "tester")
+    rows = scan_rows(db_session)
+    live = rows["10.10.0.5"]
+    assert live.gone_at is None and live.name == "ws09" and live.asset_id != srv
+    old = [r for r in rows.values() if r.asset_id == srv]
+    assert len(old) == 1 and old[0].gone_at is not None and old[0].name == "srv01"
+    srv_asset, ws_asset = db_session.get(Asset, srv), db_session.get(Asset, live.asset_id)
+    assert srv_asset is not None and srv_asset.name == "srv01"
+    assert ws_asset is not None and ws_asset.name == "ws09" and ws_asset.ip == "10.10.0.5"
+
+    # Следующий скан с тем же ws09 — правило 1, без новых активов.
+    start_scan(db_session, network, "tester")
+    assert scan_rows(db_session)["10.10.0.5"].asset_id == ws_asset.id
+    assert len(db_session.execute(select(Asset)).scalars().all()) == 2
+
+
+def test_scan_without_ptr_keeps_address_on_asset(analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan) -> None:
+    fake_scan.alive = [host("10.10.0.5", ptr="srv01.corp.local")]
+    start_scan(db_session, network, "tester")
+    first = scan_rows(db_session)["10.10.0.5"].asset_id
+    fake_scan.alive = [host("10.10.0.5")]
+    start_scan(db_session, network, "tester")
+    rows = scan_rows(db_session)
+    assert list(rows) == ["10.10.0.5"] and rows["10.10.0.5"].asset_id == first and rows["10.10.0.5"].gone_at is None
+
+
+def test_scan_waits_for_sync_lock(analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan) -> None:
+    """Пока синхронизация держит блокировку и ещё не зафиксировала новый актив, скан не пишет:
+    иначе не увидел бы его и завёл второй актив на тот же хост."""
+    fake_scan.alive = [host("10.10.0.5", ptr="srv05.corp.local")]
+    locked = threading.Event()
+
+    def sync_like() -> None:
+        with get_sessionmaker()() as s:
+            s.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SYNC_LOCK_KEY})
+            apply_observation(s, Observed(source="ksc", source_key="ksc-srv05", name="srv05", ip="10.10.0.5", seen_at=NOW))
+            locked.set()
+            time.sleep(1.0)
+            s.commit()
+
+    holder = threading.Thread(target=sync_like)
+    holder.start()
+    assert locked.wait(5)
+    started = time.monotonic()
+    start_scan(db_session, network, "tester")
+    waited = time.monotonic() - started
+    holder.join()
+    assert last_job(db_session).status == "done"
+    assert waited >= 0.5
+    assets = db_session.execute(select(Asset)).scalars().all()
+    assert len(assets) == 1
+    assert {r.source for r in db_session.execute(select(AssetObservation)).scalars()} == {"ksc", "scan"}
+
+
+def test_no_open_transaction_during_scan(analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan) -> None:
+    """Скан идёт минутами: сессия задачи не держит открытую транзакцию (снапшот, блокировки)."""
+    db_session.commit()
+    idle: list[int] = []
+
+    def check() -> None:
+        with get_sessionmaker()() as s:
+            idle.append(int(s.execute(text(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%'"
+            )).scalar() or 0))
+
+    fake_scan.during = check
+    start_scan(db_session, network, "tester")
+    assert last_job(db_session).status == "done"
+    assert idle == [0]
+
+
+def test_network_edited_during_scan_keeps_results(analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan) -> None:
+    fake_scan.alive = [host("10.10.0.5")]
+    network_id = network.id
+
+    def edit() -> None:
+        with get_sessionmaker()() as s:
+            row = s.get(Network, network_id)
+            assert row is not None
+            row.title = "правка посреди скана"
+            s.commit()
+
+    fake_scan.during = edit
+    start_scan(db_session, network, "tester")
+    assert last_job(db_session).status == "done"
+    db_session.expire_all()
+    row = db_session.get(Network, network_id)
+    assert row is not None and row.title == "правка посреди скана" and row.last_scan_alive == 1
+    assert set(scan_rows(db_session)) == {"10.10.0.5"}
+
+
+def test_network_deleted_during_scan_drops_results(analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan) -> None:
+    fake_scan.alive = [host("10.10.0.5")]
+    network_id = network.id
+    db_session.commit()
+    fake_scan.during = lambda: analyst.delete(f"/api/assets/networks/{network_id}")
+    start_scan(db_session, network, "tester")
+    job = last_job(db_session)
+    assert job.status == "done" and "удалена" in job.message, (job.status, job.error, job.message)
+    assert scan_rows(db_session) == {}
+
+
+def test_schedule_of_disabled_network_is_skipped_quietly(
+    analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan, caplog: pytest.LogCaptureFixture,
+) -> None:
+    url = f"/api/assets/networks/{network.id}"
+    assert analyst.put(url, json={"scan_enabled": False}).status_code == 200
+    r = analyst.put(f"{url}/schedule", json={"interval_hours": 24, "window_from": None, "window_to": None, "enabled": True})
+    assert r.status_code == 422 and "выключено" in r.json()["detail"]
+    sched = PlatformSchedule(module="assets", kind="scan", target_id=network.id, interval_hours=24, enabled=True)
+    db_session.expire_all()
+    with caplog.at_level(logging.WARNING):
+        assert schedule_handler(db_session, sched) is None
+    warned = [rec for rec in caplog.records if "выключено" in rec.getMessage()]
+    assert len(warned) == 1 and warned[0].exc_info is None
+    assert fake_scan.targets == []
+
+
+def test_scan_target_carries_rate(analyst: TestClient, db_session: Session, network: Network, fake_scan: FakeScan) -> None:
+    assert analyst.put(f"/api/assets/networks/{network.id}", json={"rate_per_s": 50}).status_code == 200
+    db_session.expire_all()
+    start_scan(db_session, network, "tester")
+    assert fake_scan.targets[0].rate_per_s == 50
 
 
 def test_schedule_create_read_and_delete(analyst: TestClient, db_session: Session, network: Network) -> None:

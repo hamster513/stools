@@ -220,8 +220,9 @@ def _take_rerun(db: Session) -> bool:
 
 
 @contextmanager
-def _single_flight(db: Session) -> Iterator[bool]:
-    """Синхронизация одна на базу: две параллельные вставили бы одно наблюдение дважды.
+def sync_lock(db: Session, *, wait: bool = False) -> Iterator[bool]:
+    """Синхронизация одна на базу: две параллельные вставили бы одно наблюдение дважды; запись
+    результатов скана берёт ту же блокировку (`wait=True` — ждать, а не отказываться).
     Блокировка транзакционная, на отдельном соединении: задача фиксирует работу после каждого
     источника, а блокировка нужна до конца всех проходов. Процесс умер — соединение закрылось,
     блокировка снята."""
@@ -229,7 +230,11 @@ def _single_flight(db: Session) -> Iterator[bool]:
     engine = bind if isinstance(bind, Engine) else bind.engine
     with engine.connect() as conn:
         try:
-            yield bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": SYNC_LOCK_KEY}).scalar())
+            if wait:
+                conn.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": SYNC_LOCK_KEY})
+                yield True
+            else:
+                yield bool(conn.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": SYNC_LOCK_KEY}).scalar())
         finally:
             conn.rollback()
 
@@ -239,7 +244,7 @@ def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOU
     синхронизации) — ещё проход. None — синхронизацию уже ведёт другая задача: эта просит
     её пройти ещё раз и завершается, ничего не записав. Остаётся окно: просьба, пришедшая между последней проверкой
     и закрытием задачи, исполнится следующей синхронизацией."""
-    with _single_flight(db) as acquired:
+    with sync_lock(db) as acquired:
         if not acquired:
             # Задачу завели не зря (импорт), а идущая могла прочитать источник раньше него.
             _set_rerun(db, True)
