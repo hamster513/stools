@@ -1,6 +1,7 @@
 """Сети: CIDR, зона из справочника, площадка, владелец, настройки сканирования.
 
-Расписание сканов и запуск скана — задача 4; здесь только описание сети и привязка активов.
+Запуск скана и правка расписания — `routers/scan.py`; здесь описание сети, привязка активов
+и расписание в составе сети (для таблицы).
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.assets.models import DEFAULT_PORTS, Network
+from api.modules.assets.routers.scan import ScheduleView, schedule_view
 from api.modules.assets.services.networks import (
     NetworkConflict,
     NetworkNotFound,
@@ -28,6 +30,7 @@ from api.modules.assets.services.networks import (
     normalize_exclude,
     update_network,
 )
+from api.platform.scheduler import PlatformSchedule
 
 router = APIRouter(prefix="/networks", tags=["assets"])
 
@@ -145,16 +148,29 @@ class NetworkView(BaseModel):
     created_at: dt.datetime
     updated_at: dt.datetime
     stats: NetworkStats
+    schedule: ScheduleView | None
 
 
-def _view(n: Network, stats: dict[str, Any]) -> NetworkView:
+def _schedules(db: Session, networks: list[Network]) -> dict[int, PlatformSchedule]:
+    ids = [n.schedule_id for n in networks if n.schedule_id is not None]
+    if not ids:
+        return {}
+    return {s.id: s for s in db.execute(select(PlatformSchedule).where(PlatformSchedule.id.in_(ids))).scalars()}
+
+
+def _view(n: Network, stats: dict[str, Any], schedules: dict[int, PlatformSchedule]) -> NetworkView:
+    sched = schedules.get(n.schedule_id) if n.schedule_id is not None else None
     return NetworkView(
         id=n.id, cidr=n.cidr, title=n.title, description=n.description, zone=n.zone, site=n.site, owner=n.owner, vlan=n.vlan,
         tags=list(n.tags or []), scan_enabled=n.scan_enabled, ports=list(n.ports or []), exclude=list(n.exclude or []),
         concurrency=n.concurrency, icmp_timeout_ms=n.icmp_timeout_ms, tcp_timeout_ms=n.tcp_timeout_ms, schedule_id=n.schedule_id,
         last_scan_at=n.last_scan_at, last_scan_alive=n.last_scan_alive, created_at=n.created_at, updated_at=n.updated_at,
-        stats=NetworkStats(**stats),
+        stats=NetworkStats(**stats), schedule=schedule_view(sched) if sched is not None else None,
     )
+
+
+def _one(db: Session, n: Network) -> NetworkView:
+    return _view(n, network_stats(db, n), _schedules(db, [n]))
 
 
 def _errors(fn: Any, *args: Any) -> Any:
@@ -172,20 +188,21 @@ def _errors(fn: Any, *args: Any) -> Any:
 def list_networks(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[NetworkView]:
     networks = list(db.execute(select(Network).order_by(Network.cidr)).scalars())
     stats = all_network_stats(db, networks)
-    return [_view(n, stats[n.id]) for n in networks]
+    schedules = _schedules(db, networks)
+    return [_view(n, stats[n.id], schedules) for n in networks]
 
 
 @router.post("", response_model=NetworkView, status_code=status.HTTP_201_CREATED)
 def post_network(payload: NetworkIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> NetworkView:
     network = _errors(create_network, db, payload.model_dump())
     db.commit()
-    return _view(network, network_stats(db, network))
+    return _one(db, network)
 
 
 @router.get("/{network_id}", response_model=NetworkView)
 def get_one(network_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> NetworkView:
     network = _errors(get_network, db, network_id)
-    return _view(network, network_stats(db, network))
+    return _one(db, network)
 
 
 @router.put("/{network_id}", response_model=NetworkView)
@@ -193,7 +210,7 @@ def put_network(network_id: int, payload: NetworkUpdate, db: Session = Depends(g
     network = _errors(get_network, db, network_id)
     _errors(update_network, db, network, _errors(payload.changes))
     db.commit()
-    return _view(network, network_stats(db, network))
+    return _one(db, network)
 
 
 @router.delete("/{network_id}", status_code=status.HTTP_204_NO_CONTENT)

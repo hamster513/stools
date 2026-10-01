@@ -54,6 +54,10 @@ services:
       # Файл сертификатов сервера: Debian/Ubuntu — умолчание ниже,
       # RHEL/CentOS/Astra — /etc/pki/tls/certs/ca-bundle.crt (STOOLS_CA_BUNDLE).
       - ${STOOLS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/stools/ca-bundle.crt:ro
+    # Сканер Assets пингует непривилегированным ICMP-сокетом: группа процесса API должна
+    # входить в этот диапазон. Без него скан идёт в режиме «только порты».
+    sysctls:
+      - net.ipv4.ping_group_range=0 2147483647
     depends_on:
       db:
         condition: service_healthy

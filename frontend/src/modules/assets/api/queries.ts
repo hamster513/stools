@@ -2,7 +2,9 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
-import type { AssetDetail, AssetPatch, AssetsQuery, AssetsResponse, Job, Network, NetworkIn, PinnableField, Zone, ZoneIn } from './types'
+import type {
+  AssetDetail, AssetPatch, AssetsQuery, AssetsResponse, Job, Network, NetworkIn, NetworkSchedule, PinnableField, ScanStarted, ScheduleIn, Zone, ZoneIn,
+} from './types'
 
 export const ASSETS_PAGE_SIZE = 200
 
@@ -111,6 +113,23 @@ export function useSaveNetwork() {
 
 export function useDeleteNetwork() {
   return useNetworkMutation<number, void>((id) => api.del(`/api/assets/networks/${id}`))
+}
+
+/** Скан сети сейчас; за задачей следит страница через `useJob`. */
+export function useStartScan() {
+  const qc = useQueryClient()
+  return useMutation<ScanStarted, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/assets/networks/${id}/scan`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-jobs'] }),
+  })
+}
+
+export function useSaveSchedule(networkId: number) {
+  return useNetworkMutation<ScheduleIn, NetworkSchedule>((body) => api.put(`/api/assets/networks/${networkId}/schedule`, body))
+}
+
+export function useDeleteSchedule(networkId: number) {
+  return useNetworkMutation<void, void>(() => api.del(`/api/assets/networks/${networkId}/schedule`))
 }
 
 export function useZones() {

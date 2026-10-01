@@ -51,9 +51,11 @@ def load_settings(db: Session) -> dict[str, Any]:
 
 
 def scan_probes(db: Session) -> ScanProbes:
-    """Чем расхождения узнают о скане. Сканера пока нет (задача 4): ни одна сеть не сканируется,
-    поэтому «не отвечает» и «запись DNS без хоста» не срабатывают."""
-    return (lambda _ip: False), (lambda _ip: None)
+    """Чем расхождения узнают о скане: сканируется ли сеть адреса и ответил ли он последнему скану."""
+    # Импорт здесь: services.scan сам импортирует этот модуль.
+    from api.modules.assets.services.scan import scan_probes as probes
+
+    return probes(db)
 
 
 def observed(row: AssetObservation, extra: dict[str, Any] | None = None) -> Observed:

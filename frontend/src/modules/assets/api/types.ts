@@ -184,9 +184,36 @@ export interface NetworkIn {
   tcp_timeout_ms: number
 }
 
+/** Расписание сканов сети; окно — местное время пояса STOOLS_TZ (`tz`). */
+export interface NetworkSchedule {
+  id: number
+  interval_hours: number
+  window_from: string | null
+  window_to: string | null
+  enabled: boolean
+  next_run_at: string | null
+  last_run_at: string | null
+  last_job_id: number | null
+  tz: string
+}
+
+export interface ScheduleIn {
+  interval_hours: number
+  window_from: string | null
+  window_to: string | null
+  enabled: boolean
+}
+
+export interface ScanStarted {
+  job_id: number
+  /** false — ICMP-сокет не открывается, скан идёт в режиме «только порты». */
+  icmp: boolean
+}
+
 export interface Network extends NetworkIn {
   id: number
   schedule_id: number | null
+  schedule: NetworkSchedule | null
   last_scan_at: string | null
   last_scan_alive: number | null
   created_at: string
