@@ -14,6 +14,7 @@ import { SiemModule } from '@/modules/siem/SiemModule'
 import { VmModule } from '@/modules/vm/VmModule'
 import { AdModule } from '@/modules/ad/AdModule'
 import { KscModule } from '@/modules/ksc/KscModule'
+import { AssetsModule } from '@/modules/assets/AssetsModule'
 
 /**
  * Адреса до появления модулей: /snapshots/…, /upload. На них ведут
@@ -68,6 +69,7 @@ function Root() {
   if (module.id === 'vm') return <VmModule />
   if (module.id === 'ad') return <AdModule />
   if (module.id === 'ksc') return <KscModule />
+  if (module.id === 'assets') return <AssetsModule />
 
   return (
     <AppShell>

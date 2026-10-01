@@ -1,4 +1,4 @@
-import { Bug, Grid3x3, Network, Radar, ShieldAlert, Users, type LucideIcon } from 'lucide-react'
+import { Bug, Grid3x3, Network, Radar, Server, ShieldAlert, Users, type LucideIcon } from 'lucide-react'
 
 export type ModuleStatus = 'available' | 'planned'
 
@@ -62,6 +62,15 @@ export const MODULES: readonly ModuleSpec[] = [
     description:
       'Kaspersky Security Center: покрытие относительно AD, устройства без агента и защиты, состояние компонентов, базы, политики и задачи.',
     icon: Bug,
+    status: 'available',
+  },
+  {
+    id: 'assets',
+    code: 'AST',
+    title: 'Assets',
+    description:
+      'Реестр активов из VM, антивируса, AD, сканера сети и DNS: где актив засветился, какие данные устарели, кого никто не описал.',
+    icon: Server,
     status: 'available',
   },
   {

@@ -48,9 +48,13 @@ from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
 from api.origin import OriginMiddleware
 from api.platform import router as settings_router
+from api.platform.scheduler import Scheduler
 from api.rbac import require_access
 from api.routers import auth, oidc
 from api.settings import get_settings
+
+#: Планировщик платформы (api/platform/scheduler.py): один на процесс, живёт между стартом и остановкой.
+scheduler = Scheduler()
 
 
 @asynccontextmanager
@@ -59,7 +63,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Потоки задач умерли вместе с прежним процессом: их «идущие» задачи никто не ведёт.
     with get_sessionmaker()() as db:
         fail_interrupted_jobs(db)
-    yield
+    # После уборки: расписание не должно упереться в «идущую» задачу, которую никто не ведёт.
+    scheduler.start(get_sessionmaker())
+    try:
+        yield
+    finally:
+        scheduler.stop()
 
 
 def create_app() -> FastAPI:
