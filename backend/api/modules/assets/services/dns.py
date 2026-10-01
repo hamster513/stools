@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import functools
 import ipaddress
+import logging
+import math
 import threading
 import time
 from collections import defaultdict
@@ -40,6 +43,8 @@ from api.modules.assets.services.networks import load_networks
 from api.modules.assets.services.sync import sync_lock
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
+
+log = logging.getLogger("stools.assets")
 
 SCHEDULE_STARTED_BY = "расписание"
 #: Прогресс и проверка отмены пишут в базу — не чаще раза в столько секунд.
@@ -93,7 +98,8 @@ def start_dns(db: Session, row: AssetDns, started_by: str) -> int:
 
 
 def schedule_handler(db: Session, schedule: PlatformSchedule) -> int | None:
-    """Обработчик планировщика `assets/dns`: None — идёт другая задача DNS (повтор на следующем тике)."""
+    """Обработчик планировщика `assets/dns`: None — идёт другая задача DNS или сервер выключен
+    (строка в лог); планировщик попробует на следующем тике."""
     row = db.get(AssetDns, schedule.target_id)
     if row is None:
         raise LookupError(f"DNS-сервер {schedule.target_id} расписания {schedule.id} не найден")
@@ -101,6 +107,15 @@ def schedule_handler(db: Session, schedule: PlatformSchedule) -> int | None:
         return start_dns(db, row, SCHEDULE_STARTED_BY)
     except DnsBusy:
         return None
+    except DnsDisabled as exc:
+        log.warning("расписание %s пропущено: %s", schedule.id, exc)
+        return None
+
+
+def estimate(queries: int, rate_per_s: int) -> str:
+    """Оценка длительности запросов по темпу — нижняя граница: таймауты в неё не входят."""
+    minutes = max(1, math.ceil(queries / max(1, rate_per_s) / 60))
+    return f"~{queries} запросов при {rate_per_s}/с ≈ {minutes} мин"
 
 
 @dataclass(slots=True)
@@ -199,11 +214,11 @@ def _extra(record_type: str, ttl: int | None, stamp: dt.datetime | None, server:
     return {"record_type": record_type, "ttl": ttl, "record_timestamp": stamp.isoformat() if stamp else None, "server": server, **more}
 
 
-def _forward(run: _Run, names: list[str], server: str | None, rate: RateLimiter) -> None:
-    run.phase("forward", len(names), f"прямые запросы: имён {len(names)}")
+def _forward(run: _Run, names: list[str], server: str | None, rate: RateLimiter, est: str) -> None:
+    run.phase("forward", len(names), f"прямые запросы: имён {len(names)} · {est}")
+    lookup = functools.partial(dns_core.lookup_a, before=rate.wait)  # A и AAAA — два запроса темпа
     for i, name in enumerate(names, 1):
-        rate.wait()
-        answer = run.ask(dns_core.lookup_a, name, server)
+        answer = run.ask(lookup, name, server)
         run.counts["forward"] += 1
         if answer is not None and answer.values:
             short, domain = normalize_name(name)
@@ -217,11 +232,11 @@ def _forward(run: _Run, names: list[str], server: str | None, rate: RateLimiter)
         run.step(i, len(names), f"прямые запросы: {i} из {len(names)}")
 
 
-def _reverse(run: _Run, ips: list[str], server: str | None, rate: RateLimiter) -> None:
-    run.phase("reverse", len(ips), f"обратные запросы: адресов {len(ips)}")
+def _reverse(run: _Run, ips: list[str], server: str | None, rate: RateLimiter, est: str) -> None:
+    run.phase("reverse", len(ips), f"обратные запросы: адресов {len(ips)} · {est}")
+    lookup = functools.partial(dns_core.lookup_ptr, before=rate.wait)
     for i, ip in enumerate(ips, 1):
-        rate.wait()
-        answer = run.ask(dns_core.lookup_ptr, ip, server)
+        answer = run.ask(lookup, ip, server)
         run.counts["reverse"] += 1
         if answer is not None and answer.values:
             ptr = answer.values[0]
@@ -362,10 +377,12 @@ def run_dns(db: Session, handle: JobHandle, dns_id: int) -> dict[str, int]:
         # Имя сервера разрешается один раз на задачу, а не на каждый запрос.
         server = dns_core.server_address(cfg.server) if cfg.server else None
         rate = RateLimiter(cfg.rate_per_s)
+        # На имя — A и AAAA (AAAA не спрашивается, если имени нет), на адрес — PTR.
+        est = estimate(2 * len(names) + len(ips), cfg.rate_per_s)
         if cfg.forward:
-            _forward(run, names, server, rate)
+            _forward(run, names, server, rate, est)
         if cfg.reverse:
-            _reverse(run, ips, server, rate)
+            _reverse(run, ips, server, rate, est)
     if not _write(run):
         handle.stage("done", message=f"{cfg.label}: настройку удалили во время запросов — результаты не записаны")
         return run.counts

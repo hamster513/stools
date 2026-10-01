@@ -164,6 +164,31 @@ def test_merge_and_detach_conflict_with_running_sync(analyst: TestClient, db_ses
     assert analyst.get("/api/assets/assets").json()["total"] == 4
 
 
+def test_merge_and_detach_refused_while_task_writes(analyst: TestClient) -> None:
+    """Запись результатов скана или DNS держит блокировку синхронизации: объединение и отвязка
+    в это время не идут (409), а не ждут и не пишут поперёк неё."""
+    from sqlalchemy import text
+
+    from api.db.base import get_engine
+    from api.modules.assets.services.sync import SYNC_LOCK_KEY
+
+    ws01, old01 = by_name(analyst, "ws01")["id"], by_name(analyst, "old01")["id"]
+    srv01 = analyst.get(f"/api/assets/assets/{by_name(analyst, 'srv01')['id']}").json()
+    with get_engine().connect() as conn:
+        assert conn.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": SYNC_LOCK_KEY}).scalar()
+        r = analyst.post(f"/api/assets/assets/{ws01}/merge", json={"other_id": old01})
+        assert r.status_code == 409 and r.json()["detail"] == "идёт запись результатов задачи — повторите позже"
+        r = analyst.post(f"/api/assets/observations/{srv01['observations'][0]['id']}/detach")
+        assert r.status_code == 409 and "повторите позже" in r.json()["detail"]
+        conn.rollback()
+    assert analyst.get("/api/assets/assets").json()["total"] == 4
+    # Блокировка снята — объединение проходит, и ручка её за собой не держит.
+    assert analyst.post(f"/api/assets/assets/{ws01}/merge", json={"other_id": old01}).status_code == 200
+    with get_engine().connect() as conn:
+        assert conn.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": SYNC_LOCK_KEY}).scalar()
+        conn.rollback()
+
+
 def test_scan_ports_in_list_filter_and_card(analyst: TestClient, db_session: Session) -> None:
     from sqlalchemy import event
 

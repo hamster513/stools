@@ -12,6 +12,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
+import { ScheduleBlock } from '../ScheduleBlock'
 
 const EMPTY: DnsIn = {
   title: '', mode: 'direct', server: '', ad_connection_id: null, zones: [], forward: true, reverse: true, zone_read: false,
@@ -85,38 +86,12 @@ function RunButton({ dns }: { dns: DnsServer }) {
   )
 }
 
-/** Расписание обновления через DNS: интервал и окно, своя запись планировщика. */
-function ScheduleBlock({ dns }: { dns: DnsServer }) {
-  const save = useSaveDnsSchedule(dns.id)
-  const remove = useDeleteDnsSchedule(dns.id)
-  const current = dns.schedule
-  const [hours, setHours] = useState<number>(current?.interval_hours ?? 24)
-  const [from, setFrom] = useState(current?.window_from ?? '')
-  const [to, setTo] = useState(current?.window_to ?? '')
-  const [enabled, setEnabled] = useState(current?.enabled ?? true)
-  const error = save.error ?? remove.error
+/** Расписание обновления через DNS: своя запись планировщика. */
+function DnsSchedule({ dns }: { dns: DnsServer }) {
   return (
-    <>
-      <div className="mt-4 mb-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Расписание</div>
-      <label className="mb-3 flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Обновлять по расписанию</label>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <Field label="Интервал, часов" hint="1–720"><input className={FIELD} type="number" min={1} max={720} value={shown(hours)} onChange={(e) => setHours(numberOrEmpty(e.target.value))} /></Field>
-        <Field label="Окно с" hint="Пусто — без окна"><input className={FIELD} type="time" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
-        <Field label="Окно по" hint="Конец окна не входит"><input className={FIELD} type="time" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
-      </div>
-      <p className="mt-2 text-xs text-text-secondary">
-        Окно в поясе STOOLS_TZ{current ? ` (${current.tz})` : ''}. Выключенный сервер по расписанию не запускается.
-        {current && ` Следующий запуск: ${current.enabled ? when(current.next_run_at) : 'выключено'}; прошлый: ${when(current.last_run_at)}.`}
-      </p>
-      <div className="mt-2 flex items-center gap-2">
-        <Button loading={save.isPending} onClick={() => save.mutate({ interval_hours: hours, window_from: from || null, window_to: to || null, enabled })}>
-          Сохранить расписание
-        </Button>
-        {current && <Button variant="ghost" loading={remove.isPending} onClick={() => remove.mutate()}>Удалить расписание</Button>}
-        {save.isSuccess && !save.isPending && <span className="text-xs text-text-secondary">сохранено</span>}
-        {error && <span className="text-xs text-kind-1">{message(error, 'Не удалось сохранить расписание')}</span>}
-      </div>
-    </>
+    <ScheduleBlock title="Расписание" enableLabel="Обновлять по расписанию" current={dns.schedule}
+      note="Выключенный сервер по расписанию не запускается."
+      save={useSaveDnsSchedule(dns.id)} remove={useDeleteDnsSchedule(dns.id)} />
   )
 }
 
@@ -181,7 +156,7 @@ function DnsForm({ dns, connections, onDone }: { dns: DnsServer | null; connecti
         {check('Включён', 'enabled')}
       </div>
 
-      {dns ? <ScheduleBlock dns={dns} /> : <p className="mt-3 text-xs text-text-secondary">Расписание задаётся после сохранения.</p>}
+      {dns ? <DnsSchedule dns={dns} /> : <p className="mt-3 text-xs text-text-secondary">Расписание задаётся после сохранения.</p>}
 
       <div className="mt-4 flex items-center gap-2">
         <Button variant="primary" loading={save.isPending} onClick={() => save.mutate({ id: dns?.id, body: body() }, { onSuccess: onDone })}>Сохранить</Button>

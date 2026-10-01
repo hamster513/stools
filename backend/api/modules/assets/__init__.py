@@ -1,8 +1,8 @@
 """Активы — модуль STools.
 
 Реестр хостов из VM, KSC, AD, сканера сети и DNS: актив и наблюдения
-источников, сети с зонами, расхождения между источниками. Сканы и DNS —
-задачи модуля, их запускают вручную и планировщик платформы.
+источников, сети с зонами, расхождения между источниками. Сканы, DNS и
+синхронизация с модулями — задачи модуля, их запускают вручную и планировщик платформы.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from api.modules.assets.models import AssetJob
 from api.modules.assets.routers import assets, dns, networks, overview, scan, settings, zones
 from api.modules.assets.services.dns import schedule_handler as dns_schedule_handler
 from api.modules.assets.services.scan import schedule_handler
+from api.modules.assets.services.sync import schedule_handler as sync_schedule_handler
 
 # platform_schedule — цель внешних ключей сетей и DNS, её модель должна быть в metadata.
 from api.platform import scheduler as scheduler
@@ -27,5 +28,6 @@ for sub in (
 
 scheduler.register_schedule_kind("assets", "scan", schedule_handler)
 scheduler.register_schedule_kind("assets", "dns", dns_schedule_handler)
+scheduler.register_schedule_kind("assets", "sync", sync_schedule_handler)
 
 __all__ = ["router"]

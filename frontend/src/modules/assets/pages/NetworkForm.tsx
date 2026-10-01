@@ -4,6 +4,7 @@ import { useDeleteSchedule, useSaveNetwork, useSaveSchedule, useZones } from '@/
 import { DEFAULT_PORTS, type Network, type NetworkIn } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { Field, FIELD } from '@/platform/collector/ui'
+import { ScheduleBlock } from './ScheduleBlock'
 
 /** Списки в форме — строкой: так их удобно вставлять из заметок и таблиц. */
 interface FormState extends Omit<NetworkIn, 'tags' | 'ports' | 'exclude'> {
@@ -38,42 +39,12 @@ function toBody(f: FormState): NetworkIn {
   }
 }
 
-function when(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—'
-}
-
-/** Расписание сканов сети: интервал и окно. Сохраняется отдельно от полей сети — это своя запись планировщика. */
-function ScheduleBlock({ network }: { network: Network }) {
-  const save = useSaveSchedule(network.id)
-  const remove = useDeleteSchedule(network.id)
-  const current = network.schedule
-  const [hours, setHours] = useState<number>(current?.interval_hours ?? 24)
-  const [from, setFrom] = useState(current?.window_from ?? '')
-  const [to, setTo] = useState(current?.window_to ?? '')
-  const [enabled, setEnabled] = useState(current?.enabled ?? true)
-  const error = save.error ?? remove.error
+/** Расписание сканов сети — своя запись планировщика, сохраняется отдельно от полей сети. */
+function NetworkScheduleBlock({ network }: { network: Network }) {
   return (
-    <>
-      <div className="mt-4 mb-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Расписание сканов</div>
-      <label className="mb-3 flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} /> Сканировать по расписанию</label>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <Field label="Интервал, часов" hint="1–720"><input className={FIELD} type="number" min={1} max={720} value={shown(hours)} onChange={(e) => setHours(numberOrEmpty(e.target.value))} /></Field>
-        <Field label="Окно с" hint="Пусто — без окна"><input className={FIELD} type="time" value={from} onChange={(e) => setFrom(e.target.value)} /></Field>
-        <Field label="Окно по" hint="Конец окна не входит"><input className={FIELD} type="time" value={to} onChange={(e) => setTo(e.target.value)} /></Field>
-      </div>
-      <p className="mt-2 text-xs text-text-secondary">
-        Окно в поясе STOOLS_TZ{current ? ` (${current.tz})` : ''}. Сканирование сети должно быть включено, иначе запуск по расписанию отклоняется.
-        {current && ` Следующий запуск: ${current.enabled ? when(current.next_run_at) : 'выключено'}; прошлый: ${when(current.last_run_at)}.`}
-      </p>
-      <div className="mt-2 flex items-center gap-2">
-        <Button loading={save.isPending} onClick={() => save.mutate({ interval_hours: hours, window_from: from || null, window_to: to || null, enabled })}>
-          Сохранить расписание
-        </Button>
-        {current && <Button variant="ghost" loading={remove.isPending} onClick={() => remove.mutate()}>Удалить расписание</Button>}
-        {save.isSuccess && !save.isPending && <span className="text-xs text-text-secondary">сохранено</span>}
-        {error && <span className="text-xs text-kind-1">{error instanceof ApiRequestError ? error.message : 'Не удалось сохранить расписание'}</span>}
-      </div>
-    </>
+    <ScheduleBlock title="Расписание сканов" enableLabel="Сканировать по расписанию" current={network.schedule}
+      note="Сканирование сети должно быть включено, иначе запуск по расписанию отклоняется."
+      save={useSaveSchedule(network.id)} remove={useDeleteSchedule(network.id)} />
   )
 }
 
@@ -115,7 +86,7 @@ export function NetworkForm({ network, onDone, onCancel }: { network: Network | 
         <Field label="Таймаут TCP, мс" hint="50–30000"><input className={FIELD} type="number" min={50} max={30000} step={100} value={shown(f.tcp_timeout_ms)} onChange={(e) => patch({ tcp_timeout_ms: numberOrEmpty(e.target.value) })} /></Field>
       </div>
 
-      {network ? <ScheduleBlock network={network} /> : <p className="mt-3 text-xs text-text-secondary">Расписание сканов задаётся после сохранения сети.</p>}
+      {network ? <NetworkScheduleBlock network={network} /> : <p className="mt-3 text-xs text-text-secondary">Расписание сканов задаётся после сохранения сети.</p>}
 
       <div className="mt-4 flex items-center gap-2">
         <Button variant="primary" loading={save.isPending} disabled={!f.cidr.trim()} onClick={() => save.mutate({ id: network?.id, body: toBody(f) }, { onSuccess: onDone })}>Сохранить</Button>

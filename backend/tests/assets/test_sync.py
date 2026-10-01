@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from api.modules.assets.services.assets import apply_observation, asset_detail, 
 from api.modules.assets.services.sync import request_sync, run_sync
 from api.modules.ksc.models import KscHost, KscServer
 from api.modules.vm.models import VmHost
+from api.platform.scheduler import PlatformSchedule, tick
 from tests.assets.synthetic import load_all, load_ksc
 
 
@@ -219,6 +222,7 @@ def rerun_flag(db: Session) -> bool:
 
 def test_sync_is_single_flight(loaded: Session) -> None:
     """Вторая синхронизация, пока первая держит блокировку, ничего не пишет и завершается."""
+    start_job(loaded, AssetJob, "sync", "tester")  # первая: идёт и держит блокировку
     with get_engine().connect() as conn:
         assert conn.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": sync_service.SYNC_LOCK_KEY}).scalar()
         job_id = start_job(loaded, AssetJob, "sync", "tester")
@@ -231,6 +235,31 @@ def test_sync_is_single_flight(loaded: Session) -> None:
     assert rerun_flag(loaded)  # держатель блокировки пройдёт ещё раз
     sync(loaded)
     assert loaded.execute(select(func.count()).select_from(AssetObservation)).scalar() == 7
+
+
+def test_sync_waits_for_scan_or_dns_write(loaded: Session) -> None:
+    """Блокировку держит запись скана или DNS, а не синхронизация: синхронизация ждёт её и проходит,
+    а не отбрасывается как «уже идёт»."""
+    locked = threading.Event()
+
+    def writer() -> None:
+        with get_engine().connect() as conn:
+            conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": sync_service.SYNC_LOCK_KEY})
+            locked.set()
+            time.sleep(1.0)
+            conn.rollback()
+
+    holder = threading.Thread(target=writer)
+    holder.start()
+    assert locked.wait(5)
+    started = time.monotonic()
+    counts = sync(loaded)
+    waited = time.monotonic() - started
+    holder.join()
+    assert waited >= 0.5
+    assert counts == {"vm": 2, "ksc": 2, "ad": 3}
+    assert loaded.execute(select(func.count()).select_from(AssetObservation)).scalar() == 7
+    assert not rerun_flag(loaded)
 
 
 def test_request_during_sync_runs_one_more_pass(loaded: Session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -315,3 +344,57 @@ def test_failing_assets_never_fail_the_import(db_session: Session, app_settings:
     monkeypatch.setattr(sync_service, "request_sync", boom)
     snap = load_ksc(db_session, Path(app_settings.data_dir), [("SRV01", "10.10.0.11")], now)
     assert snap.id is not None and snap.hosts == 1
+
+
+# ---- Расписание -------------------------------------------------------------
+
+
+def test_sync_schedule_routes(db_session: Session, app_settings: Any, client_as: Any) -> None:
+    analyst = client_as("analyst")
+    url = "/api/assets/sync/schedule"
+    assert analyst.get(url).json() is None
+    r = analyst.put(url, json={"interval_hours": 6, "window_from": "01:00", "window_to": "04:00", "enabled": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["interval_hours"], body["window_from"], body["window_to"], body["enabled"]) == (6, "01:00", "04:00", True)
+    assert body["next_run_at"] is not None and body["tz"]
+    db_session.expire_all()
+    sched = db_session.execute(select(PlatformSchedule)).scalar_one()
+    assert (sched.module, sched.kind, sched.target_id) == ("assets", "sync", 0)
+    assert analyst.get(url).json()["id"] == sched.id
+    r = analyst.put(url, json={"interval_hours": 12, "window_from": None, "window_to": None, "enabled": False})
+    assert r.status_code == 200 and r.json()["id"] == sched.id and r.json()["enabled"] is False
+    assert analyst.put(url, json={"interval_hours": 12, "window_from": "02:00", "window_to": None, "enabled": True}).status_code == 422
+    assert analyst.put(url, json={"interval_hours": 0, "window_from": None, "window_to": None, "enabled": True}).status_code == 422
+    assert analyst.delete(url).status_code == 204
+    assert analyst.get(url).json() is None
+    db_session.expire_all()
+    assert db_session.execute(select(PlatformSchedule)).scalars().all() == []
+
+
+def test_auditor_cannot_change_sync_schedule(db_session: Session, app_settings: Any, client_as: Any) -> None:
+    auditor = client_as("auditor")
+    url = "/api/assets/sync/schedule"
+    assert auditor.get(url).status_code == 200
+    assert auditor.put(url, json={"interval_hours": 24, "window_from": None, "window_to": None, "enabled": True}).status_code == 403
+    assert auditor.delete(url).status_code == 403
+
+
+def test_scheduler_tick_runs_sync(loaded: Session, client_as: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sync_service, "spawn", lambda fn: fn())
+    r = client_as("analyst").put("/api/assets/sync/schedule", json={"interval_hours": 1, "window_from": None, "window_to": None, "enabled": True})
+    assert r.status_code == 200, r.text
+    started = tick(loaded, dt.datetime.now(dt.UTC) + dt.timedelta(hours=2))
+    assert len(started) == 1
+    job = loaded.get(AssetJob, started[0])
+    assert job is not None
+    loaded.refresh(job)
+    assert (job.kind, job.status, job.started_by) == ("sync", "done", "расписание"), job.error
+    assert loaded.execute(select(func.count()).select_from(AssetObservation)).scalar() == 7
+
+
+def test_sync_schedule_handler_waits_for_running_sync(db_session: Session, app_settings: Any) -> None:
+    start_job(db_session, AssetJob, "sync", "tester")
+    sched = PlatformSchedule(module="assets", kind="sync", target_id=0, interval_hours=24, enabled=True)
+    assert sync_service.schedule_handler(db_session, sched) is None
+    assert db_session.execute(select(func.count()).select_from(AssetJob)).scalar() == 1

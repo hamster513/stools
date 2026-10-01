@@ -87,6 +87,26 @@ export function useSyncStatus() {
   return useQuery<SyncStatus, ApiRequestError>({ queryKey: ['assets-sync-status'], queryFn: () => api.get('/api/assets/sync/status') })
 }
 
+export function useSyncSchedule() {
+  return useQuery<NetworkSchedule | null, ApiRequestError>({ queryKey: ['assets-sync-schedule'], queryFn: () => api.get('/api/assets/sync/schedule') })
+}
+
+function useSyncScheduleMutation<V, R>(fn: (vars: V) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation<R, ApiRequestError, V>({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-sync-schedule'] }),
+  })
+}
+
+export function useSaveSyncSchedule() {
+  return useSyncScheduleMutation<ScheduleIn, NetworkSchedule>((body) => api.put('/api/assets/sync/schedule', body))
+}
+
+export function useDeleteSyncSchedule() {
+  return useSyncScheduleMutation<void, void>(() => api.del('/api/assets/sync/schedule'))
+}
+
 export function useOverview() {
   return useQuery<AssetsOverview, ApiRequestError>({ queryKey: ['assets-overview'], queryFn: () => api.get('/api/assets/overview') })
 }

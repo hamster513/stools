@@ -107,14 +107,17 @@ def _query(r: dns.resolver.Resolver, qname: dns.name.Name, rdtype: str) -> tuple
     return list(answer.rrset), answer.rrset.ttl
 
 
-def lookup_a(name: str, server: str | None, timeout: float) -> Answer:
-    """A, затем AAAA; IPv4 первым. Имени нет или адресов нет — пустой ответ."""
+def lookup_a(name: str, server: str | None, timeout: float, *, before: Callable[[], None] | None = None) -> Answer:
+    """A, затем AAAA; IPv4 первым. Имени нет или адресов нет — пустой ответ.
+    `before` вызывается перед каждым запросом (A и AAAA — два): так темп считает запросы, а не имена."""
     r = _resolver(server, timeout)
     qname = dns.name.from_text(name.strip().rstrip(".").lower() + ".")
     values: list[str] = []
     ttls: list[int] = []
     types: list[str] = []
     for rdtype in ("A", "AAAA"):
+        if before is not None:
+            before()
         got = _query(r, qname, rdtype)
         if got is None:
             break
@@ -127,8 +130,10 @@ def lookup_a(name: str, server: str | None, timeout: float) -> Answer:
     return Answer(values, min(ttls) if ttls else None, types[0] if types else "")
 
 
-def lookup_ptr(ip: str, server: str | None, timeout: float) -> Answer:
+def lookup_ptr(ip: str, server: str | None, timeout: float, *, before: Callable[[], None] | None = None) -> Answer:
     r = _resolver(server, timeout)
+    if before is not None:
+        before()
     got = _query(r, dns.reversename.from_address(ip), "PTR")
     if not got or not got[0]:
         return Answer([], None, "")

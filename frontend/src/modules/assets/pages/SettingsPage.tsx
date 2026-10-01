@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { ArrowRight, Plus, Save, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAssetSettings, useCreateZone, useDeleteZone, useSaveAssetSettings, useSyncStatus, useZones } from '@/modules/assets/api/queries'
+import {
+  useAssetSettings, useCreateZone, useDeleteSyncSchedule, useDeleteZone, useSaveAssetSettings, useSaveSyncSchedule, useSyncSchedule, useSyncStatus, useZones,
+} from '@/modules/assets/api/queries'
 import type { AssetSettings, SyncSource } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -9,6 +11,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
+import { ScheduleBlock } from './ScheduleBlock'
 import { DnsSection } from './settings/DnsSection'
 import { SyncButton } from './SyncButton'
 
@@ -73,7 +76,30 @@ const SYNC_SOURCES: { source: SyncSource; title: string }[] = [
   { source: 'ad', title: 'Active Directory' },
 ]
 
-/** Синхронизация с модулями: кнопка, время последней и что лежит по каждому источнику. */
+/** Расписание синхронизации: форма у того, кто может писать, строка — у остальных. */
+function SyncSchedule() {
+  const { write } = useCan()
+  const schedule = useSyncSchedule()
+  const save = useSaveSyncSchedule()
+  const remove = useDeleteSyncSchedule()
+  if (schedule.isError) return <p className="mt-3 text-xs text-kind-1">{message(schedule.error, 'Не удалось загрузить расписание')}</p>
+  if (schedule.data === undefined) return null
+  const current = schedule.data
+  if (!write) {
+    return (
+      <p className="mt-3 text-xs text-text-secondary">
+        Расписание: {current ? `раз в ${current.interval_hours} ч${current.window_from && current.window_to ? `, ${current.window_from}–${current.window_to} ${current.tz}` : ''}; следующий запуск ${current.enabled ? when(current.next_run_at) : 'выключено'}` : 'не задано'}.
+      </p>
+    )
+  }
+  return (
+    <ScheduleBlock key={current?.id ?? 'none'} title="Расписание синхронизации" enableLabel="Синхронизировать по расписанию" current={current}
+      note="Пока идёт другая синхронизация, запуск откладывается; запись результатов скана или DNS синхронизация дожидается."
+      save={save} remove={remove} />
+  )
+}
+
+/** Синхронизация с модулями: кнопка, время последней, что лежит по каждому источнику, расписание. */
 function SyncSection() {
   const { write } = useCan()
   const status = useSyncStatus()
@@ -111,6 +137,7 @@ function SyncSection() {
         <Link to="/assets/jobs" className="inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text">Задачи модуля <ArrowRight size={12} aria-hidden /></Link>
         {write && <SyncButton label="Обновить сейчас" />}
       </div>
+      <SyncSchedule />
     </Section>
   )
 }

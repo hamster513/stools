@@ -33,6 +33,7 @@ from api.modules.assets.services.assets import (
     settings_row,
 )
 from api.modules.assets.services.networks import load_networks
+from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
 
 log = logging.getLogger("stools.assets")
@@ -46,6 +47,10 @@ TICK_EVERY = 500
 #: Ключ advisory-блокировки синхронизации («SYNC» в ASCII): одна на всю базу.
 SYNC_LOCK_KEY = 0x53594E43
 BUSY_MESSAGE = "синхронизация уже идёт"
+WAIT_MESSAGE = "ждёт окончания записи результатов скана или DNS"
+#: Кто запустил синхронизацию по расписанию; цель у расписания одна — весь модуль.
+SCHEDULE_STARTED_BY = "расписание"
+SCHEDULE_TARGET_ID = 0
 
 
 def _in_thread(fn: Callable[[], None]) -> None:
@@ -68,6 +73,15 @@ def request_sync(db: Session, source: str) -> int | None:
         return None
     job_id = start_job(db, AssetJob, "sync", AUTO_STARTED_BY, message=source)
     spawn(lambda: run_job(AssetJob, job_id, lambda s, h: sync_job(s, h, SOURCE_TITLES.get(source, source))))
+    return job_id
+
+
+def schedule_handler(db: Session, schedule: PlatformSchedule) -> int | None:
+    """Обработчик планировщика `assets/sync`: None — синхронизация уже идёт (повтор на следующем тике)."""
+    if active_job(db, AssetJob, ("sync",)) is not None:
+        return None
+    job_id = start_job(db, AssetJob, "sync", SCHEDULE_STARTED_BY, message=SCHEDULE_STARTED_BY)
+    spawn(lambda: run_job(AssetJob, job_id, lambda s, h: sync_job(s, h, "по расписанию")))
     return job_id
 
 
@@ -230,22 +244,47 @@ def sync_lock(db: Session, *, wait: bool = False) -> Iterator[bool]:
             conn.rollback()
 
 
+def try_lock_in_transaction(db: Session) -> bool:
+    """Блокировка синхронизации в транзакции самой сессии — до её фиксации или отката: правка
+    реестра человеком (объединение, отвязка) не идёт поперёк синхронизации и записи скана или DNS."""
+    return bool(db.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": SYNC_LOCK_KEY}).scalar())
+
+
+def _earlier_sync_running(db: Session, job_id: int) -> bool:
+    """Идёт ли синхронизация, заведённая раньше этой. Раньше — чтобы две, заведённые почти разом,
+    не отказались обе, сочтя занятой друг друга: более поздняя уступает, ранняя ждёт блокировку."""
+    return db.execute(
+        select(AssetJob.id).where(AssetJob.kind == "sync", AssetJob.status == "running", AssetJob.id < job_id).limit(1)
+    ).first() is not None
+
+
 def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOURCES) -> dict[str, int] | None:
     """Проход по источникам; если за время прохода попросили ещё (`request_sync` во время
     синхронизации) — ещё проход. None — синхронизацию уже ведёт другая задача: эта просит
     её пройти ещё раз и завершается, ничего не записав. Остаётся окно: просьба, пришедшая между последней проверкой
-    и закрытием задачи, исполнится следующей синхронизацией."""
+    и закрытием задачи, исполнится следующей синхронизацией.
+
+    Блокировку держит не синхронизация, а запись результатов скана или DNS — задача ждёт её
+    окончания, а не отбрасывается: иначе синхронизация после импорта терялась бы."""
     with sync_lock(db) as acquired:
-        if not acquired:
-            # Задачу завели не зря (импорт), а идущая могла прочитать источник раньше него.
-            _set_rerun(db, True)
-            handle.stage("done", message=BUSY_MESSAGE)
-            return None
-        _take_rerun(db)  # этот проход и так прочитает всё
+        if acquired:
+            return _locked_sync(db, handle, sources)
+    if _earlier_sync_running(db, handle.id):
+        # Задачу завели не зря (импорт), а идущая могла прочитать источник раньше него.
+        _set_rerun(db, True)
+        handle.stage("done", message=BUSY_MESSAGE)
+        return None
+    handle.stage("pending", message=WAIT_MESSAGE)  # заодно фиксирует: ожидание без открытой транзакции
+    with sync_lock(db, wait=True):
+        return _locked_sync(db, handle, sources)
+
+
+def _locked_sync(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict[str, int]:
+    _take_rerun(db)  # этот проход и так прочитает всё
+    counts = _sync_pass(db, handle, sources)
+    while _take_rerun(db):
         counts = _sync_pass(db, handle, sources)
-        while _take_rerun(db):
-            counts = _sync_pass(db, handle, sources)
-        return counts
+    return counts
 
 
 def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict[str, int]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -338,6 +339,53 @@ def test_scheduler_tick_runs_dns(analyst: TestClient, db_session: Session, fake_
     db_session.refresh(job)
     assert job.kind == "dns" and job.status == "done" and job.started_by == "расписание", job.error
     assert "srv01.corp.local" in dns_rows(db_session)
+
+
+def test_schedule_of_disabled_server_is_skipped_quietly(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer,
+                                                        caplog: pytest.LogCaptureFixture) -> None:
+    dns_id = direct(analyst, enabled=False)
+    r = analyst.put(f"/api/assets/dns/{dns_id}/schedule", json={"interval_hours": 1, "enabled": True})
+    assert r.status_code == 200, r.text
+    with caplog.at_level(logging.WARNING):
+        assert tick(db_session, NOW + dt.timedelta(hours=2)) == []
+    warned = [rec for rec in caplog.records if "выключен" in rec.getMessage()]
+    assert len(warned) == 1 and warned[0].exc_info is None
+    assert not [rec for rec in caplog.records if rec.exc_info]
+    assert db_session.execute(select(AssetJob)).scalars().all() == []
+
+
+def test_rate_counts_queries_not_names(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """Темп — запросы: A и AAAA на имя — два, PTR на адрес — один; оценка в сообщении задачи."""
+    for i in range(3):
+        add(db_session, "ksc", f"1:{i}", name=f"h{i}", fqdn=f"h{i}.corp.local", ip=f"10.10.0.{50 + i}")
+        fake_dns.add(f"h{i}.corp.local", "A", f"10.10.0.{50 + i}")
+    waits: list[int] = []
+    real_wait = dns_core.RateLimiter.wait
+
+    def wait(self: dns_core.RateLimiter) -> None:
+        waits.append(1)
+        real_wait(self)
+
+    monkeypatch.setattr(dns_core.RateLimiter, "wait", wait)
+    messages: list[str] = []
+    real_stage = JobHandle.stage
+
+    def stage(self: JobHandle, name: str, total: int | None = None, message: str = "") -> None:
+        messages.append(message)
+        real_stage(self, name, total, message)
+
+    monkeypatch.setattr(JobHandle, "stage", stage)
+    job = run(analyst, direct(analyst, reverse=True, rate_per_s=1000), db_session)
+    assert job.status == "done", job.error
+    assert len(waits) == len(fake_dns.queries) == 3 * 2 + 3
+    assert any("~9 запросов при 1000/с ≈ 1 мин" in m for m in messages), messages
+
+
+def test_estimate_text() -> None:
+    assert dns_service.estimate(9, 1000) == "~9 запросов при 1000/с ≈ 1 мин"
+    assert dns_service.estimate(30000, 50) == "~30000 запросов при 50/с ≈ 10 мин"
+    assert dns_service.estimate(30001, 50) == "~30001 запросов при 50/с ≈ 11 мин"
 
 
 def test_auditor_cannot_write(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer, client_as: Callable[[str], TestClient]) -> None:
