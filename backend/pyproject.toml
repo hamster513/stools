@@ -40,6 +40,8 @@ api = [
     "cryptography>=42",
     # База часовых поясов для STOOLS_TZ: в slim-образе системной zoneinfo может не быть.
     "tzdata>=2024.1",
+    # Модуль Assets: прямые и обратные запросы к DNS-серверу.
+    "dnspython>=2.6",
 ]
 
 [project.scripts]

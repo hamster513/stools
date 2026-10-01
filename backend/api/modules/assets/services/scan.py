@@ -18,9 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.jobs import JobCancelled, JobHandle, active_job, run_job, start_job
+from api.modules.assets.core import dns as dns_core
 from api.modules.assets.core import scanner
 from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize_name
-from api.modules.assets.models import Asset, AssetJob, AssetObservation, Network
+from api.modules.assets.models import Asset, AssetDns, AssetJob, AssetObservation, Network
 from api.modules.assets.services.assets import apply_observation, recompute
 from api.modules.assets.services.networks import load_networks, scan_target
 from api.modules.assets.services.sync import sync_lock
@@ -96,6 +97,29 @@ def _observation(host: scanner.HostResult, seen_at: Any) -> Observed:
     )
 
 
+def ptr_resolver(db: Session) -> scanner.Resolver | None:
+    """PTR через первый включённый DNS-сервер `direct` (спека §3 п.3); такого нет — None,
+    и сканер спрашивает системный резолвер."""
+    row = db.execute(
+        select(AssetDns).where(AssetDns.enabled.is_(True), AssetDns.mode == "direct").order_by(AssetDns.id)
+    ).scalars().first()
+    if row is None:
+        return None
+    try:
+        server = dns_core.server_address(row.server.strip()) if row.server.strip() else None
+    except dns_core.DnsError:
+        return None
+    timeout = row.timeout_ms / 1000
+
+    async def resolve(ip: str) -> str:
+        try:
+            return await asyncio.to_thread(dns_core.resolve_ptr, ip, server, timeout)
+        except dns_core.DnsError:
+            return ""
+
+    return resolve
+
+
 def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
     """scanner.scan → наблюдения scan (apply_observation), gone_at не ответившим адресам цели,
     network.last_scan_at/last_scan_alive. Без ICMP-сокета — режим «только порты» (extra.icmp = None).
@@ -114,6 +138,7 @@ def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
     mode = "" if use_icmp else f" · {PORTS_ONLY}"
     handle.stage("scan", total=len(scanned), message=f"сеть {cidr}: адресов {len(scanned)}{mode}")
     started = utcnow()
+    resolver = ptr_resolver(db)
     db.commit()
 
     last = [0.0, 0.0]  # когда писали прогресс и проверяли отмену
@@ -135,7 +160,7 @@ def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
             db.commit()  # чтение флага не оставляет транзакцию открытой до конца скана
 
     try:
-        found = asyncio.run(scanner.scan(target, on_progress=on_progress, cancelled=cancelled, use_icmp=use_icmp))
+        found = asyncio.run(scanner.scan(target, on_progress=on_progress, cancelled=cancelled, use_icmp=use_icmp, resolver=resolver))
     except scanner.ScanCancelled:
         raise JobCancelled() from None
 

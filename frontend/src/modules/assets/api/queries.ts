@@ -3,7 +3,8 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
 import type {
-  AssetDetail, AssetPatch, AssetsQuery, AssetsResponse, Job, Network, NetworkIn, NetworkSchedule, PinnableField, ScanStarted, ScheduleIn, Zone, ZoneIn,
+  AdConnectionRef, AssetDetail, AssetPatch, AssetsQuery, AssetsResponse, DnsIn, DnsServer, Job, Network, NetworkIn, NetworkSchedule, PinnableField,
+  ScanStarted, ScheduleIn, Zone, ZoneIn,
 } from './types'
 
 export const ASSETS_PAGE_SIZE = 200
@@ -142,4 +143,48 @@ export function useCreateZone() {
 
 export function useDeleteZone() {
   return useNetworkMutation<string, void>((name) => api.del(`/api/assets/zones/${encodeURIComponent(name)}`))
+}
+
+export function useDnsServers() {
+  return useQuery<DnsServer[], ApiRequestError>({ queryKey: ['assets-dns'], queryFn: () => api.get('/api/assets/dns') })
+}
+
+/** Подключения AD для режима «зоны AD»: тот же запрос, что у модуля AD. */
+export function useAdConnections() {
+  return useQuery<AdConnectionRef[], ApiRequestError>({ queryKey: ['ad-connections'], queryFn: () => api.get('/api/ad/connections') })
+}
+
+function useDnsMutation<V, R>(fn: (vars: V) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation<R, ApiRequestError, V>({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-dns'] }),
+  })
+}
+
+export function useSaveDns() {
+  return useDnsMutation<{ id?: number; body: DnsIn }, DnsServer>(({ id, body }) =>
+    id === undefined ? api.post('/api/assets/dns', body) : api.put(`/api/assets/dns/${id}`, body),
+  )
+}
+
+export function useDeleteDns() {
+  return useDnsMutation<number, void>((id) => api.del(`/api/assets/dns/${id}`))
+}
+
+/** Обновление через DNS сейчас; за задачей следит страница через `useJob`. */
+export function useRunDns() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/assets/dns/${id}/run`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-jobs'] }),
+  })
+}
+
+export function useSaveDnsSchedule(dnsId: number) {
+  return useDnsMutation<ScheduleIn, NetworkSchedule>((body) => api.put(`/api/assets/dns/${dnsId}/schedule`, body))
+}
+
+export function useDeleteDnsSchedule(dnsId: number) {
+  return useDnsMutation<void, void>(() => api.del(`/api/assets/dns/${dnsId}/schedule`))
 }

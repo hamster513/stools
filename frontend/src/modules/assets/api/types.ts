@@ -235,3 +235,35 @@ export interface Zone {
 }
 
 export type ZoneIn = Omit<Zone, 'networks'>
+
+export type DnsMode = 'direct' | 'ad'
+
+/** DNS-сервер: прямые и обратные запросы (`direct`) или чтение зон AD через подключение AD (`ad`). */
+export interface DnsIn {
+  title: string
+  mode: DnsMode
+  /** Имя или адрес сервера; пусто — системный резолвер. */
+  server: string
+  ad_connection_id: number | null
+  zones: string[]
+  forward: boolean
+  reverse: boolean
+  zone_read: boolean
+  rate_per_s: number
+  timeout_ms: number
+  enabled: boolean
+}
+
+export interface DnsServer extends DnsIn {
+  id: number
+  schedule_id: number | null
+  last_run_at: string | null
+  schedule: NetworkSchedule | null
+}
+
+/** Подключение AD из `/api/ad/connections` — то, что нужно для выбора в форме DNS. */
+export interface AdConnectionRef {
+  id: number
+  title: string
+  host: string
+}

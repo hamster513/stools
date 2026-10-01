@@ -7,6 +7,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
+import { DnsSection } from './settings/DnsSection'
 
 function message(error: unknown, fallback: string): string {
   return error instanceof ApiRequestError ? error.message : fallback
@@ -64,7 +65,7 @@ function ZonesSection() {
   )
 }
 
-/** «Настройки и данные» модуля Assets. Пока здесь только справочник зон; DNS, пороги и синхронизация — следующими блоками. */
+/** «Настройки и данные» модуля Assets: DNS-серверы и справочник зон; пороги и синхронизация — следующими блоками. */
 export function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -73,6 +74,7 @@ export function SettingsPage() {
         <p className="max-w-2xl text-xs text-text-secondary">Справочники и настройки реестра активов.</p>
       </div>
       <div className="flex max-w-5xl flex-col gap-4">
+        <DnsSection />
         <ZonesSection />
       </div>
     </div>
