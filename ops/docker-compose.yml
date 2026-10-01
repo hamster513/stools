@@ -36,6 +36,8 @@ services:
       STOOLS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kbaudit}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kbaudit}
       STOOLS_SESSION_SECRET: ${STOOLS_SESSION_SECRET:?задайте STOOLS_SESSION_SECRET в .env}
       STOOLS_DATA_DIR: /data
+      # Часовой пояс окон расписаний (планировщик платформы); next_run_at хранится в UTC.
+      STOOLS_TZ: ${STOOLS_TZ:-UTC}
       # Инструмент хранит инвентарь внутренней инфраструктуры — модель
       # доступа не слабее, чем к анализируемым системам, поэтому по
       # умолчанию Secure включён. Для лаборатории без TLS (Caddy без
