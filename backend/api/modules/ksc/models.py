@@ -1,4 +1,4 @@
-"""Таблицы модуля KSC: сервер, подключения, снапшоты, хосты, находки, задачи (статусы находок — api/platform/findings)."""
+"""Таблицы модуля KSC: сервер, подключения, снапшоты, хосты, находки, политики, задачи (статусы находок — api/platform/findings)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -71,6 +71,8 @@ class KscHost(Base):
     fqdn: Mapped[str] = mapped_column(String(255), default="")
     domain: Mapped[str] = mapped_column(String(255), default="")
     group_path: Mapped[str] = mapped_column(String(1024), default="")
+    #: KLHST_WKS_GROUPID; NULL — строки, записанные до появления столбца.
+    group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     os: Mapped[str] = mapped_column(String(255), default="")
     ip: Mapped[str] = mapped_column(String(64), default="")
     agent_installed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -112,6 +114,135 @@ class KscFinding(Base):
     target: Mapped[str] = mapped_column(String(1024), default="")
     allowlisted: Mapped[bool] = mapped_column(Boolean, default=False)
     details_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class KscPolicy(Base):
+    """Политика снапшота (все политики выгрузки, включая агента и сервера) со счётчиками для списка."""
+
+    __tablename__ = "ksc_policy"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
+    policy_id: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    product: Mapped[str] = mapped_column(String(64), default="")
+    version: Mapped[str] = mapped_column(String(64), default="")
+    #: Группа, в которой политика создана.
+    group_id: Mapped[int] = mapped_column(Integer, default=0)
+    group_path: Mapped[str] = mapped_column(String(1024), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    accept_parent: Mapped[bool] = mapped_column(Boolean, default=False)
+    modified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Содержимое (секции настроек) есть в выгрузке.
+    has_contents: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Для продукта есть извлекатель исключений и сетевых правил (core/policy_model.EXTRACTORS).
+    described: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Групп, где действует (своя и наследники), и хостов прямо в них — из ksc_policy_scope.
+    groups: Mapped[int] = mapped_column(Integer, default=0)
+    hosts: Mapped[int] = mapped_column(Integer, default=0)
+    #: NULL — профили не собраны.
+    profiles: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    exclusions: Mapped[int] = mapped_column(Integer, default=0)
+    net_rules: Mapped[int] = mapped_column(Integer, default=0)
+    settings_total: Mapped[int] = mapped_column(Integer, default=0)
+    #: Настроек, описанных словарём (этап 2); на этапе 1 — 0.
+    settings_known: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class KscPolicyScope(Base):
+    """Где действует политика: строка на (группа, политика) из effective_policies."""
+
+    __tablename__ = "ksc_policy_scope"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
+    policy_id: Mapped[int] = mapped_column(Integer, index=True)
+    group_id: Mapped[int] = mapped_column(Integer, index=True)
+    group_path: Mapped[str] = mapped_column(String(1024), default="")
+    #: Политика создана в этой группе; False — унаследована.
+    own: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Хостов прямо в группе (без подгрупп).
+    hosts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class KscProfile(Base):
+    __tablename__ = "ksc_profile"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
+    policy_id: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: С 0; профили не из списка приоритетов — в конец по имени.
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    #: Атрибуты профиля как пришли (KLSSPOL_PRF_ENABLED, EXPRESSION — условие активации).
+    condition_json: Mapped[str] = mapped_column(Text, default="{}")
+    settings: Mapped[int] = mapped_column(Integer, default=0)
+    errors_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class KscExclusion(Base):
+    __tablename__ = "ksc_exclusion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
+    policy_id: Mapped[int] = mapped_column(Integer)
+    #: Имя профиля; "" — сама политика.
+    profile: Mapped[str] = mapped_column(String(255), default="")
+    kind: Mapped[str] = mapped_column(String(32))
+    value: Mapped[str] = mapped_column(Text, default="")
+    components_json: Mapped[str] = mapped_column(Text, default="[]")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    #: Коды рисков (этап 2); на этапе 1 — "[]".
+    risks_json: Mapped[str] = mapped_column(Text, default="[]")
+    #: core/policy_model.exclusion_key — без политики и профиля, для поиска дублей.
+    key: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class KscNetRule(Base):
+    __tablename__ = "ksc_net_rule"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
+    policy_id: Mapped[int] = mapped_column(Integer)
+    #: Имя профиля; "" — сама политика.
+    profile: Mapped[str] = mapped_column(String(255), default="")
+    #: Пакетное правило или сетевое правило программы.
+    layer: Mapped[str] = mapped_column(String(16))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    action: Mapped[str] = mapped_column(String(16), default="")
+    direction: Mapped[str] = mapped_column(String(16), default="")
+    protocol: Mapped[str] = mapped_column(String(32), default="")
+    local_ports: Mapped[str] = mapped_column(String(255), default="")
+    remote_ports: Mapped[str] = mapped_column(String(255), default="")
+    addresses: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: core/policy_model.net_rule_key — без политики, профиля и позиции.
+    key: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class KscChange(Base):
+    """Журнал изменений политик относительно предыдущего снапшота сервера (заполняет журнал изменений)."""
+
+    __tablename__ = "ksc_change"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #: Снапшот, в котором изменение замечено.
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
+    prev_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: policy | scope | profile | setting | net_rule | exclusion
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    #: added | removed | changed
+    action: Mapped[str] = mapped_column(String(8))
+    policy_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    policy_name: Mapped[str] = mapped_column(String(255), default="")
+    profile: Mapped[str] = mapped_column(String(255), default="")
+    section: Mapped[str] = mapped_column(String(255), default="")
+    path: Mapped[str] = mapped_column(Text, default="")
+    before_json: Mapped[str] = mapped_column(Text, default="null")
+    after_json: Mapped[str] = mapped_column(Text, default="null")
 
 
 class KscJob(JobColumns, Base):

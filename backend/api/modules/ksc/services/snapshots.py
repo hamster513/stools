@@ -25,6 +25,7 @@ from api.modules.ksc.core.findings import SEVERITY_RANK, Finding
 from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ksc.models import KscFinding, KscHost, KscServer, KscSnapshot
 from api.modules.ksc.services.coverage import ad_computers_for
+from api.modules.ksc.services.policy_store import store_policies
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
             "group_path": h.group_path[:1024], "os": h.os[:255], "ip": h.ip[:64], "agent_installed": h.agent_installed, "agent_alive": h.agent_alive,
             "last_seen_at": h.last_seen_at, "agent_version": h.agent_version[:64], "product": h.product[:255], "product_version": h.product_version[:64],
             "protection": h.protection, "rtp_state": h.rtp_state, "bases_at": h.bases_at, "last_fullscan_at": h.last_fullscan_at,
-            "status": h.status, "threats": h.threats, "unassigned": h.unassigned,
+            "status": h.status, "threats": h.threats, "unassigned": h.unassigned, "group_id": h.group_id,
             "in_ad": None if cov is None else ("both" if h.host_id in cov.both else "ksc_only"),
             "components_json": json.dumps(h.components, ensure_ascii=False),
             "extra_json": json.dumps(h.extra, ensure_ascii=False),
@@ -97,6 +98,7 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
         for f in findings
     )
     insert_chunked(db, KscFinding, rows, len(findings), handle, "находок")
+    store_policies(db, snapshot, idx)
     checks: dict[str, dict[str, int]] = {}
     for f in findings:
         checks.setdefault(f.check, {})
