@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from api.db.models import Finding as FindingRow
 from api.db.models import RuleRow
-from api.modules.siem.findings_adapter import MODULE, SCOPE, finding_key, key_salt
+from api.modules.siem.findings_adapter import MODULE, SCOPE, display_salt, finding_key
 from api.platform.findings import service as finding_svc
 
 #: Порядок тяжести, от большего к меньшему.
@@ -46,7 +46,8 @@ def attention_by_rule(db: Session, snapshot_id: int) -> dict[str, tuple[int, str
         .filter(FindingRow.snapshot_id == snapshot_id)
         .all()
     )
-    salt = key_salt(db)
+    # Без соли ключей (потеряна) все находки — «Новая», как и в списке гигиены.
+    salt, _ = display_salt(db)
     states = finding_svc.state_map(db, MODULE, SCOPE)
     counted = finding_svc.counted_statuses(db)
 

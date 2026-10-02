@@ -155,6 +155,11 @@ docker compose -f docker-compose.prod.yml exec -T db sh -c 'pg_dump -Fc -U "$POS
 sudo tar -C /data/stools -czf stools-archives-$(date +%F).tar.gz archives
 ```
 
+Дамп базы — целиком, а не по таблицам: в `app_setting` лежит соль ключей
+находок SIEM (`siem_finding_key`). Без неё решения по находкам SIEM не
+сопоставить с находками — STools не заведёт новую соль поверх старых
+решений, а покажет все находки как «Новая» и предупредит.
+
 Восстановление — в пустую базу той же версии STools:
 
 ```bash

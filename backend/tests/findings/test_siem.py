@@ -17,9 +17,9 @@ from tests.api.conftest import CO_WITH_LIST_DUP, META, U1, U2, upload_and_wait
 U3 = "222ffb49-bb9e-4ee4-9262-6754b7ee28d4"
 
 
-def _kb(ip: str = "10.20.30.40", *, extra_rule: bool = False) -> bytes:
+def _kb(ip: str = "10.20.30.40", *, extra_rule: bool = False, name: str = "DEMO_HC_002_030_Other") -> bytes:
     """Синтетическая выгрузка: U1 — значение из табличного списка (класс 1),
-    U2 — внутренний адрес `ip` (класс 2). Другой `ip` — другая находка U2;
+    U2 (`name`) — внутренний адрес `ip` (класс 2). Другой `ip` — другая находка U2;
     `extra_rule` меняет архив, не трогая находок."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -29,7 +29,7 @@ def _kb(ip: str = "10.20.30.40", *, extra_rule: bool = False) -> bytes:
         zf.writestr(f"correlation-rules/rules/correlation/{U1}/metainfo.yaml", META)
         zf.writestr(f"correlation-rules/rules/correlation/{U1}/DEMO_HC_002_029_Impacket.co", CO_WITH_LIST_DUP)
         zf.writestr(f"correlation-rules/rules/correlation/{U2}/metainfo.yaml", META)
-        zf.writestr(f"correlation-rules/rules/correlation/{U2}/DEMO_HC_002_030_Other.co",
+        zf.writestr(f"correlation-rules/rules/correlation/{U2}/{name}.co",
                     f'event Start:\n    filter {{ msgid == "4624" and dst.ip == "{ip}" }}\n')
         zf.writestr("correlation_defaults.json", json.dumps({"DEMO_Critical_Hosts_by_Rule": [{"host": "srv99"}]}))
         if extra_rule:
@@ -171,12 +171,251 @@ def test_profile_change_reconciles_too(auth_client: TestClient, monkeypatch: Any
     """Пересчёт по профилю переписывает находки снапшота — и сверяет статусы."""
     from api.modules.siem.routers import profile
 
-    calls: list[int] = []
-    monkeypatch.setattr(profile, "reconcile_findings", lambda db: calls.append(1))
+    calls: list[tuple[int, bool]] = []
+    monkeypatch.setattr(profile, "reconcile_findings", lambda db, snapshot_id, *, upload: calls.append((snapshot_id, upload)))
     snap = _upload(auth_client, _kb())
     r = auth_client.put("/api/siem/profile", json={"snapshot_id": snap})
     assert r.status_code == 204, r.text
-    assert calls == [1]
+    assert calls == [(snap, False)]
+
+
+# ---- Защита от ложных «устранена» ------------------------------------------------------
+
+
+def _events(client: TestClient, key: str) -> list[str]:
+    return [e["kind"] for e in _state(client, key)["events"]]
+
+
+def _reparse(client: TestClient, snapshot_id: int) -> None:
+    r = client.post(f"/api/siem/snapshots/{snapshot_id}/reparse")
+    assert r.status_code == 202, r.text
+    assert client.get(f"/api/siem/jobs/{r.json()['job_id']}").json()["status"] == "done"
+
+
+def test_reparse_after_parser_change_does_not_resolve(auth_client: TestClient, db_session: Any,
+                                                       monkeypatch: Any, caplog: Any) -> None:
+    """Переразбор новым разбором меняет находки снапшота, но не данные инсталляции:
+    сравнивать его с прошлым снапшотом нельзя — статусы не меняются, `present` — да."""
+    import logging
+    from pathlib import Path
+
+    from api.db.models import Snapshot
+    from api.modules.siem import findings_adapter
+
+    _upload(auth_client, _kb("10.20.30.40"))
+    snap2 = _upload(auth_client, _kb("10.20.30.40", extra_rule=True))
+    ip = _by_field(_list(auth_client, snap2), "dst.ip")
+    _put(auth_client, ip["key"], status="in_work")
+
+    # «Новый разбор» видит в том же архиве другой адрес.
+    Path(db_session.get(Snapshot, snap2).archive_path).write_bytes(_kb("10.20.30.41", extra_rule=True))
+    monkeypatch.setattr(findings_adapter, "PARSER_VERSION", "9.9.9-test")
+    with caplog.at_level(logging.WARNING, logger=findings_adapter.__name__):
+        _reparse(auth_client, snap2)
+    st = _state(auth_client, ip["key"])
+    assert (st["status"], st["present"]) == ("in_work", False)
+    assert "auto_resolved" not in _events(auth_client, ip["key"])
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+    db_session.expire_all()
+    assert db_session.get(Snapshot, snap2).parser_version == "9.9.9-test"
+    # Решение не потерялось из виду: строка в работе видна среди открытых как пропавшая.
+    gone = [i for i in _list(auth_client, snap2)["items"] if i["key"] == ip["key"]]
+    assert [(g["status"], g["gone"]) for g in gone] == [("in_work", True)]
+
+
+def test_upload_by_other_parser_version_does_not_resolve_until_versions_match(
+        auth_client: TestClient, monkeypatch: Any) -> None:
+    from api.modules.siem import findings_adapter
+
+    snap1 = _upload(auth_client, _kb("10.20.30.40"))
+    ip = _by_field(_list(auth_client, snap1), "dst.ip")
+    _put(auth_client, ip["key"], status="in_work")
+
+    monkeypatch.setattr(findings_adapter, "PARSER_VERSION", "9.9.9-test")
+    _upload(auth_client, _kb("10.20.30.41"))
+    st = _state(auth_client, ip["key"])
+    assert (st["status"], st["present"]) == ("in_work", False)
+    assert "auto_resolved" not in _events(auth_client, ip["key"])
+
+    # Следующая выгрузка той же версии сравнима с предыдущей — автоматика снова работает.
+    snap3 = _upload(auth_client, _kb("10.20.30.41", extra_rule=True))
+    st = _state(auth_client, ip["key"])
+    assert st["status"] == "resolved" and st["events"][0]["details"]["ref"] == f"снапшот #{snap3}"
+
+
+def test_profile_change_keeps_statuses(auth_client: TestClient, db_session: Any) -> None:
+    """Профиль, убравший находку, — решение об анализе, а не исправление в базе знаний."""
+    from api.db.models import Snapshot
+
+    _upload(auth_client, _kb("10.20.30.40"))
+    snap = _upload(auth_client, _kb("10.20.30.40", extra_rule=True))
+    listed = _by_field(_list(auth_client, snap), "subject.account.name")
+    _put(auth_client, listed["key"], status="in_work")
+    before = db_session.get(Snapshot, snap).profile_hash
+    assert before
+
+    r = auth_client.put("/api/siem/profile", json={"snapshot_id": snap, "field_roles": {"technical": ["subject.account.name"]}})
+    assert r.status_code == 204, r.text
+    assert all(i["field"] != "subject.account.name" or i["gone"] for i in _list(auth_client, snap, status="all")["items"])
+    st = _state(auth_client, listed["key"])
+    assert (st["status"], st["present"]) == ("in_work", False)
+    assert _events(auth_client, listed["key"]) == ["status"]
+    db_session.expire_all()
+    assert db_session.get(Snapshot, snap).profile_hash not in (None, before)
+
+    # Профиль вернули — находка снова на месте, без событий автоматики.
+    assert auth_client.put("/api/siem/profile", json={"snapshot_id": snap}).status_code == 204
+    st = _state(auth_client, listed["key"])
+    assert (st["status"], st["present"]) == ("in_work", True)
+    assert _events(auth_client, listed["key"]) == ["status"]
+
+
+def test_profile_hash_ignores_what_does_not_change_findings() -> None:
+    """Схема имён у каждой выгрузки своя (в ней счётчики): в отпечаток идёт только то,
+    от чего зависят находки, — иначе соседние выгрузки никогда не были бы сравнимы."""
+    from api.modules.siem.findings_adapter import profile_hash
+    from kbaudit.profile import FieldRoles, Profile, TableRoles, detect_profile
+
+    a = detect_profile(["DEMO_HC_002_029_Impacket", "DEMO_HC_002_030_Other"])
+    b = detect_profile(["DEMO_HC_002_029_Impacket", "DEMO_HC_002_030_Other", "DEMO_HC_002_031_Extra", "X_Y_Z"])
+    assert profile_hash(a) == profile_hash(b) == profile_hash(Profile(tables=TableRoles(scoping=["T"]), confirmed_by="u"))
+    assert profile_hash(Profile(field_roles=FieldRoles(technical=["dst.ip"]))) != profile_hash(Profile())
+    assert profile_hash(Profile(builtin_accounts=["svc"])) != profile_hash(Profile())
+    assert profile_hash(Profile(builtin_accounts=["a", "b"])) == profile_hash(Profile(builtin_accounts=["b", "a"]))
+
+
+# ---- Соль ключей ------------------------------------------------------------------------
+
+
+def test_lost_salt_is_not_recreated_while_statuses_exist(auth_client: TestClient, db_session: Any, caplog: Any) -> None:
+    """Новая соль молча сделала бы все решения ничьими: ключи бы сменились."""
+    import pytest
+
+    from api.db.models import AppSetting
+    from api.modules.siem.findings_adapter import SALT_SETTING, SaltMissing, key_salt
+
+    snap = _upload(auth_client, _kb())
+    ip = _by_field(_list(auth_client, snap), "dst.ip")
+    _put(auth_client, ip["key"], status="in_work")
+    db_session.delete(db_session.get(AppSetting, SALT_SETTING))
+    db_session.commit()
+
+    with pytest.raises(SaltMissing):
+        key_salt(db_session)
+    assert ADAPTER.current(db_session, 0) is None
+    body = _list(auth_client, snap)
+    assert body["status_keys_broken"] is True
+    assert {i["status"] for i in body["items"]} == {"new"} and body["total"] == 2
+    assert auth_client.get("/api/siem/rules", params={"snapshot_id": snap}).status_code == 200
+    assert auth_client.get(f"/api/siem/rules/{U2}", params={"snapshot_id": snap}).status_code == 200
+
+    # Сверка пропускается: решение не закрыто, соль не заведена заново.
+    _upload(auth_client, _kb("10.20.30.41"))
+    db_session.expire_all()
+    assert db_session.get(AppSetting, SALT_SETTING) is None
+    assert _state(auth_client, ip["key"])["status"] == "in_work"
+
+
+def test_salt_is_created_on_a_clean_install(auth_client: TestClient) -> None:
+    snap = _upload(auth_client, _kb())
+    assert _list(auth_client, snap)["status_keys_broken"] is False
+
+
+# ---- Старый снапшот -----------------------------------------------------------------------
+
+
+def test_old_snapshot_says_statuses_are_as_of_today(auth_client: TestClient) -> None:
+    snap1 = _upload(auth_client, _kb("10.20.30.40"))
+    snap2 = _upload(auth_client, _kb("10.20.30.41"))
+    old, new = _list(auth_client, snap1), _list(auth_client, snap2)
+    assert (old["is_latest"], old["statuses_as_of"]) == (False, "today")
+    assert (new["is_latest"], new["statuses_as_of"]) == (True, "today")
+
+
+def test_snapshot_list_marks_parsed_snapshots(auth_client: TestClient, db_session: Any) -> None:
+    """Ссылка `?key=` ведёт на активный снапшот — последний разобранный, а не последний загруженный."""
+    from api.db.models import Job, Snapshot
+
+    snap = _upload(auth_client, _kb())
+    loading = Snapshot(sha256="f" * 64, filename="kb.zip", archive_path="/x", parsed_cache_path="/x")
+    db_session.add(loading)
+    db_session.flush()
+    db_session.add(Job(snapshot_id=loading.id, stage="parsing", status="running", progress=20))
+    db_session.commit()
+    parsed = {s["id"]: s["parsed"] for s in auth_client.get("/api/siem/snapshots").json()}
+    assert parsed == {snap: True, loading.id: False}
+
+
+# ---- Пропавшие находки в списке ---------------------------------------------------------
+
+
+def test_default_list_does_not_load_gone_rows(auth_client: TestClient, monkeypatch: Any) -> None:
+    """Пропавших с каждой выгрузкой больше; по умолчанию (открытые) их данные не нужны."""
+    from api.modules.siem.services import facets
+
+    calls: list[int] = []
+    real = facets.last_known
+    monkeypatch.setattr(facets, "last_known", lambda db, salt, keys: calls.append(len(keys)) or real(db, salt, keys))
+
+    _upload(auth_client, _kb("10.20.30.40"))
+    snap2 = _upload(auth_client, _kb("10.20.30.41"))
+    default = _list(auth_client, snap2)
+    assert calls == [] and default["total"] == 2
+    # Счётчик статуса пропавших — по строкам состояния, с фильтрами, известными из ключа.
+    assert default["facets"]["status"]["resolved"] == 1
+    assert _list(auth_client, snap2, kind=2)["facets"]["status"]["resolved"] == 1
+    assert _list(auth_client, snap2, kind=1)["facets"]["status"]["resolved"] == 0
+    assert _list(auth_client, snap2, object_uuid=U1)["facets"]["status"]["resolved"] == 0
+    assert calls == []
+
+    resolved = _list(auth_client, snap2, status="resolved")
+    assert calls == [1] and resolved["total"] == 1 and resolved["items"][0]["gone"] is True
+    # Фильтр, которого по ключу не проверить, — данные пропавших нужны и для счётчика.
+    assert _list(auth_client, snap2, polarity="assertion")["facets"]["status"]["resolved"] == 1
+    assert len(calls) == 2
+
+
+def test_last_known_takes_the_latest_snapshot(auth_client: TestClient, db_session: Any) -> None:
+    from api.modules.siem.findings_adapter import key_salt, last_known
+
+    snap1 = _upload(auth_client, _kb("10.20.30.40"))
+    ip = _by_field(_list(auth_client, snap1), "dst.ip")
+    snap2 = _upload(auth_client, _kb("10.20.30.40", name="DEMO_HC_002_030_Renamed"))
+    _upload(auth_client, _kb("10.20.30.41"))
+    found = last_known(db_session, key_salt(db_session), {ip["key"], "нет|такого|ключа"})
+    assert set(found) == {ip["key"]}
+    assert (found[ip["key"]].snapshot_id, found[ip["key"]].object_name) == (snap2, "DEMO_HC_002_030_Renamed")
+    assert found[ip["key"]].has_value is True
+
+
+def test_rows_without_title_get_one_from_the_last_known_finding(auth_client: TestClient, db_session: Any) -> None:
+    """Массовая смена заводит строки без подписи; сверка подписывает и пропавшие."""
+    from api.platform.findings.models import FindingState
+
+    snap = _upload(auth_client, _kb("10.20.30.40"))
+    keys = [i["key"] for i in _list(auth_client, snap)["items"]]
+    r = auth_client.post("/api/findings/bulk", json={"module": "siem", "scope_id": 0, "keys": keys,
+                                                     "change": {"status": "in_work"}})
+    assert r.status_code == 200
+    _upload(auth_client, _kb("10.20.30.41"))
+    rows = {r.key: r for r in db_session.query(FindingState).filter(FindingState.module == "siem")}
+    ip = next(r for r in rows.values() if "|2|" in r.key)
+    assert (ip.present, ip.status, ip.severity) == (False, "resolved", "high") and "DEMO_HC_002_030_Other" in ip.title
+    assert all(r.title for r in rows.values())
+
+
+def test_titles_and_mine_never_carry_values(auth_client: TestClient, db_session: Any) -> None:
+    from api.db.models import Finding
+
+    snap = _upload(auth_client, _kb())
+    for item in _list(auth_client, snap)["items"]:
+        _put(auth_client, item["key"], assignee="tester")
+    _upload(auth_client, _kb(extra_rule=True))
+    values = {f.value for f in db_session.query(Finding) if f.value}
+    raw = auth_client.get("/api/findings/mine", params={"module": "siem"}).text
+    mine = json.loads(raw)
+    assert values and len(mine) == 2 and all(m["title"] for m in mine)
+    assert not any(v in raw for v in values)
 
 
 # ---- Список и фильтры ----------------------------------------------------------------

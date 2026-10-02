@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
-from api.db.models import AppUser, Snapshot
+from api.db.models import AppUser, Job, Snapshot
 from api.deps import get_current_user
 from api.limits import SIEM_UPLOAD, check_upload_size
 from api.modules.siem.services.ingest import (
@@ -72,8 +73,11 @@ def reparse_snapshot(
 def list_snapshots(
     db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)
 ) -> list[dict[str, Any]]:
+    """`parsed` — разбор завершён хотя бы раз: активный снапшот (статусы находок
+    сверяются с ним) — разобранный с наибольшим id, а не последний загруженный."""
     rows = db.query(Snapshot).order_by(Snapshot.id.desc()).all()
-    return [build_list_item(s) for s in rows]
+    parsed = set(db.scalars(select(Job.snapshot_id).where(Job.status == "done").distinct()))
+    return [{**build_list_item(s), "parsed": s.id in parsed} for s in rows]
 
 
 @router.get("/{snapshot_id}")

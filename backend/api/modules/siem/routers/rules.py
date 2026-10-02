@@ -17,7 +17,7 @@ from api.db.models import AppUser, RuleDependency, RuleMsgid, RuleRow, RuleTable
 from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
 from api.modules.attack.services.attack_bundle import current as current_bundle
-from api.modules.siem.findings_adapter import MODULE, SCOPE, key_of, key_salt
+from api.modules.siem.findings_adapter import MODULE, SCOPE, display_salt, key_of
 from api.modules.siem.services.attack import STATUS_UNMAPPED, markup_by_rule, techniques_of
 from api.modules.siem.services.highlight import spans_for
 from api.modules.siem.services.rule_attention import attention_by_rule, group_key
@@ -259,7 +259,7 @@ def get_rule(
         .filter(FindingRow.snapshot_id == snapshot_id, FindingRow.object_uuid == rule_uuid)
         .all()
     )
-    salt = key_salt(db)
+    salt, _ = display_salt(db)
     keys = {f.id: key_of(salt, f) for f in finding_rows}
     states = finding_svc.state_map(db, MODULE, SCOPE, keys.values())
     counted = finding_svc.counted_statuses(db)

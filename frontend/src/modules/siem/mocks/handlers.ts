@@ -84,6 +84,7 @@ const SNAPSHOTS: SnapshotListItem[] = [
     rule_count: RULES.length,
     finding_count: FINDINGS.length,
     kb_version: '30.0.6825',
+    parsed: true,
   },
   {
     id: PREVIOUS_ID,
@@ -92,6 +93,7 @@ const SNAPSHOTS: SnapshotListItem[] = [
     rule_count: RULES.length,
     finding_count: 1108,
     kb_version: '30.0.6702',
+    parsed: true,
   },
 ]
 
@@ -409,6 +411,9 @@ export const handlers = [
         assignee: { none: withStatus.filter((f) => applies(f, null)).length },
         flags: { overdue: 0, risk_expiring: 0 },
       },
+      is_latest: Number(p.get('snapshot_id')) === CURRENT_ID,
+      statuses_as_of: 'today',
+      status_keys_broken: false,
     }
     return HttpResponse.json(response)
   }),

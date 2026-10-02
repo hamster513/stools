@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from collections.abc import Sequence
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -65,6 +66,11 @@ class FindingListResponse(BaseModel):
     total: int
     items: list[FindingListItem]
     facets: dict[str, dict[str, int]]
+    #: Снапшот — активный (последний разобранный); у прочих статусы всё равно на сегодня.
+    is_latest: bool
+    statuses_as_of: Literal["today"] = "today"
+    #: Соли ключей нет, а решения есть: статусы не сопоставить, показаны как «Новая».
+    status_keys_broken: bool = False
 
 
 def _statuses(raw: str | None, risk_expiring: bool) -> frozenset[str]:
@@ -101,7 +107,7 @@ def _items(db: Session, rows: Sequence[ListRow]) -> list[FindingListItem]:
             due_date=st.due_date if st is not None else None, overdue=r.overdue,
             risk_until=st.risk_until if st is not None else None,
             first_seen_at=first, age_days=(now - first).days if first else None, gone=r.gone,
-            has_value=bool(f.value),
+            has_value=f.has_value,
         ))
     return items
 
@@ -156,7 +162,8 @@ def list_findings(
     )
     query = FindingQuery(db, filters)
     rows = query.page(sort=sort, order=order, limit=limit, offset=offset)
-    return FindingListResponse(total=query.total(), items=_items(db, rows), facets=query.facets())
+    return FindingListResponse(total=query.total(), items=_items(db, rows), facets=query.facets(),
+                               is_latest=query.is_latest, status_keys_broken=query.keys_broken)
 
 
 @router.get("/{finding_id}/detail", response_model=FindingDetail)

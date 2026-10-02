@@ -23,6 +23,8 @@ interface DetailDrawerProps {
   onClose: () => void
   /** Статус, исполнитель или срок изменены — список обновляется. */
   onChanged: () => void
+  /** false — ключи статусов не сопоставить (потеряна соль): блока работы с находкой нет. */
+  statusesAvailable?: boolean
 }
 
 /**
@@ -30,7 +32,7 @@ interface DetailDrawerProps {
  * /detail — списки находок их никогда не показывают. Внизу — блок «Работа
  * с находкой» общих статусов платформы (module `siem`, область 0).
  */
-export function DetailDrawer({ finding, ordinal, onClose, onChanged }: DetailDrawerProps) {
+export function DetailDrawer({ finding, ordinal, onClose, onChanged, statusesAvailable = true }: DetailDrawerProps) {
   const open = finding !== null
   const { data, isLoading, isError } = useFindingDetail(finding?.id, { enabled: open })
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -182,16 +184,18 @@ export function DetailDrawer({ finding, ordinal, onClose, onChanged }: DetailDra
                 )}
               </div>
 
-              <div className="mt-4 border-t border-grid pt-4">
-                <FindingWorkBlock
-                  module="siem"
-                  scopeId={0}
-                  findingKey={finding.key}
-                  title={`${finding.object_name}: ${FINDING_KIND_LABELS[finding.kind]}, поле ${finding.field}`}
-                  severity={finding.severity}
-                  onChanged={onChanged}
-                />
-              </div>
+              {statusesAvailable && (
+                <div className="mt-4 border-t border-grid pt-4">
+                  <FindingWorkBlock
+                    module="siem"
+                    scopeId={0}
+                    findingKey={finding.key}
+                    title={`${finding.object_name}: ${FINDING_KIND_LABELS[finding.kind]}, поле ${finding.field}`}
+                    severity={finding.severity}
+                    onChanged={onChanged}
+                  />
+                </div>
+              )}
             </div>
           </>
         )}

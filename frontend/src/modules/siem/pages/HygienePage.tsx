@@ -97,6 +97,9 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   // при прокрутке, и это читалось бы как поломка.
   const facets = query.data?.pages[0]?.facets
   const total = query.data?.pages[0]?.total ?? 0
+  const first = query.data?.pages[0]
+  // Соли ключей нет: статусы не сопоставить, и менять их нельзя — решение легло бы на чужой ключ.
+  const keysBroken = first?.status_keys_broken === true
   const fieldFacet = facets?.field
 
   useEffect(() => {
@@ -238,7 +241,9 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
         </div>
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
-      {write && (
+      {first && !first.is_latest && <div className="shrink-0 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text-secondary">Статусы показаны на сегодня, находки — на дату снапшота</div>}
+      {keysBroken && <div role="alert" className="shrink-0 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text">Статусы находок недоступны: потерян ключ сопоставления (app_setting.siem_finding_key). Восстановите его из резервной копии — до тех пор все находки показаны как «Новая».</div>}
+      {write && !keysBroken && (
         <BulkBar
           module="siem"
           scopeId={0}
@@ -287,7 +292,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
               onReachEnd={() => {
                 if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage()
               }}
-              {...(write ? { checked, onCheck: check, onCheckAll: (on: boolean) => setChecked(on ? new Set(items.map((f) => f.key)) : new Set()) } : {})}
+              {...(write && !keysBroken ? { checked, onCheck: check, onCheckAll: (on: boolean) => setChecked(on ? new Set(items.map((f) => f.key)) : new Set()) } : {})}
             />
           )}
         </div>
@@ -298,6 +303,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
         ordinal={shownFinding ? items.findIndex((f) => f.id === shownFinding.id) + 1 || null : null}
         onClose={() => setOpenFinding(null)}
         onChanged={refresh}
+        statusesAvailable={!keysBroken}
       />
     </div>
   )

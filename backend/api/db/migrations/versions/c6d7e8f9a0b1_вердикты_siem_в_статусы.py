@@ -14,7 +14,10 @@ Create Date: 2026-10-02 00:00:00.000000
 Ключ — как в api/modules/siem/findings_adapter.py (`finding_key`): подпись с
 солью установки, без хеша значения. Соль заводится здесь же в `app_setting`
 и при `downgrade` не удаляется — повторный `upgrade` даёт те же ключи.
-`present`, подпись и тяжесть — по активному снапшоту (последнему разобранному).
+`present` — по активному снапшоту (последнему разобранному); подпись и
+тяжесть — по самому позднему снапшоту, где находка была. Строка, которая
+уже есть (заведена после прошлого `upgrade` и пережила `downgrade`), не
+трогается.
 
 Таблица вердиктов не удаляется, а переименовывается в
 `finding_verdict_archive_20261002`. `downgrade` возвращает её и удаляет
@@ -68,13 +71,22 @@ def upgrade() -> None:
     active = conn.execute(sa.text(
         "SELECT max(s.id) FROM snapshot s WHERE EXISTS (SELECT 1 FROM job j WHERE j.snapshot_id = s.id AND j.status = 'done')"
     )).scalar()
-    present: dict[str, tuple[str, str]] = {}
+    present: set[str] = set()
     if active is not None:
-        for uuid, name, kind, field, value_hash, severity in conn.execute(sa.text(
-            "SELECT object_uuid, object_name, kind, field, value_hash, severity FROM finding WHERE snapshot_id = :s"
-        ), {"s": active}):
-            title = f"{name}: {KIND_TITLES.get(kind, f'класс {kind}')}, поле {field}"
-            present[_key(salt, uuid, kind, field, value_hash)] = (title[:512], severity[:16])
+        present = {_key(salt, *row) for row in conn.execute(sa.text(
+            "SELECT object_uuid, kind, field, value_hash FROM finding WHERE snapshot_id = :s"
+        ), {"s": active})}
+    # Подпись и тяжесть — из самого позднего снапшота, где находка была.
+    last: dict[tuple[str, int, str, str], tuple[str, str]] = {}
+    for uuid, name, kind, field, value_hash, severity in conn.execute(sa.text(
+        "SELECT DISTINCT ON (f.object_uuid, f.kind, f.field, f.value_hash) "
+        "f.object_uuid, f.object_name, f.kind, f.field, f.value_hash, f.severity "
+        f"FROM finding f JOIN {TABLE} v ON v.object_key = f.object_uuid AND v.kind = f.kind "
+        "AND v.field = f.field AND v.value_hash = f.value_hash AND v.key_kind = 'uuid' "
+        "ORDER BY f.object_uuid, f.kind, f.field, f.value_hash, f.snapshot_id DESC"
+    )):
+        title = f"{name}: {KIND_TITLES.get(kind, f'класс {kind}')}, поле {field}"
+        last[(uuid, kind, field, value_hash)] = (title[:512], severity[:16])
 
     verdicts = conn.execute(sa.text(
         f"SELECT object_key, kind, field, value_hash, status, reason, decided_by, decided_at FROM {TABLE} "
@@ -83,14 +95,17 @@ def upgrade() -> None:
     for uuid, kind, field, value_hash, old, reason, decided_by, decided_at in verdicts:
         key = _key(salt, uuid, kind, field, value_hash)
         status = STATUS[old]
-        title, severity = present.get(key, ("", ""))
+        title, severity = last.get((uuid, kind, field, value_hash), ("", ""))
         at = decided_at or dt.datetime.now(dt.UTC)
         state_id = conn.execute(sa.text(
             "INSERT INTO platform_finding_state "
             "(module, scope_id, key, status, reason, present, title, severity, updated_by, updated_at) "
-            "VALUES ('siem', 0, :key, :status, :reason, :present, :title, :severity, :by, :at) RETURNING id"
+            "VALUES ('siem', 0, :key, :status, :reason, :present, :title, :severity, :by, :at) "
+            "ON CONFLICT (module, scope_id, key) DO NOTHING RETURNING id"
         ), {"key": key, "status": status, "reason": reason or "", "present": key in present, "title": title,
-            "severity": severity, "by": decided_by or "", "at": at}).scalar_one()
+            "severity": severity, "by": decided_by or "", "at": at}).scalar()
+        if state_id is None:
+            continue
         conn.execute(sa.text(
             "INSERT INTO platform_finding_event (state_id, at, actor, kind, from_status, to_status, comment, details) "
             "VALUES (:sid, :at, :actor, 'migrated', NULL, :status, :comment, CAST(:details AS jsonb))"

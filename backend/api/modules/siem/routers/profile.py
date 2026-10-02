@@ -20,6 +20,7 @@ from api.db.base import get_db
 from api.db.models import AppUser, RuleField, Snapshot, SnapshotProfile
 from api.deps import get_current_user
 from api.modules.siem.findings_adapter import reconcile as reconcile_findings
+from api.modules.siem.findings_adapter import stamp as stamp_analysis
 from api.modules.siem.services.persist import persist_report
 from kbaudit.analyzers.fields import builtin_account_names, builtin_field_roles
 from kbaudit.analyzers.mp_taxonomy import role_by_documentation
@@ -224,6 +225,8 @@ def put_profile(
 
     report = build_report(parsed, profile)
     persist_report(db, snapshot, parsed, report)
+    stamp_analysis(snapshot, profile)
     db.commit()
-    # Профиль меняет находки снапшота — статусы сверяются с активным снапшотом.
-    reconcile_findings(db)
+    # Профиль меняет находки снапшота, но не базу знаний: автоматики статусов
+    # нет, у строк обновляется только наличие (findings_adapter.reconcile).
+    reconcile_findings(db, snapshot.id, upload=False)

@@ -9,7 +9,11 @@
 Статусы — общие статусы находок платформы (api/platform/findings), по ключу
 находки (findings_adapter). У активного снапшота к его находкам добавляются
 те, которых в нём уже нет, но есть состояние (`present = false`):
-устранённые системой и принятые людьми, — иначе их негде увидеть.
+устранённые системой и принятые людьми, — иначе их негде увидеть. Таких
+строк с каждой выгрузкой больше, поэтому данные находок (из последнего
+снапшота, где она была) берутся только для статусов, которые запрошены;
+остальные пропавшие считаются в фасете статуса по строкам состояния —
+с фильтрами, которые проверяются по ключу (uuid, класс) и по состоянию.
 
 Фасет считается по всем активным фильтрам, кроме фильтра по своему же
 измерению — иначе выбранное значение фасета всегда показывало бы 100%
@@ -20,14 +24,20 @@ from __future__ import annotations
 import datetime as dt
 from collections import Counter
 from dataclasses import dataclass, replace
-from itertools import batched
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.db.models import Finding as FindingRow
-from api.modules.siem.findings_adapter import MODULE, SCOPE, active_snapshot_id, key_of, key_salt
+from api.modules.siem.findings_adapter import (
+    MODULE,
+    SCOPE,
+    FindingView,
+    active_snapshot_id,
+    display_salt,
+    findings_view,
+    last_known,
+    view_key,
+)
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -49,7 +59,6 @@ _IN_TABLE_VALUES = ["true", "false"]
 #: зашито в правила» имеет смысл только вместе с ответом «а сколько нет».
 SHAPE_PLAIN = "plain"
 _SHAPE_VALUES = ["ip", "cidr", "fqdn", SHAPE_PLAIN]
-_CHUNK = 5000
 
 
 @dataclass(frozen=True)
@@ -80,13 +89,12 @@ class FindingFilters:
 
 
 @dataclass
-class ListRow:
-    finding: FindingRow
+class StateRow:
+    """Строка по ключу и состоянию — всё, что известно о пропавшей находке без её данных."""
+
     key: str
     state: FindingState | None
     today: dt.date
-    #: Находки нет в активном снапшоте: строка — из последнего снапшота, где она была.
-    gone: bool = False
 
     @property
     def status(self) -> str:
@@ -107,48 +115,56 @@ class ListRow:
                 and st.risk_until <= self.today + dt.timedelta(days=finding_svc.RISK_EXPIRING_DAYS))
 
 
-def _last_known(db: Session, salt: bytes, keys: set[str]) -> dict[str, FindingRow]:
-    """Находки по ключам, каждая — из самого позднего снапшота, где была.
-    Отбор по uuid объекта из ключа, совпадение — по подписи."""
-    found: dict[str, FindingRow] = {}
-    for chunk in batched({k.split("|", 1)[0] for k in keys}, _CHUNK):
-        for f in db.scalars(select(FindingRow).where(FindingRow.object_uuid.in_(chunk))
-                            .order_by(FindingRow.snapshot_id.desc(), FindingRow.id)):
-            key = key_of(salt, f)
-            if key in keys and key not in found:
-                found[key] = f
-    return found
+@dataclass
+class ListRow(StateRow):
+    finding: FindingView
+    #: Находки нет в активном снапшоте: строка — из последнего снапшота, где она была.
+    gone: bool = False
 
 
-def _load_rows(db: Session, snapshot_id: int) -> list[ListRow]:
-    findings = db.query(FindingRow).filter(FindingRow.snapshot_id == snapshot_id).all()
-    salt = key_salt(db)
-    states = finding_svc.state_map(db, MODULE, SCOPE)
+def _needs_finding_data(filters: FindingFilters) -> bool:
+    """Фильтры, которых не проверить по ключу и состоянию."""
+    return any(v is not None for v in (filters.polarity, filters.object_type, filters.in_table, filters.shape,
+                                       filters.field)) or bool(filters.q)
+
+
+@dataclass
+class Loaded:
+    rows: list[ListRow]
+    #: Пропавшие находки, чьи данные не грузились: только для фасета статуса и флагов.
+    stubs: list[StateRow]
+    is_latest: bool
+    keys_broken: bool
+
+
+def _load_rows(db: Session, filters: FindingFilters) -> Loaded:
+    salt, broken = display_salt(db)
+    states = {} if broken else finding_svc.state_map(db, MODULE, SCOPE)
     today = finding_svc.today()
-    out = []
-    for f in findings:
-        key = key_of(salt, f)
-        out.append(ListRow(finding=f, key=key, state=states.get(key), today=today))
-    if snapshot_id == active_snapshot_id(db):
-        here = {r.key for r in out}
-        absent = {st.key for st in states.values() if not st.present and st.key not in here}
-        if absent:
-            out += [ListRow(finding=f, key=key, state=states[key], gone=True, today=today)
-                    for key, f in _last_known(db, salt, absent).items()]
-    return out
+    rows = []
+    for f in findings_view(db, filters.snapshot_id):
+        key = view_key(salt, f)
+        rows.append(ListRow(key=key, state=states.get(key), today=today, finding=f))
+    is_latest = filters.snapshot_id == active_snapshot_id(db)
+    stubs: list[StateRow] = []
+    if is_latest and not broken:
+        here = {r.key for r in rows}
+        absent = [st for st in states.values() if not st.present and st.key not in here]
+        every = filters.statuses >= frozenset(STATUSES) or _needs_finding_data(filters)
+        wanted = {st.key for st in absent if every or st.status in filters.statuses}
+        if wanted:
+            rows += [ListRow(key=key, state=states[key], today=today, finding=f, gone=True)
+                     for key, f in last_known(db, salt, wanted).items()]
+        stubs = [StateRow(key=st.key, state=st, today=today) for st in absent if st.key not in wanted]
+    return Loaded(rows=rows, stubs=stubs, is_latest=is_latest, keys_broken=broken)
 
 
-def _matches(row: ListRow, filters: FindingFilters) -> bool:
-    f = row.finding
-    if filters.kind is not None and f.kind != filters.kind:
+def _matches_state(row: StateRow, filters: FindingFilters) -> bool:
+    """Фильтры, проверяемые по ключу (`object_uuid|kind|подпись`) и состоянию."""
+    uuid, kind, _ = row.key.split("|", 2)
+    if filters.kind is not None and kind != str(filters.kind):
         return False
-    if filters.polarity is not None and f.polarity != filters.polarity:
-        return False
-    if filters.object_type is not None and f.object_type != filters.object_type:
-        return False
-    if filters.in_table is not None and f.in_table != filters.in_table:
-        return False
-    if filters.shape is not None and (f.shape or SHAPE_PLAIN) != filters.shape:
+    if filters.object_uuid is not None and uuid != filters.object_uuid:
         return False
     if row.status not in filters.statuses:
         return False
@@ -158,18 +174,27 @@ def _matches(row: ListRow, filters: FindingFilters) -> bool:
         return False
     if filters.overdue and not row.overdue:
         return False
-    if filters.risk_expiring and not row.risk_expiring:
+    return not (filters.risk_expiring and not row.risk_expiring)
+
+
+def _matches(row: ListRow, filters: FindingFilters) -> bool:
+    f = row.finding
+    if filters.polarity is not None and f.polarity != filters.polarity:
+        return False
+    if filters.object_type is not None and f.object_type != filters.object_type:
+        return False
+    if filters.in_table is not None and f.in_table != filters.in_table:
+        return False
+    if filters.shape is not None and (f.shape or SHAPE_PLAIN) != filters.shape:
         return False
     if filters.field is not None and f.field != filters.field:
-        return False
-    if filters.object_uuid is not None and f.object_uuid != filters.object_uuid:
         return False
     if filters.q:
         needle = filters.q.strip().lower()
         haystack = f"{f.object_name} {f.field}".lower()
         if needle not in haystack:
             return False
-    return True
+    return _matches_state(row, filters)
 
 
 _SORT_KEYS: dict[str, Any] = {
@@ -187,7 +212,12 @@ class FindingQuery:
     пагинацией, посчитанными за один проход по загруженным в память рядам."""
 
     def __init__(self, db: Session, filters: FindingFilters):
-        self._rows = _load_rows(db, filters.snapshot_id)
+        loaded = _load_rows(db, filters)
+        self._rows, self._stubs = loaded.rows, loaded.stubs
+        #: Активный снапшот: только у него есть пропавшие находки; статусы — на сегодня у любого.
+        self.is_latest = loaded.is_latest
+        #: Соли ключей нет при живых решениях: статусы не сопоставить, все — «Новая».
+        self.keys_broken = loaded.keys_broken
         self._filters = filters
 
     def filtered(self) -> list[ListRow]:
@@ -213,7 +243,9 @@ class FindingQuery:
         object_type_rows = rows_excluding(replace(f, object_type=None))
         in_table_rows = rows_excluding(replace(f, in_table=None))
         shape_rows = rows_excluding(replace(f, shape=None))
-        status_rows = rows_excluding(replace(f, statuses=frozenset(STATUSES)))
+        all_statuses = replace(f, statuses=frozenset(STATUSES))
+        status_rows: list[StateRow] = [*rows_excluding(all_statuses),
+                                       *(s for s in self._stubs if _matches_state(s, all_statuses))]
         assignee_rows = rows_excluding(replace(f, assignee=None))
 
         def counts_excluding(dimension: str) -> Counter[str]:

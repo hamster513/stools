@@ -169,6 +169,12 @@ class Snapshot(Base):
     kb_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     taxonomy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_type: Mapped[str] = mapped_column(String(32), default="upload")
+    #: Чем посчитаны находки: версия разбора (`kbaudit`) и отпечаток той части
+    #: профиля, от которой они зависят. Автоматика статусов сравнивает соседние
+    #: снапшоты, только если они посчитаны одинаково (findings_adapter).
+    #: У снапшотов до 02.10.2026 пусто.
+    parser_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    profile_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     #: Производные числа сводки (см. api/services/summary.py) — пересчитываются
     #: при загрузке и при смене профиля, не при каждом GET.
@@ -345,7 +351,8 @@ class Finding(Base):
 
     __table_args__ = (
         Index("ix_finding_snapshot_kind", "snapshot_id", "kind"),
-        Index("ix_finding_verdict_key", "object_uuid", "kind", "field", "value_hash"),
+        #: Ключ статуса находки (findings_adapter): по нему ищутся прежние снапшоты находки.
+        Index("ix_finding_identity", "object_uuid", "kind", "field", "value_hash"),
     )
 
 

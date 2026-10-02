@@ -125,7 +125,6 @@ const security: SecuritySettings = {
  *  на одной странице (50) отбор и пагинацию видно сразу. */
 const AUDIT_SHAPES: Array<[string, string, number, string | null]> = [
   ['POST', '/api/siem/snapshots', 201, 'выгрузка knowledgebase_2026_08_24.zip'],
-  ['POST', '/api/siem/findings/verdict', 204, 'вердикт «принято» на 3 находки'],
   ['PUT', '/api/siem/settings', 204, 'адрес модели изменён'],
   ['POST', '/api/settings/users', 201, 'создан пользователь ann'],
   ['PATCH', '/api/settings/users/2', 200, 'роль: аналитик'],

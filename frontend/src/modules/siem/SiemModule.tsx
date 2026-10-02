@@ -84,14 +84,15 @@ function SettingsRoute() {
   )
 }
 
-/** `/siem/hygiene?key=…` — находки актуального снапшота с той же строкой запроса. */
+/** `/siem/hygiene?key=…` — находки активного снапшота (последнего разобранного:
+ *  статусы сверяются с ним) с той же строкой запроса. */
 function HygieneRedirect() {
   const { search } = useRouter()
   const { data: snapshots, isLoading } = useSnapshots()
 
   if (isLoading || !snapshots) return <FullPageSpinner />
 
-  const latest = latestOf(snapshots)
+  const latest = latestOf(snapshots.filter((s) => s.parsed)) ?? latestOf(snapshots)
   return <Redirect to={latest ? `/siem/snapshots/${latest.id}/hygiene${search}` : '/siem/settings'} />
 }
 

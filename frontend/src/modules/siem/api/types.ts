@@ -34,6 +34,8 @@ export interface SnapshotListItem {
   rule_count: number
   finding_count: number
   kb_version: string | null
+  /** Разбор завершён хотя бы раз. Активный снапшот — разобранный с наибольшим id. */
+  parsed: boolean
 }
 
 export interface CreateSnapshotResponse {
@@ -160,6 +162,12 @@ export interface FindingsListResponse {
   total: number
   items: FindingListItem[]
   facets: FindingsFacets
+  /** Снапшот — активный (последний разобранный): только у него есть пропавшие находки. */
+  is_latest: boolean
+  /** Статусы — на сегодня у любого снапшота, находки — на дату снапшота. */
+  statuses_as_of: 'today'
+  /** Соли ключей нет, а решения есть: статусы не сопоставить, все показаны как «Новая». */
+  status_keys_broken: boolean
 }
 
 /** Форма значения: сетевой адрес, подсеть, имя узла — или обычное значение.
