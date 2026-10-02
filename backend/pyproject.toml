@@ -68,6 +68,7 @@ line-length = 100
 "api/routers/*.py" = ["B008"]
 "api/modules/*/routers/*.py" = ["B008"]
 "api/platform/routers/*.py" = ["B008"]
+"api/platform/findings/router.py" = ["B008"]
 "api/deps.py" = ["B008"]
 "api/jobs.py" = ["B008"]
 "api/rbac.py" = ["B008"]

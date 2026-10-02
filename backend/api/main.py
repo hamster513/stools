@@ -48,6 +48,7 @@ from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
 from api.origin import OriginMiddleware
 from api.platform import router as settings_router
+from api.platform.findings.router import router as findings_router
 from api.platform.scheduler import Scheduler
 from api.rbac import require_access
 from api.routers import auth, oidc
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(oidc.router)
     app.include_router(auth.router, dependencies=[Depends(require_access)])
     app.include_router(settings_router, dependencies=[Depends(require_access)])
+    app.include_router(findings_router, dependencies=[Depends(require_access)])
     for module_router in MODULE_ROUTERS:
         app.include_router(module_router, dependencies=[Depends(require_access)])
     return app

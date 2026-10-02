@@ -1,0 +1,91 @@
+"""Статусы находок: коды, переходы, проверки (спека §1). Чистые функции, без базы.
+
+`resolved` и `reopened` ставит только система по сравнению с данными;
+человек выбирает из `MANUAL`. `fixed` — «исправлено, ждём подтверждения
+данными»: пока ключ в данных, статус держится, исчезновение даёт `resolved`,
+а `reopened` бывает только после исчезновения.
+"""
+from __future__ import annotations
+
+import datetime as dt
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+STATUSES = ("new", "in_work", "risk_accepted", "false_positive", "fixed", "resolved", "reopened")
+MANUAL = ("new", "in_work", "risk_accepted", "false_positive", "fixed")
+OPEN = frozenset({"new", "in_work", "fixed", "reopened"})
+NEEDS_REASON = frozenset({"risk_accepted", "false_positive"})
+STATUS_TITLES: dict[str, str] = {
+    "new": "Новая",
+    "in_work": "В работе",
+    "risk_accepted": "Принят риск",
+    "false_positive": "Ложное срабатывание",
+    "fixed": "Исправлено",
+    "resolved": "Устранена",
+    "reopened": "Переоткрыта",
+}
+#: Закрывающие решения людей и подтверждённое данными устранение по умолчанию в подсчёты не идут.
+DEFAULT_COUNTED: dict[str, bool] = {s: s not in {"risk_accepted", "false_positive", "resolved"} for s in STATUSES}
+
+#: Своя шкала, а не api.rbac.allows: ядро не тянет за собой зависимости HTTP-слоя.
+_RANK = {"admin": 2, "analyst": 1, "auditor": 0}
+_ROLE_TITLES = {"admin": "администратор", "analyst": "аналитик"}
+
+
+class TransitionError(ValueError):
+    """Ручная смена не допускается правилами §1 или настройками."""
+
+
+class RoleRequired(TransitionError):
+    """Переход разрешён только роли выше, чем у автора (`risk_accept_role`)."""
+
+
+class FindingSettings(BaseModel):
+    counted: dict[str, bool] = Field(default_factory=lambda: dict(DEFAULT_COUNTED))
+    #: Предел срока принятия риска в днях; None — срок не обязателен и не ограничен.
+    risk_max_days: int | None = Field(default=None, ge=1, le=3650)
+    risk_accept_role: Literal["analyst", "admin"] = "analyst"
+
+    @field_validator("counted")
+    @classmethod
+    def _full_counted(cls, value: dict[str, bool]) -> dict[str, bool]:
+        unknown = set(value) - set(STATUSES)
+        if unknown:
+            raise ValueError(f"неизвестные статусы: {', '.join(sorted(unknown))}")
+        return {**DEFAULT_COUNTED, **value}
+
+
+def check_manual(
+    status: str, *, reason: str, role: str, settings: FindingSettings, risk_until: dt.date | None, today: dt.date,
+) -> None:
+    if status not in MANUAL:
+        raise TransitionError(f"статус «{STATUS_TITLES.get(status, status)}» ставит только система")
+    if status in NEEDS_REASON and not reason.strip():
+        raise TransitionError(f"для статуса «{STATUS_TITLES[status]}» нужно обоснование")
+    if status != "risk_accepted":
+        return
+    needed = settings.risk_accept_role
+    if _RANK.get(role, -1) < _RANK[needed]:
+        raise RoleRequired(f"принять риск может только роль: {_ROLE_TITLES[needed]}")
+    if risk_until is not None and risk_until < today:
+        raise TransitionError("срок принятия риска уже прошёл")
+    if settings.risk_max_days is not None:
+        if risk_until is None:
+            raise TransitionError("нужен срок принятия риска")
+        if risk_until > today + dt.timedelta(days=settings.risk_max_days):
+            raise TransitionError(f"риск принимается не дольше чем на {settings.risk_max_days} дн.")
+
+
+def on_absent(status: str) -> str | None:
+    """Ключа нет в свежих данных области: открытая находка устранена, решения людей не трогаются."""
+    return "resolved" if status in OPEN else None
+
+
+def on_present(status: str) -> str | None:
+    """Ключ снова в данных: переоткрывается только то, что система закрыла."""
+    return "reopened" if status == "resolved" else None
+
+
+def is_overdue(status: str, due: dt.date | None, today: dt.date) -> bool:
+    return status in OPEN and due is not None and due < today
