@@ -2,6 +2,8 @@
 свежие данные — находки последнего снапшота домена."""
 from __future__ import annotations
 
+import json
+
 from api.collector_findings import SnapshotFindingAdapter
 from api.modules.ad.core.checks import CHECK_BY_CODE
 from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot
@@ -12,7 +14,14 @@ def _title(f: AdFinding) -> str:
     return f"{spec.title if spec else f.check}: {f.identity or f.target}"
 
 
+def _unchecked(snapshot: AdSnapshot) -> set[str]:
+    """Проверки без данных (SYSVOL не прочитан, нет данных ЦС), в том числе проверенные
+    частично (`ADCS_CA`, `ADCS_MAPPING` с находками и причиной)."""
+    return set(json.loads(snapshot.unchecked_json or "{}"))
+
+
 ADAPTER = SnapshotFindingAdapter(
     module="ad", scope_model=AdDomain, snapshot_model=AdSnapshot, finding_model=AdFinding,
     owner="domain_id", path="/ad/domains/{scope_id}/findings", title=_title, title_fields=("identity", "target"),
+    unchecked=_unchecked,
 )

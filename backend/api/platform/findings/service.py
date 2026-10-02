@@ -402,7 +402,9 @@ def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.date
     из ключей куска есть в данных (`_sources`). Решение принимается по колонкам
     строки; объекты ORM читаются только для строк, которые меняются. Строк для
     ключей без решения не заводит. Нет данных области (адаптер вернул None) —
-    область пропускается: `{"skipped": 1}`.
+    область пропускается: `{"skipped": 1}`. Ключи, которые адаптер называет в
+    `frozen_keys` (AD, KSC: находки проверок, не проверявшихся в последнем снапшоте),
+    сверка пропускает: не «устраняет» и не меняет `present`.
 
     `commit=False` — только flush: так зовёт `safe_reconcile` внутри точки
     сохранения, транзакцию фиксирует он."""
@@ -414,6 +416,7 @@ def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.date
         _finish(db, commit)
         return {"skipped": 1}
     counts = {"resolved": 0, "reopened": 0, "present": total}
+    frozen_keys: Callable[[Session, int, Sequence[str]], set[str]] | None = getattr(adapter, "frozen_keys", None)
     s = FindingState
     cols = (s.id, s.key, s.status, s.present, s.assignee, s.title, s.severity, s.first_seen_at)
     last_id = 0
@@ -427,6 +430,10 @@ def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.date
         if here is None:
             # Данные области пропали посреди сверки: «всё устранено» было бы ложью.
             raise RuntimeError("данные области пропали во время сверки")
+        if frozen_keys is not None:
+            # Находки проверок, для которых данных в этот раз не собрано: строки не трогаем.
+            frozen = frozen_keys(db, scope_id, [r.key for r in batch if r.key not in here])
+            batch = [r for r in batch if r.key not in frozen]
         _reconcile_batch(db, adapter, scope_id, batch, here, describe, refresh_all, ref, now, counts)
     _finish(db, commit)
     return counts

@@ -171,6 +171,40 @@ def test_analyzer_version_change_does_not_auto_resolve(auth_client: TestClient, 
     assert len(warnings) == 1
 
 
+def _key_events(db: Any, keys: set[str]) -> list[str]:
+    return list(db.scalars(select(FindingEvent.kind).join(FindingState).where(FindingState.key.in_(keys))))
+
+
+def test_unread_sysvol_does_not_resolve_user_rights_findings(auth_client: TestClient, db_session: Any) -> None:
+    _done(auth_client, "ad", build_ad())
+    domain_id, snap1 = _ad_latest(auth_client)
+    ura = {i["key"] for i in auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=UserRightsAssignment").json()["items"]}
+    assert ura
+    worked = min(ura)
+    svc_sql = auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast").json()["items"][0]["key"]
+    r = auth_client.put("/api/findings/state", json={"module": "ad", "scope_id": domain_id, "key": worked, "status": "in_work"})
+    assert r.status_code == 200, r.text
+
+    # SYSVOL не прочитан: проверка User Rights не проверялась, её находки не «устранены».
+    raw = _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7))
+    raw["sysvol"] = {}
+    _done(auth_client, "ad", raw)
+    _, snap2 = _ad_latest(auth_client)
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=UserRightsAssignment&status=all").json()["total"] == 1
+    states, _ = _scope_rows(db_session, "ad", domain_id)
+    assert states[worked] == ("in_work", True)
+    assert set(states) == {worked, svc_sql}
+    assert "auto_resolved" not in _key_events(db_session, ura)
+    # Находка проверенной проверки, которая правда пропала, закрывается как прежде.
+    assert states[svc_sql] == ("resolved", False)
+
+    # SYSVOL снова прочитан: переоткрывать нечего — находки не закрывались.
+    _done(auth_client, "ad", build_ad(now=AD_NOW + dt.timedelta(days=14)))
+    states, _ = _scope_rows(db_session, "ad", domain_id)
+    assert states[worked] == ("in_work", True)
+    assert _key_events(db_session, ura) == ["status"]
+
+
 def test_detail_of_older_snapshot_does_not_borrow_other_snapshots(auth_client: TestClient) -> None:
     _done(auth_client, "ad", build_ad())
     _, snap1 = _ad_latest(auth_client)
@@ -481,3 +515,25 @@ def test_ksc_statuses_follow_snapshots_and_hosts_count_counted(auth_client: Test
     _done(auth_client, "ksc", build_ksc(now=KSC_NOW + dt.timedelta(days=2)))
     state = _state(auth_client, "ksc", server_id, rtp["key"])
     assert state["status"] == "reopened" and state["events"][0]["details"]["ref"].startswith("снапшот #")
+
+
+def test_ksc_without_ad_data_does_not_resolve_coverage_findings(auth_client: TestClient, db_session: Any) -> None:
+    _done(auth_client, "ad", build_ad())
+    _, ad_snap = _ad_latest(auth_client)
+    _done(auth_client, "ksc", build_ksc())
+    server_id, snap1 = _ksc_latest(auth_client)
+    cover = {i["key"] for i in auth_client.get(f"/api/ksc/snapshots/{snap1}/findings?check=COVER_KSC_ONLY&limit=500").json()["items"]}
+    assert cover
+    worked = min(cover)
+    rtp = auth_client.get(f"/api/ksc/snapshots/{snap1}/findings?check=RTP_OFF").json()["items"][0]["key"]
+    r = auth_client.post("/api/findings/bulk", json={"module": "ksc", "scope_id": server_id, "keys": [worked, rtp], "change": {"status": "in_work"}})
+    assert r.status_code == 200, r.text
+
+    # Снапшота AD больше нет: сверки с AD не было, её находки не «устранены».
+    assert auth_client.delete(f"/api/ad/snapshots/{ad_snap}").status_code == 204
+    _done(auth_client, "ksc", _ksc_rtp(build_ksc(now=KSC_NOW + dt.timedelta(days=1)), ws02_off=False))
+    assert auth_client.get(f"/api/ksc/servers/{server_id}/overview").json()["coverage"]["ad_total"] is None
+    states, _ = _scope_rows(db_session, "ksc", server_id)
+    assert states[worked] == ("in_work", True)
+    assert "auto_resolved" not in _key_events(db_session, cover)
+    assert set(states) == {worked, rtp} and states[rtp] == ("resolved", False)

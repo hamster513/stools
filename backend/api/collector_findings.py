@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from itertools import batched
 from typing import Any
@@ -41,6 +41,9 @@ class SnapshotFindingAdapter:
 
     #: Колонки находки, из которых `title` строит подпись (кроме `check`).
     title_fields: tuple[str, ...]
+    #: Коды проверок, которые в снапшоте не проверялись (данных для них не собрано:
+    #: SYSVOL не прочитан, нет снапшота AD). Пропажа их находок — не устранение.
+    unchecked: Callable[[Any], set[str]] = lambda _snapshot: set()
 
     def _owner(self) -> Any:
         return getattr(self.snapshot_model, self.owner)
@@ -88,6 +91,23 @@ class SnapshotFindingAdapter:
     def first_seen(self, db: Session, scope_id: int, key: str) -> dt.datetime | None:
         return first_seen_map(db, self, scope_id, [key]).get(key)
 
+    def frozen_keys(self, db: Session, scope_id: int, keys: Sequence[str]) -> set[str]:
+        """Из ключей, которых нет в последнем снапшоте, — находки проверок, которые в нём не
+        проверялись: сверка их не трогает (ни статус, ни `present`). Проверку ключа берём из
+        прежних снапшотов области: ключ всегда принадлежит одной проверке."""
+        snap = self.latest(db, scope_id)
+        unchecked = self.unchecked(snap) if snap is not None else set()
+        if not unchecked or not keys:
+            return set()
+        s, f = self.snapshot_model, self.finding_model
+        found: set[str] = set()
+        for chunk in batched(set(keys), _CHUNK):
+            found.update(db.scalars(
+                select(f.key).join(s, f.snapshot_id == s.id)
+                .where(self._owner() == scope_id, f.key.in_(chunk), f.check.in_(unchecked)).distinct()
+            ))
+        return found
+
     def link(self, scope_id: int, key: str) -> str:
         return f"{self.path.format(scope_id=scope_id)}?{urlencode({'key': key})}"
 
@@ -96,6 +116,8 @@ class SnapshotFindingAdapter:
         и удаления снапшота, после commit данных модуля. Пропавшие с предыдущего
         снапшота находки получают строки состояния, чтобы закрыться системой, а
         не исчезнуть молча. Область без снапшотов не сверяется: данных нет.
+        Находки проверок, которые в последнем снапшоте не проверялись (`unchecked`),
+        пропавшими не считаются, их строки сверка не трогает (`frozen_keys`).
 
         `snapshot_id` — снапшот, который только что записан (импорт, пересчёт). Если
         он не последний по времени сбора (пересчёт старого, старая выгрузка после
@@ -113,8 +135,9 @@ class SnapshotFindingAdapter:
                 version_changed = prev is not None and prev.analyzer_version != snap.analyzer_version
                 disappeared: list[CurrentFinding] = []
                 if prev is not None and not version_changed:
-                    now = self._keys(db, snap.id)
-                    disappeared = self._current_of(f for f in self._findings(db, prev.id) if f.key not in now)
+                    now, unchecked = self._keys(db, snap.id), self.unchecked(snap)
+                    disappeared = self._current_of(f for f in self._findings(db, prev.id)
+                                                   if f.key not in now and f.check not in unchecked)
         # Данные модуля уже записаны: сбой здесь, как и в самой сверке, их не роняет.
         except Exception:
             log.exception("сверка статусов находок %s/%s не начата", self.module, scope_id)
@@ -136,7 +159,11 @@ class SnapshotFindingAdapter:
             with db.begin_nested():
                 service.lock_scope(db, self.module, scope_id)
                 current = {f.key: f for f in self._current_of(self._findings(db, snap.id))}
-                for row in service.state_map(db, self.module, scope_id, fresh=True).values():
+                rows = service.state_map(db, self.module, scope_id, fresh=True)
+                frozen = self.frozen_keys(db, scope_id, [k for k in rows if k not in current])
+                for row in rows.values():
+                    if row.key in frozen:
+                        continue
                     found = current.get(row.key)
                     row.present = found is not None
                     if found is not None:
