@@ -184,3 +184,79 @@ def test_jobless_handler_runs_once_per_interval(app_settings: Any, db_session: A
     finally:
         scheduler._handlers.pop(("test", "jobless"), None)
         scheduler._jobless.discard(("test", "jobless"))
+
+
+# ---- Подпись сразу после ручной смены ------------------------------------------------------
+
+
+def _bulk(client: TestClient, module: str, scope_id: int, keys: list[str], **change: Any) -> None:
+    r = client.post("/api/findings/bulk", json={"module": module, "scope_id": scope_id, "keys": keys, "change": change})
+    assert r.status_code == 200, r.text
+
+
+def test_mine_has_ad_title_right_after_bulk(auth_client: TestClient) -> None:
+    from tests.ad.synthetic import NOW as AD_NOW
+    from tests.findings.test_ad_ksc import _ad_latest, _done, build_ad
+
+    _done(auth_client, "ad", build_ad())
+    domain_id, snap = _ad_latest(auth_client)
+    kerb = auth_client.get(f"/api/ad/snapshots/{snap}/findings?check=Kerberoast").json()["items"][0]
+    _bulk(auth_client, "ad", domain_id, [kerb["key"]], status="in_work", assignee=TEST_LOGIN)
+    mine = auth_client.get("/api/findings/mine").json()
+    assert [(m["key"], m["title"], m["severity"]) for m in mine] == [
+        (kerb["key"], f"Кандидаты на Kerberoasting (SPN): {kerb['identity']}", kerb["severity"])]
+    assert mine[0]["first_seen_at"].startswith(AD_NOW.date().isoformat())
+
+
+def test_mine_has_siem_title_right_after_bulk(auth_client: TestClient, db_session: Any) -> None:
+    from api.db.models import Finding
+    from tests.findings.test_siem import _by_field, _kb, _list, _upload
+
+    snap = _upload(auth_client, _kb("10.20.30.40"))
+    ip = _by_field(_list(auth_client, snap), "dst.ip")
+    _bulk(auth_client, "siem", 0, [ip["key"]], status="in_work", assignee=TEST_LOGIN)
+    r = auth_client.get("/api/findings/mine", params={"module": "siem"})
+    (item,) = r.json()
+    assert "DEMO_HC_002_030_Other" in item["title"] and "dst.ip" in item["title"] and item["severity"] == ip["severity"]
+    values = {(f.value, f.value_hash) for f in db_session.query(Finding).filter(Finding.snapshot_id == snap)}
+    assert values and not any(v in r.text or h in r.text for v, h in values)
+
+
+def test_mine_has_assets_title_right_after_bulk(db_session: Any, app_settings: Any, client_as: Any) -> None:
+    from pathlib import Path
+
+    from tests.findings.test_assets import _id, _load, _sync
+
+    _load(db_session, Path(app_settings.data_dir))
+    analyst = client_as("analyst")
+    _sync(analyst)
+    ws01 = _id(analyst, "ws01")
+    _bulk(analyst, "assets", 0, [f"{ws01}|no_av"], status="in_work", assignee="user-analyst")
+    (item,) = analyst.get("/api/findings/mine").json()
+    assert item["title"].endswith(": нет агента антивируса")
+
+
+def test_mine_falls_back_to_module_and_key_only_without_title(
+        app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+    analyst = _as("analyst1")
+    adapter.set_keys(1, "known")
+    _put(analyst, "test", 1, "known", assignee="analyst1")
+    _put(analyst, "test", 1, "0123456789abcdef", assignee="analyst1")
+    titles = {m["key"]: m["title"] for m in analyst.get("/api/findings/mine").json()}
+    assert titles == {"known": "находка known", "0123456789abcdef": "test: находка 01234567…"}
+
+
+def test_expired_risk_of_a_vanished_finding_resolves(app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUser],
+                                                     db_session: Any, today: dt.date) -> None:
+    from api.platform.findings import service as svc
+
+    _accepted(_as("analyst1"), db_session, "gone", today - dt.timedelta(days=1))
+    row = db_session.scalars(select(FindingState).where(FindingState.key == "gone")).one()
+    row.present = False
+    db_session.commit()
+    assert svc.expire_risks(db_session, today) == 1
+    db_session.expire_all()
+    row = db_session.scalars(select(FindingState).where(FindingState.key == "gone")).one()
+    assert (row.status, row.risk_until, row.updated_by) == ("resolved", None, "system") and row.resolved_at is not None
+    last = db_session.scalars(select(FindingEvent).where(FindingEvent.state_id == row.id).order_by(FindingEvent.id.desc())).first()
+    assert (last.kind, last.actor, last.from_status, last.to_status) == ("risk_expired", "system", "risk_accepted", "resolved")

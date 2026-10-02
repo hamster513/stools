@@ -343,9 +343,10 @@ def get_mine(
             link = get_adapter(row.module).link(row.scope_id, row.key)
         except LookupError:
             link = ""
+        module_title = MODULE_TITLES.get(row.module, row.module)
         items.append(MineItem(
-            module=row.module, module_title=MODULE_TITLES.get(row.module, row.module), scope_id=row.scope_id,
-            key=row.key, title=row.title, severity=row.severity,
+            module=row.module, module_title=module_title, scope_id=row.scope_id,
+            key=row.key, title=row.title or f"{module_title}: находка {row.key[:8]}…", severity=row.severity,
             status=row.status, status_title=STATUS_TITLES[row.status], due_date=row.due_date,
             overdue=is_overdue(row.status, row.due_date, on), risk_until=row.risk_until, present=row.present,
             first_seen_at=row.first_seen_at, updated_at=row.updated_at, link=link,

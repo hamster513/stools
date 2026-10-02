@@ -134,3 +134,28 @@ def test_present_title_severity_follow_snapshots(scratch: tuple[Engine, Config])
     command.downgrade(cfg, BEFORE)
     assert _count(engine, "SELECT count(*) FROM platform_finding_state") == 0
     assert _count(engine, "SELECT count(*) FROM ad_verdict") == 3
+
+
+def test_existing_row_is_kept_and_authorless_verdict_is_system(scratch: tuple[Engine, Config]) -> None:
+    """Строка состояния, которая уже есть, не роняет перенос и не получает события `migrated`;
+    у вердикта без автора и строка, и событие — от `system`."""
+    engine, cfg = scratch
+    command.upgrade(cfg, BEFORE)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO ad_domain (id, sid, dns_root, netbios, dn, created_at) VALUES (1, 'S-1-5-21-1', 'corp.local', 'CORP', 'DC=corp,DC=local', now())"))
+        conn.execute(text(
+            "INSERT INTO ad_verdict (domain_id, key, status, reason, decided_by, decided_at) VALUES "
+            "(1, 'ad-k1', 'accepted', 'норма', 'analyst1', now()), (1, 'ad-k2', 'accepted', 'норма', '', now())"
+        ))
+        conn.execute(text(
+            "INSERT INTO platform_finding_state (module, scope_id, key, status, reason, present, title, severity, updated_by, updated_at) "
+            "VALUES ('ad', 1, 'ad-k1', 'in_work', '', true, 'уже есть', '', 'tester', now())"))
+
+    command.upgrade(cfg, AFTER)
+    with engine.connect() as conn:
+        rows = {r.key: (r.status, r.title, r.updated_by) for r in conn.execute(text(
+            "SELECT key, status, title, updated_by FROM platform_finding_state"))}
+        events = [tuple(e) for e in conn.execute(text(
+            "SELECT s.key, e.actor FROM platform_finding_event e JOIN platform_finding_state s ON s.id = e.state_id"))]
+    assert rows == {"ad-k1": ("in_work", "уже есть", "tester"), "ad-k2": ("risk_accepted", "", "system")}
+    assert events == [("ad-k2", "system")]

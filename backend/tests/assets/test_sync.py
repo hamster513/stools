@@ -306,6 +306,14 @@ def test_ad_finding_count_matches_whole_computer_name(loaded: Session) -> None:
     finding(target="WS01.corp.local")
     finding(identity="ws01$")
     assert count() == before + 3
+    # Принятый риск по умолчанию не учитывается — и в карточке актива тоже.
+    from api.platform.findings.models import FindingState
+
+    domain_id = loaded.get(AdSnapshot, snap_id).domain_id  # type: ignore[union-attr]
+    loaded.add(FindingState(module="ad", scope_id=domain_id, key="k-ws01$-", status="risk_accepted", reason="норма",
+                            present=True, title="", severity="", updated_by="tester"))
+    loaded.commit()
+    assert count() == before + 2
 
 
 def test_request_sync_respects_running_job_and_setting(db_session: Session, app_settings: Any) -> None:

@@ -33,6 +33,7 @@ from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
+# Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
 ANALYZER_VERSION = "2"
 
 CHECKS: list[CheckSpec] = [

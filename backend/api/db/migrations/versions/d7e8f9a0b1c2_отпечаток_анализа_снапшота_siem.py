@@ -28,10 +28,11 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column("snapshot", sa.Column("parser_version", sa.String(32), nullable=True))
     op.add_column("snapshot", sa.Column("profile_hash", sa.String(64), nullable=True))
-    op.execute("ALTER INDEX ix_finding_verdict_key RENAME TO ix_finding_identity")
+    # IF EXISTS: индекс могли уже переименовать (стенд прогнал раннюю редакцию миграции).
+    op.execute("ALTER INDEX IF EXISTS ix_finding_verdict_key RENAME TO ix_finding_identity")
 
 
 def downgrade() -> None:
-    op.execute("ALTER INDEX ix_finding_identity RENAME TO ix_finding_verdict_key")
+    op.execute("ALTER INDEX IF EXISTS ix_finding_identity RENAME TO ix_finding_verdict_key")
     op.drop_column("snapshot", "profile_hash")
     op.drop_column("snapshot", "parser_version")

@@ -450,6 +450,8 @@ def test_bulk_job_and_import_do_not_overlap(auth_client: TestClient, db_session:
     bulk = start_job(db_session, "bulk_status", "tester")
     r = auth_client.post("/api/vm/import/file", files={"file": ("hosts.csv", _csv({SRV: [A]}), "text/csv")})
     assert r.status_code == 409 and r.json()["detail"] == "идёт массовая смена статусов", r.text
+    r = auth_client.post("/api/vm/recalculate")
+    assert r.status_code == 409 and r.json()["detail"] == "идёт массовая смена статусов", r.text
     fail_job(db_session, bulk, "тест")
     assert db_session.scalar(select(func.count()).select_from(VmJob).where(VmJob.status == "running")) == 0
 

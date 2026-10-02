@@ -316,7 +316,7 @@ def _asset_or_404(db: Session, asset_id: int) -> Asset:
     return asset
 
 
-def merge_assets(db: Session, into_id: int, other_id: int) -> Asset:
+def merge_assets(db: Session, into_id: int, other_id: int, actor: str) -> Asset:
     """Наблюдения второго переезжают к первому; ручные поля второго не теряются:
     теги объединяются, заметка дописывается, пустые поля первого берутся у второго."""
     if into_id == other_id:
@@ -339,11 +339,11 @@ def merge_assets(db: Session, into_id: int, other_id: int) -> Asset:
         earlier.merged_into = into.id
     db.flush()
     recompute(db, into)
-    _move_decisions(db, other.id, into.id)
+    _move_decisions(db, other.id, into.id, actor)
     return into
 
 
-def _move_decisions(db: Session, old_id: int, new_id: int) -> None:
+def _move_decisions(db: Session, old_id: int, new_id: int, actor: str) -> None:
     """Решения по расхождениям поглощённого актива — к оставшемуся: в ключе находки id актива.
     Если у оставшегося решение по тому же ключу уже есть, прежнее остаётся при старом ключе
     (расхождения у объединённого актива нет — сверка его закроет)."""
@@ -353,7 +353,7 @@ def _move_decisions(db: Session, old_id: int, new_id: int) -> None:
         FindingState.key.startswith(prefix, autoescape=True),
     )))
     for key in keys:
-        finding_svc.rekey(db, FINDINGS_MODULE, FINDINGS_SCOPE, key, f"{new_id}|{key[len(prefix):]}")
+        finding_svc.rekey(db, FINDINGS_MODULE, FINDINGS_SCOPE, key, f"{new_id}|{key[len(prefix):]}", actor=actor)
 
 
 def detach_observation(db: Session, observation_id: int) -> Asset:
@@ -795,13 +795,15 @@ def _links(db: Session, rows: list[AssetObservation]) -> dict[str, Any]:
         if snap is not None and ad.name:
             domain = db.get(AdDomain, int(ad.extra["domain_id"]))
             names = _computer_names(ad, (domain.netbios, domain.dns_root) if domain is not None else ())
-            links["ad_finding_count"] = int(db.execute(
-                select(func.count()).select_from(AdFinding).where(
-                    AdFinding.snapshot_id == snap.id,
-                    or_(func.lower(AdFinding.identity).in_(names), func.lower(AdFinding.target).in_(names),
-                        AdFinding.identity_sid == ad.source_key),
-                )
-            ).scalar() or 0)
+            keys = list(db.scalars(select(AdFinding.key).where(
+                AdFinding.snapshot_id == snap.id,
+                or_(func.lower(AdFinding.identity).in_(names), func.lower(AdFinding.target).in_(names),
+                    AdFinding.identity_sid == ad.source_key),
+            )))
+            # Как обзор AD: только находки с учитываемым статусом (настройка `counted`).
+            counted = finding_svc.counted_statuses(db)
+            states = finding_svc.state_map(db, "ad", snap.domain_id, keys)
+            links["ad_finding_count"] = sum(finding_svc.is_counted(states.get(k), counted) for k in keys)
     ksc = next((r for r in live_first if r.source == "ksc"), None)
     if ksc is not None:
         # Ключ KSC — «server_id:host_id».

@@ -271,7 +271,7 @@ def test_rekey_keeps_history(db_session: Session, app_settings: Any, make_user: 
     user = make_user("analyst1", "analyst")
     svc.change(db_session, module="assets", scope_id=0, key="1|no_av", change=svc.Change(status="in_work"), actor=user)
     svc.change(db_session, module="assets", scope_id=0, key="3|no_av", change=svc.Change(status="fixed"), actor=user)
-    assert svc.rekey(db_session, "assets", 0, "1|no_av", "2|no_av") is True
+    assert svc.rekey(db_session, "assets", 0, "1|no_av", "2|no_av", actor="analyst1") is True
     assert svc.rekey(db_session, "assets", 0, "2|no_av", "3|no_av") is False  # новый ключ занят — не трогаем
     assert svc.rekey(db_session, "assets", 0, "9|no_av", "10|no_av") is False  # строки нет
     db_session.commit()
@@ -280,7 +280,7 @@ def test_rekey_keeps_history(db_session: Session, app_settings: Any, make_user: 
     kinds = [e.kind for e in svc.events_of(db_session, rows["2|no_av"])]
     assert kinds[0] == "rekeyed" and "status" in kinds
     event = svc.events_of(db_session, rows["2|no_av"])[0]
-    assert event.details == {"old": "1|no_av", "new": "2|no_av"}
+    assert event.details == {"old": "1|no_av", "new": "2|no_av"} and event.actor == "analyst1"
 
 
 def test_merge_moves_decisions_to_surviving_asset(analyst: TestClient) -> None:
@@ -290,7 +290,7 @@ def test_merge_moves_decisions_to_surviving_asset(analyst: TestClient) -> None:
     assert r.status_code == 200, r.text
     moved = _state(analyst, f"{ws02}|no_av")
     assert moved["status"] == "in_work" and moved["assignee"] == "user-analyst"
-    assert moved["events"][0]["kind"] == "rekeyed"
+    assert (moved["events"][0]["kind"], moved["events"][0]["actor"]) == ("rekeyed", "user-analyst")
     assert _state(analyst, f"{ws01}|no_av")["status"] == "new"  # строки у старого ключа нет
     d = next(d for d in r.json()["discrepancies"] if d["code"] == "no_av")
     assert d["status"] == "in_work"

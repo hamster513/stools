@@ -41,33 +41,37 @@ SOURCES = {
 def upgrade() -> None:
     for module, (table, scope, snapshots, findings, label) in SOURCES.items():
         # Вердикт был одного вида — «accepted»; переносится каждая строка, чтобы числа сошлись.
+        # Строка, которая уже есть (повторный прогон), не трогается, и события ей не пишутся:
+        # событие `migrated` — только строкам, вставленным здесь. Вердикт без автора — `system`.
         op.execute(sa.text(f"""
-            INSERT INTO platform_finding_state
-                (module, scope_id, key, status, reason, present, title, severity, updated_by, updated_at)
-            SELECT '{module}', v.{scope}, v.key, 'risk_accepted', v.reason,
-                   EXISTS (
-                       SELECT 1 FROM {findings} f
-                       WHERE f.key = v.key AND f.snapshot_id = (
-                           SELECT s.id FROM {snapshots} s WHERE s.{scope} = v.{scope}
-                           ORDER BY s.collected_at DESC, s.id DESC LIMIT 1)
-                   ),
-                   COALESCE(k.title, ''), COALESCE(k.severity, ''), v.decided_by, v.decided_at
-            FROM {table} v
-            LEFT JOIN LATERAL (
-                SELECT LEFT(f."check" || ': ' || COALESCE(NULLIF(f.{label}, ''), f.target), 512) AS title,
-                       LEFT(f.severity, 16) AS severity
-                FROM {findings} f JOIN {snapshots} s ON s.id = f.snapshot_id
-                WHERE s.{scope} = v.{scope} AND f.key = v.key
-                ORDER BY s.collected_at DESC, s.id DESC
-                LIMIT 1
-            ) k ON true
-        """))
-        op.execute(sa.text(f"""
+            WITH ins AS (
+                INSERT INTO platform_finding_state
+                    (module, scope_id, key, status, reason, present, title, severity, updated_by, updated_at)
+                SELECT '{module}', v.{scope}, v.key, 'risk_accepted', v.reason,
+                       EXISTS (
+                           SELECT 1 FROM {findings} f
+                           WHERE f.key = v.key AND f.snapshot_id = (
+                               SELECT s.id FROM {snapshots} s WHERE s.{scope} = v.{scope}
+                               ORDER BY s.collected_at DESC, s.id DESC LIMIT 1)
+                       ),
+                       COALESCE(k.title, ''), COALESCE(k.severity, ''),
+                       COALESCE(NULLIF(v.decided_by, ''), 'system'), v.decided_at
+                FROM {table} v
+                LEFT JOIN LATERAL (
+                    SELECT LEFT(f."check" || ': ' || COALESCE(NULLIF(f.{label}, ''), f.target), 512) AS title,
+                           LEFT(f.severity, 16) AS severity
+                    FROM {findings} f JOIN {snapshots} s ON s.id = f.snapshot_id
+                    WHERE s.{scope} = v.{scope} AND f.key = v.key
+                    ORDER BY s.collected_at DESC, s.id DESC
+                    LIMIT 1
+                ) k ON true
+                ON CONFLICT (module, scope_id, key) DO NOTHING
+                RETURNING id, scope_id, key
+            )
             INSERT INTO platform_finding_event (state_id, at, actor, kind, from_status, to_status, comment, details)
-            SELECT s.id, v.decided_at, COALESCE(NULLIF(v.decided_by, ''), 'system'), 'migrated', NULL, 'risk_accepted',
+            SELECT ins.id, v.decided_at, COALESCE(NULLIF(v.decided_by, ''), 'system'), 'migrated', NULL, 'risk_accepted',
                    v.reason, CAST(:details AS jsonb)
-            FROM {table} v
-            JOIN platform_finding_state s ON s.module = '{module}' AND s.scope_id = v.{scope} AND s.key = v.key
+            FROM ins JOIN {table} v ON v.{scope} = ins.scope_id AND v.key = ins.key
         """).bindparams(details=f'{{"from": "{table}"}}'))
         op.rename_table(table, table + SUFFIX)
 

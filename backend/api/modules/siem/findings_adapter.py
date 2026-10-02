@@ -11,8 +11,8 @@
 sha256 значения: ключ уходит в ответы API и в «Мои находки», а несолёный
 хеш адреса или имени узла восстанавливается словарём — значения же в списках
 не отдаются никогда (контракт, «Общие правила»). Поле в ключ открытым
-текстом не входит ещё и потому, что колонка ключа — 128 знаков, а поле —
-до 255. Соль хранится в `app_setting` (`SALT_SETTING`), заводится миграцией
+текстом не входит: ключ остаётся коротким (около 70 знаков при колонке ключа
+в 400) и не зависит от длины поля (до 255). Соль хранится в `app_setting` (`SALT_SETTING`), заводится миграцией
 `c6d7e8f9a0b1`, а если её нет и решений SIEM ещё нет (чистая база) — при
 первом обращении. Пропавшая соль при живых решениях заново не заводится:
 новая соль молча сделала бы все решения ничьими (`SaltMissing`).
@@ -34,7 +34,7 @@ import hmac
 import json
 import logging
 import secrets
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from itertools import batched
 from typing import NamedTuple
 from urllib.parse import urlencode
@@ -253,6 +253,17 @@ class SiemFindingAdapter:
 
     def first_seen(self, db: Session, scope_id: int, key: str) -> dt.datetime | None:
         return self.first_seen_many(db, scope_id, [key]).get(key)
+
+    def describe(self, db: Session, scope_id: int, keys: Sequence[str]) -> dict[str, CurrentFinding]:
+        """Подписи по ключам — по последнему снапшоту, где находка была (`titles_for`), без
+        значений. Нужны строкам, которые заводят люди; сверка SIEM ими не пользуется."""
+        if scope_id != SCOPE or not keys:
+            return {}
+        try:
+            salt = key_salt(db)
+        except SaltMissing:
+            return {}
+        return titles_for(db, salt, set(keys))
 
     def link(self, scope_id: int, key: str) -> str:
         return f"/siem/hygiene?{urlencode({'key': key})}"

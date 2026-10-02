@@ -250,9 +250,9 @@ def _no_running_sync(db: Session) -> None:
 
 
 @router.post("/assets/{asset_id}/merge")
-def merge(asset_id: int, payload: MergeIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+def merge(asset_id: int, payload: MergeIn, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     _no_running_sync(db)
-    _errors(merge_assets, db, asset_id, payload.other_id)
+    _errors(merge_assets, db, asset_id, payload.other_id, user.login)
     db.commit()
     reconcile_findings(db, f"актив #{payload.other_id} объединён с #{asset_id}")
     return dict(asset_detail(db, asset_id))

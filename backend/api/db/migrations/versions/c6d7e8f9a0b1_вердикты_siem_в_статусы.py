@@ -103,7 +103,7 @@ def upgrade() -> None:
             "VALUES ('siem', 0, :key, :status, :reason, :present, :title, :severity, :by, :at) "
             "ON CONFLICT (module, scope_id, key) DO NOTHING RETURNING id"
         ), {"key": key, "status": status, "reason": reason or "", "present": key in present, "title": title,
-            "severity": severity, "by": decided_by or "", "at": at}).scalar()
+            "severity": severity, "by": decided_by or "system", "at": at}).scalar()
         if state_id is None:
             continue
         conn.execute(sa.text(

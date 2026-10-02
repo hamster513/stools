@@ -41,6 +41,7 @@ from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex
 from api.modules.ksc.core.findings import Finding
 
+# Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
 ANALYZER_VERSION = "1"
 
 CHECKS: list[CheckSpec] = [

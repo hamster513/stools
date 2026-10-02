@@ -171,6 +171,25 @@ def _new_row(module: str, scope_id: int, key: str) -> FindingState:
                         title="", severity="", updated_by="")
 
 
+def _describe(db: Session, module: str, scope_id: int, rows: Sequence[FindingState]) -> None:
+    """Подпись и тяжесть строкам без подписи — сразу, по данным модуля: иначе «Мои находки»
+    до ближайшей сверки показали бы ключ. Адаптер с `describe` отвечает по ключам, остальные
+    отдают свежие находки целиком (`current`) — у AD, KSC, SIEM и Assets это посильно."""
+    untitled = {r.key: r for r in rows if not r.title}
+    if not untitled:
+        return
+    adapter = get_adapter(module)
+    describe: Describe | None = getattr(adapter, "describe", None)
+    if describe is not None:
+        found = describe(db, scope_id, list(untitled))
+    else:
+        found = {f.key: f for f in adapter.current(db, scope_id) or () if f.key in untitled}
+    for key, f in found.items():
+        if (row := untitled.get(key)) is not None:
+            row.title = f.title[:512]
+            row.severity = row.severity or f.severity[:16]
+
+
 def _created(db: Session, module: str, rows: Sequence[FindingState]) -> None:
     """Новые строки области записаны (flush) — модуль может завести к ним свои подсказки
     (`on_states_created`, VM: хост и CVE пары для быстрого списка) в той же транзакции."""
@@ -246,6 +265,7 @@ def change(db: Session, *, module: str, scope_id: int, key: str, change: Change,
             row.title = title[:512]
         if severity:
             row.severity = severity[:16]
+        _describe(db, module, scope_id, [row])
         db.add_all(events)
         if row.id is None:
             _created(db, module, [row])
@@ -264,6 +284,7 @@ def comment(db: Session, *, module: str, scope_id: int, key: str, text: str, act
         row.first_seen_at = _first_seen(db, module, scope_id, key)
     event = _event(row, actor.login, "comment", comment=text.strip())
     row.updated_by = actor.login
+    _describe(db, module, scope_id, [row])
     db.add(event)
     if row.id is None:
         _created(db, module, [row])
@@ -271,9 +292,10 @@ def comment(db: Session, *, module: str, scope_id: int, key: str, text: str, act
     return event
 
 
-def rekey(db: Session, module: str, scope_id: int, old_key: str, new_key: str) -> bool:
+def rekey(db: Session, module: str, scope_id: int, old_key: str, new_key: str, *, actor: str = SYSTEM) -> bool:
     """Перенести решение с одного ключа находки на другой (Assets: объединение активов меняет
-    id актива в ключе). Строка и история остаются, событие `rekeyed` пишет, откуда и куда.
+    id актива в ключе). Строка и история остаются, событие `rekeyed` от `actor` (кто объединил)
+    пишет, откуда и куда.
     Ключ уже занят или строки нет — ничего не делает, False. Транзакцию не фиксирует: её
     фиксирует вызывающий вместе со своей правкой."""
     lock_scope(db, module, scope_id)
@@ -282,7 +304,7 @@ def rekey(db: Session, module: str, scope_id: int, old_key: str, new_key: str) -
     if row is None or new_key in rows:
         return False
     row.key = new_key
-    db.add(_event(row, SYSTEM, "rekeyed", details={"old": old_key, "new": new_key}))
+    db.add(_event(row, actor, "rekeyed", details={"old": old_key, "new": new_key}))
     db.flush()
     return True
 
@@ -309,7 +331,7 @@ def check_change(db: Session, change: Change, *, actor: AppUser) -> None:
 def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str], change: Change,
                 actor: AppUser, bulk_id: str | None = None) -> int:
     """Одна и та же смена для многих находок; события помечены общим `bulk_id`.
-    Возраст новых строк не запрашивается по одной: его допишет ближайшая сверка."""
+    Новым строкам подпись, тяжесть и возраст — сразу, одним запросом к адаптеру на вызов."""
     bulk_id = bulk_id or uuid.uuid4().hex
     get_adapter(module)
     settings, assignable, on = load_settings(db), _directory_logins(db), today()
@@ -329,6 +351,12 @@ def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str],
             changed += 1
             if key not in existing:
                 made.append(row)
+    touched = [r for r in existing.values() if not r.title] + made
+    _describe(db, module, scope_id, touched)
+    if made:
+        seen = get_adapter(module).first_seen_many(db, scope_id, [r.key for r in made])
+        for row in made:
+            row.first_seen_at = seen.get(row.key)
     _created(db, module, made)
     db.commit()
     return changed
@@ -499,8 +527,9 @@ def _finish(db: Session, commit: bool) -> None:
 
 
 def expire_risks(db: Session, today: dt.date) -> int:
-    """Принятый риск со сроком в прошлом снова становится новой находкой.
-    По областям: каждая под своей блокировкой и своим commit."""
+    """Принятый риск со сроком в прошлом снова становится новой находкой, а если находки
+    уже нет в данных (`present = False`) — устранённой системой: пропавшая находка открытой
+    не возвращается. По областям: каждая под своей блокировкой и своим commit."""
     expired = (FindingState.status == "risk_accepted", FindingState.risk_until < today)
     scopes = db.execute(select(FindingState.module, FindingState.scope_id).where(*expired).distinct()).all()
     total = 0
@@ -509,10 +538,14 @@ def expire_risks(db: Session, today: dt.date) -> int:
         rows = db.scalars(select(FindingState).where(
             FindingState.module == module, FindingState.scope_id == scope_id, *expired,
         ).execution_options(populate_existing=True)).all()
+        now = dt.datetime.now(dt.UTC)
         for row in rows:
-            db.add(_event(row, SYSTEM, "risk_expired", from_status=row.status, to_status="new",
+            target = "new" if row.present else "resolved"
+            db.add(_event(row, SYSTEM, "risk_expired", from_status=row.status, to_status=target,
                           details={"risk_until": _iso(row.risk_until)}))
-            row.status, row.risk_until, row.updated_by = "new", None, SYSTEM
+            row.status, row.risk_until, row.updated_by = target, None, SYSTEM
+            if target == "resolved":
+                row.resolved_at = now
         db.commit()
         total += len(rows)
     return total

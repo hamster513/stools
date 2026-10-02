@@ -108,6 +108,20 @@ class SnapshotFindingAdapter:
             ))
         return found
 
+    def describe(self, db: Session, scope_id: int, keys: Sequence[str]) -> dict[str, CurrentFinding]:
+        """Подписи по ключам — по самому позднему снапшоту области, где находка была. Нужны
+        строкам, которые заводят люди; сверка снапшотов ими не пользуется (`current`)."""
+        s, fm = self.snapshot_model, self.finding_model
+        cols = [fm.key, fm.check, fm.severity, *(getattr(fm, c) for c in self.title_fields)]
+        found: list[Any] = []
+        for chunk in batched(set(keys), _CHUNK):
+            found.extend(db.execute(
+                select(*cols).join(s, fm.snapshot_id == s.id)
+                .where(self._owner() == scope_id, fm.key.in_(chunk))
+                .order_by(fm.key, s.collected_at.desc(), s.id.desc()).distinct(fm.key)
+            ))
+        return {f.key: f for f in self._current_of(found)}
+
     def link(self, scope_id: int, key: str) -> str:
         return f"{self.path.format(scope_id=scope_id)}?{urlencode({'key': key})}"
 

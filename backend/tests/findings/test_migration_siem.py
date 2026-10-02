@@ -152,3 +152,28 @@ def test_snapshot_stamps_and_index_name(scratch: tuple[Engine, Config]) -> None:
     assert not {"parser_version", "profile_hash"} & {c["name"] for c in inspect(engine).get_columns("snapshot")}
     indexes = {i["name"] for i in inspect(engine).get_indexes("finding")}
     assert "ix_finding_verdict_key" in indexes and "ix_finding_identity" not in indexes
+
+
+def test_index_rename_survives_an_already_renamed_index(scratch: tuple[Engine, Config]) -> None:
+    """Стенд прогнал раннюю редакцию: индекс уже назван по-новому — upgrade не падает."""
+    engine, cfg = scratch
+    command.upgrade(cfg, AFTER)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER INDEX ix_finding_verdict_key RENAME TO ix_finding_identity"))
+    command.upgrade(cfg, STAMPS)
+    indexes = {i["name"] for i in inspect(engine).get_indexes("finding")}
+    assert "ix_finding_identity" in indexes and "ix_finding_verdict_key" not in indexes
+
+
+def test_authorless_verdict_is_system_in_row_and_event(scratch: tuple[Engine, Config]) -> None:
+    engine, cfg = scratch
+    command.upgrade(cfg, BEFORE)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO finding_verdict (object_key, key_kind, kind, field, value_hash, status, reason, decided_by, decided_at) VALUES "
+            f"('{UA}', 'uuid', 1, 'subject.account.name', '{H1}', 'accepted', 'норма', '', '2026-09-02T10:00:00Z')"
+        ))
+    command.upgrade(cfg, AFTER)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT updated_by FROM platform_finding_state")).scalar_one() == "system"
+        assert conn.execute(text("SELECT actor FROM platform_finding_event")).scalar_one() == "system"
