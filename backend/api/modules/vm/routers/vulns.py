@@ -35,7 +35,6 @@ from api.modules.vm.services.query import (
     data_facets,
     item_with_state,
     iter_rows,
-    page,
     page_items,
     row_to_item,
     status_facets,
@@ -87,7 +86,8 @@ def _with_names(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 class VulnsResponse(BaseModel):
-    total: int
+    #: Только у первой страницы (`offset=0`), как и фасеты.
+    total: int | None
     items: list[dict[str, Any]]
     facets: dict[str, dict[str, int]] | None = None
 
@@ -103,13 +103,13 @@ def list_vulns(
 ) -> VulnsResponse:
     if sort not in SORTS:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="неизвестная сортировка")
-    # Фасеты только с первой страницей: при прокрутке они не меняются,
-    # а считать их на каждую догрузку — лишняя работа на миллионах строк.
+    # Фасеты и total только с первой страницей: при прокрутке они не меняются,
+    # а считать их на каждую догрузку — лишняя работа на миллионах строк
+    # (count по миллионам пар — секунда на каждой следующей странице).
     # Без фильтров они берутся из кэша пересчёта, total — сумма по шкале:
     # отдельный count по миллионам пар не нужен.
     if offset > 0:
-        total, items = page(db, f, sort, limit, offset)
-        return VulnsResponse(total=total, items=_with_names(db, items), facets=None)
+        return VulnsResponse(total=None, items=_with_names(db, page_items(db, f, sort, limit, offset)), facets=None)
     # Статусы: по умолчанию показываются открытые; кэш годится, пока фильтр статуса пропускает
     # пары без решений, — из него вычитаются пары с решением, не прошедшие фильтр (`data_facets`).
     cached = load_stats(db).get("facets") if f.data_empty() else None

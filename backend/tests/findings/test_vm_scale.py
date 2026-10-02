@@ -119,9 +119,29 @@ def test_summary_counts_without_materialising(auth_client: TestClient, db_sessio
     assert r.json()["by_status"]["new"] == 900
 
 
+@pytest.mark.parametrize("sort", ["risk_desc", "risk_asc", "cvss_desc", "epss_desc", "exploits_desc", "host_asc", "cve_asc"])
+def test_pages_follow_one_order(auth_client: TestClient, db_session: Any, test_user: Any, sort: str) -> None:
+    """Страницы по offset складываются ровно в выборку одним запросом: без повторов и пропусков при
+    равных ключах сортировки (у синтетики CVSS, EPSS и эксплойтов нет, баллы повторяются). Число
+    пар и фасеты — только у первой страницы: следующие их не пересчитывают."""
+    synthetic(db_session, hosts=40, cves=10, states=60, absent=0, login=test_user.login)
+    whole = auth_client.get("/api/vm/vulns", params={"sort": sort, "limit": 1000}).json()
+    keys = [i["key"] for i in whole["items"]]
+    assert len(keys) == whole["total"] == len(set(keys))
+    paged: list[str] = []
+    for offset in range(0, len(keys), 7):
+        body = auth_client.get("/api/vm/vulns", params={"sort": sort, "limit": 7, "offset": offset}).json()
+        if offset:
+            assert body["total"] is None and body["facets"] is None
+        else:
+            assert body["total"] == whole["total"]
+        paged += [i["key"] for i in body["items"]]
+    assert paged == keys
+
+
 def test_list_speed_with_100k_state_rows(auth_client: TestClient, db_session: Any, test_user: Any) -> None:
-    """300 тыс. пар × 100 тыс. строк состояния: первая страница (по умолчанию, с фасетами), следующая,
-    `status=in_work`, фасеты с фильтром по данным — каждая < 500 мс."""
+    """300 тыс. пар × 100 тыс. строк состояния: первая страница (по умолчанию, с фасетами), вторая и
+    двадцатая, `status=in_work`, фасеты с фильтром по данным — каждая < 500 мс."""
     from api.modules.vm.services.stats import refresh_stats
 
     rows = synthetic(db_session, hosts=3000, cves=100, states=100_000, absent=0, login=test_user.login)
@@ -142,14 +162,17 @@ def test_list_speed_with_100k_state_rows(auth_client: TestClient, db_session: An
     t_first, first = timed()
     assert first["total"] == 300_000 - sum(1 for r in rows if r[3] in ("risk_accepted", "false_positive"))
     t_next, nxt = timed(offset=200)
-    assert len(nxt["items"]) == 200
+    assert len(nxt["items"]) == 200 and nxt["total"] is None
+    t_20, p20 = timed(offset=19 * 200)
+    assert len(p20["items"]) == 200
     t_work, work = timed(status="in_work")
     assert work["total"] == in_work and all(i["status"] == "in_work" for i in work["items"])
     t_zone, zone = timed(zone="Z1")
     assert zone["facets"]["zone"] == {"Z1": zone["total"]}
     t_me, me = timed(assignee="me")
     assert me["total"] == in_work
-    print(f"\nVM 300k×100k: first page (default, facets) {t_first * 1000:.0f} ms; next page {t_next * 1000:.0f} ms; "
+    print(f"\nVM 300k×100k: first page (default, facets) {t_first * 1000:.0f} ms; page 2 {t_next * 1000:.0f} ms; "
+          f"page 20 {t_20 * 1000:.0f} ms; "
           f"status=in_work {t_work * 1000:.0f} ms; zone + facets {t_zone * 1000:.0f} ms; assignee=me {t_me * 1000:.0f} ms")
-    for name, took in (("first", t_first), ("next", t_next), ("in_work", t_work), ("zone", t_zone), ("me", t_me)):
+    for name, took in (("first", t_first), ("page 2", t_next), ("page 20", t_20), ("in_work", t_work), ("zone", t_zone), ("me", t_me)):
         assert took < 0.5, (name, took)

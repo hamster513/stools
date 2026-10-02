@@ -69,7 +69,8 @@ export interface VulnsFacets {
 }
 
 export interface VulnsResponse {
-  total: number
+  /** Только у первой страницы (offset=0), как и фасеты. */
+  total: number | null
   items: VulnItem[]
   facets: VulnsFacets | null
 }

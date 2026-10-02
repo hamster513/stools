@@ -9,7 +9,8 @@
 GET /vulns     q, host, cve, criticality, zone, os, level, exploits, msf,
                cvss_source, host_id, status, assignee, overdue, risk_expiring,
                sort, limit≤1000 (200), offset
-               → {total, items[], facets|null}    фасеты только при offset=0
+               → {total|null, items[], facets|null}  total и фасеты только
+               при offset=0: следующие страницы их не пересчитывают
 GET /vulns/{host_id}/{cve_id}   карточка расчёта: host, cve, risk{множители
                                 с source и substituted}, refs_loaded_at
 GET /hosts/{host_id}            хост и его пары (до 500, по риску)
@@ -21,6 +22,8 @@ GET /overview  счётчики, distribution, findings, top_cves, top_hosts, da
 
 `sort`: `risk_desc` (по умолчанию; при равном балле — по сырому риску),
 `risk_asc`, `cvss_desc`, `epss_desc`, `exploits_desc`, `host_asc`, `cve_asc`.
+При равных значениях — по паре (`host_id`, `cve_id`): порядок один и тот же в
+каждом запросе, страницы по offset не повторяют и не теряют пар.
 `level`: `low | medium | high | critical` (0–19, 20–39, 40–69, 70–100).
 
 ### Статусы пар

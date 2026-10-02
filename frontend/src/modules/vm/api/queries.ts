@@ -32,8 +32,9 @@ export function useVulns(query: Omit<VulnsQuery, 'limit' | 'offset'>) {
     queryFn: ({ pageParam }) =>
       api.get(`/api/vm/vulns${buildQuery({ ...query, limit: VULNS_PAGE_SIZE, offset: pageParam as number })}`),
     getNextPageParam: (last, pages) => {
+      // Число пар — только у первой страницы: следующие его не пересчитывают.
       const loaded = pages.reduce((sum, page) => sum + page.items.length, 0)
-      return loaded < last.total ? loaded : undefined
+      return last.items.length > 0 && loaded < (pages[0].total ?? 0) ? loaded : undefined
     },
     placeholderData: (prev) => prev,
   })

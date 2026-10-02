@@ -53,16 +53,20 @@ def pair_key(hostname: str, ip: str, cve_id: str) -> str:
 LEVELS = ("low", "medium", "high", "critical")
 LEVEL_BOUNDS = {"low": (0, 19), "medium": (20, 39), "high": (40, 69), "critical": (70, 100)}
 
+#: Последние ключи — пара целиком: при равных значениях сортировки порядок один и тот же
+#: в каждом запросе, и страницы по offset не повторяют и не теряют пар.
+_PAIR = [VmHostCve.host_id, VmHostCve.cve_id]
+
 SORTS: dict[str, list[Any]] = {
     # При равном балле (после отсечения на 100 их много) выше — пара с
     # большим сырым риском: она дальше от порога, а не просто первая по имени.
-    "risk_desc": [VmHostCve.risk.desc(), VmHostCve.risk_raw.desc(), VmHost.hostname, VmHostCve.cve_id],
-    "risk_asc": [VmHostCve.risk.asc(), VmHostCve.risk_raw.asc(), VmHost.hostname, VmHostCve.cve_id],
-    "cvss_desc": [VmCve.cvss.desc().nulls_last(), VmHostCve.risk.desc()],
-    "epss_desc": [VmCve.epss.desc().nulls_last(), VmHostCve.risk.desc()],
-    "exploits_desc": [VmCve.exploits_count.desc(), VmHostCve.risk.desc()],
-    "host_asc": [VmHost.hostname, VmHost.ip, VmHostCve.risk.desc()],
-    "cve_asc": [VmHostCve.cve_id, VmHostCve.risk.desc()],
+    "risk_desc": [VmHostCve.risk.desc(), VmHostCve.risk_raw.desc(), VmHost.hostname, VmHostCve.cve_id, VmHostCve.host_id],
+    "risk_asc": [VmHostCve.risk.asc(), VmHostCve.risk_raw.asc(), VmHost.hostname, VmHostCve.cve_id, VmHostCve.host_id],
+    "cvss_desc": [VmCve.cvss.desc().nulls_last(), VmHostCve.risk.desc(), *_PAIR],
+    "epss_desc": [VmCve.epss.desc().nulls_last(), VmHostCve.risk.desc(), *_PAIR],
+    "exploits_desc": [VmCve.exploits_count.desc(), VmHostCve.risk.desc(), *_PAIR],
+    "host_asc": [VmHost.hostname, VmHost.ip, VmHostCve.risk.desc(), *_PAIR],
+    "cve_asc": [VmHostCve.cve_id, VmHostCve.risk.desc(), *_PAIR],
 }
 
 
@@ -331,10 +335,6 @@ def page_items(db: Session, f: VulnFilters, sort: str, limit: int, offset: int) 
 
 def count(db: Session, f: VulnFilters) -> int:
     return int(db.execute(base_select([func.count()], state=not f.status.is_noop()).where(*conditions(f))).scalar() or 0)
-
-
-def page(db: Session, f: VulnFilters, sort: str, limit: int, offset: int) -> tuple[int, list[dict[str, Any]]]:
-    return count(db, f), page_items(db, f, sort, limit, offset)
 
 
 def _counts(db: Session, expr: Any, conds: list[ColumnElement[bool]], state: bool, limit: int | None = None) -> dict[str, int]:

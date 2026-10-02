@@ -171,9 +171,10 @@ def test_list_shows_open_by_default_and_filters_by_status(decided: TestClient, t
     # «Риск истекает» без статуса — среди принятых: у открытых срока риска нет.
     assert _keys(_list(decided, risk_expiring="true")) == {_key(SRV, A)}
     assert decided.get("/api/vm/vulns", params={"status": "bogus"}).status_code == 422
-    # Вторая страница — без фасетов, total — по тем же фильтрам.
+    # Вторая страница — без фасетов и total (их даёт первая), строки — по тем же фильтрам.
     page2 = _list(decided, offset=1, limit=1)
-    assert page2["facets"] is None and page2["total"] == 2
+    assert page2["facets"] is None and page2["total"] is None
+    assert _keys(page2) | _keys(_list(decided, limit=1)) == {_key(SRV, B), _key(SRV, C)}
 
 
 def test_facets_with_data_filter_match_the_list(decided: TestClient) -> None:
