@@ -149,9 +149,9 @@ P_NOTEBOOKS: dict[str, Any] = {
 P_DISABLED: dict[str, Any] = {"name": "Выключенный", "attrs": {"KLSSPOL_PRF_ENABLED": False}, "sections": {}, "errors": []}
 
 
-def _host_tags() -> dict[str, list[str]]:
-    """Теги хостов с агентом: у WS01 два, у SRV01 один, у остальных пусто."""
-    tags: dict[str, list[str]] = {f"h-ws{n:02d}": [] for n in (1, 2, 3, 4, 5, 7, 9, 10, 11, 14)} | {"h-srv01": [], "h-lab01": []}
+def _host_tags(hosts: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Теги хостов с агентом (по тому же правилу, что `host_products`): у WS01 два, у SRV01 один, у остальных пусто."""
+    tags: dict[str, list[str]] = {h["KLHST_WKS_HOSTNAME"]: [] for h in hosts if h["KLHST_WKS_STATUS"] & 4}
     tags["h-ws01"] = ["VIP", "Бухгалтерия"]
     tags["h-srv01"] = ["Server"]
     return tags
@@ -263,7 +263,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
         "policy_contents": _policy_contents(),
-        "host_tags": _host_tags(), "policy_profiles": _policy_profiles(),
+        "host_tags": _host_tags(hosts), "policy_profiles": _policy_profiles(),
     }
 
 

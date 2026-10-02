@@ -142,3 +142,17 @@ def test_export_hides_secrets_in_profiles() -> None:
     assert export.policy_profiles["1"]["profiles"][0]["sections"]["KLPRSS_Basic"]["ProxyPassword"]["KLPRSS_Val"] == "<скрыто>"
     text = json.dumps(export.policy_profiles, ensure_ascii=False)
     assert not [v for v in SECRET_VALUES if v in text]
+
+
+def test_host_tags_keys_match_hosts_with_agent() -> None:
+    raw = build_export()
+    with_agent = {h["KLHST_WKS_HOSTNAME"] for h in raw["hosts"] if h["KLHST_WKS_STATUS"] & 4}
+    assert set(raw["host_tags"]) == with_agent
+    assert "h-wg01" in raw["host_tags"] and "h-ws14" not in raw["host_tags"]
+
+
+def test_host_tags_are_normalised() -> None:
+    raw = build_export()
+    raw["host_tags"]["h-ws01"] = ["", " ", "VIP", "VIP"]
+    by = {h.name: h for h in ExportIndex(load_export(json.dumps(raw).encode())).hosts}
+    assert by["WS01"].tags == ["VIP"]
