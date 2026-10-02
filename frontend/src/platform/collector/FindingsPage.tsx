@@ -7,9 +7,11 @@ import { useSearchParams } from '@/lib/router'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { FacetPanel } from './FacetPanel'
 import type { FindingsTableProps } from './FindingsTable'
-import type { FindingBase, FindingFilters, FindingsQuery, FindingsResponse, FindingStatus, Severity } from './types'
+import { SEVERITY_LABELS, STATUS_LABELS, type FindingBase, type FindingFilters, type FindingsQuery, type FindingsResponse, type FindingStatus, type Severity } from './types'
 
 function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
@@ -18,9 +20,11 @@ function isTypingTarget(el: EventTarget | null): boolean {
 /**
  * Находки снапшота: по умолчанию — последнего снапшота области (домена,
  * сервера). Фасеты, поиск, клавиши j/k, «/», Enter, Esc. useFindings — хук
- * модуля: его аргументы собирает страница из фильтров и поиска.
+ * модуля: его аргументы собирает страница из фильтров и поиска. filtersKey —
+ * ключ страницы для запоминания, открыта ли панель фильтров (у каждого модуля свой).
  */
-export function CollectorFindingsPage<F extends FindingBase>({ loading, lastSnapshotId, useFindings, searchFromUrl = false, searchPlaceholder, emptyDescription, table, drawer }: {
+export function CollectorFindingsPage<F extends FindingBase>({ filtersKey, loading, lastSnapshotId, useFindings, searchFromUrl = false, searchPlaceholder, emptyDescription, table, drawer }: {
+  filtersKey: string
   loading: boolean
   lastSnapshotId: number | undefined
   useFindings: (snapshotId: number | undefined, query: Omit<FindingsQuery, 'limit' | 'offset'>) => UseInfiniteQueryResult<InfiniteData<FindingsResponse<F>>, ApiRequestError>
@@ -42,6 +46,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ loading, lastSnap
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [openKey, setOpenKey] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const filtersPanel = useFiltersPanel(filtersKey)
 
   const queryArgs = useMemo(() => ({ ...filters, q: q || undefined }), [filters, q])
   const query = useFindings(snapshotId, queryArgs)
@@ -54,6 +59,12 @@ export function CollectorFindingsPage<F extends FindingBase>({ loading, lastSnap
 
   function toggle<K extends keyof FindingFilters>(key: K, value: FindingFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
+  // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  const chips: FilterChip[] = []
+  if (filters.severity) chips.push({ label: `severity ${SEVERITY_LABELS[filters.severity]}`, clear: () => toggle('severity', undefined) })
+  if (filters.status) chips.push({ label: `статус ${STATUS_LABELS[filters.status]}`, clear: () => toggle('status', undefined) })
+  if (filters.allowlisted !== undefined) chips.push({ label: filters.allowlisted ? 'в allowlist (понижено до Low)' : 'не в allowlist', clear: () => toggle('allowlisted', undefined) })
+  if (filters.check) chips.push({ label: `проверка ${first?.check_titles[filters.check] ?? filters.check}`, clear: () => toggle('check', undefined) })
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -77,9 +88,10 @@ export function CollectorFindingsPage<F extends FindingBase>({ loading, lastSnap
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Находки</h1>
         <span className="font-mono text-xs text-text-secondary">снапшот #{snapshotId}</span>
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder={searchPlaceholder} className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -87,9 +99,10 @@ export function CollectorFindingsPage<F extends FindingBase>({ loading, lastSnap
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         {first?.compared_to.previous_id != null && <span className="text-[11px] text-text-secondary">к #{first.compared_to.previous_id}: <span className="text-risk-high">+{first.compared_to.new}</span> / <span className="text-kind-accepted">−{first.compared_to.fixed}</span></span>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
+        {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       <div className="flex min-h-0 flex-1">
-        <FacetPanel facets={first?.facets ?? null} titles={first?.check_titles ?? {}} filters={filters} onToggle={toggle} total={total} />
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} titles={first?.check_titles ?? {}} filters={filters} onToggle={toggle} total={total} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}

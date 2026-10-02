@@ -700,6 +700,13 @@ export const POLARITY_LABELS: Record<Polarity, string> = {
   assertion: 'утверждение',
 }
 
+export const SHAPE_LABELS: Record<ShapeFilter, string> = {
+  fqdn: 'имя узла',
+  ip: 'IP-адрес',
+  cidr: 'подсеть',
+  plain: 'обычное значение',
+}
+
 export const FINDING_STATUS_LABELS: Record<FindingStatus, string> = {
   open: 'открыта',
   accepted: 'принята как норма',

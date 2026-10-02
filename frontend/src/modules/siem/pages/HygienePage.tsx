@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, FilterX, Search } from 'lucide-react'
 import { useFindings, useRuleDetail, useSetVerdict } from '@/modules/siem/api/queries'
-import type { FindingListItem } from '@/modules/siem/api/types'
+import { FINDING_KIND_LABELS, FINDING_STATUS_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS, type FindingListItem } from '@/modules/siem/api/types'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useCan } from '@/lib/can'
 import { Link, useSearchParams } from '@/lib/router'
@@ -31,6 +33,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   const [openFindingId, setOpenFindingId] = useState<number | null>(null)
   const [acceptFindingId, setAcceptFindingId] = useState<number | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const filtersPanel = useFiltersPanel('siem-hygiene')
 
   // Экран открывают двумя путями: из инвентаря по конкретному правилу
   // и целиком по снапшоту. Правило приходит идентификатором в адресе —
@@ -80,6 +83,16 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
     setFilters({})
     setSearchInput('')
   }
+
+  // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  const chips: FilterChip[] = []
+  if (filters.kind) chips.push({ label: `класс ${FINDING_KIND_LABELS[filters.kind]}`, clear: () => toggleFilter('kind', undefined) })
+  if (filters.object_type) chips.push({ label: `тип ${OBJECT_TYPE_LABELS[filters.object_type]}`, clear: () => toggleFilter('object_type', undefined) })
+  if (filters.polarity) chips.push({ label: `полярность ${POLARITY_LABELS[filters.polarity]}`, clear: () => toggleFilter('polarity', undefined) })
+  if (filters.shape) chips.push({ label: `форма ${SHAPE_LABELS[filters.shape]}`, clear: () => toggleFilter('shape', undefined) })
+  if (filters.in_table !== undefined) chips.push({ label: filters.in_table ? 'есть в табличном списке' : 'нет в табличном списке', clear: () => toggleFilter('in_table', undefined) })
+  if (filters.status) chips.push({ label: `статус ${FINDING_STATUS_LABELS[filters.status]}`, clear: () => toggleFilter('status', undefined) })
+  if (filters.field) chips.push({ label: `поле ${filters.field}`, clear: () => toggleFilter('field', undefined) })
 
   // --- Клавиатура: j/k строки, Enter раскрыть, a принять, / поиск, Esc свернуть.
   useEffect(() => {
@@ -135,7 +148,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         {objectUuid ? (
           <div className="flex min-w-0 items-center gap-2">
             <Link
@@ -152,6 +165,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
         ) : (
           <h1 className="text-sm font-semibold text-text">Находки</h1>
         )}
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <div className="relative flex-1 max-w-sm">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input
@@ -179,10 +193,11 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
               : `${total} находок`
             : '…'}
         </div>
+        {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <FacetPanel facets={facets} fieldFacet={fieldFacet} filters={filters} onToggle={toggleFilter} total={total} />
+        {filtersPanel.open && <FacetPanel facets={facets} fieldFacet={fieldFacet} filters={filters} onToggle={toggleFilter} total={total} />}
 
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}

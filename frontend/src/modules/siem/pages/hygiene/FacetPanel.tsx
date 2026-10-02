@@ -7,7 +7,7 @@ import type {
   Polarity,
   ShapeFilter,
 } from '@/modules/siem/api/types'
-import { OBJECT_TYPE_LABELS, POLARITY_LABELS } from '@/modules/siem/api/types'
+import { OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS } from '@/modules/siem/api/types'
 import { cn } from '@/lib/cn'
 import { KindBadge } from '@/modules/siem/components/ui/KindBadge'
 import { StatusBadge } from '@/modules/siem/components/ui/StatusBadge'
@@ -73,10 +73,10 @@ const OBJECT_TYPES: ObjectType[] = ['correlation', 'filter', 'enrichment']
 //: наравне с прочими: «сколько сетевых имён» имеет смысл только рядом
 //: с «а сколько не сетевых».
 const SHAPES = [
-  { key: 'fqdn', label: 'имя узла' },
-  { key: 'ip', label: 'IP-адрес' },
-  { key: 'cidr', label: 'подсеть' },
-  { key: 'plain', label: 'обычное значение' },
+  { key: 'fqdn', label: SHAPE_LABELS.fqdn },
+  { key: 'ip', label: SHAPE_LABELS.ip },
+  { key: 'cidr', label: SHAPE_LABELS.cidr },
+  { key: 'plain', label: SHAPE_LABELS.plain },
 ] as const
 
 const POLARITIES: Polarity[] = ['negation', 'assertion']

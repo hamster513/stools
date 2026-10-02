@@ -21,6 +21,8 @@ import {
 } from '@/modules/ksc/api/types'
 import { SeverityBadge } from '@/platform/collector/SeverityBadge'
 import { AssetLink } from '@/modules/assets/AssetLink'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { useSearchParams, Link } from '@/lib/router'
@@ -285,6 +287,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [openHostId, setOpenHostId] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const filtersPanel = useFiltersPanel('ksc-hosts')
 
   const queryArgs = useMemo(() => ({ ...filters, q: q || undefined }), [filters, q])
   const query = useHosts(snapshotId, queryArgs)
@@ -296,6 +299,15 @@ export function HostsPage({ serverId }: { serverId: number }) {
 
   function toggle<K extends keyof HostFilters>(key: K, value: HostFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
+  // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  const chips: FilterChip[] = []
+  if (filters.protection) chips.push({ label: `защита ${PROTECTION_LABELS[filters.protection]}`, clear: () => toggle('protection', undefined) })
+  if (filters.agent) chips.push({ label: `агент ${AGENT_LABELS[filters.agent]}`, clear: () => toggle('agent', undefined) })
+  if (filters.bases) chips.push({ label: `базы ${BASES_LABELS[filters.bases]}`, clear: () => toggle('bases', undefined) })
+  if (filters.in_ad) chips.push({ label: `AD ${IN_AD_LABELS[filters.in_ad] ?? filters.in_ad}`, clear: () => toggle('in_ad', undefined) })
+  if (filters.status) chips.push({ label: `статус KSC ${({ ok: 'ок', warning: 'предупреждение', critical: 'критично' } as Record<string, string>)[filters.status] ?? filters.status}`, clear: () => toggle('status', undefined) })
+  if (filters.group) chips.push({ label: `группа ${filters.group}`, clear: () => toggle('group', undefined) })
+  if (filters.product) chips.push({ label: `продукт ${filters.product}`, clear: () => toggle('product', undefined) })
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -319,18 +331,20 @@ export function HostsPage({ serverId }: { serverId: number }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Хосты</h1>
         <span className="font-mono text-xs text-text-secondary">снапшот #{snapshotId}</span>
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, IP, ОС… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
+        {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       <div className="flex min-h-0 flex-1">
-        <HostFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} />
+        {filtersPanel.open && <HostFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}

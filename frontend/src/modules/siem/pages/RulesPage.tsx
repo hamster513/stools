@@ -15,6 +15,8 @@ import { cn } from '@/lib/cn'
 import { AttentionBadge, attentionLevel } from '@/modules/siem/components/ui/AttentionBadge'
 import { RuleDetailDrawer } from './rules/RuleDetailDrawer'
 import { useRouter } from '@/lib/router'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 
 const ROW_HEIGHT = 32
 
@@ -46,6 +48,7 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
   const q = useDebouncedValue(searchInput, 200)
   const [openUuid, setOpenUuid] = useState<string | null>(null)
   const parentRef = useRef<HTMLDivElement>(null)
+  const filtersPanel = useFiltersPanel('siem-rules')
 
   const allItems = useMemo(() => query.data?.items ?? [], [query.data])
 
@@ -98,10 +101,16 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
   const errorMessage =
     query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить правила' : null
 
+  // Что выбрано в боковой панели, пока она свёрнута.
+  const chips: FilterChip[] = []
+  if (author) chips.push({ label: `автор ${author}`, clear: () => setAuthor(undefined) })
+  if (category) chips.push({ label: `категория ${category}`, clear: () => setCategory(undefined) })
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Инвентарь правил</h1>
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input
@@ -154,49 +163,52 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
             </span>
           )}
         </div>
+        {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <div className="flex h-full w-56 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
-          <div className="border-b border-grid px-2 py-3">
-            <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Автор</div>
-            {Object.entries(authorFacet)
-              .sort((a, b) => b[1] - a[1])
-              .map(([a, cnt]) => (
-                <button
-                  key={a}
-                  type="button"
-                  onClick={() => setAuthor((prev) => (prev === a ? undefined : a))}
-                  className={cn(
-                    'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
-                    author === a ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
-                  )}
-                >
-                  <span className="truncate">{a}</span>
-                  <span className="font-mono tabular-nums text-[11px]">{cnt}</span>
-                </button>
-              ))}
+        {filtersPanel.open && (
+          <div className="flex h-full w-56 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
+            <div className="border-b border-grid px-2 py-3">
+              <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Автор</div>
+              {Object.entries(authorFacet)
+                .sort((a, b) => b[1] - a[1])
+                .map(([a, cnt]) => (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => setAuthor((prev) => (prev === a ? undefined : a))}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
+                      author === a ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
+                    )}
+                  >
+                    <span className="truncate">{a}</span>
+                    <span className="font-mono tabular-nums text-[11px]">{cnt}</span>
+                  </button>
+                ))}
+            </div>
+            <div className="px-2 py-3">
+              <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Категория</div>
+              {Object.entries(categoryFacet)
+                .sort((a, b) => b[1] - a[1])
+                .map(([c, cnt]) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCategory((prev) => (prev === c ? undefined : c))}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
+                      category === c ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
+                    )}
+                  >
+                    <span className="truncate font-mono">{c}</span>
+                    <span className="font-mono tabular-nums text-[11px]">{cnt}</span>
+                  </button>
+                ))}
+            </div>
           </div>
-          <div className="px-2 py-3">
-            <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Категория</div>
-            {Object.entries(categoryFacet)
-              .sort((a, b) => b[1] - a[1])
-              .map(([c, cnt]) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => setCategory((prev) => (prev === c ? undefined : c))}
-                  className={cn(
-                    'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
-                    category === c ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
-                  )}
-                >
-                  <span className="truncate font-mono">{c}</span>
-                  <span className="font-mono tabular-nums text-[11px]">{cnt}</span>
-                </button>
-              ))}
-          </div>
-        </div>
+        )}
 
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}

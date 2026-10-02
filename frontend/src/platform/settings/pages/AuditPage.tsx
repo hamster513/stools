@@ -6,6 +6,8 @@ import { Field, FIELD } from '@/components/ui/Field'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Button } from '@/components/ui/Button'
 import { auditCsvUrl, useAudit, useUsers } from '@/platform/settings/api/queries'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ROLE_TITLES, type AuditFilters } from '@/platform/settings/api/types'
 
 const PAGE_SIZE = 50
@@ -15,6 +17,10 @@ const CELL = 'py-1.5 pr-3 align-top'
 /** Поле `datetime-local` даёт местное время без зоны — в API уходит UTC. */
 function toIso(local: string): string | undefined {
   return local === '' ? undefined : new Date(local).toISOString()
+}
+
+function localLabel(local: string): string {
+  return new Date(local).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 /**
@@ -30,6 +36,7 @@ export function AuditPage() {
   const [until, setUntil] = useState('')
   const [deniedOnly, setDeniedOnly] = useState(false)
   const [page, setPage] = useState(1)
+  const filtersPanel = useFiltersPanel('settings-audit')
 
   const filters: AuditFilters = {
     user_id: userId === '' ? undefined : Number(userId),
@@ -48,6 +55,16 @@ export function AuditPage() {
     apply()
   }
 
+  // Что выбрано, пока отбор свёрнут.
+  const chips: FilterChip[] = []
+  if (userId !== '') {
+    const u = users.data?.find((x) => String(x.id) === userId)
+    chips.push({ label: `пользователь ${u ? (u.display_name ? `${u.display_name} (${u.login})` : u.login) : `#${userId}`}`, clear: () => change(() => setUserId('')) })
+  }
+  if (since !== '') chips.push({ label: `с ${localLabel(since)}`, clear: () => change(() => setSince('')) })
+  if (until !== '') chips.push({ label: `по ${localLabel(until)}`, clear: () => change(() => setUntil('')) })
+  if (deniedOnly) chips.push({ label: 'только отказы', clear: () => change(() => setDeniedOnly(false)) })
+
   const total = audit.data?.total ?? 0
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -55,7 +72,10 @@ export function AuditPage() {
     <div className="flex h-full min-h-0 flex-col overflow-y-auto p-6">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">Журнал действий</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-base font-semibold text-text">Журнал действий</h1>
+            <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+          </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Изменяющие запросы и отказы по правам. Записи хранятся столько, сколько задано в
             разделе «Безопасность».
@@ -71,46 +91,49 @@ export function AuditPage() {
         </a>
       </div>
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="Пользователь">
-          <select
-            className={FIELD}
-            value={userId}
-            onChange={(e) => change(() => setUserId(e.target.value))}
-          >
-            <option value="">все</option>
-            {(users.data ?? []).map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.display_name ? `${u.display_name} (${u.login})` : u.login}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="С">
-          <input
-            className={FIELD}
-            type="datetime-local"
-            value={since}
-            onChange={(e) => change(() => setSince(e.target.value))}
-          />
-        </Field>
-        <Field label="По">
-          <input
-            className={FIELD}
-            type="datetime-local"
-            value={until}
-            onChange={(e) => change(() => setUntil(e.target.value))}
-          />
-        </Field>
-        <label className="flex items-end gap-2 pb-2 text-xs text-text">
-          <input
-            type="checkbox"
-            checked={deniedOnly}
-            onChange={(e) => change(() => setDeniedOnly(e.target.checked))}
-          />
-          <span>Только отказы</span>
-        </label>
-      </div>
+      {!filtersPanel.open && chips.length > 0 && <div className="mb-4 flex"><FilterChips chips={chips} /></div>}
+      {filtersPanel.open && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Пользователь">
+            <select
+              className={FIELD}
+              value={userId}
+              onChange={(e) => change(() => setUserId(e.target.value))}
+            >
+              <option value="">все</option>
+              {(users.data ?? []).map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.display_name ? `${u.display_name} (${u.login})` : u.login}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="С">
+            <input
+              className={FIELD}
+              type="datetime-local"
+              value={since}
+              onChange={(e) => change(() => setSince(e.target.value))}
+            />
+          </Field>
+          <Field label="По">
+            <input
+              className={FIELD}
+              type="datetime-local"
+              value={until}
+              onChange={(e) => change(() => setUntil(e.target.value))}
+            />
+          </Field>
+          <label className="flex items-end gap-2 pb-2 text-xs text-text">
+            <input
+              type="checkbox"
+              checked={deniedOnly}
+              onChange={(e) => change(() => setDeniedOnly(e.target.checked))}
+            />
+            <span>Только отказы</span>
+          </label>
+        </div>
+      )}
 
       {audit.isError ? (
         <ErrorState

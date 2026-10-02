@@ -3,7 +3,9 @@ import { Download, FilterX, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { exportUrl, useHost, useVulns } from '@/modules/vm/api/queries'
 import { AssetLink } from '@/modules/assets/AssetLink'
-import type { RiskLevel, VulnItem, VulnSort } from '@/modules/vm/api/types'
+import { CVSS_SOURCE_LABELS, LEVEL_LABELS, type RiskLevel, type VulnItem, type VulnSort } from '@/modules/vm/api/types'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useRouter, useSearchParams } from '@/lib/router'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -42,6 +44,7 @@ export function VulnsPage() {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [openKey, setOpenKey] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const filtersPanel = useFiltersPanel('vm-vulns')
 
   const host = useHost(hostIdParam)
   const queryArgs = useMemo(
@@ -66,6 +69,16 @@ export function VulnsPage() {
     setSearchInput('')
     if (cveParam || hostIdParam) navigate('/vm/vulns', { replace: true })
   }
+  // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  // Пустая строка — тоже значение фильтра («не задана», «без зоны»).
+  const chips: FilterChip[] = []
+  if (filters.level) chips.push({ label: `риск ${LEVEL_LABELS[filters.level]}`, clear: () => toggle('level', undefined) })
+  if (filters.criticality !== undefined) chips.push({ label: `критичность ${filters.criticality || 'не задана'}`, clear: () => toggle('criticality', undefined) })
+  if (filters.zone !== undefined) chips.push({ label: filters.zone ? `зона ${filters.zone}` : 'без зоны', clear: () => toggle('zone', undefined) })
+  if (filters.exploits) chips.push({ label: 'есть эксплойт в ExploitDB', clear: () => toggle('exploits', undefined) })
+  if (filters.msf) chips.push({ label: 'есть модуль Metasploit', clear: () => toggle('msf', undefined) })
+  if (filters.cvss_source) chips.push({ label: `источник CVSS ${CVSS_SOURCE_LABELS[filters.cvss_source]}`, clear: () => toggle('cvss_source', undefined) })
+  if (filters.os !== undefined) chips.push({ label: `ОС ${filters.os || 'не определена'}`, clear: () => toggle('os', undefined) })
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -89,8 +102,9 @@ export function VulnsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Уязвимости</h1>
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         {cveParam && (
           <span className="inline-flex items-center gap-1 rounded border border-grid px-2 py-0.5 font-mono text-xs text-text">
             {cveParam}
@@ -129,10 +143,11 @@ export function VulnsPage() {
         <div className="font-mono text-xs tabular-nums text-text-secondary">
           {query.data ? (items.length < total ? `${items.length.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}` : total.toLocaleString('ru-RU')) : '…'}
         </div>
+        {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <FacetPanel facets={facets} filters={filters} onToggle={toggle} total={total} />
+        {filtersPanel.open && <FacetPanel facets={facets} filters={filters} onToggle={toggle} total={total} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}

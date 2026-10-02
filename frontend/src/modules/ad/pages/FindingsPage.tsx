@@ -9,6 +9,7 @@ export function FindingsPage({ domainId }: { domainId: number }) {
   const domain = domains.data?.find((d) => d.id === domainId)
   return (
     <CollectorFindingsPage
+      filtersKey="ad-findings"
       loading={domains.isLoading}
       lastSnapshotId={domain?.last_snapshot_id ?? undefined}
       useFindings={useFindings}

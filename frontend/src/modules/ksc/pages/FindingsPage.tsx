@@ -9,6 +9,7 @@ export function FindingsPage({ serverId }: { serverId: number }) {
   const server = servers.data?.find((s) => s.id === serverId)
   return (
     <CollectorFindingsPage
+      filtersKey="ksc-findings"
       loading={servers.isLoading}
       lastSnapshotId={server?.last_snapshot_id ?? undefined}
       useFindings={useFindings}
