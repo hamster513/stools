@@ -164,11 +164,13 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: 
 
 
 def delete_snapshot(db: Session, snapshot: AdSnapshot, data_dir: Path) -> None:
-    path = snapshot_path(data_dir, snapshot.id)
+    path, scope_id = snapshot_path(data_dir, snapshot.id), snapshot.domain_id
     db.delete(snapshot)
     db.commit()
     if path.exists():
         path.unlink()
+    # Удалён последний снапшот — свежими данными области стал предыдущий.
+    FINDINGS_ADAPTER.reconcile(db, scope_id)
 
 
 def previous_snapshot(db: Session, snapshot: AdSnapshot) -> AdSnapshot | None:

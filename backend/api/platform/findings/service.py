@@ -2,7 +2,13 @@
 
 Каждое изменение пишет событие истории; изменение, которое ничего не
 меняет, не пишет ничего — иначе лента заполнится повторами одного и того же
-сохранения. Функции с записью фиксируют транзакцию сами, один раз на вызов.
+сохранения. Функции с записью фиксируют транзакцию сами, один раз на вызов
+(`reconcile` — если не попросили иначе).
+
+Все записи одной области (`module`, `scope_id`) идут друг за другом: в начале
+транзакции берётся транзакционная advisory-блокировка области (`lock_scope`),
+а строки читаются заново уже под ней. Так сверка не перетирает ручную смену,
+сделанную, пока она шла, а две смены одной новой находки не заводят две строки.
 """
 from __future__ import annotations
 
@@ -14,7 +20,8 @@ from itertools import batched
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from api.db.models import ROLE_ADMIN, ROLE_ANALYST, AppUser
@@ -33,6 +40,8 @@ from api.platform.findings.models import FindingEvent, FindingSettingsRow, Findi
 from api.settings import get_settings
 
 SYSTEM = "system"
+#: Строка настроек одна, с постоянным id.
+SETTINGS_ID = 1
 #: «Риск истекает» на обзоре — столько дней вперёд.
 RISK_EXPIRING_DAYS = 30
 _CHUNK = 5000
@@ -91,12 +100,14 @@ def load_settings(db: Session) -> FindingSettings:
 
 
 def save_settings(db: Session, data: FindingSettings, *, updated_by: str = "") -> FindingSettings:
+    """Строка с постоянным id заводится вставкой без конфликта: одновременные
+    сохранения пишут в одну строку, а не каждое в свою."""
+    db.execute(pg_insert(FindingSettingsRow).values(id=SETTINGS_ID, data={}, updated_by="")
+               .on_conflict_do_nothing(index_elements=["id"]))
     row = db.scalars(
-        select(FindingSettingsRow).order_by(FindingSettingsRow.id).with_for_update()
-    ).first()
-    if row is None:
-        row = FindingSettingsRow(data={})
-        db.add(row)
+        select(FindingSettingsRow).where(FindingSettingsRow.id == SETTINGS_ID).with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
     row.data = data.model_dump()
     row.updated_by = updated_by
     db.commit()
@@ -111,15 +122,30 @@ def counted_statuses(db: Session) -> frozenset[str]:
 
 
 def state_map(
-    db: Session, module: str, scope_id: int, keys: Iterable[str] | None = None,
+    db: Session, module: str, scope_id: int, keys: Iterable[str] | None = None, *, fresh: bool = False,
 ) -> dict[str, FindingState]:
+    """`fresh` — перечитать строки из базы поверх уже загруженных в сессию: так
+    читают под блокировкой области, чтобы не решать по устаревшим значениям."""
     scope = (FindingState.module == module, FindingState.scope_id == scope_id)
+    opts = {"populate_existing": True} if fresh else {}
     if keys is None:
-        return {r.key: r for r in db.scalars(select(FindingState).where(*scope))}
+        return {r.key: r for r in db.scalars(select(FindingState).where(*scope).execution_options(**opts))}
     found: dict[str, FindingState] = {}
     for chunk in batched(set(keys), _CHUNK):
-        found.update((r.key, r) for r in db.scalars(select(FindingState).where(*scope, FindingState.key.in_(chunk))))
+        found.update((r.key, r) for r in db.scalars(
+            select(FindingState).where(*scope, FindingState.key.in_(chunk)).execution_options(**opts)))
     return found
+
+
+def lock_scope(db: Session, module: str, scope_id: int) -> None:
+    """Транзакционная блокировка области: держится до commit или rollback, повторный
+    вызов в той же транзакции не ждёт. Два int-а: `hashtext(module)` и `scope_id`."""
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:module), CAST(:scope_id AS integer))"),
+               {"module": module, "scope_id": scope_id})
+
+
+def _first_seen(db: Session, module: str, scope_id: int, key: str) -> dt.datetime | None:
+    return get_adapter(module).first_seen_many(db, scope_id, [key]).get(key)
 
 
 def effective_status(state: FindingState | None) -> str:
@@ -168,7 +194,9 @@ def _apply(row: FindingState, change: Change, *, actor: AppUser, settings: Findi
         if not isinstance(change.risk_until, Unset) and change.risk_until is not None:
             raise TransitionError("срок принятия риска задаётся только для статуса «Принят риск»")
         risk_until = None
-    if target != old or risk_until != row.risk_until:
+    # Новое обоснование закрывающего решения — тоже решение: пишется как смена статуса.
+    new_reason = target in NEEDS_REASON and target == old and bool(comment) and comment != row.reason
+    if target != old or risk_until != row.risk_until or new_reason:
         # Продление принятого риска без нового текста держится на прежнем обосновании.
         reason = comment or (row.reason if target == old else "")
         check_manual(target, reason=reason, role=actor.role, settings=settings, risk_until=risk_until, today=on)
@@ -197,10 +225,11 @@ def _apply(row: FindingState, change: Change, *, actor: AppUser, settings: Findi
 
 def change(db: Session, *, module: str, scope_id: int, key: str, change: Change, actor: AppUser,
            title: str = "", severity: str = "") -> FindingState:
-    row = state_map(db, module, scope_id, [key]).get(key)
+    lock_scope(db, module, scope_id)
+    row = state_map(db, module, scope_id, [key], fresh=True).get(key)
     if row is None:
         row = _new_row(module, scope_id, key)
-        row.first_seen_at = get_adapter(module).first_seen(db, scope_id, key)
+        row.first_seen_at = _first_seen(db, module, scope_id, key)
     events = _apply(row, change, actor=actor, settings=load_settings(db), assignable=_directory_logins(db),
                     on=today(), bulk_id=None)
     if events:
@@ -209,17 +238,19 @@ def change(db: Session, *, module: str, scope_id: int, key: str, change: Change,
         if severity:
             row.severity = severity[:16]
         db.add_all(events)
-        db.commit()
+    # И без изменений: commit отпускает блокировку области.
+    db.commit()
     return row
 
 
 def comment(db: Session, *, module: str, scope_id: int, key: str, text: str, actor: AppUser) -> FindingEvent:
     if not text.strip():
         raise TransitionError("пустой комментарий")
-    row = state_map(db, module, scope_id, [key]).get(key)
+    lock_scope(db, module, scope_id)
+    row = state_map(db, module, scope_id, [key], fresh=True).get(key)
     if row is None:
         row = _new_row(module, scope_id, key)
-        row.first_seen_at = get_adapter(module).first_seen(db, scope_id, key)
+        row.first_seen_at = _first_seen(db, module, scope_id, key)
     event = _event(row, actor.login, "comment", comment=text.strip())
     row.updated_by = actor.login
     db.add(event)
@@ -234,11 +265,16 @@ def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str],
     bulk_id = bulk_id or uuid.uuid4().hex
     get_adapter(module)
     settings, assignable, on = load_settings(db), _directory_logins(db), today()
-    existing = state_map(db, module, scope_id, keys)
+    lock_scope(db, module, scope_id)
+    existing = state_map(db, module, scope_id, keys, fresh=True)
     changed = 0
     for key in dict.fromkeys(keys):
         row = existing.get(key) or _new_row(module, scope_id, key)
-        events = _apply(row, change, actor=actor, settings=settings, assignable=assignable, on=on, bulk_id=bulk_id)
+        try:
+            events = _apply(row, change, actor=actor, settings=settings, assignable=assignable, on=on, bulk_id=bulk_id)
+        except TransitionError as exc:
+            # Отказ на одной — отказ всей смены; фиксации не было, вызывающий откатит.
+            raise type(exc)(f"находка «{key}»: {exc}") from exc
         if events:
             db.add_all(events)
             changed += 1
@@ -258,34 +294,45 @@ def ensure_rows_for_disappeared(db: Session, module: str, scope_id: int, finding
     wanted = {f.key: f for f in findings}
     if not wanted:
         return 0
-    existing = state_map(db, module, scope_id, wanted)
-    adapter = get_adapter(module)
-    made = 0
-    for key, f in wanted.items():
-        if key in existing:
-            continue
+    lock_scope(db, module, scope_id)
+    existing = state_map(db, module, scope_id, wanted, fresh=True)
+    missing = [key for key in wanted if key not in existing]
+    seen = get_adapter(module).first_seen_many(db, scope_id, missing) if missing else {}
+    for key in missing:
+        f = wanted[key]
         row = _new_row(module, scope_id, key)
         row.title, row.severity, row.updated_by = f.title[:512], f.severity[:16], SYSTEM
-        row.first_seen_at = adapter.first_seen(db, scope_id, key)
+        row.first_seen_at = seen.get(key)
         db.add(row)
-        made += 1
+    made = len(missing)
     db.flush()
     return made
 
 
 
-def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.datetime | None = None) -> dict[str, int]:
+def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.datetime | None = None,
+              commit: bool = True) -> dict[str, int]:
     """Сверка строк состояния области со свежими данными модуля (§1).
 
     Свежих ключей бывают десятки тысяч, строк состояния — те, о которых
     решали люди: сверка идёт по строкам, а ключи нужны только как множество.
-    Строк для ключей без решения не заводит."""
+    Строк для ключей без решения не заводит. Нет данных области (адаптер
+    вернул None) — область пропускается: `{"skipped": 1}`.
+
+    `commit=False` — только flush: так зовёт `safe_reconcile` внутри точки
+    сохранения, транзакцию фиксирует он."""
     now = now or dt.datetime.now(dt.UTC)
     adapter = get_adapter(module)
-    current = {f.key: f for f in adapter.current(db, scope_id)}
+    lock_scope(db, module, scope_id)
+    fresh = adapter.current(db, scope_id)
+    if fresh is None:
+        _finish(db, commit)
+        return {"skipped": 1}
+    current = {f.key: f for f in fresh}
     counts = {"resolved": 0, "reopened": 0, "present": len(current)}
     events: list[FindingEvent] = []
-    for row in state_map(db, module, scope_id).values():
+    no_age: list[FindingState] = []
+    for row in state_map(db, module, scope_id, fresh=True).values():
         found = current.get(row.key)
         if found is None:
             if row.present:
@@ -296,6 +343,7 @@ def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.date
                 row.status, row.resolved_at, row.updated_by = target, now, SYSTEM
                 counts["resolved"] += 1
             continue
+        was_present = row.present
         if not row.present:
             row.present = True
         if found.title and row.title != found.title[:512]:
@@ -303,28 +351,48 @@ def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.date
         if found.severity and row.severity != found.severity[:16]:
             row.severity = found.severity[:16]
         if row.first_seen_at is None:
-            row.first_seen_at = adapter.first_seen(db, scope_id, row.key)
-        target = on_present(row.status)
+            no_age.append(row)
+        target = on_present(row.status, was_present)
         if target is not None:
             events.append(_event(row, SYSTEM, "auto_reopened", from_status=row.status, to_status=target, details={"ref": ref}))
             row.status, row.resolved_at, row.updated_by = target, None, SYSTEM
             counts["reopened"] += 1
+    # Возраст — одним запросом и только для ключей в данных: о пропавших адаптер
+    # нового не скажет, и каждая сверка спрашивала бы о них зря.
+    if no_age:
+        seen = adapter.first_seen_many(db, scope_id, [r.key for r in no_age])
+        for row in no_age:
+            row.first_seen_at = seen.get(row.key)
     db.add_all(events)
-    db.commit()
+    _finish(db, commit)
     return counts
 
 
+def _finish(db: Session, commit: bool) -> None:
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
 def expire_risks(db: Session, today: dt.date) -> int:
-    """Принятый риск со сроком в прошлом снова становится новой находкой."""
-    rows = db.scalars(select(FindingState).where(
-        FindingState.status == "risk_accepted", FindingState.risk_until < today,
-    )).all()
-    for row in rows:
-        db.add(_event(row, SYSTEM, "risk_expired", from_status=row.status, to_status="new",
-                      details={"risk_until": _iso(row.risk_until)}))
-        row.status, row.risk_until, row.updated_by = "new", None, SYSTEM
-    db.commit()
-    return len(rows)
+    """Принятый риск со сроком в прошлом снова становится новой находкой.
+    По областям: каждая под своей блокировкой и своим commit."""
+    expired = (FindingState.status == "risk_accepted", FindingState.risk_until < today)
+    scopes = db.execute(select(FindingState.module, FindingState.scope_id).where(*expired).distinct()).all()
+    total = 0
+    for module, scope_id in scopes:
+        lock_scope(db, module, scope_id)
+        rows = db.scalars(select(FindingState).where(
+            FindingState.module == module, FindingState.scope_id == scope_id, *expired,
+        ).execution_options(populate_existing=True)).all()
+        for row in rows:
+            db.add(_event(row, SYSTEM, "risk_expired", from_status=row.status, to_status="new",
+                          details={"risk_until": _iso(row.risk_until)}))
+            row.status, row.risk_until, row.updated_by = "new", None, SYSTEM
+        db.commit()
+        total += len(rows)
+    return total
 
 
 # ---- Сводка ------------------------------------------------------------------

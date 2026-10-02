@@ -2,18 +2,20 @@ import { useState } from 'react'
 import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
+import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useBulkChange, useUsersDirectory } from './queries'
 import { MANUAL_STATUSES, NEEDS_REASON, STATUS_TITLES, type FindingChange, type FindingStatus } from './types'
 
-/** Значение «снять исполнителя» в списке: пустая строка уже значит «не менять». */
+/** Значение «очистить исполнителя» в списке: пустая строка уже значит «не менять». */
 const NOBODY = '\u0000'
 const SMALL = cn(FIELD, 'w-auto py-1 text-xs')
 
 /**
  * Полоса массовых действий над выбранными находками (спека §6). Пустое поле —
- * «не менять». «Выбрать всё по фильтру» показывается, только если модуль
- * передал `onSelectAll`.
+ * «не менять»; исполнителя и срок можно и очистить. «Выбрать всё по фильтру»
+ * показывается, только если модуль передал `onSelectAll`. Без права записи
+ * полосы нет.
  */
 export function BulkBar({ module, scopeId, keys, total, onSelectAll, onDone, onClear }: {
   module: string
@@ -24,20 +26,23 @@ export function BulkBar({ module, scopeId, keys, total, onSelectAll, onDone, onC
   onDone: (changed: number) => void
   onClear: () => void
 }) {
+  const { write } = useCan()
   const directory = useUsersDirectory()
   const bulk = useBulkChange()
   const [status, setStatus] = useState<FindingStatus | ''>('')
   const [assignee, setAssignee] = useState('')
   const [due, setDue] = useState('')
+  const [clearDue, setClearDue] = useState(false)
   const [riskUntil, setRiskUntil] = useState('')
   const [comment, setComment] = useState('')
 
-  if (keys.length === 0) return null
+  if (!write || keys.length === 0) return null
 
   const change: FindingChange = {}
   if (status) change.status = status
   if (assignee) change.assignee = assignee === NOBODY ? null : assignee
-  if (due) change.due_date = due
+  if (clearDue) change.due_date = null
+  else if (due) change.due_date = due
   if (status === 'risk_accepted' && riskUntil) change.risk_until = riskUntil
   if (comment.trim()) change.comment = comment.trim()
   const needsReason = status !== '' && NEEDS_REASON.includes(status)
@@ -46,7 +51,7 @@ export function BulkBar({ module, scopeId, keys, total, onSelectAll, onDone, onC
   function apply() {
     bulk.mutate({ module, scope_id: scopeId, keys, change }, {
       onSuccess: ({ changed }) => {
-        setStatus(''); setAssignee(''); setDue(''); setRiskUntil(''); setComment('')
+        setStatus(''); setAssignee(''); setDue(''); setClearDue(false); setRiskUntil(''); setComment('')
         onDone(changed)
       },
     })
@@ -62,10 +67,14 @@ export function BulkBar({ module, scopeId, keys, total, onSelectAll, onDone, onC
       </select>
       <select aria-label="Исполнитель" className={SMALL} value={assignee} onChange={(e) => setAssignee(e.target.value)}>
         <option value="">исполнитель: не менять</option>
-        <option value={NOBODY}>снять исполнителя</option>
+        <option value={NOBODY}>исполнитель: очистить</option>
         {(directory.data ?? []).map((u) => <option key={u.login} value={u.login}>{u.display_name || u.login}</option>)}
       </select>
-      <input aria-label="Срок" title="Срок" type="date" className={SMALL} value={due} onChange={(e) => setDue(e.target.value)} />
+      <input aria-label="Срок" title="Срок" type="date" className={SMALL} value={due} disabled={clearDue} onChange={(e) => setDue(e.target.value)} />
+      <label className="flex items-center gap-1 text-text-secondary">
+        <input type="checkbox" checked={clearDue} onChange={(e) => setClearDue(e.target.checked)} />
+        срок: очистить
+      </label>
       {status === 'risk_accepted' && <input aria-label="Риск принят до" title="Риск принят до" type="date" className={SMALL} value={riskUntil} onChange={(e) => setRiskUntil(e.target.value)} />}
       <input aria-label="Комментарий" className={cn(SMALL, 'min-w-48 flex-1')} value={comment} onChange={(e) => setComment(e.target.value)}
         placeholder={needsReason ? 'Обоснование (обязательно)' : 'Комментарий'} />

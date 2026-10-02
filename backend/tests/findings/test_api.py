@@ -7,11 +7,9 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from api.db.models import AppUser, AuditEvent
-from api.platform.findings import service as svc
 from tests.api.conftest import TEST_PASSWORD
 from tests.findings.conftest import FakeAdapter
 
-TODAY = svc.today()
 Q = {"module": "test", "scope_id": 1}
 
 
@@ -35,9 +33,9 @@ def test_state_without_row_is_new(app_settings: Any, adapter: FakeAdapter, users
             "updated_by", "updated_at"} <= set(body)
 
 
-def test_put_status_assignee_due_and_null_clears(app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+def test_put_status_assignee_due_and_null_clears(app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
     analyst = _as("analyst1")
-    past = (TODAY - dt.timedelta(days=1)).isoformat()
+    past = (today - dt.timedelta(days=1)).isoformat()
     r = analyst.put("/api/findings/state", json={**Q, "key": "k1", "status": "in_work", "assignee": "analyst1", "due_date": past})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -141,3 +139,50 @@ def test_auditor_cannot_write(app_settings: Any, adapter: FakeAdapter, users: di
     assert auditor.post("/api/findings/comment", json={**Q, "key": "k1", "text": "x"}).status_code == 403
     assert auditor.post("/api/findings/bulk", json={**Q, "keys": ["k1"], "change": {"status": "in_work"}}).status_code == 403
     assert auditor.put("/api/settings/findings", json={}).status_code == 403
+
+
+def test_scope_must_exist(app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+    analyst = _as("analyst1")
+    missing = {"module": "test", "scope_id": 99}
+    for r in (
+        analyst.put("/api/findings/state", json={**missing, "key": "k1", "status": "in_work"}),
+        analyst.post("/api/findings/comment", json={**missing, "key": "k1", "text": "x"}),
+        analyst.post("/api/findings/bulk", json={**missing, "keys": ["k1"], "change": {"status": "in_work"}}),
+    ):
+        assert r.status_code == 404 and r.json()["detail"] == "область не найдена"
+    huge = {"module": "test", "scope_id": 2**31}
+    assert analyst.put("/api/findings/state", json={**huge, "key": "k1", "status": "in_work"}).status_code == 422
+    assert analyst.post("/api/findings/comment", json={**huge, "key": "k1", "text": "x"}).status_code == 422
+    assert analyst.post("/api/findings/bulk", json={**huge, "keys": ["k1"], "change": {}}).status_code == 422
+    assert analyst.get("/api/findings/state", params={**huge, "key": "k1"}).status_code == 422
+    assert analyst.get("/api/findings/summary", params=huge).status_code == 422
+
+
+def test_summary_without_data(app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+    analyst = _as("analyst1")
+    analyst.put("/api/findings/state", json={**Q, "key": "k1", "status": "in_work"})
+    body = analyst.get("/api/findings/summary", params=Q).json()
+    assert body["by_status"]["in_work"] == 1 and body["by_status"]["new"] == 0
+
+
+def test_bulk_audit_counts_changed_rows(app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUser],
+                                        db_session: Any) -> None:
+    analyst = _as("analyst1")
+    body = {**Q, "keys": ["a", "b", "c"], "change": {"status": "in_work"}}
+    assert analyst.post("/api/findings/bulk", json=body).json() == {"changed": 3}
+    assert analyst.post("/api/findings/bulk", json=body).json() == {"changed": 0}
+    db_session.expire_all()
+    summaries = [e.summary for e in db_session.query(AuditEvent).filter(AuditEvent.path == "/api/findings/bulk")
+                 .order_by(AuditEvent.id)]
+    assert [s.split(";")[0] for s in summaries] == ["test: изменено находок 3 из 3", "test: изменено находок 0 из 3"]
+
+
+def test_settings_partial_counted_merges_with_current(app_settings: Any, users: dict[str, AppUser]) -> None:
+    admin = _as("admin1")
+    assert admin.put("/api/settings/findings", json={"counted": {"risk_accepted": True}}).status_code == 200
+    r = admin.put("/api/settings/findings", json={"counted": {"fixed": False}})
+    assert r.status_code == 200
+    counted = r.json()["counted"]
+    assert counted["risk_accepted"] is True and counted["fixed"] is False and counted["new"] is True
+    assert admin.put("/api/settings/findings", json={"counted": {"bogus": True}}).status_code == 422
+    assert admin.get("/api/settings/findings").json()["counted"] == counted

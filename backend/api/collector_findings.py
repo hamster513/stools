@@ -64,9 +64,16 @@ class SnapshotFindingAdapter:
     def scopes(self, db: Session) -> Iterable[int]:
         return list(db.scalars(select(self.scope_model.id).order_by(self.scope_model.id)))
 
-    def current(self, db: Session, scope_id: int) -> Iterable[CurrentFinding]:
+    def has_scope(self, db: Session, scope_id: int) -> bool:
+        return db.get(self.scope_model, scope_id) is not None
+
+    def current(self, db: Session, scope_id: int) -> Iterable[CurrentFinding] | None:
+        """Находки последнего снапшота; у области без снапшотов данных нет — None."""
         snap = self.latest(db, scope_id)
-        return self._current_of(self._findings(db, snap.id)) if snap is not None else []
+        return self._current_of(self._findings(db, snap.id)) if snap is not None else None
+
+    def first_seen_many(self, db: Session, scope_id: int, keys: Iterable[str]) -> dict[str, dt.datetime]:
+        return first_seen_map(db, self, scope_id, keys)
 
     def first_seen(self, db: Session, scope_id: int, key: str) -> dt.datetime | None:
         return first_seen_map(db, self, scope_id, [key]).get(key)
@@ -75,37 +82,39 @@ class SnapshotFindingAdapter:
         return f"{self.path.format(scope_id=scope_id)}?{urlencode({'key': key})}"
 
     def reconcile(self, db: Session, scope_id: int) -> None:
-        """Сверка статусов с последним снапшотом области — в конце импорта и пересчёта,
-        после записи данных модуля. Пропавшие с предыдущего снапшота находки
-        получают строки состояния, чтобы закрыться системой, а не исчезнуть молча."""
+        """Сверка статусов с последним снапшотом области — в конце импорта, пересчёта
+        и удаления снапшота, после commit данных модуля. Пропавшие с предыдущего
+        снапшота находки получают строки состояния, чтобы закрыться системой, а
+        не исчезнуть молча. Область без снапшотов не сверяется: данных нет."""
         try:
-            snap = self.latest(db, scope_id)
-            if snap is None:
-                return
-            prev = self._previous(db, snap)
-            disappeared: list[CurrentFinding] = []
-            if prev is not None:
-                now = {f.key for f in self._findings(db, snap.id)}
-                disappeared = self._current_of(f for f in self._findings(db, prev.id) if f.key not in now)
-        # Данные модуля уже записаны: сбой здесь, как и в самой сверке, импорт не роняет.
+            # Точка сохранения: сбой чтения откатывает только её, не работу вызывающего.
+            with db.begin_nested():
+                snap = self.latest(db, scope_id)
+                if snap is None:
+                    return
+                prev = self._previous(db, snap)
+                disappeared: list[CurrentFinding] = []
+                if prev is not None:
+                    now = {f.key for f in self._findings(db, snap.id)}
+                    disappeared = self._current_of(f for f in self._findings(db, prev.id) if f.key not in now)
+        # Данные модуля уже записаны: сбой здесь, как и в самой сверке, их не роняет.
         except Exception:
             log.exception("сверка статусов находок %s/%s не начата", self.module, scope_id)
-            db.rollback()
             return
         safe_reconcile(db, self.module, scope_id, f"снапшот #{snap.id}", disappeared=disappeared)
 
 
 def first_seen_map(db: Session, adapter: SnapshotFindingAdapter, scope_id: int, keys: Iterable[str]) -> dict[str, dt.datetime]:
-    """Возраст находок: время сбора самого раннего снапшота области, где был ключ."""
-    wanted = list(set(keys))
-    if not wanted:
-        return {}
+    """Возраст находок: время сбора самого раннего снапшота области, где был ключ.
+    Один запрос на пачку до `_CHUNK` ключей; ключей, которых в снапшотах нет, в ответе нет."""
     s, f = adapter.snapshot_model, adapter.finding_model
-    rows = db.execute(
-        select(f.key, func.min(s.collected_at)).join(s, f.snapshot_id == s.id)
-        .where(getattr(s, adapter.owner) == scope_id, f.key.in_(wanted)).group_by(f.key)
-    ).all()
-    return {str(k): at for k, at in rows}
+    found: dict[str, dt.datetime] = {}
+    for chunk in batched(set(keys), _CHUNK):
+        found.update((str(k), at) for k, at in db.execute(
+            select(f.key, func.min(s.collected_at)).join(s, f.snapshot_id == s.id)
+            .where(getattr(s, adapter.owner) == scope_id, f.key.in_(chunk)).group_by(f.key)
+        ))
+    return found
 
 
 def last_known(db: Session, adapter: SnapshotFindingAdapter, scope_id: int, keys: Iterable[str]) -> list[Any]:

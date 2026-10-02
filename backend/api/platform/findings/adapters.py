@@ -29,7 +29,12 @@ class FindingAdapter(Protocol):
     module: str
 
     def scopes(self, db: Session) -> Iterable[int]: ...
-    def current(self, db: Session, scope_id: int) -> Iterable[CurrentFinding]: ...
+    def has_scope(self, db: Session, scope_id: int) -> bool: ...
+    #: Свежие находки области. None — данных нет (снапшота нет, выгрузка не разобрана):
+    #: сверка такую область пропускает. Пустой список — данные есть, находок нет.
+    def current(self, db: Session, scope_id: int) -> Iterable[CurrentFinding] | None: ...
+    #: Возраст многих находок одним запросом; ключей, о которых адаптер не знает, в ответе нет.
+    def first_seen_many(self, db: Session, scope_id: int, keys: Iterable[str]) -> dict[str, dt.datetime]: ...
     def first_seen(self, db: Session, scope_id: int, key: str) -> dt.datetime | None: ...
     def link(self, scope_id: int, key: str) -> str: ...
 
@@ -68,13 +73,25 @@ def safe_reconcile(
     db: Session, module: str, scope_id: int, ref: str, *, disappeared: Iterable[CurrentFinding] = (),
 ) -> None:
     """Сверка в конце импорта модуля: сбой платформы не должен ронять сам импорт.
-    `disappeared` — находки, пропавшие с прошлых данных области: им заводятся
-    строки, чтобы исчезновение закрыло их системой (`ensure_rows_for_disappeared`)."""
+
+    Вызывать после собственного commit модуля: работа платформы идёт в точке
+    сохранения (SAVEPOINT), и сбой откатывает только её; удачная сверка
+    фиксирует транзакцию целиком. `disappeared` — находки, пропавшие с прошлых
+    данных области: им заводятся строки, чтобы исчезновение закрыло их системой
+    (`ensure_rows_for_disappeared`)."""
     from api.platform.findings import service
 
     try:
-        service.ensure_rows_for_disappeared(db, module, scope_id, disappeared)
-        service.reconcile(db, module, scope_id, ref=ref)
+        with db.begin_nested():
+            service.lock_scope(db, module, scope_id)
+            service.ensure_rows_for_disappeared(db, module, scope_id, disappeared)
+            service.reconcile(db, module, scope_id, ref=ref, commit=False)
     except Exception:
         log.exception("сверка статусов находок %s/%s не удалась", module, scope_id)
+        return
+    try:
+        db.commit()
+    except Exception:
+        # Транзакция уже не жива: откат теряет только то, что не прошло commit.
+        log.exception("сверка статусов находок %s/%s не зафиксирована", module, scope_id)
         db.rollback()

@@ -11,12 +11,23 @@ export function useFindingState(ref: FindingRef | undefined) {
   })
 }
 
+/** Ключи запросов сводки области и «Моих находок»: смена статуса делает их устаревшими. */
+export const FINDING_SUMMARY_KEY = 'finding-summary'
+export const FINDINGS_MINE_KEY = 'findings-mine'
+
+function invalidateDerived(qc: ReturnType<typeof useQueryClient>) {
+  for (const key of [FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY]) qc.invalidateQueries({ queryKey: [key] })
+}
+
 export function useChangeFinding() {
   const qc = useQueryClient()
   // title и severity — для «Моих находок» до ближайшей сверки с данными модуля.
   return useMutation<FindingState, ApiRequestError, FindingRef & FindingChange & { title?: string; severity?: string }>({
     mutationFn: (body) => api.put('/api/findings/state', body),
-    onSuccess: (state) => qc.setQueryData(['finding-state', state.module, state.scope_id, state.key], state),
+    onSuccess: (state) => {
+      qc.setQueryData(['finding-state', state.module, state.scope_id, state.key], state)
+      invalidateDerived(qc)
+    },
   })
 }
 
@@ -24,7 +35,10 @@ export function useBulkChange() {
   const qc = useQueryClient()
   return useMutation<{ changed: number }, ApiRequestError, BulkChangeRequest>({
     mutationFn: (body) => api.post('/api/findings/bulk', body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['finding-state'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['finding-state'] })
+      invalidateDerived(qc)
+    },
   })
 }
 

@@ -165,11 +165,13 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg:
 
 
 def delete_snapshot(db: Session, snapshot: KscSnapshot, data_dir: Path) -> None:
-    path = snapshot_path(data_dir, snapshot.id)
+    path, scope_id = snapshot_path(data_dir, snapshot.id), snapshot.server_id
     db.delete(snapshot)
     db.commit()
     if path.exists():
         path.unlink()
+    # Удалён последний снапшот — свежими данными области стал предыдущий.
+    FINDINGS_ADAPTER.reconcile(db, scope_id)
 
 
 def previous_snapshot(db: Session, snapshot: KscSnapshot) -> KscSnapshot | None:

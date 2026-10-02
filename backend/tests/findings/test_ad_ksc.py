@@ -17,8 +17,6 @@ from tests.ad.synthetic import build_export as build_ad
 from tests.ksc.synthetic import NOW as KSC_NOW
 from tests.ksc.synthetic import build_export as build_ksc
 
-TODAY = svc.today()
-
 
 def _done(client: TestClient, module: str, raw: dict[str, Any]) -> None:
     r = client.post(f"/api/{module}/snapshots/file", files={"file": (f"{module}.json", json.dumps(raw).encode(), "application/json")})
@@ -119,7 +117,7 @@ def test_reconcile_failure_does_not_break_import(auth_client: TestClient, monkey
 # ---- AD: список, фильтры, массовая смена ---------------------------------------
 
 
-def test_ad_list_filters_facets_and_bulk(auth_client: TestClient) -> None:
+def test_ad_list_filters_facets_and_bulk(auth_client: TestClient, today: dt.date) -> None:
     _done(auth_client, "ad", build_ad())
     domain_id, snap = _ad_latest(auth_client)
     url = f"/api/ad/snapshots/{snap}/findings"
@@ -127,11 +125,11 @@ def test_ad_list_filters_facets_and_bulk(auth_client: TestClient) -> None:
     total = everything["total"]
     k1, k2, k3 = (i["key"] for i in everything["items"][:3])
 
-    yesterday = (TODAY - dt.timedelta(days=1)).isoformat()
+    yesterday = (today - dt.timedelta(days=1)).isoformat()
     r = auth_client.post("/api/findings/bulk", json={"module": "ad", "scope_id": domain_id, "keys": [k1, k2],
                                                      "change": {"status": "in_work", "assignee": "tester", "due_date": yesterday}})
     assert r.status_code == 200 and r.json() == {"changed": 2}
-    until = (TODAY + dt.timedelta(days=10)).isoformat()
+    until = (today + dt.timedelta(days=10)).isoformat()
     r = auth_client.put("/api/findings/state", json={"module": "ad", "scope_id": domain_id, "key": k3, "status": "risk_accepted",
                                                      "risk_until": until, "comment": "компенсирующая мера"})
     assert r.status_code == 200, r.text
@@ -192,6 +190,34 @@ def test_adapters_link_and_first_seen(auth_client: TestClient, db_session: Any) 
     assert kerb.severity and len(current) == auth_client.get(f"/api/ad/snapshots/{snap}").json()["findings"]
     seen = ad.first_seen(db_session, domain_id, kerb.key)
     assert seen is not None and seen.date() == AD_NOW.date()
+    assert ad.first_seen_many(db_session, domain_id, [kerb.key, "nope"]) == {kerb.key: seen}
+    assert ad.has_scope(db_session, domain_id) and not ad.has_scope(db_session, domain_id + 1000)
+
+
+def test_deleting_latest_snapshot_reconciles_with_previous(auth_client: TestClient) -> None:
+    _done(auth_client, "ad", build_ad())
+    domain_id, snap1 = _ad_latest(auth_client)
+    key = auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast").json()["items"][0]["key"]
+    _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
+    _, snap2 = _ad_latest(auth_client)
+    assert _state(auth_client, "ad", domain_id, key)["status"] == "resolved"
+    # Последний снапшот удалён — данными снова стал первый, где находка есть.
+    assert auth_client.delete(f"/api/ad/snapshots/{snap2}").status_code == 204
+    state = _state(auth_client, "ad", domain_id, key)
+    assert (state["status"], state["present"]) == ("reopened", True)
+
+
+def test_scope_without_snapshots_has_no_data(auth_client: TestClient, db_session: Any) -> None:
+    _done(auth_client, "ksc", build_ksc())
+    server_id, snap = _ksc_latest(auth_client)
+    key = auth_client.get(f"/api/ksc/snapshots/{snap}/findings?check=RTP_OFF").json()["items"][0]["key"]
+    r = auth_client.put("/api/findings/state", json={"module": "ksc", "scope_id": server_id, "key": key, "status": "in_work"})
+    assert r.status_code == 200, r.text
+    assert auth_client.delete(f"/api/ksc/snapshots/{snap}").status_code == 204
+    assert get_adapter("ksc").current(db_session, server_id) is None
+    # Нет данных — не значит «всё устранено».
+    state = _state(auth_client, "ksc", server_id, key)
+    assert (state["status"], state["present"]) == ("in_work", True)
 
 
 # ---- AD: обзор, подсчёты, ATT&CK -----------------------------------------------

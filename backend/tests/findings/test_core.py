@@ -76,14 +76,22 @@ def test_on_absent(status: str, expected: str | None) -> None:
     assert on_absent(status) == expected
 
 
-@pytest.mark.parametrize("status,expected", [
-    ("resolved", "reopened"),
+@pytest.mark.parametrize("status,was_present,expected", [
+    ("resolved", False, "reopened"), ("resolved", True, "reopened"),
     # fixed остаётся fixed, пока ключ в данных: reopened — только после исчезновения.
-    ("fixed", None), ("new", None), ("in_work", None), ("reopened", None),
-    ("risk_accepted", None), ("false_positive", None),
+    ("fixed", True, None),
+    # «Исправлено» поставили, когда находки в данных уже не было, — она вернулась.
+    ("fixed", False, "reopened"),
+    ("new", False, None), ("in_work", False, None), ("reopened", False, None),
+    ("risk_accepted", False, None), ("false_positive", False, None),
 ])
-def test_on_present(status: str, expected: str | None) -> None:
-    assert on_present(status) == expected
+def test_on_present(status: str, was_present: bool, expected: str | None) -> None:
+    assert on_present(status, was_present) == expected
+
+
+def test_unknown_status_is_named_unknown() -> None:
+    with pytest.raises(TransitionError, match="неизвестный статус «nonsense»"):
+        _check("nonsense")
 
 
 def test_is_overdue() -> None:

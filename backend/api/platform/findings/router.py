@@ -11,10 +11,10 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -38,7 +38,10 @@ from api.platform.findings.models import FindingState
 router = APIRouter(tags=["findings"])
 
 MAX_BULK_KEYS = 5000
+#: Область — int4: столбец `scope_id` и второй аргумент advisory-блокировки области.
+MAX_SCOPE_ID = 2**31 - 1
 Key = Annotated[str, Field(min_length=1, max_length=128)]
+ScopeId = Annotated[int, Field(ge=0, le=MAX_SCOPE_ID)]
 
 
 class ChangeBody(BaseModel):
@@ -70,7 +73,7 @@ class ChangeBody(BaseModel):
 
 class StateChange(ChangeBody):
     module: str = Field(max_length=16)
-    scope_id: int = Field(ge=0)
+    scope_id: ScopeId
     key: Key
     #: Подпись для «Моих находок», пока строку не обновила сверка с данными модуля.
     title: str = Field(default="", max_length=512)
@@ -79,17 +82,33 @@ class StateChange(ChangeBody):
 
 class CommentBody(BaseModel):
     module: str = Field(max_length=16)
-    scope_id: int = Field(ge=0)
+    scope_id: ScopeId
     key: Key
     text: str = Field(min_length=1, max_length=4000)
 
 
 class BulkBody(BaseModel):
     module: str = Field(max_length=16)
-    scope_id: int = Field(ge=0)
+    scope_id: ScopeId
     keys: list[Key] | None = Field(default=None, min_length=1, max_length=MAX_BULK_KEYS)
     filter: dict[str, Any] | None = None
     change: ChangeBody
+
+
+class SettingsPatch(BaseModel):
+    """Тело PUT настроек: чего нет — остаётся прежним, в том числе отдельные статусы в `counted`."""
+
+    counted: dict[str, bool] = Field(default_factory=dict)
+    risk_max_days: int | None = Field(default=None, ge=1, le=3650)
+    risk_accept_role: Literal["analyst", "admin"] = "analyst"
+
+    @field_validator("counted")
+    @classmethod
+    def _known_statuses(cls, value: dict[str, bool]) -> dict[str, bool]:
+        unknown = set(value) - set(STATUSES)
+        if unknown:
+            raise ValueError(f"неизвестные статусы: {', '.join(sorted(unknown))}")
+        return value
 
 
 class EventView(BaseModel):
@@ -150,6 +169,14 @@ def _adapter(module: str) -> FindingAdapter:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from None
 
 
+def _scoped(db: Session, module: str, scope_id: int) -> FindingAdapter:
+    """Модуль подключён и область у него есть: строки не заводятся для выдуманной области."""
+    adapter = _adapter(module)
+    if not adapter.has_scope(db, scope_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="область не найдена")
+    return adapter
+
+
 def _refused(exc: TransitionError) -> HTTPException:
     code = status.HTTP_403_FORBIDDEN if isinstance(exc, RoleRequired) else status.HTTP_422_UNPROCESSABLE_CONTENT
     return HTTPException(code, detail=str(exc))
@@ -176,7 +203,8 @@ def _view(db: Session, module: str, scope_id: int, key: str) -> StateView:
 
 @router.get("/api/findings/state", response_model=StateView)
 def get_state(
-    module: str = Query(max_length=16), scope_id: int = Query(ge=0), key: str = Query(min_length=1, max_length=128),
+    module: str = Query(max_length=16), scope_id: int = Query(ge=0, le=MAX_SCOPE_ID),
+    key: str = Query(min_length=1, max_length=128),
     db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> StateView:
     _adapter(module)
@@ -186,7 +214,7 @@ def get_state(
 @router.put("/api/findings/state", response_model=StateView)
 def put_state(payload: StateChange, request: Request, db: Session = Depends(get_db),
               user: AppUser = Depends(get_current_user)) -> StateView:
-    _adapter(payload.module)
+    _scoped(db, payload.module, payload.scope_id)
     request.state.audit_summary = f"{payload.module}: находок 1; {payload.describe()}"
     try:
         svc.change(db, module=payload.module, scope_id=payload.scope_id, key=payload.key,
@@ -199,7 +227,7 @@ def put_state(payload: StateChange, request: Request, db: Session = Depends(get_
 @router.post("/api/findings/comment", response_model=StateView)
 def post_comment(payload: CommentBody, request: Request, db: Session = Depends(get_db),
                  user: AppUser = Depends(get_current_user)) -> StateView:
-    _adapter(payload.module)
+    _scoped(db, payload.module, payload.scope_id)
     request.state.audit_summary = f"{payload.module}: находок 1; комментарий"
     try:
         svc.comment(db, module=payload.module, scope_id=payload.scope_id, key=payload.key, text=payload.text, actor=user)
@@ -213,7 +241,7 @@ def post_bulk(payload: BulkBody, request: Request, db: Session = Depends(get_db)
               user: AppUser = Depends(get_current_user)) -> dict[str, int]:
     """Смена по списку ключей. Выбор «всё по фильтру» — только у модулей, которые
     зарегистрировали разбор своего фильтра (`register_bulk_filter`)."""
-    _adapter(payload.module)
+    _scoped(db, payload.module, payload.scope_id)
     if (payload.keys is None) == (payload.filter is None):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="нужны либо ключи, либо фильтр")
     keys = payload.keys
@@ -222,12 +250,14 @@ def post_bulk(payload: BulkBody, request: Request, db: Session = Depends(get_db)
         if select_by_filter is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="выбор по фильтру не поддерживается этим модулем")
         keys = select_by_filter(db, payload.scope_id, payload.filter or {})
-    request.state.audit_summary = f"{payload.module}: находок {len(keys)}; {payload.change.describe()}"
+    what = payload.change.describe()
+    request.state.audit_summary = f"{payload.module}: находок {len(keys)}; {what}"
     try:
         changed = svc.bulk_change(db, module=payload.module, scope_id=payload.scope_id, keys=keys,
                                   change=payload.change.to_change(), actor=user)
     except TransitionError as exc:
         raise _refused(exc) from None
+    request.state.audit_summary = f"{payload.module}: изменено находок {changed} из {len(keys)}; {what}"
     return {"changed": changed}
 
 
@@ -262,11 +292,13 @@ def get_mine(
 
 @router.get("/api/findings/summary")
 def get_summary(
-    module: str = Query(max_length=16), scope_id: int = Query(ge=0),
+    module: str = Query(max_length=16), scope_id: int = Query(ge=0, le=MAX_SCOPE_ID),
     db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     adapter = _adapter(module)
-    keys_present = len({f.key for f in adapter.current(db, scope_id)})
+    current = adapter.current(db, scope_id)
+    # Нет данных области — считаются только строки состояния.
+    keys_present = None if current is None else len({f.key for f in current})
     return svc.summary(db, module, scope_id, keys_present=keys_present)
 
 
@@ -281,11 +313,13 @@ def get_finding_settings(db: Session = Depends(get_db), _user: AppUser = Depends
 
 
 @router.put("/api/settings/findings", response_model=FindingSettings)
-def put_finding_settings(payload: FindingSettings, request: Request, db: Session = Depends(get_db),
+def put_finding_settings(payload: SettingsPatch, request: Request, db: Session = Depends(get_db),
                  user: AppUser = Depends(get_current_user)) -> FindingSettings:
-    """Поля, которых нет в теле, остаются прежними."""
+    """Поля, которых нет в теле, остаются прежними; `counted` сливается с текущими значениями."""
     current = svc.load_settings(db)
-    merged = FindingSettings.model_validate({**current.model_dump(), **payload.model_dump(exclude_unset=True)})
+    patch = payload.model_dump(exclude_unset=True)
+    patch["counted"] = {**current.counted, **payload.counted}
+    merged = FindingSettings.model_validate({**current.model_dump(), **patch})
     request.state.audit_summary = changes_summary(
         [f for f in FindingSettings.model_fields if getattr(merged, f) != getattr(current, f)]
     )

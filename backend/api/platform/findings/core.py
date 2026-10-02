@@ -3,7 +3,8 @@
 `resolved` и `reopened` ставит только система по сравнению с данными;
 человек выбирает из `MANUAL`. `fixed` — «исправлено, ждём подтверждения
 данными»: пока ключ в данных, статус держится, исчезновение даёт `resolved`,
-а `reopened` бывает только после исчезновения.
+а `reopened` бывает только после исчезновения — в том числе когда «исправлено»
+поставили находке, которой в данных уже не было, а она вернулась.
 """
 from __future__ import annotations
 
@@ -59,6 +60,8 @@ class FindingSettings(BaseModel):
 def check_manual(
     status: str, *, reason: str, role: str, settings: FindingSettings, risk_until: dt.date | None, today: dt.date,
 ) -> None:
+    if status not in STATUSES:
+        raise TransitionError(f"неизвестный статус «{status}»")
     if status not in MANUAL:
         raise TransitionError(f"статус «{STATUS_TITLES.get(status, status)}» ставит только система")
     if status in NEEDS_REASON and not reason.strip():
@@ -82,9 +85,13 @@ def on_absent(status: str) -> str | None:
     return "resolved" if status in OPEN else None
 
 
-def on_present(status: str) -> str | None:
-    """Ключ снова в данных: переоткрывается только то, что система закрыла."""
-    return "reopened" if status == "resolved" else None
+def on_present(status: str, was_present: bool) -> str | None:
+    """Ключ в свежих данных области. Переоткрывается то, что система закрыла, и
+    «исправлено», поставленное, пока ключа в данных не было (`was_present` —
+    флаг строки до этой сверки): исправление не подтвердилось."""
+    if status == "resolved" or (status == "fixed" and not was_present):
+        return "reopened"
+    return None
 
 
 def is_overdue(status: str, due: dt.date | None, today: dt.date) -> bool:

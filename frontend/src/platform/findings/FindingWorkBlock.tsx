@@ -5,7 +5,7 @@ import { FIELD } from '@/components/ui/Field'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { useChangeFinding, useFindingState, useUsersDirectory } from './queries'
+import { useChangeFinding, useFindingSettings, useFindingState, useUsersDirectory } from './queries'
 import { StatusBadge } from './StatusBadge'
 import { MANUAL_STATUSES, NEEDS_REASON, STATUS_TITLES, type FindingChange, type FindingEvent, type FindingState, type FindingStatus } from './types'
 
@@ -75,7 +75,8 @@ export function FindingWorkBlock({ module, scopeId, findingKey, title, severity,
   severity: string
   onChanged?: (state: FindingState) => void
 }) {
-  const { write } = useCan()
+  const { write, admin } = useCan()
+  const settings = useFindingSettings()
   const state = useFindingState({ module, scope_id: scopeId, key: findingKey })
   const directory = useUsersDirectory()
   const save = useChangeFinding()
@@ -90,6 +91,9 @@ export function FindingWorkBlock({ module, scopeId, findingKey, title, severity,
   const needsReason = change.status !== undefined && NEEDS_REASON.includes(change.status)
   const blocked = Object.keys(change).length === 0 || (needsReason && !change.comment)
   const set = (patch: Partial<Form>) => setForm({ ...form, ...patch })
+  // Принять риск может только администратор — остальным статус не предлагается (сервер всё равно откажет).
+  const canAcceptRisk = admin || settings.data?.risk_accept_role !== 'admin'
+  const choices = MANUAL_STATUSES.filter((st) => st !== 'risk_accepted' || canAcceptRisk)
   const names = new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login]))
   // Исполнитель, которого уже нет в справочнике, остаётся видимым в списке.
   const logins = [...names.keys(), ...(s.assignee && !names.has(s.assignee) ? [s.assignee] : [])]
@@ -106,8 +110,8 @@ export function FindingWorkBlock({ module, scopeId, findingKey, title, severity,
           <span className={LABEL}>Статус</span>
           {write ? (
             <select className={FIELD} value={form.status} onChange={(e) => set({ status: e.target.value as FindingStatus })}>
-              {!MANUAL_STATUSES.includes(s.status) && <option value={s.status} disabled>{STATUS_TITLES[s.status]}</option>}
-              {MANUAL_STATUSES.map((st) => <option key={st} value={st}>{STATUS_TITLES[st]}</option>)}
+              {!choices.includes(s.status) && <option value={s.status} disabled>{STATUS_TITLES[s.status]}</option>}
+              {choices.map((st) => <option key={st} value={st}>{STATUS_TITLES[st]}</option>)}
             </select>
           ) : <StatusBadge status={s.status} />}
         </label>

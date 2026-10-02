@@ -1,20 +1,22 @@
 """Сервис статусов находок: ручные смены, история, автоматика по данным, сводка."""
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import threading
+import time
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 
+import api.db.base as db_base
 from api.db.models import AppUser
 from api.platform.findings import service as svc
 from api.platform.findings.adapters import safe_reconcile
 from api.platform.findings.core import FindingSettings, TransitionError
-from api.platform.findings.models import FindingEvent, FindingState
+from api.platform.findings.models import FindingEvent, FindingSettingsRow, FindingState
 from tests.findings.conftest import FakeAdapter
-
-TODAY = svc.today()
 
 
 def _events(db: Any, state: FindingState) -> list[FindingEvent]:
@@ -29,10 +31,10 @@ def _change(db: Any, actor: AppUser, key: str, change: svc.Change, scope_id: int
     return svc.change(db, module="test", scope_id=scope_id, key=key, change=change, actor=actor)
 
 
-def test_change_creates_row_and_event(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+def test_change_creates_row_and_event(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
     actor = users["analyst1"]
     state = _change(db_session, actor, "k1", svc.Change(status="in_work", assignee="analyst2",
-                                                         due_date=TODAY + dt.timedelta(days=5)))
+                                                         due_date=today + dt.timedelta(days=5)))
     assert state.status == "in_work" and state.assignee == "analyst2" and state.updated_by == "analyst1"
     kinds = [e.kind for e in _events(db_session, state)]
     assert sorted(kinds) == ["assign", "due", "status"]
@@ -43,7 +45,7 @@ def test_change_creates_row_and_event(db_session: Any, adapter: FakeAdapter, use
 
     # Повтор с теми же значениями — ни одного пустого события.
     _change(db_session, actor, "k1", svc.Change(status="in_work", assignee="analyst2",
-                                                due_date=TODAY + dt.timedelta(days=5)))
+                                                due_date=today + dt.timedelta(days=5)))
     assert len(_events(db_session, state)) == 3
 
 
@@ -71,13 +73,12 @@ def test_assignee_must_be_in_directory(db_session: Any, adapter: FakeAdapter, us
 
 
 def test_risk_accepted_needs_comment_and_leaving_clears_risk_until(
-    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]
-) -> None:
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
     actor = users["analyst1"]
     with pytest.raises(TransitionError):
         _change(db_session, actor, "k1", svc.Change(status="risk_accepted"))
     db_session.rollback()
-    until = TODAY + dt.timedelta(days=10)
+    until = today + dt.timedelta(days=10)
     state = _change(db_session, actor, "k1", svc.Change(status="risk_accepted", risk_until=until, comment="компенсирующая мера"))
     assert state.reason == "компенсирующая мера" and state.risk_until == until
     state = _change(db_session, actor, "k1", svc.Change(status="in_work"))
@@ -117,10 +118,9 @@ def test_reconcile_never_creates_rows(db_session: Any, adapter: FakeAdapter) -> 
 
 
 def test_in_work_resolves_then_reopens_keeping_assignee(
-    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]
-) -> None:
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
     adapter.set_keys(1, "k1")
-    due = TODAY + dt.timedelta(days=3)
+    due = today + dt.timedelta(days=3)
     _change(db_session, users["analyst1"], "k1", svc.Change(status="in_work", assignee="analyst2", due_date=due))
     adapter.set_keys(1)
     svc.reconcile(db_session, "test", 1, ref="импорт 2")
@@ -175,8 +175,8 @@ def test_reconcile_scopes_are_separate(db_session: Any, adapter: FakeAdapter, us
     assert state is not None and state.status == "in_work"
 
 
-def test_expire_risks(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
-    until = TODAY + dt.timedelta(days=1)
+def test_expire_risks(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
+    until = today + dt.timedelta(days=1)
     _change(db_session, users["analyst1"], "k1", svc.Change(status="risk_accepted", risk_until=until, comment="до релиза"))
     _change(db_session, users["analyst1"], "k2", svc.Change(status="risk_accepted", comment="бессрочно"))
     assert svc.expire_risks(db_session, until) == 0
@@ -220,14 +220,14 @@ def test_settings_roundtrip(db_session: Any) -> None:
     assert loaded == saved and loaded.risk_max_days == 90 and loaded.risk_accept_role == "admin"
 
 
-def test_summary(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+def test_summary(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
     actor = users["analyst1"]
     adapter.set_keys(1, *[f"k{i}" for i in range(10)])
-    past = TODAY - dt.timedelta(days=1)
+    past = today - dt.timedelta(days=1)
     _change(db_session, actor, "k1", svc.Change(status="in_work", assignee="analyst1", due_date=past))
     _change(db_session, actor, "k2", svc.Change(status="in_work"))
-    _change(db_session, actor, "k3", svc.Change(status="risk_accepted", risk_until=TODAY + dt.timedelta(days=20), comment="до релиза"))
-    _change(db_session, actor, "k4", svc.Change(status="risk_accepted", risk_until=TODAY + dt.timedelta(days=60), comment="до квартала"))
+    _change(db_session, actor, "k3", svc.Change(status="risk_accepted", risk_until=today + dt.timedelta(days=20), comment="до релиза"))
+    _change(db_session, actor, "k4", svc.Change(status="risk_accepted", risk_until=today + dt.timedelta(days=60), comment="до квартала"))
     _change(db_session, actor, "k5", svc.Change(status="false_positive", comment="не наш хост"))
     svc.reconcile(db_session, "test", 1, ref="импорт")
 
@@ -246,3 +246,200 @@ def test_safe_reconcile_swallows_adapter_error(db_session: Any, adapter: FakeAda
     safe_reconcile(db_session, "test", 1, "импорт")
     # Сессия после сбоя пригодна для работы.
     assert svc.state_map(db_session, "test", 1) == {}
+
+
+def test_reconcile_without_data_skips_scope(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+    adapter.set_keys(1, "k1")
+    _change(db_session, users["analyst1"], "k1", svc.Change(status="in_work"))
+    # Данных области нет (снапшота нет, выгрузка не разобрана) — это не «все находки устранены».
+    del adapter.keys[1]
+    assert svc.reconcile(db_session, "test", 1, ref="импорт 2") == {"skipped": 1}
+    state = _row(db_session, "k1")
+    assert state is not None and (state.status, state.present) == ("in_work", True)
+    # Данные есть и пусты — вот тогда устранено.
+    adapter.set_keys(1)
+    assert svc.reconcile(db_session, "test", 1, ref="импорт 3")["resolved"] == 1
+
+
+def test_fixed_set_on_absent_finding_reopens_when_it_returns(
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]
+) -> None:
+    adapter.set_keys(1, "k1")
+    _change(db_session, users["analyst1"], "k1", svc.Change(status="in_work"))
+    adapter.set_keys(1)
+    svc.reconcile(db_session, "test", 1, ref="импорт 2")
+    # Находки в данных уже нет, а человек отмечает её исправленной.
+    _change(db_session, users["analyst1"], "k1", svc.Change(status="fixed"))
+    adapter.set_keys(1, "k1")
+    assert svc.reconcile(db_session, "test", 1, ref="импорт 3")["reopened"] == 1
+    state = _row(db_session, "k1")
+    assert state is not None and (state.status, state.present) == ("reopened", True)
+
+
+def test_reconcile_asks_first_seen_once_for_many_rows(
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]
+) -> None:
+    keys = [f"k{i}" for i in range(2000)]
+    svc.bulk_change(db_session, module="test", scope_id=1, keys=keys, change=svc.Change(status="in_work"),
+                    actor=users["analyst1"])
+    seen = dt.datetime(2026, 8, 1, tzinfo=dt.UTC)
+    adapter.first["k7"] = seen
+    adapter.set_keys(1, *keys)
+    adapter.first_seen_calls = 0
+    svc.reconcile(db_session, "test", 1, ref="импорт")
+    assert adapter.first_seen_calls == 1
+    state = _row(db_session, "k7")
+    assert state is not None and state.first_seen_at == seen
+    # Возраст остальных адаптеру неизвестен: следующая сверка снова спрашивает одним вызовом.
+    adapter.first_seen_calls = 0
+    svc.reconcile(db_session, "test", 1, ref="импорт 2")
+    assert adapter.first_seen_calls == 1
+
+
+def test_safe_reconcile_failure_keeps_callers_pending_work(db_session: Any, adapter: FakeAdapter) -> None:
+    db_session.add(AppUser(login="pending1", password_hash="x", role="analyst"))
+    adapter.fail = True
+    safe_reconcile(db_session, "test", 1, "импорт")
+    db_session.commit()
+    with db_base.get_sessionmaker()() as other:
+        assert other.scalars(select(AppUser).where(AppUser.login == "pending1")).first() is not None
+
+
+def test_safe_reconcile_commits_platform_changes(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
+    adapter.set_keys(1, "k1")
+    _change(db_session, users["analyst1"], "k1", svc.Change(status="in_work"))
+    adapter.set_keys(1)
+    safe_reconcile(db_session, "test", 1, "импорт 2")
+    with db_base.get_sessionmaker()() as other:
+        state = svc.state_map(other, "test", 1, ["k1"])["k1"]
+        assert state.status == "resolved"
+
+
+def test_resaving_risk_accepted_with_new_reason_updates_reason(
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]
+) -> None:
+    _change(db_session, users["analyst1"], "k1", svc.Change(status="risk_accepted", comment="старое обоснование"))
+    state = _change(db_session, users["analyst1"], "k1", svc.Change(status="risk_accepted", comment="новое обоснование"))
+    assert state.reason == "новое обоснование"
+    last = _events(db_session, state)[-1]
+    assert (last.kind, last.from_status, last.to_status, last.comment) == (
+        "status", "risk_accepted", "risk_accepted", "новое обоснование")
+    # Новое обоснование — снова решение о риске: роль проверяется.
+    svc.save_settings(db_session, FindingSettings(risk_accept_role="admin"))
+    with pytest.raises(TransitionError):
+        _change(db_session, users["analyst1"], "k1", svc.Change(status="risk_accepted", comment="третье"))
+
+
+def test_bulk_error_names_first_failing_key(
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date
+) -> None:
+    _change(db_session, users["analyst1"], "a", svc.Change(status="risk_accepted", comment="до релиза"))
+    with pytest.raises(TransitionError, match="«b»"):
+        svc.bulk_change(db_session, module="test", scope_id=1, keys=["a", "b", "c"],
+                        change=svc.Change(risk_until=today + dt.timedelta(days=5)), actor=users["analyst1"])
+
+
+# ---- Одновременные изменения одной области ----------------------------------------
+
+
+def _actor(db: Any, login: str) -> AppUser:
+    return db.scalars(select(AppUser).where(AppUser.login == login)).one()
+
+
+def _wait_until_blocked(thread: threading.Thread, timeout: float = 10.0) -> None:
+    """Ждём, пока поток встанет в ожидание блокировки в базе (или закончит работу)."""
+    deadline = time.monotonic() + timeout
+    with db_base.get_engine().connect() as conn:
+        while time.monotonic() < deadline and thread.is_alive():
+            if conn.execute(text("SELECT count(*) FROM pg_locks WHERE NOT granted")).scalar():
+                return
+            conn.rollback()
+            time.sleep(0.02)
+
+
+def test_reconcile_waits_for_manual_change_and_rereads(
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter.set_keys(1, "k1")
+    _change(db_session, users["analyst1"], "k1", svc.Change(status="in_work"))
+    adapter.set_keys(1, "other")
+    counts: dict[str, int] = {}
+
+    def run_reconcile() -> None:
+        with db_base.get_sessionmaker()() as other:
+            counts.update(svc.reconcile(other, "test", 1, ref="импорт 2"))
+
+    worker = threading.Thread(target=run_reconcile)
+    commit = db_session.commit
+
+    def commit_while_reconcile_waits() -> None:
+        # Принятие риска записано, но не зафиксировано, а сверка той же области уже идёт.
+        monkeypatch.setattr(db_session, "commit", commit)
+        db_session.flush()
+        worker.start()
+        _wait_until_blocked(worker)
+        commit()
+
+    monkeypatch.setattr(db_session, "commit", commit_while_reconcile_waits)
+    _change(db_session, users["analyst1"], "k1", svc.Change(status="risk_accepted", comment="изолированный стенд"))
+    worker.join(10)
+    assert not worker.is_alive()
+    assert counts["resolved"] == 0
+    db_session.expire_all()
+    state = _row(db_session, "k1")
+    assert state is not None and (state.status, state.present) == ("risk_accepted", False)
+
+
+def test_concurrent_changes_of_new_finding_make_one_row(
+    db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    barrier = threading.Barrier(2)
+    plain = adapter.first_seen_many
+
+    def first_seen_together(db: Any, scope_id: int, keys: Any) -> dict[str, dt.datetime]:
+        # Без блокировки области оба потока доходят сюда, не видя строки друг друга.
+        with contextlib.suppress(threading.BrokenBarrierError):
+            barrier.wait(timeout=2)
+        return plain(db, scope_id, keys)
+
+    monkeypatch.setattr(adapter, "first_seen_many", first_seen_together)
+    errors: list[BaseException] = []
+
+    def run(login: str, change: svc.Change) -> None:
+        try:
+            with db_base.get_sessionmaker()() as db:
+                svc.change(db, module="test", scope_id=1, key="k1", change=change, actor=_actor(db, login))
+        except BaseException as exc:  # noqa: BLE001 — ошибку потока проверяет тест
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=("analyst1", svc.Change(status="in_work"))),
+               threading.Thread(target=run, args=("analyst2", svc.Change(assignee="analyst2")))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    assert errors == []
+    rows = list(db_session.scalars(select(FindingState).where(FindingState.key == "k1")))
+    assert len(rows) == 1 and (rows[0].status, rows[0].assignee) == ("in_work", "analyst2")
+    assert sorted(e.kind for e in _events(db_session, rows[0])) == ["assign", "status"]
+
+
+def test_settings_stay_one_row_under_concurrent_saves(db_session: Any) -> None:
+    barrier = threading.Barrier(8)
+    errors: list[BaseException] = []
+
+    def save(days: int) -> None:
+        try:
+            with db_base.get_sessionmaker()() as db:
+                barrier.wait(timeout=5)
+                svc.save_settings(db, FindingSettings(risk_max_days=days))
+        except BaseException as exc:  # noqa: BLE001 — ошибку потока проверяет тест
+            errors.append(exc)
+
+    threads = [threading.Thread(target=save, args=(10 + i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(15)
+    assert errors == []
+    assert db_session.scalar(select(func.count()).select_from(FindingSettingsRow)) == 1
