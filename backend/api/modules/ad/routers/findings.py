@@ -68,9 +68,9 @@ def list_findings(
                          assignee=assignee, overdue=overdue, risk_expiring=risk_expiring, q=q)
     cmp_ = compare(db, snap)
     # Находок у домена тысячи, не миллионы: статусы и фасеты считаются в памяти.
-    rows = finding_rows(db, ADAPTER, snap, cmp_)
+    found = finding_rows(db, ADAPTER, snap, cmp_, flt, first_page=offset == 0)
     return findings_page(
-        db, ADAPTER, snap.domain_id, rows, flt, cmp_, offset=offset, limit=limit,
+        db, ADAPTER, snap.domain_id, found, flt, cmp_, offset=offset, limit=limit,
         haystack=lambda f: (f.identity, f.target, f.right),
         sort_key=lambda f: (SEVERITY_RANK.get(f.severity, 9), f.check, f.identity.lower(), f.target.lower()),
         item=_item, severities=SEVERITIES, check_titles={code: spec.title for code, spec in CHECK_BY_CODE.items()},

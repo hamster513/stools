@@ -244,7 +244,7 @@ function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string 
                     ))}
                   </ul>
 
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Находки хоста ({h.findings.length})</div>
+                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Находки хоста ({h.findings_counted !== h.findings.length ? `учитываются ${h.findings_counted} из ${h.findings.length}` : h.findings.length})</div>
                   <ul className="flex flex-col gap-1">
                     {h.findings.length === 0 && <li className="text-text-secondary">находок нет</li>}
                     {h.findings.map((f) => (

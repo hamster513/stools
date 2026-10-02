@@ -14,5 +14,5 @@ def _title(f: AdFinding) -> str:
 
 ADAPTER = SnapshotFindingAdapter(
     module="ad", scope_model=AdDomain, snapshot_model=AdSnapshot, finding_model=AdFinding,
-    owner="domain_id", path="/ad/domains/{scope_id}/findings", title=_title,
+    owner="domain_id", path="/ad/domains/{scope_id}/findings", title=_title, title_fields=("identity", "target"),
 )

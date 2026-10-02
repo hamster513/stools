@@ -126,7 +126,7 @@ def import_export(
     _store_findings(db, snapshot, findings, gaps, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
-    FINDINGS_ADAPTER.reconcile(db, domain.id)
+    FINDINGS_ADAPTER.reconcile(db, domain.id, snapshot.id)
     _notify_assets(db)
     return snapshot
 
@@ -159,7 +159,7 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: 
     snapshot.ca_data_id = ca_data_id
     _store_findings(db, snapshot, findings, gaps, handle)
     db.commit()
-    FINDINGS_ADAPTER.reconcile(db, snapshot.domain_id)
+    FINDINGS_ADAPTER.reconcile(db, snapshot.domain_id, snapshot.id)
     return snapshot
 
 

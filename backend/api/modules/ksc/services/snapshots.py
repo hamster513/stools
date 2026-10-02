@@ -132,7 +132,7 @@ def import_export(
     _store(db, snapshot, idx, findings, cfg, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
-    FINDINGS_ADAPTER.reconcile(db, server.id)
+    FINDINGS_ADAPTER.reconcile(db, server.id, snapshot.id)
     _notify_assets(db)
     return snapshot
 
@@ -160,7 +160,7 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     _store(db, snapshot, idx, findings, cfg, handle)
     db.commit()
-    FINDINGS_ADAPTER.reconcile(db, snapshot.server_id)
+    FINDINGS_ADAPTER.reconcile(db, snapshot.server_id, snapshot.id)
     return snapshot
 
 

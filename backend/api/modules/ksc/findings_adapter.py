@@ -14,5 +14,5 @@ def _title(f: KscFinding) -> str:
 
 ADAPTER = SnapshotFindingAdapter(
     module="ksc", scope_model=KscServer, snapshot_model=KscSnapshot, finding_model=KscFinding,
-    owner="server_id", path="/ksc/servers/{scope_id}/findings", title=_title,
+    owner="server_id", path="/ksc/servers/{scope_id}/findings", title=_title, title_fields=("host", "target"),
 )

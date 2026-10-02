@@ -150,9 +150,13 @@ def host_detail(snapshot_id: int, host_id: str, db: Session = Depends(get_db), _
     cfg = load_config(db)
     findings = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host_key == _host_key(h))).scalars())
     states = finding_svc.state_map(db, "ksc", snap.server_id, [f.key for f in findings])
+    counted = finding_svc.counted_statuses(db)
     items = []
     for f in findings:
         status_ = finding_svc.effective_status(states.get(f.key))
         items.append({"key": f.key, "check": f.check, "check_title": CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check,
                       "severity": f.severity, "status": status_, "status_title": STATUS_TITLES[status_], "details": json.loads(f.details_json or "{}")})
-    return {**_item(h, _agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days), len(items)), "findings": items}
+    # `findings` — все находки хоста со статусами; `findings_counted` — по тому же правилу, что счётчик в списке хостов.
+    n_counted = sum(1 for i in items if i["status"] in counted)
+    return {**_item(h, _agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days), n_counted),
+            "findings": items, "findings_counted": n_counted}

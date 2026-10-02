@@ -19,7 +19,7 @@ import { FacetPanel } from './FacetPanel'
 import type { FindingsTableProps } from './FindingsTable'
 import { SEVERITY_LABELS, type FindingBase, type FindingDelta, type FindingFilters, type FindingsQuery, type FindingsResponse, type Severity } from './types'
 
-const DELTA_LABELS: Record<FindingDelta, string> = { new: 'появились в этом снапшоте', same: 'были и раньше', gone: 'нет в последнем снапшоте' }
+const DELTA_LABELS: Record<FindingDelta, string> = { new: 'появились в этом снапшоте', same: 'были и раньше', gone: 'исчезла (нет в последнем снапшоте)' }
 
 /** Статусы из ссылки: коды через запятую или `all`; незнакомые коды отбрасываются. */
 function statusesFrom(raw: string | null): FindingStatus[] | undefined {
@@ -152,6 +152,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
+      {first && !first.is_latest && <div className="shrink-0 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text-secondary">Статусы показаны на сегодня, находки — на дату снапшота</div>}
       {write && <BulkBar module={module} scopeId={scopeId} keys={[...checked]} total={total} onDone={changed} onClear={() => setChecked(new Set())} />}
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} titles={first?.check_titles ?? {}} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}

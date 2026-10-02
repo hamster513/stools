@@ -80,8 +80,8 @@ export interface OverviewBase {
     by_severity: Record<Severity, number>
   } | null
   compared_to?: ComparedTo
-  /** Учитываемые находки последнего снапшота. */
-  counted?: { total: number; by_severity: Record<Severity, number> }
+  /** Учитываемые находки последнего снапшота; statuses — какие статусы учтены (фильтр ссылок с плиток). */
+  counted?: { total: number; by_severity: Record<Severity, number>; statuses: FindingStatus[] }
   summary?: FindingSummary
   checks: CheckSummary[]
 }
@@ -123,6 +123,10 @@ export interface FindingsResponse<F extends FindingBase> {
   } | null
   compared_to: ComparedTo
   check_titles: Record<string, string>
+  /** Смотрят последний снапшот области: только у него есть строки отсутствующих находок. */
+  is_latest: boolean
+  /** Статусы — на сегодня у любого снапшота, находки — на дату снапшота. */
+  statuses_as_of: 'today'
 }
 
 export type FindingDetail<F extends FindingBase> = F & {

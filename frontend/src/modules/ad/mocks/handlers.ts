@@ -32,7 +32,7 @@ function overview(): Overview {
     domain: { id: DOMAIN.id, dns_root: DOMAIN.dns_root, netbios: DOMAIN.netbios },
     snapshot: { id: 1, collected_at: '2026-09-30T09:00:00Z', source: 'file', collector: 'powershell 2.0', findings: CHECKS.reduce((a, c) => a + c.total, 0), by_severity, objects: 1840 },
     compared_to: { previous_id: null, collected_at: null, new: 0, fixed: 0 },
-    counted: { total: CHECKS.reduce((a, c) => a + c.total, 0), by_severity },
+    counted: { total: CHECKS.reduce((a, c) => a + c.total, 0), by_severity, statuses: ['new', 'in_work', 'fixed', 'reopened'] },
     summary: {
       by_status: { new: CHECKS.reduce((a, c) => a + c.total, 0), in_work: 0, risk_accepted: 0, false_positive: 0, fixed: 0, resolved: 0, reopened: 0 },
       overdue: 0, risk_expiring: 0, unassigned: CHECKS.reduce((a, c) => a + c.total, 0),

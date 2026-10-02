@@ -6,8 +6,11 @@
 
 ```
 GET  /domains                          [{id, sid, dns_root, netbios, dn, snapshots, last_snapshot_id, last_snapshot_at}]
-GET  /domains/{id}/overview            {domain, snapshot|null, compared_to, accepted_total,
-                                        checks: [{code, title, description, total, by_severity, new, fixed, accepted, unchecked}]}
+GET  /domains/{id}/overview            {domain, snapshot|null, compared_to,
+                                        counted: {total, by_severity, statuses[]},
+                                        summary: {by_status, overdue, risk_expiring, unassigned},
+                                        checks: [{code, title, description, total, all, open, new, resolved,
+                                                  by_severity, unchecked}]}
                                         snapshot: {id, collected_at, source, collector, objects, findings,
                                         by_severity, analyzer_version, stale_analysis}
                                         unchecked: null | причина — в выгрузке не было данных для проверки
@@ -26,8 +29,15 @@ GET  /snapshots?domain_id              [{id, domain_id, collected_at, imported_a
 GET  /snapshots/{id}
 POST /snapshots/file  multipart file   {job_id} | 409 идёт задача
 POST /snapshots/{id}/reanalyze         {job_id}   — проверки заново по сохранённой выгрузке
-DELETE /snapshots/{id}                 204        — удаляет находки и файл; вердикты остаются
+DELETE /snapshots/{id}                 204        — удаляет находки и файл; статусы находок остаются
 ```
+
+Обзор — по последнему снапшоту. `counted` и у проверки `total`, `by_severity` —
+находки со статусами, которые велено учитывать (`counted.statuses`, настройка
+платформы); список с тем же числом — `findings?severity=…&status=<statuses через запятую>`.
+У проверки `all` — все её находки, `open` — открытые, `new` — появились в
+этом снапшоте, `resolved` — пропали с предыдущего. `summary` — счётчики
+статусов домена (вместе с отсутствующими в последнем снапшоте).
 
 ## Данные центра сертификации
 
@@ -81,20 +91,47 @@ ESC10: находка — `StrongCertificateBindingEnforcement` 0 или 1 ли�
 2025 это полный режим. На более старых сборках отсутствие значения означает
 режим совместимости — проверьте уровень обновлений контроллеров.
 
-## Находки и вердикты
+## Находки
 
 ```
-GET  /snapshots/{id}/findings          check, severity, status(new|persisting|accepted|fixed),
-                                       allowlisted, q, limit≤1000, offset
-                                       → {total, items, facets|null, compared_to, check_titles}
-GET  /snapshots/{id}/findings/{key}    + description, history[], verdict|null
-PUT  /verdicts/{key}  {domain_id, reason}   204   принять как норму
-DELETE /verdicts/{key}?domain_id=      204
+GET  /snapshots/{id}/findings          check, severity, allowlisted, q,
+                                       status (коды через запятую или all; по умолчанию — открытые:
+                                         new, in_work, fixed, reopened; с risk_expiring — risk_accepted),
+                                       delta (new|same|gone), assignee (логин | me | none),
+                                       overdue=true, risk_expiring=true, limit≤1000, offset
+                                       → {total, items, facets|null, compared_to, check_titles,
+                                          is_latest, statuses_as_of: "today"}
+GET  /snapshots/{id}/findings/{key}    элемент списка + description, history[{snapshot_id, collected_at}]
 ```
 
-Статус: `new` — нет в предыдущем снапшоте домена; `persisting` — была;
-`accepted` — есть вердикт; `fixed` — была в предыдущем, нет в этом (только
-при `status=fixed`, строки берутся из предыдущего снапшота).
+Статусы находок — общий механизм платформы: `GET/PUT /api/findings/state`,
+`POST /api/findings/comment`, `POST /api/findings/bulk`, `GET /api/findings/mine`,
+настройки `GET/PUT /api/settings/findings` (`module=ad`, `scope_id` — id домена).
+Своих ручек смены статуса у модуля нет.
+
+Строка списка — поля находки и её состояние: `status`, `status_title`,
+`assignee`, `assignee_name`, `due_date`, `overdue`, `risk_until`,
+`first_seen_at`, `age_days`, `delta` (`new` — нет в предыдущем снапшоте
+домена, `same` — была, `gone` — нет в последнем снапшоте: данные из
+последнего снапшота, где она была). Строки `gone` есть только у последнего
+снапшота (`is_latest: true`) — устранённые системой, принятые людьми,
+перенесённые вердикты; вердикт, находки которого нет ни в одном снапшоте,
+показывается по строке состояния (подпись — в `target`, `check` пуст).
+
+Статусы показываются на сегодня у любого снапшота (`statuses_as_of: "today"`),
+находки — на дату снапшота. Карточка находки, которой нет в просматриваемом
+снапшоте, открывается только из последнего (иначе 404).
+
+`facets` — только на первой странице: `check`, `severity`, `allowlisted`,
+`delta` — по отобранным строкам; `status` — без фильтра статуса, `assignee` —
+без фильтра исполнителя (`none` — без исполнителя), `flags` (`overdue`,
+`risk_expiring`) — каждый без своего фильтра, но под выбранным статусом.
+
+Сверка статусов идёт в конце импорта и пересчёта, только если записанный
+снапшот — последний домена по времени сбора, и после удаления снапшота.
+Если у последнего и предыдущего снапшота разные `analyzer_version`, пропажи
+не считаются и «устранена» не ставится: ключи находок разных версий не
+сравнимы (в журнал — предупреждение).
 
 ## Сбор
 

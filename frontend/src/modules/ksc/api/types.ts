@@ -181,6 +181,8 @@ export interface HostsResponse {
 
 export interface HostDetail extends Omit<Host, 'findings'> {
   findings: { key: string; check: string; check_title: string; severity: Severity; status: FindingStatus; status_title: string; details: Record<string, unknown> }[]
+  /** Учитываемые находки хоста — то же правило, что счётчик в списке хостов. */
+  findings_counted: number
 }
 
 export interface LockCount {

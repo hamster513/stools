@@ -57,6 +57,8 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
   const clean = o.checks.filter((c) => c.all === 0 && c.resolved === 0 && !c.unchecked)
   // Плитки severity — по учитываемым статусам (настройка платформы), как и счётчики проверок.
   const bySeverity = o.counted?.by_severity ?? snap.by_severity
+  // Ссылка с плитки и карточки — на список с теми же статусами, что в числе: без статуса список показал бы открытые.
+  const countedStatus = o.counted?.statuses.length ? `&status=${o.counted.statuses.join(',')}` : ''
   const summary = o.summary
   const statusTiles = summary ? [
     { label: 'новые', value: summary.by_status.new, to: `${base}?status=new` },
@@ -82,7 +84,7 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
 
       <div className="mb-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {SEVERITIES.map((s) => (
-          <Link key={s} to={`${base}?severity=${s}`} className="rounded border border-grid bg-surface p-3 hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+          <Link key={s} to={`${base}?severity=${s}${countedStatus}`} className="rounded border border-grid bg-surface p-3 hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
             <div className={cn('text-[11px]', SEVERITY_TEXT[s])}>{SEVERITY_LABELS[s]}</div>
             <div className="mt-1 font-mono text-xl tabular-nums text-text">{(bySeverity[s] ?? 0).toLocaleString('ru-RU')}</div>
           </Link>
@@ -112,7 +114,7 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
         {withFindings.map((c) => {
           const w = worst(c)
           return (
-            <Link key={c.code} to={`${base}?check=${c.code}`} className="flex flex-col gap-1.5 rounded border border-grid bg-surface p-3 hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+            <Link key={c.code} to={`${base}?check=${c.code}${countedStatus}`} className="flex flex-col gap-1.5 rounded border border-grid bg-surface p-3 hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
               <div className="flex items-start justify-between gap-2">
                 <span className="text-sm text-text">{c.title}</span>
                 <span className={cn('font-mono text-lg tabular-nums', w ? SEVERITY_TEXT[w] : 'text-text-secondary')}>{c.total}</span>

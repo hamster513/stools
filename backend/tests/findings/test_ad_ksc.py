@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import datetime as dt
+import gzip
 import json
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import delete, select
 
 from api.modules.attack.layers import LAYERS
 from api.platform.findings import service as svc
 from api.platform.findings.adapters import get_adapter
+from api.platform.findings.models import FindingEvent, FindingState
 from tests.ad.synthetic import NOW as AD_NOW
 from tests.ad.synthetic import build_export as build_ad
 from tests.ksc.synthetic import NOW as KSC_NOW
@@ -105,6 +108,155 @@ def test_ad_risk_accepted_survives_disappearance(auth_client: TestClient) -> Non
     assert [(i["key"], i["delta"]) for i in accepted["items"]] == [(key, "gone")]
 
 
+def _scope_rows(db: Any, module: str, scope_id: int) -> tuple[dict[str, tuple[str, bool]], list[str]]:
+    """Строки состояния области (ключ → статус, present) и виды всех её событий."""
+    db.expire_all()
+    states = db.scalars(select(FindingState).where(FindingState.module == module, FindingState.scope_id == scope_id)).all()
+    events = db.scalars(select(FindingEvent.kind).join(FindingState).where(
+        FindingState.module == module, FindingState.scope_id == scope_id).order_by(FindingEvent.id)).all()
+    return {s.key: (s.status, s.present) for s in states}, list(events)
+
+
+def test_reanalyze_of_older_snapshot_leaves_statuses_alone(auth_client: TestClient, app_settings: Any, db_session: Any) -> None:
+    _done(auth_client, "ad", build_ad())
+    domain_id, snap1 = _ad_latest(auth_client)
+    _done(auth_client, "ad", build_ad(now=AD_NOW + dt.timedelta(days=7)))
+    key = auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast").json()["items"][0]["key"]
+    auth_client.put("/api/findings/state", json={"module": "ad", "scope_id": domain_id, "key": key, "status": "in_work"})
+    before = _scope_rows(db_session, "ad", domain_id)
+    # Пересчёт старого снапшота даёт в нём находку, которой нет в последнем: статусы — по последнему, они не меняются.
+    raw = build_ad()
+    for o in raw["objects"]:
+        if o.get("sam") == "helpdesk":
+            o["spn"] = ["HTTP/help.corp.local"]
+    (app_settings.data_dir / "ad" / f"{snap1}.json.gz").write_bytes(gzip.compress(json.dumps(raw).encode()))
+    r = auth_client.post(f"/api/ad/snapshots/{snap1}/reanalyze")
+    assert r.status_code == 202, r.text
+    assert auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()["status"] == "done"
+    assert auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast").json()["total"] == 2
+    assert _scope_rows(db_session, "ad", domain_id) == before
+
+
+def test_older_export_imported_after_newer_changes_nothing(auth_client: TestClient, db_session: Any) -> None:
+    _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
+    domain_id, newer = _ad_latest(auth_client)
+    _done(auth_client, "ad", build_ad())
+    assert _ad_latest(auth_client) == (domain_id, newer)
+    # svc_sql есть только в старой выгрузке: «пропавшей» с последнего снапшота она не считается.
+    assert _scope_rows(db_session, "ad", domain_id) == ({}, [])
+    older = next(s["id"] for s in auth_client.get("/api/ad/snapshots").json() if s["id"] != newer)
+    old_list = auth_client.get(f"/api/ad/snapshots/{older}/findings").json()
+    assert (old_list["is_latest"], old_list["statuses_as_of"]) == (False, "today")
+    new_list = auth_client.get(f"/api/ad/snapshots/{newer}/findings").json()
+    assert (new_list["is_latest"], new_list["statuses_as_of"]) == (True, "today")
+
+
+def test_analyzer_version_change_does_not_auto_resolve(auth_client: TestClient, db_session: Any, caplog: pytest.LogCaptureFixture) -> None:
+    from api.modules.ad.models import AdSnapshot
+
+    _done(auth_client, "ad", build_ad())
+    domain_id, snap1 = _ad_latest(auth_client)
+    key = auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast").json()["items"][0]["key"]
+    auth_client.put("/api/findings/state", json={"module": "ad", "scope_id": domain_id, "key": key, "status": "in_work"})
+    db_session.get(AdSnapshot, snap1).analyzer_version = "0-old"
+    db_session.commit()
+    _, events_before = _scope_rows(db_session, "ad", domain_id)
+    caplog.clear()
+    _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
+    states, events = _scope_rows(db_session, "ad", domain_id)
+    # Ключи разных версий анализатора не сравниваются: ни «устранена», ни событий.
+    assert states == {key: ("in_work", False)}
+    assert events == events_before and "auto_resolved" not in events
+    warnings = [r for r in caplog.records if r.levelname == "WARNING" and "версией анализатора" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_detail_of_older_snapshot_does_not_borrow_other_snapshots(auth_client: TestClient) -> None:
+    _done(auth_client, "ad", build_ad())
+    _, snap1 = _ad_latest(auth_client)
+    _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
+    _, snap2 = _ad_latest(auth_client)
+    helpdesk = auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast").json()["items"][0]["key"]
+    # В старом снапшоте helpdesk не было: карточка не подставляет данные из нового.
+    assert auth_client.get(f"/api/ad/snapshots/{snap1}/findings/{helpdesk}").status_code == 404
+    # Статусы — на сегодня и у старого снапшота: svc_sql уже устранена, среди открытых её нет.
+    svc_sql = auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast&status=all").json()["items"][0]["key"]
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings/{svc_sql}").json()["delta"] == "gone"
+
+
+def _add_states(db: Any, module: str, scope_id: int, rows: list[tuple[str, str, bool]]) -> None:
+    """Строки состояния, как их оставляет перенос вердиктов: (ключ, статус, present)."""
+    for key, status_, present in rows:
+        db.add(FindingState(module=module, scope_id=scope_id, key=key, status=status_, reason="норма" if status_ == "risk_accepted" else "",
+                            present=present, title="", severity="", updated_by="analyst1"))
+    db.commit()
+
+
+def test_migrated_verdicts_without_finding_in_latest_are_absent_rows(auth_client: TestClient, db_session: Any) -> None:
+    _done(auth_client, "ad", build_ad())
+    domain_id, snap1 = _ad_latest(auth_client)
+    svc_sql = auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast").json()["items"][0]["key"]
+    _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
+    _, snap2 = _ad_latest(auth_client)
+    findings = auth_client.get(f"/api/ad/snapshots/{snap2}").json()["findings"]
+    # svc_sql нет в последнем снапшоте, orphan — ни в одном (вердикт пережил свою находку).
+    db_session.execute(delete(FindingState).where(FindingState.key == svc_sql))
+    _add_states(db_session, "ad", domain_id, [(svc_sql, "risk_accepted", False), ("orphan-key", "risk_accepted", False)])
+    accepted = auth_client.get(f"/api/ad/snapshots/{snap2}/findings?status=risk_accepted").json()
+    assert accepted["total"] == 2
+    assert sorted((i["key"], i["delta"], i["status"]) for i in accepted["items"]) == sorted(
+        [(svc_sql, "gone", "risk_accepted"), ("orphan-key", "gone", "risk_accepted")])
+    assert accepted["facets"]["status"]["risk_accepted"] == 2
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings/orphan-key").json()["status"] == "risk_accepted"
+    summary = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()["summary"]
+    assert summary["by_status"]["risk_accepted"] == 2 and summary["by_status"]["new"] == findings
+
+
+def test_default_list_does_not_load_absent_rows(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    import api.collector_routes as routes
+
+    _done(auth_client, "ad", build_ad())
+    _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
+    _, snap2 = _ad_latest(auth_client)
+    calls: list[int] = []
+    real = routes.last_known
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "last_known", spy)
+    default = auth_client.get(f"/api/ad/snapshots/{snap2}/findings").json()
+    assert calls == []
+    # Устранённая не загружена, но в фасете статуса посчитана.
+    assert default["facets"]["status"]["resolved"] == 1
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?status=resolved").json()["total"] == 1
+    assert calls == [1]
+    # Фильтр по данным находки: для фасетов первой страницы устранённые загружаются.
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast").json()["facets"]["status"]["resolved"] == 1
+    assert len(calls) == 2
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast&offset=1").status_code == 200
+    assert len(calls) == 2
+
+
+def test_pagination_with_absent_rows_is_stable(auth_client: TestClient, db_session: Any) -> None:
+    _done(auth_client, "ad", build_ad())
+    _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
+    domain_id, snap2 = _ad_latest(auth_client)
+    _add_states(db_session, "ad", domain_id, [(f"orphan-{n}", "risk_accepted", False) for n in range(5)])
+    url = f"/api/ad/snapshots/{snap2}/findings?status=all&limit=3"
+    first = auth_client.get(url).json()
+    total, keys, offset = first["total"], [i["key"] for i in first["items"]], 3
+    while offset < total:
+        page = auth_client.get(f"{url}&offset={offset}").json()
+        assert page["total"] == total and page["facets"] is None
+        keys += [i["key"] for i in page["items"]]
+        offset += 3
+    assert len(keys) == len(set(keys)) == total
+    assert {f"orphan-{n}" for n in range(5)} <= set(keys)
+    assert sum(first["facets"]["status"].values()) == total
+
+
 def test_reconcile_failure_does_not_break_import(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     def broken(*_args: Any, **_kwargs: Any) -> dict[str, int]:
         raise RuntimeError("платформа сломана")
@@ -140,7 +292,10 @@ def test_ad_list_filters_facets_and_bulk(auth_client: TestClient, today: dt.date
     assert default["facets"]["status"]["in_work"] == 2 and default["facets"]["status"]["risk_accepted"] == 1
     assert default["facets"]["status"]["new"] == total - 3
     assert default["facets"]["assignee"]["tester"] == 2 and default["facets"]["assignee"]["none"] == total - 3
-    assert default["facets"]["flags"] == {"overdue": 2, "risk_expiring": 1}
+    # Флаги — под выбранным статусом: принятого риска среди открытых нет.
+    assert default["facets"]["flags"] == {"overdue": 2, "risk_expiring": 0}
+    assert auth_client.get(f"{url}?risk_expiring=true").json()["facets"]["flags"] == {"overdue": 0, "risk_expiring": 1}
+    assert auth_client.get(f"{url}?status=all").json()["facets"]["flags"] == {"overdue": 2, "risk_expiring": 1}
 
     mine = auth_client.get(f"{url}?assignee=me").json()
     assert mine["total"] == 2
@@ -254,6 +409,21 @@ def test_ad_overview_and_counted_setting(auth_client: TestClient, db_session: An
     assert LAYERS["ad"].build(db_session).cells["T1558"].count == layer_before
 
 
+def test_overview_severity_count_matches_its_list(auth_client: TestClient) -> None:
+    _done(auth_client, "ad", build_ad())
+    domain_id, snap = _ad_latest(auth_client)
+    url = f"/api/ad/snapshots/{snap}/findings"
+    key = auth_client.get(f"{url}?check=Kerberoast").json()["items"][0]["key"]
+    auth_client.put("/api/findings/state", json={"module": "ad", "scope_id": domain_id, "key": key, "status": "risk_accepted", "comment": "норма"})
+    auth_client.put("/api/settings/findings", json={"counted": {"risk_accepted": True, "new": False}})
+    counted = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()["counted"]
+    assert counted["statuses"] == [s for s in svc.STATUSES if s in {"in_work", "risk_accepted", "fixed", "reopened"}]
+    # Плитка ведёт на список с теми же статусами — числа совпадают.
+    for severity, n in counted["by_severity"].items():
+        listed = auth_client.get(url, params={"severity": severity, "status": ",".join(counted["statuses"])}).json()
+        assert listed["total"] == n, severity
+
+
 def test_ad_overview_resolved_since_previous(auth_client: TestClient) -> None:
     _done(auth_client, "ad", build_ad())
     _done(auth_client, "ad", _ad_without_svc_sql(AD_NOW + dt.timedelta(days=7)))
@@ -293,6 +463,7 @@ def test_ksc_statuses_follow_snapshots_and_hosts_count_counted(auth_client: Test
     assert next(h for h in hosts if h["host_id"] == "h-ws02")["findings"] == 0
     detail = auth_client.get(f"/api/ksc/snapshots/{snap1}/hosts/h-ws02").json()
     assert [(f["check"], f["status"]) for f in detail["findings"]] == [("RTP_OFF", "risk_accepted")]
+    assert detail["findings_counted"] == 0
     overview = auth_client.get(f"/api/ksc/servers/{server_id}/overview").json()
     card = next(c for c in overview["checks"] if c["code"] == "RTP_OFF")
     assert (card["total"], card["all"]) == (0, 1) and overview["summary"]["by_status"]["risk_accepted"] == 1

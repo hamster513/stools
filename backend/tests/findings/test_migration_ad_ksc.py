@@ -68,7 +68,8 @@ def test_verdicts_move_to_states_and_back(scratch: tuple[Engine, Config]) -> Non
         row = conn.execute(text(
             "SELECT scope_id, status, reason, updated_by, present, updated_at FROM platform_finding_state WHERE key = 'ad-k1'"
         )).one()
-        assert tuple(row[:5]) == (1, "risk_accepted", "сервисная учётка", "analyst1", True)
+        # Снапшотов у домена нет — ключа нет и в последнем снапшоте.
+        assert tuple(row[:5]) == (1, "risk_accepted", "сервисная учётка", "analyst1", False)
         assert row.updated_at.isoformat().startswith("2026-09-01T10:00")
         events = conn.execute(text(
             "SELECT s.key, e.kind, e.actor, e.to_status, e.comment FROM platform_finding_event e "
@@ -87,3 +88,49 @@ def test_verdicts_move_to_states_and_back(scratch: tuple[Engine, Config]) -> Non
     assert _count(engine, "SELECT count(*) FROM platform_finding_event") == 0
     assert _count(engine, "SELECT count(*) FROM ad_verdict") == 2
     assert _count(engine, "SELECT count(*) FROM ksc_verdict") == 1
+
+
+def test_present_title_severity_follow_snapshots(scratch: tuple[Engine, Config]) -> None:
+    """`present` — ключ в последнем снапшоте области; подпись и severity — из самого
+    позднего снапшота, где ключ был; вердикт без находки ни в одном снапшоте — пустые."""
+    engine, cfg = scratch
+    command.upgrade(cfg, BEFORE)
+    snap_cols = "collected_at, imported_at, source, collector, filename, sha256, findings, stats_json, analyzer_version"
+    snap_vals = "now(), 'file', '', '', '', 0, '{}', '1'"
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO ad_domain (id, sid, dns_root, netbios, dn, created_at) VALUES (1, 'S-1-5-21-1', 'corp.local', 'CORP', 'DC=corp,DC=local', now())"))
+        conn.execute(text(f"INSERT INTO ad_snapshot (id, domain_id, objects, {snap_cols}) VALUES "
+                          f"(10, 1, 0, '2026-09-01T00:00:00Z', {snap_vals}), (11, 1, 0, '2026-09-08T00:00:00Z', {snap_vals})"))
+        ad_cols = '(snapshot_id, key, "check", severity, severity_original, identity, identity_sid, target, "right", allowlisted, details_json)'
+        conn.execute(text(
+            f"INSERT INTO ad_finding {ad_cols} VALUES "
+            "(10, 'ad-old', 'Kerberoast', 'Medium', 'Medium', 'CORP\\old_name', '', '', '', false, '{}'),"
+            "(10, 'ad-live', 'Kerberoast', 'Low', 'Low', 'CORP\\svc_was', '', '', '', false, '{}'),"
+            "(11, 'ad-live', 'Kerberoast', 'High', 'High', 'CORP\\svc_now', '', '', '', false, '{}')"
+        ))
+        conn.execute(text(
+            "INSERT INTO ad_verdict (domain_id, key, status, reason, decided_by, decided_at) VALUES "
+            "(1, 'ad-live', 'accepted', 'норма', 'analyst1', now()), (1, 'ad-old', 'accepted', 'норма', 'analyst1', now()),"
+            "(1, 'ad-orphan', 'accepted', 'норма', 'analyst1', now())"
+        ))
+        conn.execute(text("INSERT INTO ksc_server (id, name, version, created_at) VALUES (2, 'ksc01', '15', now())"))
+        conn.execute(text(f"INSERT INTO ksc_snapshot (id, server_id, hosts, {snap_cols}) VALUES (20, 2, 0, '2026-09-01T00:00:00Z', {snap_vals})"))
+        conn.execute(text(
+            'INSERT INTO ksc_finding (snapshot_id, key, "check", severity, severity_original, host, host_key, target, allowlisted, details_json) '
+            "VALUES (20, 'ksc-live', 'RTP_OFF', 'Critical', 'Critical', 'WS02', 'ws02.corp.local', '', false, '{}')"
+        ))
+        conn.execute(text("INSERT INTO ksc_verdict (server_id, key, status, reason, decided_by, decided_at) VALUES (2, 'ksc-live', 'accepted', 'стенд', 'admin1', now())"))
+
+    command.upgrade(cfg, AFTER)
+    with engine.connect() as conn:
+        rows = {r.key: (r.present, r.title, r.severity) for r in conn.execute(text(
+            "SELECT key, present, title, severity FROM platform_finding_state"))}
+    assert rows == {
+        "ad-live": (True, "Kerberoast: CORP\\svc_now", "High"),
+        "ad-old": (False, "Kerberoast: CORP\\old_name", "Medium"),
+        "ad-orphan": (False, "", ""),
+        "ksc-live": (True, "RTP_OFF: WS02", "Critical"),
+    }
+    command.downgrade(cfg, BEFORE)
+    assert _count(engine, "SELECT count(*) FROM platform_finding_state") == 0
+    assert _count(engine, "SELECT count(*) FROM ad_verdict") == 3

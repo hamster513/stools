@@ -42,7 +42,7 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Находок <span className="font-mono tabular-nums text-text">{total}</span></div>
-      <Section title="Статус" hint={filters.status ? undefined : 'не выбран — показаны открытые: новая, в работе, исправлено, переоткрыта'}>
+      <Section title="Статус" hint={filters.status ? undefined : filters.risk_expiring ? 'не выбран — показан принятый риск: среди открытых срока риска нет' : 'не выбран — показаны открытые: новая, в работе, исправлено, переоткрыта'}>
         {STATUS_OPTIONS.map(({ value, label }) => (
           <Row key={value} active={filters.status ? filters.status.includes(value) : false} count={facets?.status[value]} onClick={() => onToggle('status', toggleStatus(filters.status, value))}>
             {label}
@@ -62,6 +62,7 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
       </Section>
       <Section title="Снапшот">
         <Row active={filters.delta === 'new'} count={facets?.delta.new} onClick={() => onToggle('delta', filters.delta === 'new' ? undefined : 'new')}>появились в этом снапшоте</Row>
+        <Row active={filters.delta === 'gone'} count={facets?.delta.gone} onClick={() => onToggle('delta', filters.delta === 'gone' ? undefined : 'gone')}>исчезла (нет в последнем снапшоте)</Row>
       </Section>
       <Section title="Severity">
         {SEVERITIES.map((s) => (
