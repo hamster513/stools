@@ -171,12 +171,12 @@ def test_profile_change_reconciles_too(auth_client: TestClient, monkeypatch: Any
     """Пересчёт по профилю переписывает находки снапшота — и сверяет статусы."""
     from api.modules.siem.routers import profile
 
-    calls: list[tuple[int, bool]] = []
-    monkeypatch.setattr(profile, "reconcile_findings", lambda db, snapshot_id, *, upload: calls.append((snapshot_id, upload)))
+    calls: list[int] = []
+    monkeypatch.setattr(profile, "reconcile_findings", lambda db, snapshot_id: calls.append(snapshot_id))
     snap = _upload(auth_client, _kb())
     r = auth_client.put("/api/siem/profile", json={"snapshot_id": snap})
     assert r.status_code == 204, r.text
-    assert calls == [(snap, False)]
+    assert calls == [snap]
 
 
 # ---- Защита от ложных «устранена» ------------------------------------------------------
@@ -267,6 +267,56 @@ def test_profile_change_keeps_statuses(auth_client: TestClient, db_session: Any)
     assert auth_client.put("/api/siem/profile", json={"snapshot_id": snap}).status_code == 204
     st = _state(auth_client, listed["key"])
     assert (st["status"], st["present"]) == ("in_work", True)
+    assert _events(auth_client, listed["key"]) == ["status"]
+
+
+def test_profile_save_equal_to_previous_snapshot_runs_automation(auth_client: TestClient) -> None:
+    """Автоматика зависит не от того, что пересчитало снапшот, а от того, посчитан ли он
+    как предыдущий: профиль, сохранённый на новой выгрузке таким же, как у прошлой, её включает."""
+    own = {"field_roles": {"technical": ["src.host"]}}
+    snap1 = _upload(auth_client, _kb("10.20.30.40"))
+    assert auth_client.put("/api/siem/profile", json={"snapshot_id": snap1, **own}).status_code == 204
+    ip = _by_field(_list(auth_client, snap1), "dst.ip")
+    _put(auth_client, ip["key"], status="in_work")
+
+    # Новая выгрузка посчитана профилем по умолчанию — не как предыдущая: только наличие.
+    snap2 = _upload(auth_client, _kb("10.20.30.41"))
+    st = _state(auth_client, ip["key"])
+    assert (st["status"], st["present"]) == ("in_work", False)
+    assert _events(auth_client, ip["key"]) == ["status"]
+
+    assert auth_client.put("/api/siem/profile", json={"snapshot_id": snap2, **own}).status_code == 204
+    st = _state(auth_client, ip["key"])
+    assert st["status"] == "resolved" and st["events"][0]["details"]["ref"] == f"снапшот #{snap2}"
+
+
+def test_reparse_with_the_same_version_and_profile_runs_automation(auth_client: TestClient, db_session: Any) -> None:
+    from pathlib import Path
+
+    from api.db.models import Snapshot
+
+    _upload(auth_client, _kb("10.20.30.40"))
+    snap2 = _upload(auth_client, _kb("10.20.30.40", extra_rule=True))
+    ip = _by_field(_list(auth_client, snap2), "dst.ip")
+    _put(auth_client, ip["key"], status="in_work")
+
+    Path(db_session.get(Snapshot, snap2).archive_path).write_bytes(_kb("10.20.30.41", extra_rule=True))
+    _reparse(auth_client, snap2)
+    st = _state(auth_client, ip["key"])
+    assert (st["status"], st["present"]) == ("resolved", False)
+    assert st["events"][0]["kind"] == "auto_resolved"
+
+
+def test_first_snapshot_has_nothing_to_compare_with(auth_client: TestClient) -> None:
+    """Без предыдущего разобранного снапшота сравнивать не с чем: смена профиля на
+    единственном снапшоте не закрывает находки системой."""
+    snap = _upload(auth_client, _kb("10.20.30.40"))
+    listed = _by_field(_list(auth_client, snap), "subject.account.name")
+    _put(auth_client, listed["key"], status="in_work")
+    r = auth_client.put("/api/siem/profile", json={"snapshot_id": snap, "field_roles": {"technical": ["subject.account.name"]}})
+    assert r.status_code == 204, r.text
+    st = _state(auth_client, listed["key"])
+    assert (st["status"], st["present"]) == ("in_work", False)
     assert _events(auth_client, listed["key"]) == ["status"]
 
 
@@ -445,6 +495,23 @@ def test_list_defaults_to_open_and_filters_by_status_assignee_overdue(auth_clien
     assert _list(auth_client, snap, risk_expiring="true")["total"] == 0
     assert auth_client.get("/api/siem/findings", params={"snapshot_id": snap, "status": "open"}).status_code == 422
     assert auth_client.get("/api/siem/findings", params={"snapshot_id": snap, "status": "accepted"}).status_code == 422
+
+
+def test_flags_ignore_the_status_filter(auth_client: TestClient, today: Any) -> None:
+    """«Риск истекает» — среди принятых, «просроченные» — среди открытых, при любом выбранном статусе."""
+    import datetime as dt
+
+    snap = _upload(auth_client, _kb())
+    body = _list(auth_client, snap)
+    ip, listed = _by_field(body, "dst.ip"), _by_field(body, "subject.account.name")
+    _put(auth_client, listed["key"], status="risk_accepted", comment="норма",
+         risk_until=(today + dt.timedelta(days=10)).isoformat())
+    _put(auth_client, ip["key"], due_date="2020-01-01")
+    flags = {"overdue": 1, "risk_expiring": 1}
+    assert _list(auth_client, snap)["facets"]["flags"] == flags
+    assert _list(auth_client, snap, status="risk_accepted")["facets"]["flags"] == flags
+    assert _list(auth_client, snap, status="in_work")["facets"]["flags"] == flags
+    assert _list(auth_client, snap, risk_expiring="true")["facets"]["flags"] == {"overdue": 0, "risk_expiring": 1}
 
 
 def test_list_by_key_opens_any_status(auth_client: TestClient) -> None:

@@ -292,10 +292,13 @@ def test_ad_list_filters_facets_and_bulk(auth_client: TestClient, today: dt.date
     assert default["facets"]["status"]["in_work"] == 2 and default["facets"]["status"]["risk_accepted"] == 1
     assert default["facets"]["status"]["new"] == total - 3
     assert default["facets"]["assignee"]["tester"] == 2 and default["facets"]["assignee"]["none"] == total - 3
-    # Флаги — под выбранным статусом: принятого риска среди открытых нет.
-    assert default["facets"]["flags"] == {"overdue": 2, "risk_expiring": 0}
+    # Флаги — без фильтра статуса: «риск истекает» среди принятых, «просроченные» среди
+    # открытых, какой бы статус ни был выбран (щелчок по флагу сам переключает статус).
+    assert default["facets"]["flags"] == {"overdue": 2, "risk_expiring": 1}
     assert auth_client.get(f"{url}?risk_expiring=true").json()["facets"]["flags"] == {"overdue": 0, "risk_expiring": 1}
     assert auth_client.get(f"{url}?status=all").json()["facets"]["flags"] == {"overdue": 2, "risk_expiring": 1}
+    assert auth_client.get(f"{url}?status=risk_accepted").json()["facets"]["flags"] == {"overdue": 2, "risk_expiring": 1}
+    assert auth_client.get(f"{url}?status=new").json()["facets"]["flags"] == {"overdue": 2, "risk_expiring": 1}
 
     mine = auth_client.get(f"{url}?assignee=me").json()
     assert mine["total"] == 2

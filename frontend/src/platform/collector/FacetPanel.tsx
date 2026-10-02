@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, toggleStatus } from '@/platform/findings/facets'
+import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus } from '@/platform/findings/facets'
 import { SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type FindingBase, type FindingFilters, type FindingsResponse } from './types'
 import { cn } from '@/lib/cn'
 
@@ -57,8 +57,8 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
         ))}
       </Section>
       <Section title="Сроки">
-        <Row active={filters.overdue === true} count={facets?.flags.overdue} onClick={() => onToggle('overdue', filters.overdue ? undefined : true)}>просроченные</Row>
-        <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => onToggle('risk_expiring', filters.risk_expiring ? undefined : true)}>риск истекает (≤ 30 дней)</Row>
+        <Row active={filters.overdue === true} count={facets?.flags.overdue} onClick={() => { if (!filters.overdue) onToggle('status', statusForFlag('overdue', filters.status)); onToggle('overdue', filters.overdue ? undefined : true) }}>просроченные</Row>
+        <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => { if (!filters.risk_expiring) onToggle('status', statusForFlag('risk_expiring', filters.status)); onToggle('risk_expiring', filters.risk_expiring ? undefined : true) }}>риск истекает (≤ 30 дней)</Row>
       </Section>
       <Section title="Снапшот">
         <Row active={filters.delta === 'new'} count={facets?.delta.new} onClick={() => onToggle('delta', filters.delta === 'new' ? undefined : 'new')}>появились в этом снапшоте</Row>

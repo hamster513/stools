@@ -227,6 +227,6 @@ def put_profile(
     persist_report(db, snapshot, parsed, report)
     stamp_analysis(snapshot, profile)
     db.commit()
-    # Профиль меняет находки снапшота, но не базу знаний: автоматики статусов
-    # нет, у строк обновляется только наличие (findings_adapter.reconcile).
-    reconcile_findings(db, snapshot.id, upload=False)
+    # Профиль меняет находки снапшота, но не базу знаний: автоматика статусов —
+    # только если снапшот теперь посчитан как предыдущий (findings_adapter.reconcile).
+    reconcile_findings(db, snapshot.id)

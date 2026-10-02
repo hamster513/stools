@@ -5,7 +5,7 @@
  * параметры запроса и чипы. Без выбранного статуса сервер отдаёт открытые.
  */
 import type { FilterChip } from '@/platform/filters/FiltersBar'
-import { STATUSES, STATUS_TITLES, type FindingStatus } from './types'
+import { OPEN_STATUSES, STATUSES, STATUS_TITLES, type FindingStatus } from './types'
 
 export interface FindingFacetFilters {
   status?: FindingStatus[]
@@ -22,6 +22,17 @@ export const ASSIGNEE_SPECIAL: Record<string, string> = { me: 'мои', none: '�
 export function toggleStatus(current: FindingStatus[] | undefined, status: FindingStatus): FindingStatus[] | undefined {
   const next = current?.includes(status) ? current.filter((s) => s !== status) : [...(current ?? []), status]
   return next.length ? next : undefined
+}
+
+/**
+ * Статус при включении флага сроков. Счётчики флагов сервер считает без фильтра
+ * статуса («риск истекает» — среди принятых, «просроченные» — среди открытых), и
+ * список после щелчка должен показать их же: «риск истекает» снимает статус (сервер
+ * возьмёт принятый риск), «просроченные» — если среди выбранных нет открытых.
+ */
+export function statusForFlag(flag: 'overdue' | 'risk_expiring', status: FindingStatus[] | undefined): FindingStatus[] | undefined {
+  if (flag === 'risk_expiring') return undefined
+  return status?.some((s) => OPEN_STATUSES.includes(s)) ? status : undefined
 }
 
 export function findingFacetParams(f: FindingFacetFilters): Record<string, string | boolean | undefined> {

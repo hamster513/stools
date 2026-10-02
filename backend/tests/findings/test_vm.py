@@ -151,9 +151,12 @@ def test_list_shows_open_by_default_and_filters_by_status(decided: TestClient, t
     assert body["facets"]["status"] == {"new": 1, "in_work": 1, "risk_accepted": 1, "false_positive": 1,
                                         "fixed": 0, "resolved": 0, "reopened": 0}
     assert body["facets"]["assignee"] == {"none": 1, test_user.login: 1}
-    # Как у AD/KSC: флаг сроков считается с фильтром статуса — среди открытых принятого риска нет.
-    assert body["facets"]["flags"] == {"overdue": 1, "risk_expiring": 0}
+    # Как у AD/KSC: флаги сроков — без фильтра статуса («риск истекает» среди принятых,
+    # «просроченные» среди открытых), иначе по умолчанию истекающий риск не виден.
+    assert body["facets"]["flags"] == {"overdue": 1, "risk_expiring": 1}
     assert _list(decided, status="all")["facets"]["flags"] == {"overdue": 1, "risk_expiring": 1}
+    assert _list(decided, status="false_positive")["facets"]["flags"] == {"overdue": 1, "risk_expiring": 1}
+    assert _list(decided, risk_expiring="true")["facets"]["flags"] == {"overdue": 0, "risk_expiring": 1}
 
     b = next(i for i in body["items"] if i["cve_id"] == B)
     assert (b["status"], b["status_title"], b["assignee"], b["overdue"]) == ("in_work", "В работе", test_user.login, True)

@@ -344,19 +344,19 @@ def _risk_expiring(r: FindingRow, today: dt.date) -> bool:
             and st.risk_until <= today + dt.timedelta(days=finding_svc.RISK_EXPIRING_DAYS))
 
 
-def _matches(r: FindingRow, flt: FindingFilter, today: dt.date, haystack: Callable[[Any], Iterable[str]], skip: str = "") -> bool:
-    """Отбор по фильтрам; `skip` — какой фильтр не применять (фасет считается без своего фильтра).
+def _matches(r: FindingRow, flt: FindingFilter, today: dt.date, haystack: Callable[[Any], Iterable[str]], *skip: str) -> bool:
+    """Отбор по фильтрам; `skip` — какие фильтры не применять (фасет считается без своего фильтра).
     Строка без данных находки (`finding is None`) бывает, только когда фильтров по ним нет."""
     f = r.finding
     if flt.delta and r.delta != flt.delta:
         return False
-    if skip != "status" and r.status not in flt.statuses:
+    if "status" not in skip and r.status not in flt.statuses:
         return False
-    if skip != "assignee" and flt.assignee and r.assignee != (None if flt.assignee == "none" else flt.assignee):
+    if "assignee" not in skip and flt.assignee and r.assignee != (None if flt.assignee == "none" else flt.assignee):
         return False
-    if skip != "overdue" and flt.overdue and not _overdue(r, today):
+    if "overdue" not in skip and flt.overdue and not _overdue(r, today):
         return False
-    if skip != "risk_expiring" and flt.risk_expiring and not _risk_expiring(r, today):
+    if "risk_expiring" not in skip and flt.risk_expiring and not _risk_expiring(r, today):
         return False
     if f is None:
         return not flt.by_finding
@@ -426,14 +426,16 @@ def findings_page(
             facets["allowlisted"]["yes" if f.allowlisted else "no"] += 1
             facets["delta"][r.delta] += 1
         for r in rows:
-            if _matches(r, flt, today, haystack, skip="status"):
+            if _matches(r, flt, today, haystack, "status"):
                 facets["status"][r.status] += 1
-            if _matches(r, flt, today, haystack, skip="assignee"):
+            if _matches(r, flt, today, haystack, "assignee"):
                 who = r.assignee or "none"
                 facets["assignee"][who] = facets["assignee"].get(who, 0) + 1
-            if _overdue(r, today) and _matches(r, flt, today, haystack, skip="overdue"):
+            # Флаги сроков — и без фильтра статуса: «риск истекает» бывает только у принятых,
+            # «просроченные» — только у открытых; по умолчанию (открытые) первый был бы всегда 0.
+            if _overdue(r, today) and _matches(r, flt, today, haystack, "overdue", "status"):
                 facets["flags"]["overdue"] += 1
-            if _risk_expiring(r, today) and _matches(r, flt, today, haystack, skip="risk_expiring"):
+            if _risk_expiring(r, today) and _matches(r, flt, today, haystack, "risk_expiring", "status"):
                 facets["flags"]["risk_expiring"] += 1
     page = filtered[offset : offset + limit]
     return {

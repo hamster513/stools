@@ -18,11 +18,13 @@ sha256 значения: ключ уходит в ответы API и в «Мо�
 новая соль молча сделала бы все решения ничьими (`SaltMissing`).
 
 Автоматика («устранена», «переоткрыта», шаг «пропали с прошлого снапшота»)
-срабатывает только на новой выгрузке и только если она и предыдущий
-разобранный снапшот посчитаны одинаково: той же версией разбора и с тем же
-отпечатком профиля (`profile_hash`). Переразбор, смена профиля, другая
-версия или профиль меняют находки без изменений в самой базе знаний — тогда
-у строк обновляется только наличие, подпись и тяжесть.
+срабатывает, только если активный снапшот и предыдущий разобранный посчитаны
+одинаково: той же версией разбора и с тем же отпечатком профиля
+(`profile_hash`), — чем бы снапшот ни был пересчитан (загрузка, переразбор,
+сохранение профиля). Тогда разница находок — разница баз знаний. Другая
+версия или другой профиль меняют находки без изменений в самой базе знаний —
+тогда у строк обновляется только наличие, подпись и тяжесть; так же и у
+первого снапшота, которому не с чем сравниться.
 """
 from __future__ import annotations
 
@@ -259,12 +261,10 @@ class SiemFindingAdapter:
 ADAPTER = SiemFindingAdapter()
 
 
-def _incomparable(active: Snapshot, prev: Snapshot | None, upload: bool) -> str | None:
+def _incomparable(active: Snapshot, prev: Snapshot | None) -> str | None:
     """Почему находки активного снапшота нельзя сравнивать с прошлыми; None — можно."""
-    if not upload:
-        return "пересчитан (переразбор или смена профиля)"
     if prev is None:
-        return None
+        return "первый разобранный, сравнивать не с чем"
     if active.parser_version != prev.parser_version:
         return f"разобран версией {active.parser_version!r}, предыдущий #{prev.id} — {prev.parser_version!r}"
     if active.profile_hash != prev.profile_hash:
@@ -272,16 +272,17 @@ def _incomparable(active: Snapshot, prev: Snapshot | None, upload: bool) -> str 
     return None
 
 
-def reconcile(db: Session, snapshot_id: int, *, upload: bool) -> None:
+def reconcile(db: Session, snapshot_id: int) -> None:
     """Сверка статусов с активным снапшотом — в конце загрузки, переразбора и
     пересчёта по профилю, после commit данных модуля. `snapshot_id` — снапшот,
     который только что записан; не активный (старый пересчитан, старая загрузка
     разобралась после новой) — статусы по активному, а он не менялся.
 
-    Новая выгрузка (`upload`), посчитанная как предыдущая, — полная сверка:
-    пропавшие с предыдущего разобранного снапшота находки получают строки
-    состояния, чтобы закрыться системой, а не исчезнуть молча. Иначе — только
-    наличие, подпись и тяжесть строк, без смен статусов и событий."""
+    Активный снапшот, посчитанный как предыдущий разобранный (версия разбора и
+    отпечаток профиля), — полная сверка: пропавшие с предыдущего снапшота
+    находки получают строки состояния, чтобы закрыться системой, а не исчезнуть
+    молча. Иначе — только наличие, подпись и тяжесть строк, без смен статусов и
+    событий."""
     why: str | None = None
     try:
         # Точка сохранения: сбой чтения откатывает только её, не работу вызывающего.
@@ -294,9 +295,10 @@ def reconcile(db: Session, snapshot_id: int, *, upload: bool) -> None:
             assert active is not None
             prev_id = _previous_snapshot_id(db, active_id)
             prev = db.get(Snapshot, prev_id) if prev_id is not None else None
-            why = _incomparable(active, prev, upload)
+            why = _incomparable(active, prev)
             disappeared: list[CurrentFinding] = []
-            if why is None and prev is not None:
+            if why is None:
+                assert prev is not None
                 now = {f.key for f in findings_of(db, active_id, salt)}
                 disappeared = [f for f in findings_of(db, prev.id, salt) if f.key not in now]
     except SaltMissing:
@@ -306,8 +308,10 @@ def reconcile(db: Session, snapshot_id: int, *, upload: bool) -> None:
         log.exception("сверка статусов находок siem не начата")
         return
     if why is not None:
-        log.warning("siem: снапшот #%s %s — статусы находок не меняются, обновляется только наличие; "
-                    "автоматика вернётся со следующей выгрузкой, посчитанной так же", active_id, why)
+        # У первого снапшота сравнивать не с чем — это не повод для предупреждения.
+        log.log(logging.WARNING if prev is not None else logging.INFO,
+                "siem: снапшот #%s %s — статусы находок не меняются, обновляется только наличие; "
+                "автоматика вернётся, когда активный снапшот будет посчитан так же, как предыдущий", active_id, why)
         _refresh_rows(db, salt, active_id)
         return
     safe_reconcile(db, MODULE, SCOPE, f"снапшот #{active_id}", disappeared=disappeared)

@@ -9,7 +9,7 @@ import type {
 import { OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS } from '@/modules/siem/api/types'
 import { cn } from '@/lib/cn'
 import { KindBadge } from '@/modules/siem/components/ui/KindBadge'
-import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
+import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
 
 /** Статус, исполнитель и сроки — общие фасеты статусов находок платформы. */
 export interface HygieneFilters extends FindingFacetFilters {
@@ -118,8 +118,8 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLog
       </Section>
 
       <Section title="Сроки">
-        <Row active={filters.overdue === true} count={facets?.flags.overdue} onClick={() => onToggle('overdue', filters.overdue ? undefined : true)}>просроченные</Row>
-        <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => onToggle('risk_expiring', filters.risk_expiring ? undefined : true)}>риск истекает (≤ 30 дней)</Row>
+        <Row active={filters.overdue === true} count={facets?.flags.overdue} onClick={() => { if (!filters.overdue) onToggle('status', statusForFlag('overdue', filters.status)); onToggle('overdue', filters.overdue ? undefined : true) }}>просроченные</Row>
+        <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => { if (!filters.risk_expiring) onToggle('status', statusForFlag('risk_expiring', filters.status)); onToggle('risk_expiring', filters.risk_expiring ? undefined : true) }}>риск истекает (≤ 30 дней)</Row>
       </Section>
 
       <Section title="Класс">

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import type { CvssSource, RiskLevel, VulnsFacets, VulnsQuery } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS, LEVEL_LABELS, LEVELS } from '@/modules/vm/api/types'
 import { LEVEL_TEXT } from '@/modules/vm/components/RiskBadge'
-import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
+import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
 import { cn } from '@/lib/cn'
 
 export type VulnFilters = Pick<VulnsQuery, 'level' | 'criticality' | 'zone' | 'os' | 'exploits' | 'msf' | 'cvss_source'> & FindingFacetFilters
@@ -81,8 +81,8 @@ export function FacetPanel({ facets, filters, onToggle, total, myLogin, names }:
       </Section>
 
       <Section title="Сроки">
-        <Row active={filters.overdue === true} count={facets?.flags.overdue} onClick={() => onToggle('overdue', filters.overdue ? undefined : true)}>просроченные</Row>
-        <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => onToggle('risk_expiring', filters.risk_expiring ? undefined : true)}>риск истекает (≤ 30 дней)</Row>
+        <Row active={filters.overdue === true} count={facets?.flags.overdue} onClick={() => { if (!filters.overdue) onToggle('status', statusForFlag('overdue', filters.status)); onToggle('overdue', filters.overdue ? undefined : true) }}>просроченные</Row>
+        <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => { if (!filters.risk_expiring) onToggle('status', statusForFlag('risk_expiring', filters.status)); onToggle('risk_expiring', filters.risk_expiring ? undefined : true) }}>риск истекает (≤ 30 дней)</Row>
       </Section>
 
       <Section title="Риск">

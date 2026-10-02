@@ -399,19 +399,20 @@ def data_facets(db: Session, f: VulnFilters, cached: dict[str, Any] | None) -> d
     return _minus(cached, excluded)
 
 
-def _passes(sf: StatusFilter, status: str, assignee: str | None, overdue: bool, expiring: bool, skip: str) -> bool:
-    if skip != "status" and sf.statuses is not None and status not in sf.statuses:
+def _passes(sf: StatusFilter, status: str, assignee: str | None, overdue: bool, expiring: bool, *skip: str) -> bool:
+    if "status" not in skip and sf.statuses is not None and status not in sf.statuses:
         return False
-    if skip != "assignee" and sf.assignee and assignee != (None if sf.assignee == "none" else sf.assignee):
+    if "assignee" not in skip and sf.assignee and assignee != (None if sf.assignee == "none" else sf.assignee):
         return False
-    if skip != "overdue" and sf.overdue and not overdue:
+    if "overdue" not in skip and sf.overdue and not overdue:
         return False
-    return not (skip != "risk_expiring" and sf.risk_expiring and not expiring)
+    return not ("risk_expiring" not in skip and sf.risk_expiring and not expiring)
 
 
 def status_facets(db: Session, f: VulnFilters, total_all: int | None) -> dict[str, dict[str, int]]:
     """Фасеты статуса, исполнителя и сроков — каждый без своего фильтра, с остальными (как у
-    AD/KSC). Пары сгруппированы по (статус, исполнитель, просрочка, риск истекает): групп
+    AD/KSC); флаги сроков — ещё и без фильтра статуса: «риск истекает» бывает только у
+    принятых, «просроченные» — только у открытых, и по умолчанию (открытые) первый был бы 0. Пары сгруппированы по (статус, исполнитель, просрочка, риск истекает): групп
     немного, фильтры применяются к группам. Без фильтров по данным и при известном числе всех
     пар (`total_all`) группы берутся по строкам состояния, а пары без строки — разностью."""
     today = f.status.day()
@@ -440,9 +441,9 @@ def status_facets(db: Session, f: VulnFilters, total_all: int | None) -> dict[st
         if _passes(sf, status, assignee, overdue, expiring, "assignee"):
             who = assignee or "none"
             out["assignee"][who] = out["assignee"].get(who, 0) + n
-        if overdue and _passes(sf, status, assignee, overdue, expiring, "overdue"):
+        if overdue and _passes(sf, status, assignee, overdue, expiring, "overdue", "status"):
             out["flags"]["overdue"] += n
-        if expiring and _passes(sf, status, assignee, overdue, expiring, "risk_expiring"):
+        if expiring and _passes(sf, status, assignee, overdue, expiring, "risk_expiring", "status"):
             out["flags"]["risk_expiring"] += n
     out["assignee"] = {k: n for k, n in out["assignee"].items() if n or k == "none"}
     return out
