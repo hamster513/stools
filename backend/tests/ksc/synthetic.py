@@ -296,6 +296,17 @@ def expected_policy_contents() -> dict[str, Any]:
     return out
 
 
+def expected_policy_profiles() -> dict[str, Any]:
+    """`_policy_profiles()` как должен отдать онлайн-сборщик после разбора (без обёрток params):
+    секрет профиля «Ноутбуки» — `ProxyPassword` — скрыт вместе со строками замка, булевы остаются."""
+    from api.modules.ksc.core.export import strip_params
+
+    out = strip_params(json.loads(json.dumps(_policy_profiles())))
+    proxy = out["1"]["profiles"][0]["sections"]["KLPRSS_Basic"]["ProxyPassword"]
+    proxy.update(KLPRSS_Val="<скрыто>", KLPRSS_ValLckPolicy="<скрыто>", KLPRSS_ValLckGroup="<скрыто>")
+    return out
+
+
 def assert_secrets_hidden(policy_contents: dict[str, Any]) -> None:
     """Секреты синтетики скрыты в секции `policy_contents` сборщика — как пришла (с обёртками
     params) или разобранная: ни одно значение из `SECRET_VALUES` не попало в неё, каждый случай

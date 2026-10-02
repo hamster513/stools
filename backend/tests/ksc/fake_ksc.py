@@ -95,11 +95,23 @@ def _policy_id_from_ss(ssid: Any) -> str:
     return text.split("-", 1)[1] if text.startswith("ss-") else ""
 
 
+def _profile_sections_from_ss(data: dict[str, Any], ssid: Any) -> dict[str, Any] | None:
+    """`"pss-<KLPOL_ID>-<n>"` (как отдаёт `PolicyProfiles.GetProfileSettings`) → секции n-го профиля политики;
+    не идентификатор профиля — None."""
+    parts = str(ssid or "").split("-")
+    if len(parts) != 3 or parts[0] != "pss" or not parts[2].isdigit():
+        return None
+    profiles = data.get("policy_profiles", {}).get(parts[1], {}).get("profiles", [])
+    n = int(parts[2])
+    return profiles[n]["sections"] if n < len(profiles) else {}
+
+
 class FakeKsc:
     def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "",
                  deny: set[str] | None = None, deny_cert_functions: set[int] | None = None,
                  fail_cert_functions: set[int] | None = None, deny_policy_contents: set[int] | None = None,
-                 fail_policy_sections: dict[int, set[str]] | None = None) -> None:
+                 fail_policy_sections: dict[int, set[str]] | None = None, deny_tags_batch: bool = False,
+                 fail_profiles: dict[str, set[str]] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         if data is None and variant == "params":
             # KLPOL_ACTIVE как типизированный ноль — сборщики не должны читать его как безусловную правду.
@@ -115,6 +127,16 @@ class FakeKsc:
         self.wrap = variant == "params"
         #: Имена методов, на которые отвечать 403 (нет прав).
         self.deny: set[str] = set(deny) if deny is not None else (set(DENIED_METHODS) if variant == "denied" else set())
+        #: Теги: пакетный вызов — 403 (сборщик уходит на вызов по одному хосту); variant="tags_denied" — 403 на оба вызова.
+        if deny_tags_batch:
+            self.deny.add("HostsTags.ListTags.GetTags")
+        if variant == "tags_denied":
+            self.deny |= {"HostsTags.ListTags.GetTags", "HostTagsApi.GetHostTags"}
+        #: variant="profiles_denied" — 403 на PolicyProfiles.EnumProfiles (политики читаются, профили — нет).
+        if variant == "profiles_denied":
+            self.deny.add("PolicyProfiles.EnumProfiles")
+        #: KLPOL_ID (строкой) → имена профилей, на которые GetProfile и GetProfileSettings отвечают PxgError.
+        self.fail_profiles: dict[str, set[str]] = fail_profiles or {}
         #: Номера функций CertPoolCtrl.GetCertificateInfo, на которые отвечать 403 (остальные — как обычно).
         self.deny_cert_functions: set[int] = set(deny_cert_functions) if deny_cert_functions is not None else ({2} if variant == "denied_cert2" else set())
         #: Номера функций сертификата, на которые отвечать PxgError — «сертификата для этого назначения нет».
@@ -266,10 +288,23 @@ class FakeKsc:
             if npolicy in self.deny_policy_contents:
                 return 403, {}
             return 200, {"PxgRetVal": f"ss-{npolicy}"}
+        if method == "HostsTags.ListTags.GetTags":
+            tags = d.get("host_tags", {})
+            return 200, {"PxgRetVal": [{"KLTAGS_ITEM_ID": i, "KLTAGS_TAGS": tags[i]} for i in body.get("pIdArray", []) if i in tags]}
+        if method == "HostTagsApi.GetHostTags":
+            return 200, {"PxgRetVal": d.get("host_tags", {}).get(body.get("szwHostId"), [])}
+        if method.startswith("PolicyProfiles."):
+            return self._profiles(method, body)
         if method == "SsContents.SS_GetNames":
+            profile_sections = _profile_sections_from_ss(d, body.get("wstrID"))
+            if profile_sections is not None:
+                return 200, {"PxgRetVal": list(profile_sections.keys())}
             sections = d.get("policy_contents", {}).get(_policy_id_from_ss(body.get("wstrID")), {}).get("sections", {})
             return 200, {"PxgRetVal": list(sections.keys())}
         if method == "SsContents.Ss_Read":
+            profile_sections = _profile_sections_from_ss(d, body.get("wstrID"))
+            if profile_sections is not None:
+                return 200, {"PxgRetVal": profile_sections.get(body.get("wstrSection"), {})}
             npolicy = _policy_id_from_ss(body.get("wstrID"))
             section = body.get("wstrSection")
             fail_sections = self.fail_policy_sections.get(int(npolicy), set()) if npolicy.isdigit() else set()
@@ -290,6 +325,25 @@ class FakeKsc:
             return 200, {"PxgRetVal": len(chunk), "bEOF": not self.iterators[body["szwIterator"]], "pData": {"KLCSP_ITERATOR_ARRAY": chunk}}
         if method == "GroupSyncIterator.ReleaseIterator":
             return 200, {}
+        return 404, {}
+
+    def _profiles(self, method: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """`PolicyProfiles.*`: профили политики `nPolicy` из `data["policy_profiles"]`."""
+        npolicy = str(body.get("nPolicy"))
+        entry = self.data.get("policy_profiles", {}).get(npolicy, {})
+        profiles: list[dict[str, Any]] = entry.get("profiles", [])
+        if method == "PolicyProfiles.EnumProfiles":
+            return 200, {"PxgRetVal": {p["name"]: p["attrs"] for p in profiles}}
+        if method == "PolicyProfiles.GetPriorities":
+            return 200, {"PxgRetVal": entry.get("priorities", [])}
+        name = body.get("szwName")
+        index = next((n for n, p in enumerate(profiles) if p["name"] == name), None)
+        if index is None or name in self.fail_profiles.get(npolicy, set()):
+            return 200, {"PxgError": {"code": 1, "message": "boom"}}
+        if method == "PolicyProfiles.GetProfile":
+            return 200, {"PxgRetVal": profiles[index]["attrs"]}
+        if method == "PolicyProfiles.GetProfileSettings":
+            return 200, {"PxgRetVal": f"pss-{npolicy}-{index}"}
         return 404, {}
 
 

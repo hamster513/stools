@@ -18,12 +18,14 @@ from api.modules.ksc.core.export import (
 )
 from api.modules.ksc.core.secrets import hide_secrets, hide_task_params
 
-COLLECTOR_VERSION = "1.0"
+COLLECTOR_VERSION = "1.2"
 
 #: Не больше стольки политик собираем за один сбор — предупреждение при превышении.
 POLICY_CONTENTS_MAX_POLICIES = 200
 #: Ответ секции больше этого размера не сохраняется (в errors — "секция больше лимита").
 POLICY_CONTENTS_SECTION_MAX_BYTES = 2 * 1024 * 1024
+#: Сколько хостов спрашиваем у `ListTags.GetTags` за один вызов.
+TAGS_BATCH = 500
 
 HOST_FIELDS = [
     "KLHST_WKS_HOSTNAME", "KLHST_WKS_DN", "KLHST_WKS_WINHOSTNAME", "KLHST_WKS_WINDOMAIN", "KLHST_WKS_DNSDOMAIN", "KLHST_WKS_DNSNAME", "KLHST_WKS_FQDN",
@@ -85,6 +87,45 @@ def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = ""
         client.call("SrvView.ReleaseIterator", {"wstrIteratorId": it})
 
 
+def _protection_policies(policies: list[dict[str, Any]]) -> list[tuple[int, str, str]]:
+    """Активные политики продуктов защиты (не Агент и не Сервер) как `(KLPOL_ID, продукт, версия)` —
+    общий отбор для содержимого политик и их профилей."""
+    out: list[tuple[int, str, str]] = []
+    for raw_policy in policies:
+        policy = strip_params(raw_policy)
+        if not bool(unwrap(policy.get("KLPOL_ACTIVE"))):
+            continue
+        product = _str(policy.get("KLPOL_PRODUCT"))
+        if product in (PRODUCT_AGENT, PRODUCT_SERVER):
+            continue
+        out.append((_int(policy.get("KLPOL_ID")), product, _str(policy.get("KLPOL_VERSION"))))
+    return out
+
+
+def _read_sections(client: KscClient, ssid: Any, product: str, version: str) -> tuple[dict[str, Any], list[str]]:
+    """Секции хранилища `ssid` (политики или её профиля): `SS_GetNames` → `Ss_Read` по каждой, `Ss_Release` в finally.
+    Ошибка секции — строка в `errors`, остальные остаются; ошибка `SS_GetNames` уходит вызывающему."""
+    try:
+        names = _ret(client.call("SsContents.SS_GetNames", {"wstrID": ssid, "wstrProduct": product, "wstrVersion": version})) or []
+        sections: dict[str, Any] = {}
+        errors: list[str] = []
+        for section_name in names:
+            try:
+                section_raw = _ret(client.call("SsContents.Ss_Read", {"wstrID": ssid, "wstrProduct": product, "wstrVersion": version, "wstrSection": section_name}))
+            except KscError as exc:
+                errors.append(f"{section_name}: {exc}")
+                continue
+            value = hide_secrets(section_raw, section_name)
+            # Компактный JSON — как `ConvertTo-Json -Compress` в скрипте.
+            if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > POLICY_CONTENTS_SECTION_MAX_BYTES:
+                errors.append(f"{section_name}: секция больше лимита")
+                continue
+            sections[section_name] = value
+        return sections, errors
+    finally:
+        client.call("SsContents.Ss_Release", {"wstrID": ssid})
+
+
 def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings: list[str], *, max_policies: int | None = None) -> dict[str, Any]:
     """Содержимое активных политик продуктов защиты: `Policy.GetPolicyContents` →
     `SsContents.SS_GetNames`/`Ss_Read` по каждой секции, `Ss_Release` в finally. Каждая политика в
@@ -95,17 +136,7 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
     онлайн-сбора передаётся явно через `collect`)."""
     limit = POLICY_CONTENTS_MAX_POLICIES if max_policies is None else max_policies
     out: dict[str, Any] = {}
-    count = 0
-    for raw_policy in policies:
-        policy = strip_params(raw_policy)
-        if not bool(unwrap(policy.get("KLPOL_ACTIVE"))):
-            continue
-        product = _str(policy.get("KLPOL_PRODUCT"))
-        if product in (PRODUCT_AGENT, PRODUCT_SERVER):
-            continue
-        count += 1
-        npolicy = _int(policy.get("KLPOL_ID"))
-        version = _str(policy.get("KLPOL_VERSION"))
+    for count, (npolicy, product, version) in enumerate(_protection_policies(policies), 1):
         if count > limit:
             # Пропущенная по лимиту политика остаётся в секции с причиной — POLICY_CONTENT_MISSING её покажет.
             if count == limit + 1:
@@ -114,28 +145,80 @@ def _policy_contents(client: KscClient, policies: list[dict[str, Any]], warnings
             continue
         try:
             ssid = _ret(client.call("Policy.GetPolicyContents", {"nPolicy": npolicy, "nRevisionId": 0, "nLifeTime": 0}))
-            try:
-                names = _ret(client.call("SsContents.SS_GetNames", {"wstrID": ssid, "wstrProduct": product, "wstrVersion": version})) or []
-                sections: dict[str, Any] = {}
-                errors: list[str] = []
-                for section_name in names:
-                    try:
-                        section_raw = _ret(client.call("SsContents.Ss_Read", {"wstrID": ssid, "wstrProduct": product, "wstrVersion": version, "wstrSection": section_name}))
-                    except KscError as exc:
-                        errors.append(f"{section_name}: {exc}")
-                        continue
-                    value = hide_secrets(section_raw, section_name)
-                    # Компактный JSON — как `ConvertTo-Json -Compress` в скрипте.
-                    if len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > POLICY_CONTENTS_SECTION_MAX_BYTES:
-                        errors.append(f"{section_name}: секция больше лимита")
-                        continue
-                    sections[section_name] = value
-                out[str(npolicy)] = {"product": product, "version": version, "sections": sections, "errors": errors}
-            finally:
-                client.call("SsContents.Ss_Release", {"wstrID": ssid})
+            sections, errors = _read_sections(client, ssid, product, version)
+            out[str(npolicy)] = {"product": product, "version": version, "sections": sections, "errors": errors}
         except KscError as exc:
             warnings.append(f"policy_contents[{npolicy}]: {exc}")
     return out
+
+
+def _policy_profiles(client: KscClient, policies: list[dict[str, Any]], *, max_policies: int | None = None) -> dict[str, Any]:
+    """Профили активных политик продуктов защиты (тот же отбор и лимит, что у `_policy_contents`):
+    `PolicyProfiles.EnumProfiles` → по каждому имени `GetProfile` (атрибуты, секреты скрыты) и
+    `GetProfileSettings` (хранилище, секции читаются как у политики), плюс `GetPriorities`.
+    Ошибки — строки `errors` на своём уровне: отказ `EnumProfiles` — у политики (профилей и порядка нет),
+    `GetPriorities` — у политики, `GetProfile`/`GetProfileSettings` — у профиля, остальные профили читаются.
+    Политика сверх лимита записывается с `errors == ["лимит политик"]`."""
+    limit = POLICY_CONTENTS_MAX_POLICIES if max_policies is None else max_policies
+    out: dict[str, Any] = {}
+    for count, (npolicy, product, version) in enumerate(_protection_policies(policies), 1):
+        entry: dict[str, Any] = {"profiles": [], "priorities": [], "errors": []}
+        out[str(npolicy)] = entry
+        if count > limit:
+            entry["errors"].append("лимит политик")
+            continue
+        base = {"nPolicy": npolicy, "nRevision": 0}
+        try:
+            names = [str(name) for name in strip_params(_ret(client.call("PolicyProfiles.EnumProfiles", base)) or {})]
+        except KscError as exc:
+            entry["errors"].append(str(exc))
+            continue
+        for name in names:
+            profile: dict[str, Any] = {"name": name, "attrs": {}, "sections": {}, "errors": []}
+            try:
+                profile["attrs"] = hide_secrets(_ret(client.call("PolicyProfiles.GetProfile", {**base, "szwName": name})) or {})
+            except KscError as exc:
+                profile["errors"].append(str(exc))
+            try:
+                ssid = _ret(client.call("PolicyProfiles.GetProfileSettings", {**base, "szwName": name, "nLifeTime": 0}))
+                profile["sections"], section_errors = _read_sections(client, ssid, product, version)
+                profile["errors"].extend(section_errors)
+            except KscError as exc:
+                profile["errors"].append(str(exc))
+            entry["profiles"].append(profile)
+        try:
+            entry["priorities"] = [str(name) for name in unwrap(_ret(client.call("PolicyProfiles.GetPriorities", base))) or []]
+        except KscError as exc:
+            entry["errors"].append(str(exc))
+    return out
+
+
+def _hosts_with_agent(hosts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Хосты с Агентом администрирования (бит 4 статуса) и именем — только у них спрашиваем продукты и теги."""
+    plain_hosts = [strip_params(h) for h in hosts]
+    return [h for h in plain_hosts if _int(h.get("KLHST_WKS_STATUS")) & 4 and h.get("KLHST_WKS_HOSTNAME")]
+
+
+def _host_tags(client: KscClient, hosts: list[dict[str, Any]], warnings: list[str]) -> dict[str, list[str]] | None:
+    """Теги хостов с агентом: пакетный `ListTags.GetTags` экземпляра HostsTags; не сработал пакет —
+    по одному хосту через `HostTagsApi.GetHostTags`. Отказ обоих — None (секции в выгрузке не будет),
+    строка `host_tags: …` в `warnings`."""
+    ids = [str(h["KLHST_WKS_HOSTNAME"]) for h in _hosts_with_agent(hosts)]
+    out: dict[str, list[str]] = {i: [] for i in ids}
+    try:
+        for start in range(0, len(ids), TAGS_BATCH):
+            items = strip_params(_ret(client.call("HostsTags.ListTags.GetTags", {"pIdArray": ids[start:start + TAGS_BATCH], "pParams": {}})) or [])
+            for item in items:
+                out[_str(item.get("KLTAGS_ITEM_ID"))] = [str(t) for t in (unwrap(item.get("KLTAGS_TAGS")) or [])]
+        return out
+    except KscError as batch_exc:
+        try:
+            for host_id in ids:
+                out[host_id] = [str(t) for t in (unwrap(_ret(client.call("HostTagsApi.GetHostTags", {"szwHostId": host_id}))) or [])]
+            return out
+        except KscError as exc:
+            warnings.append(f"host_tags: {batch_exc}; по одному хосту: {exc}")
+            return None
 
 
 def collect(client: KscClient, *, skip_products: bool = False, skip_policy_contents: bool = False, max_policies: int | None = None, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
@@ -161,8 +244,7 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
     components: dict[str, Any] = {}
     if not skip_products:
         # KSC заворачивает записи в {"type": "params"}: читаем сквозь обёртку, в файл кладём как пришло.
-        plain_hosts = [strip_params(h) for h in hosts]
-        with_agent = [h for h in plain_hosts if _int(h.get("KLHST_WKS_STATUS")) & 4 and h.get("KLHST_WKS_HOSTNAME")]
+        with_agent = _hosts_with_agent(hosts)
         for n, h in enumerate(with_agent, 1):
             hid = str(h["KLHST_WKS_HOSTNAME"])
             try:
@@ -183,6 +265,8 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
                 components[hid] = comp
             if progress:
                 progress(n, len(with_agent))
+
+    host_tags = _host_tags(client, hosts, warnings)
 
     policies = _ret(client.call("Policy.GetPoliciesForGroup", {"nGroupId": -1})) or []
     effective: dict[str, Any] = {}
@@ -257,7 +341,7 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
     update_agents = _section("update_agents", lambda: client.call("UaControl.GetUpdateAgentsList", {}).get("pUasArr") or [], [])
 
     name = str(static.get("KLADMSRV_SERVER_HOSTNAME") or host or "ksc")
-    return {
+    result: dict[str, Any] = {
         "format": FORMAT,
         "server": {"name": name, "version": str(static.get("KLADMSRV_PRODUCT_FULL_VERSION") or ""), "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                    "collector": "online", "collector_version": COLLECTOR_VERSION, "user": username, "host": host, "warnings": warnings},
@@ -267,3 +351,9 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
         "policy_contents": policy_contents,
     }
+    # Секции «не собрано» в файл не попадают вовсе — «не собрано» отличается от «пусто».
+    if host_tags is not None:
+        result["host_tags"] = host_tags
+    if not skip_policy_contents:
+        result["policy_profiles"] = _policy_profiles(client, policies, max_policies=max_policies)
+    return result

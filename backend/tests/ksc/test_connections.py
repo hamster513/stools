@@ -9,7 +9,7 @@ from api.modules.ksc.core import client as client_mod
 from api.modules.ksc.core import collector as collector_mod
 from api.modules.ksc.core.client import KscClient, KscError
 from api.modules.ksc.core.collector import collect
-from api.modules.ksc.core.export import load_export
+from api.modules.ksc.core.export import load_export, strip_params
 from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
 from tests.ksc.fake_ksc import PASSWORD, USER, FakeKsc, http_factory_for
 from tests.ksc.synthetic import (
@@ -18,6 +18,7 @@ from tests.ksc.synthetic import (
     assert_storage_shapes,
     build_export,
     expected_policy_contents,
+    expected_policy_profiles,
 )
 
 
@@ -380,6 +381,76 @@ def test_collect_policy_contents_skips_inactive_typed_bool_policy(monkeypatch: A
     export = load_export(__import__("json").dumps(raw).encode())
     assert set(export.policy_contents) == {"1", "3"}
     assert "9" not in export.policy_contents
+
+
+def _collect_with(monkeypatch: Any, fake: FakeKsc, **kwargs: Any) -> dict[str, Any]:
+    monkeypatch.setattr(client_mod, "http_factory", http_factory_for(fake))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        return collect(c, username=USER, **kwargs)
+
+
+def test_collect_reads_tags_in_batches(fake: FakeKsc) -> None:
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    assert raw["host_tags"] == build_export()["host_tags"] and len(raw["host_tags"]) == 12
+    assert "HostsTags.ListTags.GetTags" in fake.calls and "HostTagsApi.GetHostTags" not in fake.calls
+    assert raw["server"]["collector_version"] == "1.2"
+
+
+def test_collect_falls_back_to_per_host_tags(monkeypatch: Any) -> None:
+    f = FakeKsc(deny_tags_batch=True)
+    raw = _collect_with(monkeypatch, f)
+    assert raw["host_tags"] == build_export()["host_tags"]
+    assert "HostTagsApi.GetHostTags" in f.calls
+    assert not [w for w in raw["server"]["warnings"] if "host_tags" in w]
+
+
+def test_collect_without_tag_rights_has_no_section(monkeypatch: Any) -> None:
+    raw = _collect_with(monkeypatch, FakeKsc(variant="tags_denied"))
+    assert "host_tags" not in raw
+    assert len(raw["server"]["warnings"]) == 1 and raw["server"]["warnings"][0].startswith("host_tags:")
+    assert len(raw["hosts"]) == 14
+
+
+def test_collect_reads_policy_profiles(fake: FakeKsc) -> None:
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    assert strip_params(raw["policy_profiles"]) == expected_policy_profiles()
+    assert "profile-secret" not in __import__("json").dumps(raw["policy_profiles"], ensure_ascii=False)
+    opened = fake.calls.count("Policy.GetPolicyContents") + fake.calls.count("PolicyProfiles.GetProfileSettings")
+    assert opened == 4 and opened == fake.calls.count("SsContents.Ss_Release")  # 2 политики + 2 профиля
+    assert not raw["server"]["warnings"]
+
+
+def test_collect_reads_profiles_and_tags_through_live_params_wrappers(monkeypatch: Any) -> None:
+    raw = _collect_with(monkeypatch, FakeKsc(variant="params"))
+    assert strip_params(raw["policy_profiles"]) == expected_policy_profiles()
+    assert raw["host_tags"] == build_export()["host_tags"]
+    export = load_export(__import__("json").dumps(raw).encode())
+    assert export.policy_profiles == expected_policy_profiles() and export.host_tags == build_export()["host_tags"]
+
+
+def test_collect_profiles_denied_keeps_contents(monkeypatch: Any) -> None:
+    raw = _collect_with(monkeypatch, FakeKsc(variant="profiles_denied"))
+    pol1 = raw["policy_profiles"]["1"]
+    assert pol1["profiles"] == [] and pol1["priorities"] == [] and len(pol1["errors"]) == 1 and "PolicyProfiles.EnumProfiles" in pol1["errors"][0]
+    assert strip_params(raw["policy_contents"]) == expected_policy_contents()
+
+
+def test_collect_profile_error_keeps_other_profiles(monkeypatch: Any) -> None:
+    f = FakeKsc(fail_profiles={"1": {"Ноутбуки"}})
+    raw = _collect_with(monkeypatch, f)
+    profiles = {p["name"]: p for p in raw["policy_profiles"]["1"]["profiles"]}
+    assert set(profiles) == {"Ноутбуки", "Выключенный"}
+    assert profiles["Ноутбуки"]["sections"] == {} and len(profiles["Ноутбуки"]["errors"]) == 2
+    assert profiles["Выключенный"] == strip_params(expected_policy_profiles()["1"]["profiles"][1])
+
+
+def test_collect_skip_policy_contents_skips_profiles(fake: FakeKsc) -> None:
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, skip_policy_contents=True, username=USER)
+    assert "policy_profiles" not in raw
+    assert not [m for m in fake.calls if m.startswith("PolicyProfiles.")]
 
 
 def _create(auth_client: TestClient, **extra: Any) -> int:
