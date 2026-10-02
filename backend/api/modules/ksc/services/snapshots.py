@@ -23,7 +23,7 @@ from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, KscExport, load_export_path
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding
 from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
-from api.modules.ksc.models import KscFinding, KscHost, KscServer, KscSnapshot
+from api.modules.ksc.models import KscChange, KscFinding, KscHost, KscServer, KscSnapshot
 from api.modules.ksc.services.coverage import ad_computers_for
 from api.modules.ksc.services.policy_store import store_policies
 
@@ -115,6 +115,8 @@ def import_export(
 ) -> KscSnapshot:
     """Как у AD: `path` — файл выгрузки в каталоге данных, становится файлом снапшота;
     `sha256` — отпечаток исходного текста, не задан — по байтам файла."""
+    from api.modules.ksc.services.changes import next_snapshot
+
     if handle:
         handle.stage("parsing", message=filename)
     export = load_export_path(path)
@@ -134,9 +136,40 @@ def import_export(
     _store(db, snapshot, idx, findings, cfg, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
+    _recompute_changes(db, snapshot, data_dir)
+    # Снапшот лёг в середину истории: следующий за ним теперь сравнивается с ним.
+    _recompute_changes(db, next_snapshot(db, snapshot), data_dir)
     FINDINGS_ADAPTER.reconcile(db, server.id, snapshot.id)
     _notify_assets(db)
     return snapshot
+
+
+def _recompute_changes(db: Session, snapshot: KscSnapshot | None, data_dir: Path) -> None:
+    """Журнал изменений снапшота. Его сбой не должен ронять импорт, пересчёт и удаление: остальное уже
+    зафиксировано, свод изменений получает причину. Импорт внутри функции — журнал сам берёт отсюда
+    предыдущий снапшот и путь файла."""
+    from api.modules.ksc.core.changes import KINDS
+    from api.modules.ksc.services.changes import recompute_changes, set_summary
+
+    if snapshot is None:
+        return
+    snapshot_id = snapshot.id
+    try:
+        recompute_changes(db, snapshot, data_dir)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        log.exception("изменения снапшота KSC #%s не посчитаны", snapshot_id)
+        try:
+            # Старые строки другого предыдущего снапшота не должны остаться под новым сводом.
+            db.execute(delete(KscChange).where(KscChange.snapshot_id == snapshot_id))
+            prev = previous_snapshot(db, snapshot)
+            set_summary(snapshot, {"prev": prev.id if prev else None, "total": 0, "compared": dict.fromkeys(KINDS, False),
+                                   "truncated": False, "reason": f"изменения не посчитаны: {exc}"})
+            db.commit()
+        except Exception:
+            db.rollback()
+            log.exception("причина сбоя изменений снапшота KSC #%s не записана", snapshot_id)
 
 
 def _notify_assets(db: Session) -> None:
@@ -162,16 +195,22 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     _store(db, snapshot, idx, findings, cfg, handle)
     db.commit()
+    _recompute_changes(db, snapshot, data_dir)
     FINDINGS_ADAPTER.reconcile(db, snapshot.server_id, snapshot.id)
     return snapshot
 
 
 def delete_snapshot(db: Session, snapshot: KscSnapshot, data_dir: Path) -> None:
+    from api.modules.ksc.services.changes import next_snapshot
+
     path, scope_id = snapshot_path(data_dir, snapshot.id), snapshot.server_id
+    # Следующий сравнивался с удаляемым: после удаления его предыдущим станет предыдущий удалённого.
+    following = next_snapshot(db, snapshot)
     db.delete(snapshot)
     db.commit()
     if path.exists():
         path.unlink()
+    _recompute_changes(db, following, data_dir)
     # Удалён последний снапшот — свежими данными области стал предыдущий.
     FINDINGS_ADAPTER.reconcile(db, scope_id)
 
