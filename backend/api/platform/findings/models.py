@@ -40,7 +40,8 @@ class FindingState(Base):
     module: Mapped[str] = mapped_column(String(16))
     #: Домен AD, сервер KSC; у модулей с одной областью — 0.
     scope_id: Mapped[int] = mapped_column(Integer)
-    key: Mapped[str] = mapped_column(String(128))
+    #: VM: `hostname|ip|cve` — до 255 + 64 + 32 символов и два разделителя.
+    key: Mapped[str] = mapped_column(String(400))
     status: Mapped[str] = mapped_column(String(16), default="new")
     assignee: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     due_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True, index=True)

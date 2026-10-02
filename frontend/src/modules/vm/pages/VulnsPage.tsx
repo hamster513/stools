@@ -207,7 +207,7 @@ export function VulnsPage() {
         <a
           href={exportUrl(queryArgs)}
           className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          title="Скачать текущую выборку как CSV"
+          title="Скачать CSV по текущему фильтру, по умолчанию — открытые"
         >
           <Download size={13} aria-hidden /> CSV
         </a>
@@ -226,7 +226,13 @@ export function VulnsPage() {
                 <span>{running.message}</span>
                 <button type="button" onClick={() => cancelJob.mutate(running.id)} disabled={running.cancel_requested} className="text-text underline disabled:no-underline disabled:opacity-60">{running.cancel_requested ? 'останавливается…' : 'остановить'}</button>
               </>
-            : <span>{job.data.status === 'done' ? `готово: ${job.data.message}` : job.data.status === 'cancelled' ? `остановлена: ${job.data.message}` : `ошибка: ${job.data.error ?? ''}`}</span>}
+            : (() => {
+                // Остановленная и упавшая задача пишет в message, сколько применено до остановки.
+                const text = job.data.status === 'done' ? `готово: ${job.data.message}`
+                  : job.data.status === 'cancelled' ? `остановлена: ${job.data.message}`
+                  : `ошибка: ${job.data.error ?? ''} · ${job.data.message}`
+                return <span className="min-w-0 truncate" title={text}>{text}</span>
+              })()}
           {!running && <button type="button" onClick={() => setJobId(undefined)} aria-label="Скрыть" className="ml-auto text-text-secondary hover:text-text"><X size={12} aria-hidden /></button>}
         </div>
       )}

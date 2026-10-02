@@ -17,7 +17,14 @@ from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.models import VmImport
 from api.modules.vm.routers.jobs import JobView
 from api.modules.vm.services.importer import run_import
-from api.modules.vm.services.jobs import JobHandle, active_job, fail_job, run_job, start_job
+from api.modules.vm.services.jobs import (
+    JobHandle,
+    active_job,
+    fail_job,
+    lock_job_start,
+    run_job,
+    start_job,
+)
 from api.modules.vm.services.settings import load_settings
 from api.settings import Settings, get_settings
 
@@ -49,12 +56,17 @@ class ImportState(BaseModel):
 
 
 def _reject_if_running(db: Session) -> None:
+    """Под блокировкой запуска задач VM (её отпустит commit `start_job`): массовая смена
+    статусов выбирает пары кусками, и замена пар посреди неё смешала бы два импорта."""
+    lock_job_start(db)
     running = active_job(db, IMPORT_KINDS)
     if running is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail=f"импорт уже идёт (задача #{running.id}, стадия {running.stage})",
         )
+    if active_job(db, ["bulk_status"]) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="идёт массовая смена статусов")
 
 
 @router.post("/vm", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)

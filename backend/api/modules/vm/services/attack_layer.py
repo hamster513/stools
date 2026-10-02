@@ -35,10 +35,17 @@ from api.modules.attack.layers import (
     parent_of,
 )
 from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmRefAttack, VmZone
-from api.modules.vm.services.query import MODULE, SCOPE, ST, StatusFilter, status_conditions
+from api.modules.vm.services.query import (
+    MODULE,
+    SCOPE,
+    ST,
+    StatusFilter,
+    state_on,
+    status_conditions,
+)
 from api.modules.vm.services.settings import load_settings
 from api.platform.findings import service as finding_svc
-from api.platform.findings.models import FindingState
+from api.platform.findings.models import FindingEvent, FindingState
 
 CACHE_KEY = "vm.attack_layer"
 
@@ -104,11 +111,15 @@ def _counted(counted: frozenset[str] | None) -> list[ColumnElement[bool]]:
 
 
 def _state_mark(db: Session) -> str:
-    """Отметка состояний VM и настройки `counted`: меняется с любой сменой статуса пары."""
-    rows, last = db.execute(
-        select(func.count(), func.max(FindingState.updated_at)).where(FindingState.module == MODULE, FindingState.scope_id == SCOPE)
-    ).one()
-    return f"{','.join(sorted(finding_svc.counted_statuses(db)))}|{rows}|{last.isoformat() if last else ''}"
+    """Отметка состояний VM и настройки `counted`. Любая смена статуса пары — ручная, массовая
+    или системная — пишет событие истории, поэтому отметка — последнее событие области VM:
+    растёт с каждой сменой и не зависит от совпадения времени двух правок."""
+    last = db.scalar(
+        select(FindingEvent.id).join(FindingState, FindingState.id == FindingEvent.state_id)
+        .where(FindingState.module == MODULE, FindingState.scope_id == SCOPE)
+        .order_by(FindingEvent.id.desc()).limit(1)
+    )
+    return f"{','.join(sorted(finding_svc.counted_statuses(db)))}|{last or 0}"
 
 
 def _exposure(threshold: int, counted: frozenset[str] | None = None) -> Subquery:
@@ -132,7 +143,7 @@ def _exposure(threshold: int, counted: frozenset[str] | None = None) -> Subquery
         .where(VmHostCve.risk >= threshold)
     )
     if counted is not None:
-        stmt = stmt.outerjoin(ST, and_(ST.c.host_id == VmHostCve.host_id, ST.c.cve_id == VmHostCve.cve_id)).where(*_counted(counted))
+        stmt = stmt.outerjoin(ST, state_on()).where(*_counted(counted))
     return stmt.subquery("exposure")
 
 
@@ -143,7 +154,8 @@ def compute(db: Session) -> dict[str, Any]:
     pairs = int(
         db.execute(
             select(func.count()).select_from(VmHostCve)
-            .outerjoin(ST, and_(ST.c.host_id == VmHostCve.host_id, ST.c.cve_id == VmHostCve.cve_id))
+            .join(VmHost, VmHost.id == VmHostCve.host_id)
+            .outerjoin(ST, state_on())
             .where(VmHostCve.risk >= threshold, *_counted(counted))
         ).scalar() or 0
     )

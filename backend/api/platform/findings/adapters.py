@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -59,8 +60,19 @@ class BulkJobRequest:
     bulk_id: str
 
 
+class BulkConflict(Exception):
+    """Массовую смену сейчас запускать нельзя (у модуля идёт задача, которая меняет данные):
+    платформа отвечает 409 с текстом исключения."""
+
+
+def filter_text(flt: dict[str, Any]) -> str:
+    """Фильтр массовой смены для журнала действий и строки задачи — не длиннее 300 символов."""
+    return json.dumps(flt, ensure_ascii=False)[:300]
+
+
 #: Фоновая массовая смена: заводит задачу модуля и отдаёт её id и работу, которую платформа
-#: запустит после ответа. Ошибка фильтра — ValueError, до того как задача заведена.
+#: запустит после ответа. Ошибка фильтра — ValueError, нельзя сейчас — BulkConflict; и то и
+#: другое до того, как задача заведена.
 BulkJob = Callable[[Session, BulkJobRequest], tuple[int, Callable[[], None]]]
 
 _ADAPTERS: dict[str, FindingAdapter] = {}

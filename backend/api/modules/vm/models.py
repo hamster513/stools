@@ -23,6 +23,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,7 +33,12 @@ from api.jobs import JobColumns
 
 class VmHost(Base):
     __tablename__ = "vm_host"
-    __table_args__ = (UniqueConstraint("hostname", "ip", name="uq_vm_host_name_ip"),)
+    __table_args__ = (
+        UniqueConstraint("hostname", "ip", name="uq_vm_host_name_ip"),
+        # Статусы пар присоединяются по `hostname|ip` (query.host_key): индекс даёт Postgres
+        # статистику этого выражения.
+        Index("ix_vm_host_key", text("(hostname || '|' || ip)")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     hostname: Mapped[str] = mapped_column(String(255), index=True)
@@ -83,6 +89,27 @@ class VmHostCve(Base):
     )
     risk_raw: Mapped[float] = mapped_column(Float, default=0.0)
     risk: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class VmFindingStateRef(Base):
+    """Строка статуса пары (`platform_finding_state`, module = vm) как хост и CVE.
+
+    Ключ пары — `hostname|ip|cve`; список пар присоединяет статусы по этой таблице
+    и индексу (hostname, ip, cve_id), а не разбирает ключи всех строк состояния в
+    каждом запросе. Заводится адаптером VM вместе со строкой состояния
+    (`on_states_created`), строки, заведённые в обход, дописывает `backfill`.
+    """
+
+    __tablename__ = "vm_finding_state_ref"
+    #: То же выражение, что у `ix_vm_host_key`: пары присоединяют статусы по `hostname|ip` и CVE.
+    __table_args__ = (Index("ix_vm_finding_state_ref_pair", text("(hostname || '|' || ip)"), "cve_id"),)
+
+    state_id: Mapped[int] = mapped_column(
+        ForeignKey("platform_finding_state.id", ondelete="CASCADE"), primary_key=True
+    )
+    hostname: Mapped[str] = mapped_column(String(255))
+    ip: Mapped[str] = mapped_column(String(64))
+    cve_id: Mapped[str] = mapped_column(String(32))
 
 
 class VmZone(Base):

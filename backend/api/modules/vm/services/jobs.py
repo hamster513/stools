@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.jobs import JobCancelled, JobHandle
@@ -12,7 +13,16 @@ from api.jobs import run_job as _run_job
 from api.jobs import start_job as _start_job
 from api.modules.vm.models import VmJob
 
-__all__ = ["JobCancelled", "JobHandle", "active_job", "fail_job", "run_job", "start_job"]
+__all__ = ["DATA_KINDS", "JobCancelled", "JobHandle", "active_job", "fail_job", "lock_job_start", "run_job", "start_job"]
+
+#: Задачи, которые заменяют или пересчитывают пары: массовая смена статусов с ними одновременно не идёт.
+DATA_KINDS = ("import_vm", "import_file", "recalculate")
+
+
+def lock_job_start(db: Session) -> None:
+    """Проверка «не идёт ли мешающая задача» и заведение своей — под одной транзакционной
+    блокировкой: два запуска не проскочат проверку оба. Отпускается commit-ом `start_job`."""
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('vm_job_start'))"))
 
 
 def active_job(db: Session, kinds: Iterable[str]) -> VmJob | None:

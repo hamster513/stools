@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from itertools import batched
 from typing import Any
@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from api.db.models import ROLE_ADMIN, ROLE_ANALYST, AppUser
-from api.platform.findings.adapters import CurrentFinding, get_adapter
+from api.platform.findings.adapters import CurrentFinding, FindingAdapter, get_adapter
 from api.platform.findings.core import (
     NEEDS_REASON,
     OPEN,
@@ -171,6 +171,15 @@ def _new_row(module: str, scope_id: int, key: str) -> FindingState:
                         title="", severity="", updated_by="")
 
 
+def _created(db: Session, module: str, rows: Sequence[FindingState]) -> None:
+    """Новые строки области записаны (flush) — модуль может завести к ним свои подсказки
+    (`on_states_created`, VM: хост и CVE пары для быстрого списка) в той же транзакции."""
+    hook = getattr(get_adapter(module), "on_states_created", None)
+    if rows and hook is not None:
+        db.flush()
+        hook(db, rows)
+
+
 def _event(row: FindingState, actor: str, kind: str, *, from_status: str | None = None,
            to_status: str | None = None, comment: str = "", details: dict[str, Any] | None = None) -> FindingEvent:
     #: Событие привязано к строке через связь: у новой строки ещё нет id, вставка их упорядочит.
@@ -238,6 +247,8 @@ def change(db: Session, *, module: str, scope_id: int, key: str, change: Change,
         if severity:
             row.severity = severity[:16]
         db.add_all(events)
+        if row.id is None:
+            _created(db, module, [row])
     # И без изменений: commit отпускает блокировку области.
     db.commit()
     return row
@@ -254,16 +265,29 @@ def comment(db: Session, *, module: str, scope_id: int, key: str, text: str, act
     event = _event(row, actor.login, "comment", comment=text.strip())
     row.updated_by = actor.login
     db.add(event)
+    if row.id is None:
+        _created(db, module, [row])
     db.commit()
     return event
 
 
 def check_change(db: Session, change: Change, *, actor: AppUser) -> None:
-    """Проверить смену заранее, на новой находке, — для фоновой задачи, которая применит её
-    позже: отказ по правилам §1 (обоснование, роль, срок риска, исполнитель) — до её запуска.
-    Ничего не записывает."""
-    _apply(_new_row("", 0, ""), change, actor=actor, settings=load_settings(db), assignable=_directory_logins(db),
-           on=today(), bulk_id=None)
+    """Проверить смену заранее — для фоновой задачи, которая применит её позже кусками: отказ
+    по правилам §1, не зависящим от строки (статус и обоснование к нему, роль, срок риска,
+    исполнитель), — до её запуска. Зависящее от строки (продление срока у непринятой
+    находки) проверяет `bulk_change` на каждом куске. Ничего не записывает."""
+    if isinstance(change.assignee, str) and change.assignee not in _directory_logins(db):
+        raise TransitionError(f"«{change.assignee}» нет в справочнике исполнителей")
+    risk_until = None if isinstance(change.risk_until, Unset) else change.risk_until
+    # Без статуса срок риска задаётся принятым находкам: их и проверяем.
+    target = change.status or ("risk_accepted" if risk_until is not None else None)
+    if target is None:
+        return
+    if target != "risk_accepted" and risk_until is not None:
+        raise TransitionError("срок принятия риска задаётся только для статуса «Принят риск»")
+    # Продление срока без статуса держится на прежнем обосновании строки.
+    reason = change.comment if change.status else "прежнее"
+    check_manual(target, reason=reason, role=actor.role, settings=load_settings(db), risk_until=risk_until, today=today())
 
 
 def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str], change: Change,
@@ -276,6 +300,7 @@ def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str],
     lock_scope(db, module, scope_id)
     existing = state_map(db, module, scope_id, keys, fresh=True)
     changed = 0
+    made: list[FindingState] = []
     for key in dict.fromkeys(keys):
         row = existing.get(key) or _new_row(module, scope_id, key)
         try:
@@ -286,6 +311,9 @@ def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str],
         if events:
             db.add_all(events)
             changed += 1
+            if key not in existing:
+                made.append(row)
+    _created(db, module, made)
     db.commit()
     return changed
 
@@ -306,43 +334,113 @@ def ensure_rows_for_disappeared(db: Session, module: str, scope_id: int, finding
     existing = state_map(db, module, scope_id, wanted, fresh=True)
     missing = [key for key in wanted if key not in existing]
     seen = get_adapter(module).first_seen_many(db, scope_id, missing) if missing else {}
+    made: list[FindingState] = []
     for key in missing:
         f = wanted[key]
         row = _new_row(module, scope_id, key)
         row.title, row.severity, row.updated_by = f.title[:512], f.severity[:16], SYSTEM
         row.first_seen_at = seen.get(key)
         db.add(row)
-    made = len(missing)
+        made.append(row)
     db.flush()
-    return made
+    _created(db, module, made)
+    return len(made)
 
+
+
+PresentKeys = Callable[[Session, int, Sequence[str]], "set[str] | None"]
+Describe = Callable[[Session, int, Sequence[str]], dict[str, CurrentFinding]]
+
+
+def _sources(db: Session, adapter: FindingAdapter, scope_id: int) -> tuple[int | None, PresentKeys, Describe, bool]:
+    """Что сверке нужно от данных модуля: сколько находок, какие из ключей есть, подписи.
+
+    Адаптер с `present_keys` и `count_current` (VM: пар сотни тысяч) отвечает запросом
+    к своим таблицам — все находки в память не собираются; подписи (`describe`, если есть)
+    берутся только для строк, которые меняются или видны людям. Остальные адаптеры отдают
+    находки целиком (`current`), и подписи обновляются у всех строк в данных.
+    Последний элемент — «обновлять подписи всех строк в данных»."""
+    present_keys = getattr(adapter, "present_keys", None)
+    count_current = getattr(adapter, "count_current", None)
+    if present_keys is not None and count_current is not None:
+        describe: Describe = getattr(adapter, "describe", None) or (lambda _db, _scope, _keys: {})
+        return count_current(db, scope_id), present_keys, describe, False
+    fresh = adapter.current(db, scope_id)
+    current = {} if fresh is None else {f.key: f for f in fresh}
+
+    def known(_db: Session, _scope: int, keys: Sequence[str]) -> set[str]:
+        return {k for k in keys if k in current}
+
+    def described(_db: Session, _scope: int, keys: Sequence[str]) -> dict[str, CurrentFinding]:
+        return {k: current[k] for k in keys if k in current}
+
+    return (None if fresh is None else len(current)), known, described, True
 
 
 def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.datetime | None = None,
               commit: bool = True) -> dict[str, int]:
     """Сверка строк состояния области со свежими данными модуля (§1).
 
-    Свежих ключей бывают десятки тысяч, строк состояния — те, о которых
-    решали люди: сверка идёт по строкам, а ключи нужны только как множество.
-    Строк для ключей без решения не заводит. Нет данных области (адаптер
-    вернул None) — область пропускается: `{"skipped": 1}`.
+    Свежих ключей бывают сотни тысяч, строк состояния — те, о которых решали
+    люди: сверка идёт по строкам кусками по `_CHUNK` и спрашивает адаптер, какие
+    из ключей куска есть в данных (`_sources`). Решение принимается по колонкам
+    строки; объекты ORM читаются только для строк, которые меняются. Строк для
+    ключей без решения не заводит. Нет данных области (адаптер вернул None) —
+    область пропускается: `{"skipped": 1}`.
 
     `commit=False` — только flush: так зовёт `safe_reconcile` внутри точки
     сохранения, транзакцию фиксирует он."""
     now = now or dt.datetime.now(dt.UTC)
     adapter = get_adapter(module)
     lock_scope(db, module, scope_id)
-    fresh = adapter.current(db, scope_id)
-    if fresh is None:
+    total, present_keys, describe, refresh_all = _sources(db, adapter, scope_id)
+    if total is None:
         _finish(db, commit)
         return {"skipped": 1}
-    current = {f.key: f for f in fresh}
-    counts = {"resolved": 0, "reopened": 0, "present": len(current)}
+    counts = {"resolved": 0, "reopened": 0, "present": total}
+    s = FindingState
+    cols = (s.id, s.key, s.status, s.present, s.assignee, s.title, s.severity, s.first_seen_at)
+    last_id = 0
+    while True:
+        batch = db.execute(select(*cols).where(s.module == module, s.scope_id == scope_id, s.id > last_id)
+                           .order_by(s.id).limit(_CHUNK)).all()
+        if not batch:
+            break
+        last_id = batch[-1].id
+        here = present_keys(db, scope_id, [r.key for r in batch])
+        if here is None:
+            # Данные области пропали посреди сверки: «всё устранено» было бы ложью.
+            raise RuntimeError("данные области пропали во время сверки")
+        _reconcile_batch(db, adapter, scope_id, batch, here, describe, refresh_all, ref, now, counts)
+    _finish(db, commit)
+    return counts
+
+
+def _reconcile_batch(db: Session, adapter: FindingAdapter, scope_id: int, batch: Sequence[Any], here: set[str],
+                     describe: Describe, refresh_all: bool, ref: str, now: dt.datetime, counts: dict[str, int]) -> None:
+    present = [r for r in batch if r.key in here]
+    # Подписи — у строк, которые сверка тронет, у видимых людям (есть исполнитель —
+    # строка в «Моих находках») и у ещё не подписанных.
+    wanted = [r.key for r in present
+              if refresh_all or not r.present or on_present(r.status, r.present) or r.assignee or not r.title]
+    found = describe(db, scope_id, wanted) if wanted else {}
+    # Возраст — только для ключей в данных: о пропавших адаптер нового не скажет.
+    no_age = [r.key for r in present if r.first_seen_at is None]
+    seen = adapter.first_seen_many(db, scope_id, no_age) if no_age else {}
+
+    def differs(r: Any) -> bool:
+        f = found.get(r.key)
+        return f is not None and ((bool(f.title) and r.title != f.title[:512])
+                                  or (bool(f.severity) and r.severity != f.severity[:16]))
+
+    touched = [r.id for r in batch if (r.key not in here and (r.present or on_absent(r.status)))
+               or (r.key in here and (not r.present or on_present(r.status, r.present) or differs(r) or r.key in seen))]
+    if not touched:
+        return
     events: list[FindingEvent] = []
-    no_age: list[FindingState] = []
-    for row in state_map(db, module, scope_id, fresh=True).values():
-        found = current.get(row.key)
-        if found is None:
+    for row in db.scalars(select(FindingState).where(FindingState.id.in_(touched))
+                          .execution_options(populate_existing=True)):
+        if row.key not in here:
             if row.present:
                 row.present = False
             target = on_absent(row.status)
@@ -354,26 +452,20 @@ def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.date
         was_present = row.present
         if not row.present:
             row.present = True
-        if found.title and row.title != found.title[:512]:
-            row.title = found.title[:512]
-        if found.severity and row.severity != found.severity[:16]:
-            row.severity = found.severity[:16]
-        if row.first_seen_at is None:
-            no_age.append(row)
+        if (f := found.get(row.key)) is not None:
+            if f.title and row.title != f.title[:512]:
+                row.title = f.title[:512]
+            if f.severity and row.severity != f.severity[:16]:
+                row.severity = f.severity[:16]
+        if row.key in seen:
+            row.first_seen_at = seen[row.key]
         target = on_present(row.status, was_present)
         if target is not None:
             events.append(_event(row, SYSTEM, "auto_reopened", from_status=row.status, to_status=target, details={"ref": ref}))
             row.status, row.resolved_at, row.updated_by = target, None, SYSTEM
             counts["reopened"] += 1
-    # Возраст — одним запросом и только для ключей в данных: о пропавших адаптер
-    # нового не скажет, и каждая сверка спрашивала бы о них зря.
-    if no_age:
-        seen = adapter.first_seen_many(db, scope_id, [r.key for r in no_age])
-        for row in no_age:
-            row.first_seen_at = seen.get(row.key)
     db.add_all(events)
-    _finish(db, commit)
-    return counts
+    db.flush()
 
 
 def _finish(db: Session, commit: bool) -> None:
@@ -406,10 +498,15 @@ def expire_risks(db: Session, today: dt.date) -> int:
 # ---- Сводка ------------------------------------------------------------------
 
 
-def summary(db: Session, module: str, scope_id: int, keys_present: int | None = None) -> dict[str, Any]:
+def summary(db: Session, module: str, scope_id: int, keys_present: int | None = None, *,
+            present_only: bool = False) -> dict[str, Any]:
     """Счётчики области. `keys_present` — сколько ключей в свежих данных: находки без
-    строки состояния — новые и без исполнителя, и сосчитать их можно только так."""
-    scope = (FindingState.module == module, FindingState.scope_id == scope_id)
+    строки состояния — новые и без исполнителя, и сосчитать их можно только так.
+    `present_only` — только находки, которые есть в данных: так считают плитки обзора,
+    ведущие в список (VM: принятый риск пропавшей пары в списке не виден)."""
+    scope: tuple[Any, ...] = (FindingState.module == module, FindingState.scope_id == scope_id)
+    if present_only:
+        scope += (FindingState.present.is_(True),)
     by_status = dict.fromkeys(STATUSES, 0)
     present_rows = present_decided = 0
     for status, present, n in db.execute(

@@ -443,3 +443,43 @@ def test_settings_stay_one_row_under_concurrent_saves(db_session: Any) -> None:
         t.join(15)
     assert errors == []
     assert db_session.scalar(select(func.count()).select_from(FindingSettingsRow)) == 1
+
+
+def test_new_rows_are_reported_to_the_adapter_once(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser],
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """`on_states_created` — для каждой новой строки, с id, один раз; существующие и строки без
+    изменений не сообщаются."""
+    seen: list[tuple[int, str]] = []
+    monkeypatch.setattr(adapter, "on_states_created", lambda db, rows: seen.extend((r.id, r.key) for r in rows), raising=False)
+    actor = users["analyst1"]
+    _change(db_session, actor, "k1", svc.Change(status="in_work"))
+    _change(db_session, actor, "k1", svc.Change(status="fixed"))
+    _change(db_session, actor, "k0", svc.Change())  # ничего не меняет — строки нет
+    svc.comment(db_session, module="test", scope_id=1, key="k2", text="заметка", actor=actor)
+    svc.bulk_change(db_session, module="test", scope_id=1, keys=["k1", "k3", "k4"], change=svc.Change(status="in_work"),
+                    actor=actor)
+    assert [k for _, k in seen] == ["k1", "k2", "k3", "k4"] and all(i is not None for i, _ in seen)
+
+
+def test_reconcile_uses_adapter_lookups_when_offered(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser],
+                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    """Адаптер с `present_keys` и `count_current`: `current()` не зовётся, подписи — через `describe`
+    только у строк, которые меняются, видны (есть исполнитель) или не подписаны."""
+    from api.platform.findings.adapters import CurrentFinding
+
+    actor = users["analyst1"]
+    for key in ("k1", "k2", "k3"):
+        _change(db_session, actor, key, svc.Change(status="in_work"))
+    _change(db_session, actor, "k4", svc.Change(status="in_work", assignee="analyst2"))
+    db_session.execute(FindingState.__table__.update().values(title="старая"))
+    db_session.commit()
+    asked: list[list[str]] = []
+    monkeypatch.setattr(adapter, "count_current", lambda db, scope: 3, raising=False)
+    monkeypatch.setattr(adapter, "present_keys", lambda db, scope, keys: {k for k in keys if k != "k1"}, raising=False)
+    monkeypatch.setattr(adapter, "describe", lambda db, scope, keys: (asked.append(sorted(keys)) or
+                        {k: CurrentFinding(k, f"новая {k}", "High") for k in keys}), raising=False)
+    adapter.fail = True  # current() сломан: сверка его звать не должна
+    assert svc.reconcile(db_session, "test", 1, ref="импорт") == {"resolved": 1, "reopened": 0, "present": 3}
+    # k2, k3 — в данных, без исполнителя, подписаны, не меняются: подпись не спрашивается.
+    assert asked == [["k4"]]
+    assert _row(db_session, "k4").title == "новая k4" and _row(db_session, "k2").title == "старая"  # type: ignore[union-attr]

@@ -76,7 +76,8 @@ def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current
         "above_threshold": above,
         "threshold": settings.threshold,
         "distribution": distribution,
-        "findings": finding_svc.summary(db, MODULE, SCOPE, keys_present=pairs_all),
+        # Плитки ведут в список, а он показывает только пары текущих данных.
+        "findings": finding_svc.summary(db, MODULE, SCOPE, keys_present=pairs_all, present_only=True),
         "top_cves": stats["top_cves"],
         "top_hosts": stats["top_hosts"],
         "data": {

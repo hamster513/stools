@@ -34,8 +34,10 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.platform.findings import service as svc
 from api.platform.findings.adapters import (
+    BulkConflict,
     BulkJobRequest,
     FindingAdapter,
+    filter_text,
     get_adapter,
     get_bulk_filter,
     get_bulk_job,
@@ -56,7 +58,9 @@ router = APIRouter(tags=["findings"])
 MAX_BULK_KEYS = 5000
 #: Область — int4: столбец `scope_id` и второй аргумент advisory-блокировки области.
 MAX_SCOPE_ID = 2**31 - 1
-Key = Annotated[str, Field(min_length=1, max_length=128)]
+#: Длина ключа — столбец `platform_finding_state.key` (VM: `hostname|ip|cve`).
+MAX_KEY = 400
+Key = Annotated[str, Field(min_length=1, max_length=MAX_KEY)]
 ScopeId = Annotated[int, Field(ge=0, le=MAX_SCOPE_ID)]
 
 
@@ -232,7 +236,7 @@ def _view(db: Session, module: str, scope_id: int, key: str) -> StateView:
 @router.get("/api/findings/state", response_model=StateView)
 def get_state(
     module: str = Query(max_length=16), scope_id: int = Query(ge=0, le=MAX_SCOPE_ID),
-    key: str = Query(min_length=1, max_length=128),
+    key: str = Query(min_length=1, max_length=MAX_KEY),
     db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> StateView:
     _adapter(module)
@@ -274,23 +278,29 @@ def post_bulk(payload: BulkBody, request: Request, response: Response, backgroun
     if (payload.keys is None) == (payload.filter is None):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="нужны либо ключи, либо фильтр")
     what = payload.change.describe()
+    bulk_id = uuid.uuid4().hex
     keys = payload.keys
+    by_filter = ""
     if keys is None:
         flt = dict(payload.filter or {})
         if flt.get("assignee") == "me":
             flt["assignee"] = user.login
+        by_filter = f"; фильтр {filter_text(flt)}"
         start = get_bulk_job(payload.module)
         if start is not None:
             change = payload.change.to_change()
             try:
                 svc.check_change(db, change, actor=user)
-                job_id, run = start(db, BulkJobRequest(payload.scope_id, flt, change, user.login, uuid.uuid4().hex))
+                job_id, run = start(db, BulkJobRequest(payload.scope_id, flt, change, user.login, bulk_id))
             except TransitionError as exc:
                 raise _refused(exc) from None
+            except BulkConflict as exc:
+                raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
             except ValueError as exc:
                 raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
             background.add_task(run)
-            request.state.audit_summary = f"{payload.module}: массовая смена по фильтру, задача #{job_id}; {what}"
+            request.state.audit_summary = (f"{payload.module}: массовая смена по фильтру, задача #{job_id}; {what}"
+                                           f"; bulk_id {bulk_id}{by_filter}")
             response.status_code = status.HTTP_202_ACCEPTED
             return {"job_id": job_id}
         select_by_filter = get_bulk_filter(payload.module)
@@ -300,13 +310,15 @@ def post_bulk(payload: BulkBody, request: Request, response: Response, backgroun
             keys = list(select_by_filter(db, payload.scope_id, flt))
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
-    request.state.audit_summary = f"{payload.module}: находок {len(keys)}; {what}"
+    # bulk_id — до фильтра: журнал действий хранит первые 200 символов описания.
+    request.state.audit_summary = f"{payload.module}: находок {len(keys)}; {what}; bulk_id {bulk_id}{by_filter}"
     try:
         changed = svc.bulk_change(db, module=payload.module, scope_id=payload.scope_id, keys=keys,
-                                  change=payload.change.to_change(), actor=user)
+                                  change=payload.change.to_change(), actor=user, bulk_id=bulk_id)
     except TransitionError as exc:
         raise _refused(exc) from None
-    request.state.audit_summary = f"{payload.module}: изменено находок {changed} из {len(keys)}; {what}"
+    request.state.audit_summary = (f"{payload.module}: изменено находок {changed} из {len(keys)}; {what}"
+                                   f"; bulk_id {bulk_id}{by_filter}")
     return {"changed": changed}
 
 
@@ -360,9 +372,14 @@ def get_summary(
     db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     adapter = _adapter(module)
-    current = adapter.current(db, scope_id)
-    # Нет данных области — считаются только строки состояния.
-    keys_present = None if current is None else len({f.key for f in current})
+    # Нет данных области — считаются только строки состояния. Адаптер, который умеет
+    # сосчитать находки сам (VM), их не перечисляет.
+    count_current = getattr(adapter, "count_current", None)
+    if count_current is not None:
+        keys_present = count_current(db, scope_id)
+    else:
+        current = adapter.current(db, scope_id)
+        keys_present = None if current is None else len({f.key for f in current})
     return svc.summary(db, module, scope_id, keys_present=keys_present)
 
 

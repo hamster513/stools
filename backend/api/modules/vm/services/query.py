@@ -5,11 +5,11 @@
 счётчики менялись бы при прокрутке.
 
 Статус пары — строка `platform_finding_state` с ключом `hostname|ip|cve`
-(статусы находок, спека §3). Пар — десятки тысяч и больше, строк состояния —
-только те, о которых решали люди. Поэтому ключ не собирается по каждой паре:
-строки состояния разбираются обратно в (host_id, cve_id) — CVE и IP символа
-`|` не содержат, их отрезают справа, а хост находится по уникальному
-(hostname, ip), — и присоединяются к парам по первичному ключу (`ST`).
+(статусы находок, спека §3). Пар — сотни тысяч, строк состояния — те, о
+которых решали люди, и их тоже бывает сто тысяч. Ключ не собирается по каждой
+паре и не разбирается в каждом запросе: у строки состояния VM есть подсказка
+`vm_finding_state_ref` (хост, IP, CVE — разобраны один раз, при заведении
+строки), и пары присоединяют статусы по её индексу (`ST`, `state_on`).
 Пара без строки — «новая», без исполнителя и сроков.
 """
 from __future__ import annotations
@@ -19,11 +19,23 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, fields
 from typing import Any
 
-from sqlalchemy import Select, and_, case, func, literal, not_, or_, select, tuple_
+from sqlalchemy import (
+    Select,
+    String,
+    and_,
+    case,
+    func,
+    literal,
+    literal_column,
+    not_,
+    or_,
+    select,
+    tuple_,
+)
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement, Subquery
 
-from api.modules.vm.models import VmCve, VmHost, VmHostCve
+from api.modules.vm.models import VmCve, VmFindingStateRef, VmHost, VmHostCve
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -55,30 +67,41 @@ SORTS: dict[str, list[Any]] = {
 
 
 def _state_subquery() -> Subquery:
-    """Строки состояния VM как (host_id, cve_id, …): см. описание модуля. Строка, хоста
-    которой в текущих данных нет, сюда не попадает — и к парам не присоединится."""
-    s = FindingState
-    rev = func.reverse(s.key)
-    cve_r, ip_r = func.split_part(rev, "|", 1), func.split_part(rev, "|", 2)
-    hostname = func.left(s.key, func.length(s.key) - func.length(cve_r) - func.length(ip_r) - 2)
+    """Строки состояния VM как (hostname, ip, cve_id, …) — см. описание модуля."""
+    s, r = FindingState, VmFindingStateRef
     return (
         select(
-            VmHost.id.label("host_id"),
-            func.reverse(cve_r).label("cve_id"),
+            s.id.label("state_id"),
+            r.hostname,
+            r.ip,
+            r.cve_id,
             s.status,
             s.assignee,
             s.due_date,
             s.risk_until,
             s.first_seen_at,
         )
-        .select_from(s)
-        .join(VmHost, and_(VmHost.hostname == hostname, VmHost.ip == func.reverse(ip_r)))
-        .where(s.module == MODULE, s.scope_id == SCOPE)
+        .select_from(r)
+        .join(s, s.id == r.state_id)
         .subquery("st")
     )
 
 
 ST = _state_subquery()
+
+
+def host_key(hostname: Any, ip: Any) -> ColumnElement[str]:
+    """`hostname|ip` — одно выражение вместо двух равенств: по индексу `ix_vm_host_key` у Postgres
+    есть статистика выражения, и он верно оценивает соединение строк состояния с хостами.
+    С двумя равенствами он перемножает их избирательность, ждёт десятки строк вместо сотни
+    тысяч и выбирает вложенные циклы (список на 100 тыс. строк состояния — секунды)."""
+    joined: ColumnElement[str] = hostname.op("||")(literal_column("'|'", String)).op("||")(ip)
+    return joined
+
+
+def state_on() -> ColumnElement[bool]:
+    """Условие присоединения строк состояния к парам; в запросе должны быть `VmHost` и `VmHostCve`."""
+    return and_(host_key(ST.c.hostname, ST.c.ip) == host_key(VmHost.hostname, VmHost.ip), ST.c.cve_id == VmHostCve.cve_id)
 
 
 @dataclass(frozen=True)
@@ -220,7 +243,7 @@ def base_select(columns: list[Any], *, state: bool = False) -> Select[Any]:
         .join(VmCve, VmCve.cve_id == VmHostCve.cve_id)
     )
     if state:
-        stmt = stmt.outerjoin(ST, and_(ST.c.host_id == VmHostCve.host_id, ST.c.cve_id == VmHostCve.cve_id))
+        stmt = stmt.outerjoin(ST, state_on())
     return stmt
 
 
@@ -395,7 +418,7 @@ def data_facets(db: Session, f: VulnFilters, cached: dict[str, Any] | None) -> d
     sc = status_conditions(f.status)
     if not sc:
         return {name: dict(counts) for name, counts in cached.items()}
-    excluded = facets_where(db, [ST.c.host_id.is_not(None), not_(and_(*sc))], state=True)
+    excluded = facets_where(db, [ST.c.state_id.is_not(None), not_(and_(*sc))], state=True)
     return _minus(cached, excluded)
 
 
@@ -423,7 +446,7 @@ def status_facets(db: Session, f: VulnFilters, total_all: int | None) -> dict[st
         case((_expiring(today), True), else_=False).label("expiring"),
     ]
     by_rows = f.data_empty() and total_all is not None
-    where = [ST.c.host_id.is_not(None)] if by_rows else conditions(f, with_status=False)
+    where = [ST.c.state_id.is_not(None)] if by_rows else conditions(f, with_status=False)
     inner = base_select(flags, state=True).where(*where).subquery("groups")
     cols = [inner.c.status, inner.c.assignee, inner.c.overdue, inner.c.expiring]
     groups = [(r[0] or "new", r[1], bool(r[2]), bool(r[3]), int(r[4]))

@@ -19,7 +19,7 @@ from sqlalchemy import Table, func, select
 
 from api.db.models import AppUser, AuditEvent
 from api.modules.attack.layers import LAYERS
-from api.modules.vm.findings_adapter import pair_key
+from api.modules.vm.findings_adapter import ADAPTER, pair_key
 from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmImport, VmJob
 from api.modules.vm.services.bulk import bulk_insert
 from api.platform.findings import service as svc
@@ -321,6 +321,8 @@ def test_reconcile_and_list_on_40k_pairs(auth_client: TestClient, db_session: An
     bulk_insert(db_session, cast(Table, FindingState.__table__),
                 ("module", "scope_id", "key", "status", "assignee", "reason", "present", "title", "severity", "updated_by", "updated_at"),
                 state_rows)
+    # Строки записаны в обход платформы: подсказки модуля — как у миграции.
+    ADAPTER.backfill(db_session)
     db_session.commit()
     refresh_stats(db_session)
     accepted = sum(1 for r in state_rows if r[3] == "risk_accepted")
@@ -347,3 +349,203 @@ def test_reconcile_and_list_on_40k_pairs(auth_client: TestClient, db_session: An
           f"next page {t_next * 1000:.0f} ms; zone filter + facets {t_zone * 1000:.0f} ms; "
           f"status=in_work {t_work * 1000:.0f} ms; assignee=me {t_me * 1000:.0f} ms")
     assert t_reconcile < 5, t_reconcile
+
+
+# ---- Ключи и данные: длинный ключ, «|» в имени, новые id хостов -----------------------
+
+LONG = ("h" * 250 + ".corp", "2001:0db8:85a3:0000:0000:8a2e:0370:7334")
+
+
+def _job(client: TestClient, r: Any) -> dict[str, Any]:
+    assert r.status_code == 202, r.text
+    return dict(client.get(f"/api/vm/jobs/{r.json()['job_id']}").json())
+
+
+def test_long_key_pair_works_single_by_keys_and_by_filter(auth_client: TestClient) -> None:
+    """Имя хоста в 255 символов и IPv6: ключ длиннее прежних 128 — смена одной пары, по ключам
+    и по фильтру проходят."""
+    _import(auth_client, {LONG: [A, B, C], SRV: [D]})
+    key = _key(LONG, A)
+    assert len(key) > 128
+    assert _put(auth_client, key, status="in_work")["status"] == "in_work"
+    assert _state(auth_client, key)["status"] == "in_work"
+    r = auth_client.post("/api/findings/bulk", json={"module": "vm", "scope_id": 0, "keys": [_key(LONG, B)],
+                                                     "change": {"status": "fixed"}})
+    assert r.status_code == 200 and r.json() == {"changed": 1}
+    job = _job(auth_client, auth_client.post("/api/findings/bulk", json={
+        "module": "vm", "scope_id": 0, "filter": {"host": "hhhhh", "status": "all"},
+        "change": {"status": "false_positive", "comment": "стенд"}}))
+    assert (job["status"], job["processed"]) == ("done", 3), job
+    assert _keys(_list(auth_client, status="false_positive")) == {_key(LONG, c) for c in (A, B, C)}
+
+
+def test_hostname_with_pipe_keeps_its_status(auth_client: TestClient) -> None:
+    odd = ("web|01.corp.local", "10.0.0.9")
+    _import(auth_client, {odd: [A, B], SRV: [A]})
+    _put(auth_client, _key(odd, A), status="in_work")
+    assert _keys(_list(auth_client, status="in_work")) == {_key(odd, A)}
+    assert next(i for i in _list(auth_client)["items"] if i["key"] == _key(odd, B))["status"] == "new"
+    _import(auth_client, {odd: [B], SRV: [A]})
+    assert _state(auth_client, _key(odd, A))["status"] == "resolved"
+    _import(auth_client, {odd: [A, B], SRV: [A]})
+    assert _state(auth_client, _key(odd, A))["status"] == "reopened"
+    assert _keys(_list(auth_client, status="reopened")) == {_key(odd, A)}
+
+
+def test_list_status_survives_reimport_with_new_host_ids(auth_client: TestClient, db_session: Any) -> None:
+    _import(auth_client, {SRV: [A, B], WS: [D]})
+    _put(auth_client, _key(SRV, A), status="in_work")
+    before = db_session.scalar(select(VmHost.id).where(VmHost.hostname == SRV[0]))
+    # Другие хосты впереди: id хостов у той же пары меняются.
+    _import(auth_client, {("new1.corp.local", "10.0.0.7"): [C], ("new2.corp.local", "10.0.0.8"): [C], WS: [D], SRV: [A, B]})
+    db_session.expire_all()
+    after = db_session.scalar(select(VmHost.id).where(VmHost.hostname == SRV[0]))
+    assert before != after
+    item = next(i for i in _list(auth_client, status="all")["items"] if i["key"] == _key(SRV, A))
+    assert item["status"] == "in_work" and item["host_id"] == after
+
+
+# ---- Массовая смена: проверки, импорт, сообщения ------------------------------------------
+
+
+def test_risk_until_extension_single_and_by_filter(auth_client: TestClient, db_session: Any,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    """Продление срока принятого риска без статуса проходит и через PUT, и по фильтру; по фильтру,
+    захватившему непринятые пары, задача останавливается на первой такой и называет её."""
+    _import(auth_client, {SRV: [A, B, C], WS: [D]})
+    soon = (svc.today() + dt.timedelta(days=10)).isoformat()
+    later = (svc.today() + dt.timedelta(days=90)).isoformat()
+    for cve in (A, B):
+        _put(auth_client, _key(SRV, cve), status="risk_accepted", comment="за экраном", risk_until=soon)
+    assert _put(auth_client, _key(SRV, A), risk_until=later)["risk_until"] == later
+
+    job = _job(auth_client, auth_client.post("/api/findings/bulk", json={
+        "module": "vm", "scope_id": 0, "filter": {"status": "risk_accepted"}, "change": {"risk_until": later}}))
+    assert job["status"] == "done", job
+    assert _state(auth_client, _key(SRV, B))["risk_until"] == later
+
+    monkeypatch.setattr("api.modules.vm.findings_adapter.BULK_CHUNK", 1)
+    job = _job(auth_client, auth_client.post("/api/findings/bulk", json={
+        "module": "vm", "scope_id": 0, "filter": {"status": "all"}, "change": {"risk_until": soon}}))
+    assert job["status"] == "failed", job
+    # Пары по порядку (хост, CVE): у srv01 первая — принятая B, вторая — C без решения.
+    assert _key(SRV, C) in job["error"] and "только для статуса «Принят риск»" in job["error"]
+    assert "применено 1 из 4 до остановки" in job["message"]
+    assert _state(auth_client, _key(SRV, B))["risk_until"] == soon
+    assert _state(auth_client, _key(SRV, A))["risk_until"] == later
+
+
+def test_bulk_job_and_import_do_not_overlap(auth_client: TestClient, db_session: Any) -> None:
+    from api.modules.vm.services.jobs import fail_job, start_job
+
+    _import(auth_client, {SRV: [A, B]})
+    body = {"module": "vm", "scope_id": 0, "filter": {"status": "all"}, "change": {"status": "in_work"}}
+    for kind in ("import_file", "import_vm", "recalculate"):
+        running = start_job(db_session, kind, "tester")
+        r = auth_client.post("/api/findings/bulk", json=body)
+        assert r.status_code == 409 and r.json()["detail"] == "идёт импорт VM — повторите после него", r.text
+        fail_job(db_session, running, "тест")
+
+    bulk = start_job(db_session, "bulk_status", "tester")
+    r = auth_client.post("/api/vm/import/file", files={"file": ("hosts.csv", _csv({SRV: [A]}), "text/csv")})
+    assert r.status_code == 409 and r.json()["detail"] == "идёт массовая смена статусов", r.text
+    fail_job(db_session, bulk, "тест")
+    assert db_session.scalar(select(func.count()).select_from(VmJob).where(VmJob.status == "running")) == 0
+
+
+def test_bulk_job_stops_when_import_replaces_data(auth_client: TestClient, db_session: Any,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.db.base import get_sessionmaker
+    from api.modules.vm import findings_adapter
+
+    _import(auth_client, {SRV: [A, B, C], WS: [D]})
+    monkeypatch.setattr(findings_adapter, "BULK_CHUNK", 1)
+    original = findings_adapter.finding_svc.bulk_change
+
+    def bulk_then_import(*args: Any, **kwargs: Any) -> int:
+        changed = original(*args, **kwargs)
+        with get_sessionmaker()() as other:
+            other.add(VmImport(source="file", filename="между кусками.csv", hosts=0, pairs=0, cves=0))
+            other.commit()
+        return changed
+
+    monkeypatch.setattr(findings_adapter.finding_svc, "bulk_change", bulk_then_import)
+    job = _job(auth_client, auth_client.post("/api/findings/bulk", json={
+        "module": "vm", "scope_id": 0, "filter": {"status": "all"}, "change": {"status": "in_work"}}))
+    assert job["status"] == "failed" and "импорт" in job["error"], job
+    assert "применено 1 из 4 до остановки" in job["message"]
+    assert _list(auth_client, status="in_work")["total"] == 1
+
+
+def test_bulk_job_progress_never_exceeds_total(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    _import(auth_client, {SRV: [A, B, C], WS: [D]})
+    monkeypatch.setattr("api.modules.vm.findings_adapter.BULK_CHUNK", 1)
+    # Между подсчётом и выбором пар их стало больше: счёт отстал.
+    monkeypatch.setattr("api.modules.vm.findings_adapter.count", lambda db, f: 2)
+    job = _job(auth_client, auth_client.post("/api/findings/bulk", json={
+        "module": "vm", "scope_id": 0, "filter": {"status": "all"}, "change": {"status": "in_work"}}))
+    assert job["status"] == "done" and job["processed"] == 4 and job["total"] == 4 and job["progress"] == 100, job
+
+
+def test_bulk_audit_and_job_carry_filter_and_bulk_id(auth_client: TestClient, db_session: Any) -> None:
+    _import(auth_client, {SRV: [A, B]})
+    flt = {"zone": "DMZ", "q": "x" * 400, "status": "all"}
+    job = _job(auth_client, auth_client.post("/api/findings/bulk", json={
+        "module": "vm", "scope_id": 0, "filter": flt, "change": {"status": "in_work"}}))
+    db_session.expire_all()
+    audit = db_session.scalars(select(AuditEvent).where(AuditEvent.path == "/api/findings/bulk")).one()
+    bulk_id = audit.summary.split("bulk_id ")[1][:32]
+    assert f"bulk_id {bulk_id}" in job["message"]
+    # Журнал действий хранит 200 символов описания — bulk_id идёт до фильтра и в него попадает.
+    assert '"zone": "DMZ"' in audit.summary and '"zone": "DMZ"' in job["message"]
+    # Фильтр в строке задачи — не длиннее 300 символов.
+    shown = job["message"].split("фильтр ")[1]
+    assert len(shown) == 300 and "x" * 250 in shown
+
+    r = auth_client.post("/api/findings/bulk", json={"module": "vm", "scope_id": 0, "keys": [_key(SRV, A)],
+                                                     "change": {"status": "fixed"}})
+    assert r.status_code == 200
+    db_session.expire_all()
+    last = db_session.scalars(select(AuditEvent).where(AuditEvent.path == "/api/findings/bulk")
+                              .order_by(AuditEvent.id.desc())).first()
+    assert last is not None
+    event = db_session.scalars(select(FindingEvent).where(FindingEvent.to_status == "fixed")).one()
+    assert f"bulk_id {event.details['bulk_id']}" in last.summary
+
+
+def test_cancelled_bulk_job_says_how_much_was_applied(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.jobs import JobHandle
+
+    _import(auth_client, {SRV: [A, B, C], WS: [D]})
+    monkeypatch.setattr("api.modules.vm.findings_adapter.BULK_CHUNK", 1)
+    monkeypatch.setattr(JobHandle, "cancelled", lambda self: self._job.processed >= 2)
+    job = _job(auth_client, auth_client.post("/api/findings/bulk", json={
+        "module": "vm", "scope_id": 0, "filter": {"status": "all"}, "change": {"status": "in_work"}}))
+    assert job["status"] == "cancelled" and "применено 2 из 4 до остановки" in job["message"], job
+
+
+# ---- Обзор и слой ATT&CK ----------------------------------------------------------------------
+
+
+def test_overview_risk_accepted_counts_present_pairs_only(auth_client: TestClient) -> None:
+    _import(auth_client, {SRV: [A, B]})
+    _put(auth_client, _key(SRV, A), status="risk_accepted", comment="за экраном")
+    _put(auth_client, _key(SRV, B), status="risk_accepted", comment="за экраном")
+    _import(auth_client, {SRV: [B]})
+    ov = auth_client.get("/api/vm/overview").json()
+    assert ov["findings"]["by_status"]["risk_accepted"] == 1
+    assert _list(auth_client, status="risk_accepted")["total"] == 1
+
+
+def test_attack_layer_mark_follows_status_events_not_row_timestamps(auth_client: TestClient, db_session: Any) -> None:
+    from api.modules.vm.services.attack_layer import _state_mark
+
+    _import(auth_client, {SRV: [A, B]})
+    _put(auth_client, _key(SRV, A), status="in_work")
+    mark = _state_mark(db_session)
+    # Подпись строки обновилась (сверка), статусы — нет: слой пересчитывать незачем.
+    db_session.execute(FindingState.__table__.update().values(title="другая подпись", updated_at=func.now()))
+    db_session.commit()
+    assert _state_mark(db_session) == mark
+    _put(auth_client, _key(SRV, A), status="fixed")
+    assert _state_mark(db_session) != mark
