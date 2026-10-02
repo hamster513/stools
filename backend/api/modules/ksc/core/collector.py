@@ -26,6 +26,8 @@ POLICY_CONTENTS_MAX_POLICIES = 200
 POLICY_CONTENTS_SECTION_MAX_BYTES = 2 * 1024 * 1024
 #: Сколько хостов спрашиваем у `ListTags.GetTags` за один вызов.
 TAGS_BATCH = 500
+#: Вызовов `HostTagsApi.GetHostTags` подряд, если все они отказали, достаточно, чтобы бросить чтение тегов по одному хосту.
+TAGS_FALLBACK_GIVE_UP = 20
 
 HOST_FIELDS = [
     "KLHST_WKS_HOSTNAME", "KLHST_WKS_DN", "KLHST_WKS_WINHOSTNAME", "KLHST_WKS_WINDOMAIN", "KLHST_WKS_DNSDOMAIN", "KLHST_WKS_DNSNAME", "KLHST_WKS_FQDN",
@@ -200,25 +202,38 @@ def _hosts_with_agent(hosts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _host_tags(client: KscClient, hosts: list[dict[str, Any]], warnings: list[str]) -> dict[str, list[str]] | None:
-    """Теги хостов с агентом: пакетный `ListTags.GetTags` экземпляра HostsTags; не сработал пакет —
-    по одному хосту через `HostTagsApi.GetHostTags`. Отказ обоих — None (секции в выгрузке не будет),
-    строка `host_tags: …` в `warnings`."""
+    """Теги хостов с агентом: пакетный `ListTags.GetTags` экземпляра HostsTags (чужие идентификаторы и записи
+    без идентификатора отбрасываются); не сработал пакет — по одному хосту через `HostTagsApi.GetHostTags`.
+    Отказ на одном хосте не теряет остальные: у него `[]`, одна строка `host_tags: теги не прочитаны у N хостов`
+    в `warnings`. Если отказали все первые `TAGS_FALLBACK_GIVE_UP` вызовов (или все, когда хостов меньше) —
+    None (секции в выгрузке не будет) и строка `host_tags: …` в `warnings`."""
     ids = [str(h["KLHST_WKS_HOSTNAME"]) for h in _hosts_with_agent(hosts)]
     out: dict[str, list[str]] = {i: [] for i in ids}
     try:
         for start in range(0, len(ids), TAGS_BATCH):
             items = strip_params(_ret(client.call("HostsTags.ListTags.GetTags", {"pIdArray": ids[start:start + TAGS_BATCH], "pParams": {}})) or [])
             for item in items:
-                out[_str(item.get("KLTAGS_ITEM_ID"))] = [str(t) for t in (unwrap(item.get("KLTAGS_TAGS")) or [])]
+                key = _str(item.get("KLTAGS_ITEM_ID"))
+                if key in out:
+                    out[key] = [str(t) for t in (unwrap(item.get("KLTAGS_TAGS")) or [])]
         return out
     except KscError as batch_exc:
-        try:
-            for host_id in ids:
+        out = {i: [] for i in ids}
+        failed = 0
+        first_error: KscError | None = None
+        probe = min(TAGS_FALLBACK_GIVE_UP, len(ids))
+        for n, host_id in enumerate(ids, 1):
+            try:
                 out[host_id] = [str(t) for t in (unwrap(_ret(client.call("HostTagsApi.GetHostTags", {"szwHostId": host_id}))) or [])]
-            return out
-        except KscError as exc:
-            warnings.append(f"host_tags: {batch_exc}; по одному хосту: {exc}")
-            return None
+            except KscError as exc:
+                failed += 1
+                first_error = first_error or exc
+            if n == probe and failed == n:
+                warnings.append(f"host_tags: {batch_exc}; по одному хосту: {first_error}")
+                return None
+        if failed:
+            warnings.append(f"host_tags: теги не прочитаны у {failed} хостов: {first_error}")
+        return out
 
 
 def collect(client: KscClient, *, skip_products: bool = False, skip_policy_contents: bool = False, max_policies: int | None = None, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:

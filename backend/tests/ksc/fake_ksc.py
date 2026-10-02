@@ -110,7 +110,7 @@ class FakeKsc:
     def __init__(self, data: dict[str, Any] | None = None, variant: str = "", mfa_secret: str = "",
                  deny: set[str] | None = None, deny_cert_functions: set[int] | None = None,
                  fail_cert_functions: set[int] | None = None, deny_policy_contents: set[int] | None = None,
-                 fail_policy_sections: dict[int, set[str]] | None = None, deny_tags_batch: bool = False,
+                 fail_policy_sections: dict[int, set[str]] | None = None, deny_tags_batch: bool = False, fail_host_tags: set[str] | None = None, foreign_tag_items: bool = False,
                  fail_profiles: dict[str, set[str]] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         if data is None and variant == "params":
@@ -132,6 +132,10 @@ class FakeKsc:
             self.deny.add("HostsTags.ListTags.GetTags")
         if variant == "tags_denied":
             self.deny |= {"HostsTags.ListTags.GetTags", "HostTagsApi.GetHostTags"}
+        #: Идентификаторы хостов, на которые HostTagsApi.GetHostTags отвечает PxgError (хост пропал при сборе).
+        self.fail_host_tags: set[str] = fail_host_tags or set()
+        #: Пакетный GetTags кроме запрошенных отдаёт запись с чужим идентификатором и запись без KLTAGS_ITEM_ID.
+        self.foreign_tag_items = foreign_tag_items
         #: variant="profiles_denied" — 403 на PolicyProfiles.EnumProfiles (политики читаются, профили — нет).
         if variant == "profiles_denied":
             self.deny.add("PolicyProfiles.EnumProfiles")
@@ -290,8 +294,13 @@ class FakeKsc:
             return 200, {"PxgRetVal": f"ss-{npolicy}"}
         if method == "HostsTags.ListTags.GetTags":
             tags = d.get("host_tags", {})
-            return 200, {"PxgRetVal": [{"KLTAGS_ITEM_ID": i, "KLTAGS_TAGS": tags[i]} for i in body.get("pIdArray", []) if i in tags]}
+            items = [{"KLTAGS_ITEM_ID": i, "KLTAGS_TAGS": tags[i]} for i in body.get("pIdArray", []) if i in tags]
+            if self.foreign_tag_items:
+                items += [{"KLTAGS_ITEM_ID": "h-foreign", "KLTAGS_TAGS": ["Чужой"]}, {"KLTAGS_TAGS": ["Без идентификатора"]}]
+            return 200, {"PxgRetVal": items}
         if method == "HostTagsApi.GetHostTags":
+            if body.get("szwHostId") in self.fail_host_tags:
+                return 200, {"PxgError": {"code": 1, "message": "хост не найден"}}
             return 200, {"PxgRetVal": d.get("host_tags", {}).get(body.get("szwHostId"), [])}
         if method.startswith("PolicyProfiles."):
             return self._profiles(method, body)

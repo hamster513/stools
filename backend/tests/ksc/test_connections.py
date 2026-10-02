@@ -453,6 +453,32 @@ def test_collect_skip_policy_contents_skips_profiles(fake: FakeKsc) -> None:
     assert not [m for m in fake.calls if m.startswith("PolicyProfiles.")]
 
 
+def test_collect_tag_fallback_tolerates_single_host_error(monkeypatch: Any) -> None:
+    raw = _collect_with(monkeypatch, FakeKsc(deny_tags_batch=True, fail_host_tags={"h-ws02"}))
+    assert raw["host_tags"]["h-ws01"] == ["VIP", "Бухгалтерия"] and raw["host_tags"]["h-ws02"] == []
+    assert set(raw["host_tags"]) == set(build_export()["host_tags"])
+    tag_warnings = [w for w in raw["server"]["warnings"] if w.startswith("host_tags")]
+    assert len(tag_warnings) == 1 and tag_warnings[0].startswith("host_tags: теги не прочитаны у 1 хостов: ")
+
+
+def test_collect_tag_fallback_gives_up_early(monkeypatch: Any) -> None:
+    ids = set(build_export()["host_tags"])
+    f = FakeKsc(deny_tags_batch=True, fail_host_tags=ids)
+    raw = _collect_with(monkeypatch, f)
+    assert "host_tags" not in raw
+    assert len(raw["server"]["warnings"]) == 1 and raw["server"]["warnings"][0].startswith("host_tags: ")
+    assert f.calls.count("HostTagsApi.GetHostTags") == 12  # min(20, хостов с агентом)
+    monkeypatch.setattr(collector_mod, "TAGS_FALLBACK_GIVE_UP", 3)
+    f = FakeKsc(deny_tags_batch=True, fail_host_tags=ids)
+    raw = _collect_with(monkeypatch, f)
+    assert "host_tags" not in raw and f.calls.count("HostTagsApi.GetHostTags") == 3
+
+
+def test_collect_batch_tags_ignore_foreign_ids(monkeypatch: Any) -> None:
+    raw = _collect_with(monkeypatch, FakeKsc(foreign_tag_items=True))
+    assert raw["host_tags"] == build_export()["host_tags"]
+
+
 def _create(auth_client: TestClient, **extra: Any) -> int:
     r = auth_client.post("/api/ksc/connections", json={"title": "KSC", "host": "ksc01.corp.local", "username": USER, "password": PASSWORD, **extra})
     assert r.status_code == 201, r.text
