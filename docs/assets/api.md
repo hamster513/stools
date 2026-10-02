@@ -46,6 +46,12 @@ GET   /assets/{id}                     + network_manual, note, merged_into, crea
 PATCH /assets/{id}  {criticality?, tags?, note?, network_id?, network_manual?}   → карточка
                                        только ручные поля; network_id без network_manual — сеть ручная;
                                        network_id: null, network_manual: false — вернуть расчёт по адресу
+GET   /assets/ids                      те же фильтры, без limit/offset → {total, ids} — выбор «всех по
+                                       фильтру» для массового изменения (не больше 50 000)
+POST  /assets/bulk  {ids, criticality?, tags_add?, tags_remove?}   → {updated}
+                                       критичность и теги у многих активов: теги добавляются и снимаются,
+                                       а не заменяются; несуществующие и объединённые id пропускаются;
+                                       422 — менять нечего или ids пуст
 POST  /assets/{id}/pin    {field: name|fqdn|domain|ip|os, pinned}   → карточка
 POST  /assets/{id}/merge  {other_id}   → карточка первого; 409 — уже объединён, идёт синхронизация
                                        или запись результатов скана/DNS («идёт запись результатов

@@ -6,6 +6,7 @@ import {
   CODE_LABELS,
   CRITICALITIES,
   CRITICALITY_LABELS,
+  defaultCidr,
   MARK_TEXT,
   SOURCE_LABELS,
   type AssetDetail,
@@ -100,7 +101,13 @@ function CanonicalCard({ a, write }: { a: AssetDetail; write: boolean }) {
           )
         })}
         <dt className="text-text-secondary">Сеть</dt>
-        <dd className="col-span-2 text-text">{a.network ? `${a.network.cidr}${a.network.title ? ` — ${a.network.title}` : ''}${a.network.zone ? ` · ${a.network.zone}` : ''}${a.network_manual ? ' (задана вручную)' : ''}` : '—'}</dd>
+        <dd className="col-span-2 text-text">
+          {a.network ? `${a.network.cidr}${a.network.title ? ` — ${a.network.title}` : ''}${a.network.zone ? ` · ${a.network.zone}` : ''}${a.network_manual ? ' (задана вручную)' : ''}` : '—'}
+          {/* Адрес не входит ни в одну сеть: создать её тут же; после сохранения актив привяжется сам. */}
+          {!a.network && a.ip && write && (
+            <Link to={`/assets/networks?new=${encodeURIComponent(defaultCidr(a.ip))}`} className="ml-2 text-[11px] text-primary hover:underline">создать сеть {defaultCidr(a.ip)}</Link>
+          )}
+        </dd>
         <dt className="text-text-secondary">Виден</dt>
         <dd className="col-span-2 text-text">впервые {day(a.first_seen)}, последний раз {day(a.last_seen)}</dd>
       </dl>

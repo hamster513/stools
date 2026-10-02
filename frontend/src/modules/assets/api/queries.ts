@@ -3,7 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
 import type {
-  AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, DnsIn, DnsServer, Job, Network, NetworkIn,
+  AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DnsIn, DnsServer, Job, Network, NetworkIn,
   NetworkSchedule, PinnableField, ScanStarted, ScheduleIn, SyncStatus, Zone, ZoneIn,
 } from './types'
 
@@ -71,6 +71,23 @@ export function useMergeAssets(id: number) {
 
 export function useDetachObservation() {
   return useAssetMutation<number>((observationId) => api.post(`/api/assets/observations/${observationId}/detach`))
+}
+
+/** Id всех активов под фильтрами списка — выбор «всех по фильтру», а не только загруженных строк. */
+export function useAssetIds() {
+  return useMutation<{ total: number; ids: number[] }, ApiRequestError, AssetsQuery>({
+    mutationFn: (query) => api.get(`/api/assets/assets/ids${buildQuery({ ...query })}`),
+  })
+}
+
+export function useBulkUpdate() {
+  const qc = useQueryClient()
+  return useMutation<{ updated: number }, ApiRequestError, BulkPatch>({
+    mutationFn: (body) => api.post('/api/assets/assets/bulk', body),
+    onSuccess: () => {
+      for (const key of ['assets-list', 'assets-asset', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
+    },
+  })
 }
 
 export function useStartSync() {

@@ -9,7 +9,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
-import { Link } from '@/lib/router'
+import { Link, useRouter, useSearchParams } from '@/lib/router'
 import { NetworkForm } from './NetworkForm'
 
 function when(iso: string | null): string {
@@ -83,8 +83,15 @@ function ConfirmDelete({ network, onDone }: { network: Network; onDone: () => vo
 export function NetworksPage() {
   const { write } = useCan()
   const networks = useNetworks()
+  // `?new=<cidr>` — ссылка «создать сеть» из карточки актива без сети: форма новой сети открыта сразу, CIDR подставлен.
+  const params = useSearchParams()
+  const { navigate } = useRouter()
+  const [newCidr, setNewCidr] = useState(() => params.get('new') ?? '')
   // undefined — форма закрыта, null — новая сеть.
-  const [editing, setEditing] = useState<Network | null | undefined>(undefined)
+  const [editing, setEditing] = useState<Network | null | undefined>(() => (newCidr ? null : undefined))
+  // Параметр снимается: закрытая форма не откроется снова при обновлении страницы.
+  useEffect(() => { if (params.has('new')) navigate('/assets/networks', { replace: true }) }, [params, navigate])
+  function closeForm() { setEditing(undefined); setNewCidr('') }
   const [deleting, setDeleting] = useState<Network | null>(null)
 
   if (networks.isLoading) return <FullPageSpinner />
@@ -108,7 +115,7 @@ export function NetworksPage() {
 
       {editing !== undefined && (
         <div className="mb-4">
-          <NetworkForm key={editing?.id ?? 'new'} network={editing} onDone={() => setEditing(undefined)} onCancel={() => setEditing(undefined)} />
+          <NetworkForm key={editing?.id ?? 'new'} network={editing} initialCidr={newCidr} onDone={closeForm} onCancel={closeForm} />
         </div>
       )}
 

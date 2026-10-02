@@ -48,11 +48,12 @@ function NetworkScheduleBlock({ network }: { network: Network }) {
   )
 }
 
-/** Форма сети: описание, настройки сканирования и расписание сканов (у сохранённой сети). */
-export function NetworkForm({ network, onDone, onCancel }: { network: Network | null; onDone: () => void; onCancel: () => void }) {
+/** Форма сети: описание, настройки сканирования и расписание сканов (у сохранённой сети).
+ * `initialCidr` — CIDR новой сети, предложенный по адресу актива без сети. */
+export function NetworkForm({ network, initialCidr = '', onDone, onCancel }: { network: Network | null; initialCidr?: string; onDone: () => void; onCancel: () => void }) {
   const save = useSaveNetwork()
   const zones = useZones()
-  const [f, setF] = useState<FormState>(() => toForm(network ?? EMPTY))
+  const [f, setF] = useState<FormState>(() => toForm(network ?? { ...EMPTY, cidr: initialCidr }))
   const patch = (p: Partial<FormState>) => setF((v) => ({ ...v, ...p }))
 
   return (

@@ -167,6 +167,20 @@ export interface AssetPatch {
   network_manual?: boolean
 }
 
+/** Массовое изменение: теги добавляются и снимаются, не переданная критичность не меняется. */
+export interface BulkPatch {
+  ids: number[]
+  criticality?: Criticality | ''
+  tags_add?: string[]
+  tags_remove?: string[]
+}
+
+/** Сеть /24 (IPv6 — /64) вокруг адреса: то, что предлагается создать для актива без сети. */
+export function defaultCidr(ip: string): string {
+  const v4 = ip.split('.')
+  return v4.length === 4 ? `${v4.slice(0, 3).join('.')}.0/24` : `${ip}/64`
+}
+
 export const DEFAULT_PORTS = [22, 80, 135, 139, 443, 445, 3389]
 
 /** «≈ N мин» из `estimated_seconds` API (минуты вверх, не меньше одной); null — сеть сканеру не по силам. */

@@ -389,6 +389,30 @@ def update_manual(db: Session, asset_id: int, values: dict[str, Any]) -> Asset:
     return asset
 
 
+#: Столько id за раз уходит в один запрос массового изменения (параметров у запроса не больше 65 535).
+BULK_CHUNK = 10_000
+
+
+def bulk_update(
+    db: Session, ids: list[int], *, criticality: str | None = None, tags_add: Iterable[str] = (), tags_remove: Iterable[str] = (),
+) -> int:
+    """Критичность и теги у многих активов разом: теги добавляются к имеющимся и снимаются, а не
+    заменяются; `criticality=None` — не менять. Несуществующие и объединённые пропускаются; число изменённых."""
+    add = [t.strip() for t in tags_add if t.strip()]
+    remove = {t.strip() for t in tags_remove}
+    updated = 0
+    for start in range(0, len(ids), BULK_CHUNK):
+        chunk = ids[start : start + BULK_CHUNK]
+        for asset in db.execute(select(Asset).where(Asset.id.in_(chunk), Asset.merged_into.is_(None))).scalars():
+            if criticality is not None:
+                asset.criticality = criticality
+            if add or remove:
+                asset.tags = [t for t in dict.fromkeys([*(asset.tags or []), *add]) if t not in remove]
+            updated += 1
+    db.flush()
+    return updated
+
+
 # ---- Список и карточка ----------------------------------------------------
 
 
@@ -455,9 +479,16 @@ def _open_ports(observations: list[Observed]) -> set[int]:
 LIST_EXTRA_SOURCES = ("scan", "ad", "dns")
 
 
-def list_assets(
+Picked = list[tuple[Asset, list[AssetObservation], list[Discrepancy]]]
+
+
+def _pick(
     db: Session,
     *,
+    networks: dict[int, Network],
+    settings: dict[str, Any],
+    now: dt.datetime,
+    with_found: bool,
     q: str | None = None,
     source_has: str | None = None,
     source_missing: str | None = None,
@@ -467,30 +498,25 @@ def list_assets(
     port: int | None = None,
     tag: str | None = None,
     criticality: str | None = None,
-    limit: int = 200,
-    offset: int = 0,
-    now: dt.datetime | None = None,
-) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
-    """items, total, facets. Расхождения считаются на лету, поэтому фильтры и фасеты — в памяти,
-    как у хостов KSC; `criticality='none'` — критичность не задана; `code='any'` — хоть одно расхождение
-    (фасет `code.any` — сколько таких)."""
-    now = now or utcnow()
-    settings = load_settings(db)
-    probes = scan_probes(db)
+) -> Picked:
+    """Активы под фильтрами списка: (актив, наблюдения, расхождения). Расхождения считаются на лету,
+    поэтому фильтры — в памяти. `with_found=False` — расхождения нужны только фильтру `code`: без
+    него они не считаются и остаются пустыми (выбор id для массового изменения)."""
+    probes = scan_probes(db) if with_found or code else None
+    # Наблюдения с extra нужны расхождениям и фильтру по порту; без них extra не читается вовсе.
+    need_observed = probes is not None or port is not None
     assets = list(db.execute(select(Asset).where(Asset.merged_into.is_(None))).scalars())
     per_asset: dict[int, list[AssetObservation]] = defaultdict(list)
     for row in db.execute(select(AssetObservation).options(defer(AssetObservation.extra)).order_by(AssetObservation.id)).scalars():
         per_asset[row.asset_id].append(row)
     extras: dict[int, dict[str, Any]] = dict(db.execute(
         select(AssetObservation.id, AssetObservation.extra).where(AssetObservation.source.in_(LIST_EXTRA_SOURCES))
-    ).tuples().all())
-    networks = {n.id: n for n in db.execute(select(Network)).scalars()}
+    ).tuples().all()) if need_observed else {}
     needle = (q or "").strip().lower()
 
-    picked: list[tuple[Asset, list[AssetObservation], list[Discrepancy]]] = []
+    picked: Picked = []
     for asset in assets:
         rows = per_asset[asset.id]
-        observations = [observed(r, extra=dict(extras.get(r.id) or {})) for r in rows]
         live = {r.source for r in rows if r.gone_at is None}
         if source_has and source_has not in live:
             continue
@@ -505,16 +531,42 @@ def list_assets(
             continue
         if criticality and asset.criticality != ("" if criticality == "none" else criticality):
             continue
-        if port is not None and port not in _open_ports(observations):
-            continue
         if needle and not _matches_query(asset, rows, needle):
             continue
-        found = _found(asset, observations, settings, probes, now)
+        observations = [observed(r, extra=dict(extras.get(r.id) or {})) for r in rows] if need_observed else []
+        if port is not None and port not in _open_ports(observations):
+            continue
+        found = _found(asset, observations, settings, probes, now) if probes is not None else []
         if code == ANY_CODE and not found:
             continue
         if code and code != ANY_CODE and code not in {d.code for d in found}:
             continue
         picked.append((asset, rows, found))
+    return picked
+
+
+def matching_ids(db: Session, **filters: Any) -> list[int]:
+    """Id всех активов под фильтрами списка — без фасетов и строк, а расхождения считаются,
+    только если задан фильтр `code`."""
+    networks = {n.id: n for n in db.execute(select(Network)).scalars()}
+    return [asset.id for asset, _, _ in _pick(db, networks=networks, settings=load_settings(db), now=utcnow(), with_found=False, **filters)]
+
+
+def list_assets(
+    db: Session,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    now: dt.datetime | None = None,
+    **filters: Any,
+) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
+    """items, total, facets; `filters` — как у `_pick`. Фасеты — в памяти, как у хостов KSC;
+    `criticality='none'` — критичность не задана; `code='any'` — хоть одно расхождение
+    (фасет `code.any` — сколько таких)."""
+    now = now or utcnow()
+    settings = load_settings(db)
+    networks = {n.id: n for n in db.execute(select(Network)).scalars()}
+    picked = _pick(db, networks=networks, settings=settings, now=now, with_found=True, **filters)
 
     facets: dict[str, Any] = {
         "source": dict.fromkeys(SOURCES, 0), "code": dict.fromkeys((*CODES, ANY_CODE), 0), "zone": {},

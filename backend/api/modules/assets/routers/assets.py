@@ -23,9 +23,11 @@ from api.modules.assets.services.assets import (
     AssetConflict,
     AssetNotFound,
     asset_detail,
+    bulk_update,
     detach_observation,
     list_assets,
     lookup_asset,
+    matching_ids,
     merge_assets,
     pin_field,
     update_manual,
@@ -41,6 +43,8 @@ from api.platform.scheduler import PlatformSchedule, delete_schedule, upsert_sch
 router = APIRouter(tags=["assets"])
 
 MAX_LIMIT = 500
+#: Столько активов можно выбрать «всеми по фильтру» и изменить одним запросом.
+MAX_BULK = 50_000
 TASK_WRITING = "идёт запись результатов задачи — повторите позже"
 
 
@@ -56,6 +60,15 @@ class AssetPatch(BaseModel):
     note: str | None = Field(default=None, max_length=4000)
     network_id: int | None = None
     network_manual: bool | None = None
+
+
+class BulkIn(BaseModel):
+    """Массовое изменение: теги добавляются и снимаются, не переданная критичность не меняется."""
+
+    ids: list[int] = Field(min_length=1, max_length=MAX_BULK)
+    criticality: Literal["Critical", "High", "Medium", "Low", ""] | None = None
+    tags_add: list[str] = Field(default_factory=list, max_length=50)
+    tags_remove: list[str] = Field(default_factory=list, max_length=50)
 
 
 class PinIn(BaseModel):
@@ -83,8 +96,7 @@ def _check(value: str | None, allowed: tuple[str, ...]) -> None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{value}»")
 
 
-@router.get("/assets")
-def get_assets(
+def _filters(
     q: str | None = None,
     source_has: str | None = None,
     source_missing: str | None = None,
@@ -94,20 +106,46 @@ def get_assets(
     port: int | None = Query(default=None, ge=1, le=65535),
     tag: str | None = None,
     criticality: str | None = None,
+) -> dict[str, Any]:
+    """Фильтры списка — одни и те же у страницы списка и у выбора «всех по фильтру»."""
+    _check(source_has, SOURCES)
+    _check(source_missing, SOURCES)
+    _check(code, (*CODES, ANY_CODE))
+    _check(criticality, (*CRITICALITY, "none"))
+    return {
+        "q": q, "source_has": source_has, "source_missing": source_missing, "code": code, "network_id": network_id,
+        "zone": zone, "port": port, "tag": tag, "criticality": criticality,
+    }
+
+
+@router.get("/assets")
+def get_assets(
+    filters: dict[str, Any] = Depends(_filters),
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    _check(source_has, SOURCES)
-    _check(source_missing, SOURCES)
-    _check(code, (*CODES, ANY_CODE))
-    _check(criticality, (*CRITICALITY, "none"))
-    items, total, facets = list_assets(
-        db, q=q, source_has=source_has, source_missing=source_missing, code=code, network_id=network_id, zone=zone,
-        port=port, tag=tag, criticality=criticality, limit=limit, offset=offset,
-    )
+    items, total, facets = list_assets(db, **filters, limit=limit, offset=offset)
     return {"total": total, "items": items, "facets": facets if offset == 0 else None}
+
+
+@router.get("/assets/ids")
+def get_asset_ids(
+    filters: dict[str, Any] = Depends(_filters), db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Id всех активов под фильтрами (не больше `MAX_BULK`) — для выбора «всех по фильтру»."""
+    ids = matching_ids(db, **filters)
+    return {"total": len(ids), "ids": ids[:MAX_BULK]}
+
+
+@router.post("/assets/bulk")
+def bulk(payload: BulkIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, int]:
+    if payload.criticality is None and not payload.tags_add and not payload.tags_remove:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="не задано, что менять: критичность или теги")
+    updated = bulk_update(db, payload.ids, criticality=payload.criticality, tags_add=payload.tags_add, tags_remove=payload.tags_remove)
+    db.commit()
+    return {"updated": updated}
 
 
 @router.get("/assets/{asset_id}")

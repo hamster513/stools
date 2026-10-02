@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, FilterX, Search } from 'lucide-react'
+import { ChevronRight, Filter, FilterX, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAssets, useNetworks } from '@/modules/assets/api/queries'
+import { useAssetIds, useAssets, useBulkUpdate, useNetworks } from '@/modules/assets/api/queries'
 import {
   ANY_CODE_LABEL,
   CODE_LABELS,
@@ -17,17 +17,21 @@ import {
   type CodeFilter,
   type Criticality,
 } from '@/modules/assets/api/types'
+import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useVirtualRows } from '@/hooks/useVirtualRows'
+import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useRouter, useSearchParams } from '@/lib/router'
 import { AssetDrawer } from './AssetDrawer'
 
 const ROW_HEIGHT = 40
+/** Панель фильтров свёрнута, пока аналитик сам её не раскроет; выбор запоминается в браузере. */
+const FILTERS_OPEN_KEY = 'stools-assets-filters-open'
 
 type Filters = Omit<AssetsQuery, 'q' | 'port' | 'tag'>
 
@@ -57,7 +61,8 @@ function FacetSection({ title, children }: { title: string; children: ReactNode 
   )
 }
 
-const INPUT = 'w-full rounded border border-border bg-app-bg px-2 py-1 text-xs text-text placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
+const INPUT_BASE = 'rounded border border-border bg-app-bg px-2 py-1 text-xs text-text placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
+const INPUT = `w-full ${INPUT_BASE}`
 
 function FacetPanel({ facets, filters, onToggle, total, port, onPort, tag, onTag }: {
   facets: AssetsFacets | null
@@ -132,11 +137,27 @@ function SourceBadges({ item }: { item: AssetItem }) {
   )
 }
 
-function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd }: { items: AssetItem[]; selectedIndex: number; onSelectIndex: (i: number) => void; onOpen: (i: number) => void; onReachEnd?: () => void }) {
+/** `checked` — отмеченные для массового изменения (undefined — отмечать нельзя: у аудитора флажков нет). */
+function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: {
+  items: AssetItem[]
+  selectedIndex: number
+  onSelectIndex: (i: number) => void
+  onOpen: (i: number) => void
+  onReachEnd?: () => void
+  checked?: Set<number>
+  onCheck: (index: number, range: boolean) => void
+  onCheckAll: (on: boolean) => void
+}) {
   const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
+  const allChecked = checked !== undefined && items.length > 0 && items.every((a) => checked.has(a.id))
   return (
     <div ref={parentRef} className="h-full overflow-auto">
       <div className="sticky top-0 z-10 flex min-w-[1100px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+        {checked && (
+          <div className="flex w-8 shrink-0 items-center justify-center">
+            <input type="checkbox" className="accent-primary" checked={allChecked} onChange={(e) => onCheckAll(e.target.checked)} aria-label="Отметить все загруженные строки" />
+          </div>
+        )}
         <div className="w-60 shrink-0 px-2 py-2">Имя</div>
         <div className="w-32 shrink-0 px-2 py-2">IP</div>
         <div className="w-44 shrink-0 px-2 py-2">Сеть · зона</div>
@@ -151,6 +172,12 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd }
           const selected = v.index === selectedIndex
           return (
             <div key={a.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-full min-w-[1100px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+              {checked && (
+                // Щелчок по флажку не открывает карточку; Shift отмечает диапазон от предыдущего флажка.
+                <div className="flex h-full w-8 shrink-0 items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" className="accent-primary" checked={checked.has(a.id)} onChange={(e) => onCheck(v.index, (e.nativeEvent as MouseEvent).shiftKey)} aria-label={`Отметить ${a.name || a.fqdn || a.ip || `актив #${a.id}`}`} />
+                </div>
+              )}
               <div className="w-60 shrink-0 truncate px-2">
                 <div className="truncate text-text" title={a.name}>{a.name || a.fqdn || a.ip || `актив #${a.id}`}</div>
                 <div className="truncate text-[10px] text-text-secondary" title={a.fqdn}>{a.fqdn}</div>
@@ -168,6 +195,43 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd }
           )
         })}
       </div>
+    </div>
+  )
+}
+
+const split = (text: string) => text.split(',').map((t) => t.trim()).filter(Boolean)
+
+/** Массовое изменение отмеченных активов: критичность и теги (добавить, снять). Заметка и сеть — только в карточке. */
+function BulkBar({ ids, total, selectingAll, onSelectAll, onClear }: { ids: number[]; total: number; selectingAll: boolean; onSelectAll: () => void; onClear: () => void }) {
+  const bulk = useBulkUpdate()
+  // 'keep' — критичность не менять; '' — сбросить в «не задана».
+  const [criticality, setCriticality] = useState<Criticality | '' | 'keep'>('keep')
+  const [add, setAdd] = useState('')
+  const [remove, setRemove] = useState('')
+  const tagsAdd = split(add)
+  const tagsRemove = split(remove)
+  const nothing = criticality === 'keep' && tagsAdd.length === 0 && tagsRemove.length === 0
+  function apply() {
+    bulk.mutate(
+      { ids, ...(criticality === 'keep' ? {} : { criticality }), tags_add: tagsAdd, tags_remove: tagsRemove },
+      { onSuccess: () => { setCriticality('keep'); setAdd(''); setRemove('') } },
+    )
+  }
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-grid bg-surface px-3 py-2 text-xs">
+      <span className="text-text">Отмечено <span className="font-mono tabular-nums">{ids.length}</span></span>
+      {ids.length < total && <button type="button" onClick={onSelectAll} disabled={selectingAll} className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">{selectingAll ? 'выбираю…' : `отметить все ${total} по фильтру`}</button>}
+      <select value={criticality} onChange={(e) => setCriticality(e.target.value as Criticality | '' | 'keep')} aria-label="Критичность" className={cn(INPUT_BASE, 'ml-2 w-44')}>
+        <option value="keep">критичность: не менять</option>
+        <option value="">критичность: {CRITICALITY_LABELS.none}</option>
+        {CRITICALITIES.map((c) => <option key={c} value={c}>критичность: {CRITICALITY_LABELS[c]}</option>)}
+      </select>
+      <input value={add} onChange={(e) => setAdd(e.target.value)} placeholder="добавить теги, через запятую" aria-label="Добавить теги" className={cn(INPUT_BASE, 'w-52')} />
+      <input value={remove} onChange={(e) => setRemove(e.target.value)} placeholder="снять теги, через запятую" aria-label="Снять теги" className={cn(INPUT_BASE, 'w-52')} />
+      <Button variant="primary" disabled={nothing} loading={bulk.isPending} onClick={apply}>Применить</Button>
+      <Button variant="ghost" onClick={onClear}>Снять отметки</Button>
+      {bulk.error && <span className="text-kind-1">{bulk.error.message}</span>}
+      {bulk.isSuccess && !bulk.isPending && <span className="text-text-secondary">изменено активов: {bulk.data.updated}</span>}
     </div>
   )
 }
@@ -196,6 +260,12 @@ export function AssetsPage() {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [openId, setOpenId] = useState<number | null>(() => (Number(params.get('asset')) > 0 ? Number(params.get('asset')) : null))
   const searchRef = useRef<HTMLInputElement>(null)
+  const { write } = useCan()
+  const networks = useNetworks()
+  const [filtersOpen, setFiltersOpen] = useState(() => localStorage.getItem(FILTERS_OPEN_KEY) === '1')
+  const [checked, setChecked] = useState<Set<number>>(() => new Set())
+  const lastChecked = useRef<number | null>(null)
+  const allIds = useAssetIds()
 
   const queryArgs = useMemo<AssetsQuery>(
     () => ({ ...filters, q: q || undefined, port: port ? Number(port) : undefined, tag: tag.trim() || undefined }),
@@ -205,11 +275,36 @@ export function AssetsPage() {
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const first = query.data?.pages[0]
   const total = first?.total ?? 0
-  useEffect(() => setSelectedIndex(0), [queryArgs])
+  // Новый фильтр — другой список: курсор в начало, отметки сняты.
+  useEffect(() => { setSelectedIndex(0); setChecked(new Set()); lastChecked.current = null }, [queryArgs])
   const selected: AssetItem | null = items[selectedIndex] ?? null
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput(''); setPortInput(''); setTagInput('') }
+  function toggleFilters() {
+    setFiltersOpen((open) => { localStorage.setItem(FILTERS_OPEN_KEY, open ? '0' : '1'); return !open })
+  }
+  function check(index: number, range: boolean) {
+    const from = range && lastChecked.current !== null ? lastChecked.current : index
+    const on = !checked.has(items[index].id)
+    setChecked((prev) => {
+      const next = new Set(prev)
+      for (let i = Math.min(from, index); i <= Math.max(from, index); i++) { if (on) next.add(items[i].id); else next.delete(items[i].id) }
+      return next
+    })
+    lastChecked.current = index
+  }
+  function checkAll(on: boolean) { setChecked(on ? new Set(items.map((a) => a.id)) : new Set()); lastChecked.current = null }
+  // Что выбрано, пока панель свёрнута: фильтр из ссылки обзора не должен действовать незаметно.
+  const chips: { label: string; clear: () => void }[] = []
+  if (filters.code) chips.push({ label: filters.code === 'any' ? ANY_CODE_LABEL : CODE_LABELS[filters.code], clear: () => toggle('code', undefined) })
+  if (filters.source_has) chips.push({ label: `есть в ${SOURCE_LABELS[filters.source_has]}`, clear: () => toggle('source_has', undefined) })
+  if (filters.source_missing) chips.push({ label: `нет в ${SOURCE_LABELS[filters.source_missing]}`, clear: () => toggle('source_missing', undefined) })
+  if (filters.criticality) chips.push({ label: `критичность ${CRITICALITY_LABELS[filters.criticality]}`, clear: () => toggle('criticality', undefined) })
+  if (filters.zone) chips.push({ label: `зона ${filters.zone}`, clear: () => toggle('zone', undefined) })
+  if (filters.network_id !== undefined) chips.push({ label: `сеть ${networks.data?.find((n) => n.id === filters.network_id)?.cidr ?? `#${filters.network_id}`}`, clear: () => toggle('network_id', undefined) })
+  if (portInput) chips.push({ label: `порт ${portInput}`, clear: () => setPortInput('') })
+  if (tagInput.trim()) chips.push({ label: `тег ${tagInput.trim()}`, clear: () => setTagInput('') })
   // Карточка по ссылке открывается один раз: параметр снимается, и закрытая карточка не откроется снова при обновлении страницы.
   useEffect(() => {
     if (!params.has('asset')) return
@@ -236,32 +331,51 @@ export function AssetsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Активы</h1>
+        <button type="button" onClick={toggleFilters} aria-expanded={filtersOpen} className={cn('flex items-center gap-1.5 rounded border px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', filtersOpen ? 'border-border bg-row-selected text-text' : 'border-border text-text-secondary hover:bg-row-hover hover:text-text')}>
+          <Filter size={13} aria-hidden /> Фильтры{chips.length > 0 && <span className="font-mono tabular-nums text-text">{chips.length}</span>}
+        </button>
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, FQDN, IP, ОС… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
+        {!filtersOpen && chips.length > 0 && (
+          <div className="flex basis-full flex-wrap gap-1.5">
+            {chips.map((c) => (
+              <button key={c.label} type="button" onClick={c.clear} title="Снять фильтр" className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+                {c.label} <X size={11} className="text-text-secondary" aria-hidden />
+              </button>
+            ))}
+          </div>
+        )}
       </header>
       <div className="flex min-h-0 flex-1">
-        <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />
-        <div className="min-w-0 flex-1 bg-app-bg">
-          {query.isLoading && <FullPageSpinner />}
-          {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
-          {!query.isLoading && !errorMessage && items.length === 0 && (
-            <div className="p-6">
-              <EmptyState
-                icon={FilterX}
-                title={hasFilters ? 'Ничего не найдено' : 'Активов ещё нет'}
-                description={hasFilters ? 'Ни один актив не подходит под фильтры.' : 'Активы появятся после импорта в модулях VM, антивируса или AD — или после синхронизации кнопкой на обзоре и в настройках.'}
-              />
-            </div>
+        {filtersOpen && <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
+        <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
+          {write && checked.size > 0 && (
+            <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)}
+              onSelectAll={() => allIds.mutate(queryArgs, { onSuccess: (r) => setChecked(new Set(r.ids)) })} />
           )}
-          {!query.isLoading && !errorMessage && items.length > 0 && (
-            <AssetsTable items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenId(items[i].id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }} />
-          )}
+          <div className="min-h-0 flex-1">
+            {query.isLoading && <FullPageSpinner />}
+            {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
+            {!query.isLoading && !errorMessage && items.length === 0 && (
+              <div className="p-6">
+                <EmptyState
+                  icon={FilterX}
+                  title={hasFilters ? 'Ничего не найдено' : 'Активов ещё нет'}
+                  description={hasFilters ? 'Ни один актив не подходит под фильтры.' : 'Активы появятся после импорта в модулях VM, антивируса или AD — или после синхронизации кнопкой на обзоре и в настройках.'}
+                />
+              </div>
+            )}
+            {!query.isLoading && !errorMessage && items.length > 0 && (
+              <AssetsTable items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenId(items[i].id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }}
+                checked={write ? checked : undefined} onCheck={check} onCheckAll={checkAll} />
+            )}
+          </div>
         </div>
       </div>
       <AssetDrawer assetId={openId} onClose={() => setOpenId(null)} onOpenAsset={setOpenId} />

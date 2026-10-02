@@ -97,6 +97,52 @@ def test_manual_fields(analyst: TestClient) -> None:
     assert (again["criticality"], again["tags"], again["note"]) == ("High", ["бухгалтерия", "vip"], "стоит у кассы")
 
 
+def test_ids_by_filter(analyst: TestClient) -> None:
+    """Выбор «всех по фильтру»: те же фильтры, что у списка, без постраничности."""
+    all_ids = analyst.get("/api/assets/assets/ids").json()
+    assert all_ids["total"] == 4 and len(all_ids["ids"]) == 4
+    only = analyst.get("/api/assets/assets/ids", params={"source_missing": "ksc"}).json()
+    assert set(only["ids"]) == {by_name(analyst, "ws01")["id"], by_name(analyst, "old01")["id"]}
+    assert analyst.get("/api/assets/assets/ids", params={"code": "nope"}).status_code == 422
+
+
+def test_ids_do_not_compute_discrepancies_unless_filtered_by_code(analyst: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.modules.assets.services import assets as service
+
+    calls = []
+    real = service._found
+    monkeypatch.setattr(service, "_found", lambda *a: calls.append(1) or real(*a))
+    assert analyst.get("/api/assets/assets/ids", params={"source_missing": "ksc"}).json()["total"] == 2
+    assert calls == []
+    conflict = analyst.get("/api/assets/assets/ids", params={"code": "conflict"}).json()
+    assert len(calls) > 0
+    assert conflict["ids"] == [by_name(analyst, "msk1")["id"]]
+
+
+def test_bulk_criticality_and_tags(analyst: TestClient) -> None:
+    ws01, srv01, msk1 = (by_name(analyst, n)["id"] for n in ("ws01", "srv01", "msk1"))
+    assert analyst.patch(f"/api/assets/assets/{ws01}", json={"tags": ["vip", "касса"], "note": "заметка"}).status_code == 200
+
+    r = analyst.post("/api/assets/assets/bulk", json={"ids": [ws01, srv01, 10**9], "criticality": "High", "tags_add": ["dmz", " vip "]})
+    assert r.status_code == 200 and r.json() == {"updated": 2}, r.text
+    a, b = (analyst.get(f"/api/assets/assets/{i}").json() for i in (ws01, srv01))
+    # Теги добавляются к имеющимся без дублей; заметка и прочие ручные поля не тронуты.
+    assert (a["criticality"], a["tags"], a["note"]) == ("High", ["vip", "касса", "dmz"], "заметка")
+    assert (b["criticality"], b["tags"]) == ("High", ["dmz", "vip"])
+    assert analyst.get(f"/api/assets/assets/{msk1}").json()["criticality"] == ""
+
+    # Снять тег и сбросить критичность; не переданное поле не меняется.
+    assert analyst.post("/api/assets/assets/bulk", json={"ids": [ws01, srv01], "tags_remove": ["vip"]}).json() == {"updated": 2}
+    assert analyst.post("/api/assets/assets/bulk", json={"ids": [srv01], "criticality": ""}).json() == {"updated": 1}
+    a, b = (analyst.get(f"/api/assets/assets/{i}").json() for i in (ws01, srv01))
+    assert (a["criticality"], a["tags"]) == ("High", ["касса", "dmz"])
+    assert (b["criticality"], b["tags"]) == ("", ["dmz"])
+
+    assert analyst.post("/api/assets/assets/bulk", json={"ids": [ws01]}).status_code == 422  # менять нечего
+    assert analyst.post("/api/assets/assets/bulk", json={"ids": [], "criticality": "Low"}).status_code == 422
+    assert analyst.post("/api/assets/assets/bulk", json={"ids": [ws01], "criticality": "Urgent"}).status_code == 422
+
+
 def test_pin_field(analyst: TestClient) -> None:
     asset_id = by_name(analyst, "msk1")["id"]
     r = analyst.post(f"/api/assets/assets/{asset_id}/pin", json={"field": "ip", "pinned": True})
@@ -233,4 +279,6 @@ def test_auditor_reads_but_cannot_write(analyst: TestClient, client_as: Callable
     assert auditor.post(f"/api/assets/assets/{asset_id}/pin", json={"field": "ip", "pinned": True}).status_code == 403
     assert auditor.post(f"/api/assets/assets/{asset_id}/merge", json={"other_id": asset_id}).status_code == 403
     assert auditor.post("/api/assets/observations/1/detach").status_code == 403
+    assert auditor.get("/api/assets/assets/ids").status_code == 200
+    assert auditor.post("/api/assets/assets/bulk", json={"ids": [asset_id], "criticality": "Low"}).status_code == 403
     assert auditor.post("/api/assets/sync").status_code == 403
