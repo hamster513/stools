@@ -13,7 +13,7 @@ from api.modules.ksc.core.export import (
     load_export,
     unwrap,
 )
-from tests.ksc.synthetic import NOW, build_export, export_bytes
+from tests.ksc.synthetic import NOW, SECRET_VALUES, build_export, export_bytes, without_new_sections
 
 
 def test_unwrap_typed_values() -> None:
@@ -117,3 +117,28 @@ def test_deeply_nested_json_is_a_format_error() -> None:
     text = json.dumps(build_export())[:-1] + ', "extra": ' + "[" * 5000 + "]" * 5000 + "}"
     with pytest.raises(ExportFormatError, match="вложенность"):
         load_export(text.encode())
+
+
+def test_export_reads_host_tags_and_profiles() -> None:
+    export = load_export(export_bytes())
+    assert export.host_tags is not None and export.host_tags["h-ws01"] == ["VIP", "Бухгалтерия"]
+    assert export.policy_profiles is not None and [p["name"] for p in export.policy_profiles["1"]["profiles"]] == ["Ноутбуки", "Выключенный"]
+    assert export.policy_profiles["1"]["profiles"][0]["attrs"]["EXPRESSION"] == {"KLSSPOL_TAG": "Notebook"}
+    by = {h.name: h for h in ExportIndex(export).hosts}
+    assert by["WS01"].tags == ["VIP", "Бухгалтерия"] and by["WS01"].extra["tags"] == ["VIP", "Бухгалтерия"]
+    assert by["WS02"].tags == [] and by["WS02"].extra["tags"] == []
+
+
+def test_export_without_new_sections_marks_not_collected() -> None:
+    export = load_export(json.dumps(without_new_sections(build_export())).encode())
+    assert export.host_tags is None and export.policy_profiles is None
+    for h in ExportIndex(export).hosts:
+        assert h.tags == [] and "tags" not in h.extra
+
+
+def test_export_hides_secrets_in_profiles() -> None:
+    export = load_export(export_bytes())
+    assert export.policy_profiles is not None
+    assert export.policy_profiles["1"]["profiles"][0]["sections"]["KLPRSS_Basic"]["ProxyPassword"]["KLPRSS_Val"] == "<скрыто>"
+    text = json.dumps(export.policy_profiles, ensure_ascii=False)
+    assert not [v for v in SECRET_VALUES if v in text]

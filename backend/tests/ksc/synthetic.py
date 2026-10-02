@@ -123,7 +123,8 @@ def _policy_sections(*, locked: bool) -> dict[str, Any]:
 
 
 #: Значения-секреты синтетики: ни одно не должно попасть в выгрузку ни одного сборщика.
-SECRET_VALUES = ("hunter2", "proxy-secret", "aGFzaC1ibG9i", "e10adc3949ba59abbe56e057f20f883e", "uninstall-secret", "exit-secret", "c2VjcmV0LWJsb2I=")
+SECRET_VALUES = ("hunter2", "proxy-secret", "aGFzaC1ibG9i", "e10adc3949ba59abbe56e057f20f883e", "uninstall-secret", "exit-secret", "c2VjcmV0LWJsb2I=",
+                 "profile-secret")
 
 
 def _policy_contents() -> dict[str, Any]:
@@ -132,6 +133,34 @@ def _policy_contents() -> dict[str, Any]:
     return {
         "1": {"product": "KES", "version": "12.0.0.0", "sections": _policy_sections(locked=True), "errors": []},
         "3": {"product": "KES", "version": "12.0.0.0", "sections": _policy_sections(locked=False), "errors": []},
+    }
+
+
+#: Профили политики 1: включённый (с замком и секретом) и выключенный.
+P_NOTEBOOKS: dict[str, Any] = {
+    "name": "Ноутбуки",
+    "attrs": {"KLSSPOL_PRF_ENABLED": True, "EXPRESSION": {"type": "params", "value": {"KLSSPOL_TAG": "Notebook"}}},
+    "sections": {
+        "KLPRSS_Components": {"KLPRSS_Val": {"Firewall": {"KLPRSS_Val": {"Enabled": _lock(False, locked=True)}}}},
+        "KLPRSS_Basic": {"ProxyPassword": _lock("profile-secret", locked=True)},
+    },
+    "errors": [],
+}
+P_DISABLED: dict[str, Any] = {"name": "Выключенный", "attrs": {"KLSSPOL_PRF_ENABLED": False}, "sections": {}, "errors": []}
+
+
+def _host_tags() -> dict[str, list[str]]:
+    """Теги хостов с агентом: у WS01 два, у SRV01 один, у остальных пусто."""
+    tags: dict[str, list[str]] = {f"h-ws{n:02d}": [] for n in (1, 2, 3, 4, 5, 7, 9, 10, 11, 14)} | {"h-srv01": [], "h-lab01": []}
+    tags["h-ws01"] = ["VIP", "Бухгалтерия"]
+    tags["h-srv01"] = ["Server"]
+    return tags
+
+
+def _policy_profiles() -> dict[str, Any]:
+    return {
+        "1": {"profiles": [P_NOTEBOOKS, P_DISABLED], "priorities": ["Ноутбуки", "Выключенный"], "errors": []},
+        "3": {"profiles": [], "priorities": [], "errors": []},
     }
 
 
@@ -234,7 +263,13 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
         "policy_contents": _policy_contents(),
+        "host_tags": _host_tags(), "policy_profiles": _policy_profiles(),
     }
+
+
+def without_new_sections(export: dict[str, Any]) -> dict[str, Any]:
+    """Копия выгрузки без `host_tags` и `policy_profiles` — как у старого сборщика."""
+    return {k: v for k, v in export.items() if k not in ("host_tags", "policy_profiles")}
 
 
 def expected_policy_contents() -> dict[str, Any]:

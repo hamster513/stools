@@ -137,6 +137,11 @@ class KscExport(BaseModel):
     update_agents: list[dict[str, Any]] = Field(default_factory=list)
     #: {"<KLPOL_ID>": {"product", "version", "sections": {...}, "errors": [...]}}; необязательная секция.
     policy_contents: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    #: {"<KLHST_WKS_HOSTNAME>": ["тег", …]}; None — секции нет (старый сборщик), «не собрано», а не «пусто».
+    host_tags: dict[str, list[str]] | None = None
+    #: {"<KLPOL_ID>": {"profiles": [{"name", "attrs", "sections", "errors"}], "priorities": [...], "errors": [...]}};
+    #: None — секции нет (не собрано).
+    policy_profiles: dict[str, dict[str, Any]] | None = None
 
 
 class ExportFormatError(ValueError):
@@ -154,6 +159,17 @@ def _hide_export_secrets(raw: dict[str, Any]) -> None:
             sections = policy.get("sections") if isinstance(policy, dict) else None
             if isinstance(sections, dict):
                 policy["sections"] = {name: hide_secrets(value, str(name)) for name, value in sections.items()}
+    profiles = raw.get("policy_profiles")
+    if isinstance(profiles, dict):
+        for policy in profiles.values():
+            for profile in (policy.get("profiles") if isinstance(policy, dict) else None) or []:
+                if not isinstance(profile, dict):
+                    continue
+                sections = profile.get("sections")
+                if isinstance(sections, dict):
+                    profile["sections"] = {name: hide_secrets(value, str(name)) for name, value in sections.items()}
+                if isinstance(profile.get("attrs"), dict):
+                    profile["attrs"] = hide_secrets(profile["attrs"])
     tasks = raw.get("tasks")
     if isinstance(tasks, list):
         for task in tasks:
@@ -305,17 +321,24 @@ class HostRecord:
         self.reboot_reason = _int(raw.get("KLHST_WKS_RBT_REQUEST_REASON"))
         self.edr_status = _int(raw.get("KLHST_WKS_EDR_STATUS"))
         self.managed_by_other_server = bool(unwrap(raw.get("KLHST_MANAGED_OTHER_SERVER")))
+        # Теги — секция необязательная: `tags_collected` отличает «у хоста нет тегов» от «теги не собирались».
+        tags_raw = export.host_tags.get(self.host_id) if export.host_tags is not None else None
+        self.tags: list[str] = sorted({str(t) for t in (tags_raw or []) if str(t).strip()})
+        self.tags_collected = export.host_tags is not None
 
     @property
     def extra(self) -> dict[str, Any]:
         """Расширенные поля хоста для карточки и списка (не колонки `ksc_host`)."""
-        return {
+        extra: dict[str, Any] = {
             "os_build": self.os_build, "cpu_arch": self.cpu_arch, "vm_type": self.vm_type,
             "reboot_required": self.reboot_required,
             "reboot_requested_at": self.reboot_requested_at.strftime("%Y-%m-%dT%H:%M:%SZ") if self.reboot_requested_at else None,
             "reboot_reason": self.reboot_reason, "edr_status": self.edr_status,
             "managed_by_other_server": self.managed_by_other_server,
         }
+        if self.tags_collected:
+            extra["tags"] = self.tags
+        return extra
 
     @property
     def protection(self) -> str:
