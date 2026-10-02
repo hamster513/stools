@@ -14,7 +14,7 @@ const NONE = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 }
 function check(code: string, title: string, description: string, by: Partial<CheckSummary['by_severity']>, unchecked: string | null = null): CheckSummary {
   const by_severity = { ...NONE, ...by }
   const total = Object.values(by_severity).reduce((a, b) => a + b, 0)
-  return { code, title, description, total, by_severity, new: 0, fixed: 0, accepted: 0, unchecked }
+  return { code, title, description, total, all: total, open: total, by_severity, new: 0, resolved: 0, unchecked }
 }
 
 const CHECKS: CheckSummary[] = [
@@ -32,6 +32,11 @@ function overview(): Overview {
     domain: { id: DOMAIN.id, dns_root: DOMAIN.dns_root, netbios: DOMAIN.netbios },
     snapshot: { id: 1, collected_at: '2026-09-30T09:00:00Z', source: 'file', collector: 'powershell 2.0', findings: CHECKS.reduce((a, c) => a + c.total, 0), by_severity, objects: 1840 },
     compared_to: { previous_id: null, collected_at: null, new: 0, fixed: 0 },
+    counted: { total: CHECKS.reduce((a, c) => a + c.total, 0), by_severity },
+    summary: {
+      by_status: { new: CHECKS.reduce((a, c) => a + c.total, 0), in_work: 0, risk_accepted: 0, false_positive: 0, fixed: 0, resolved: 0, reopened: 0 },
+      overdue: 0, risk_expiring: 0, unassigned: CHECKS.reduce((a, c) => a + c.total, 0),
+    },
     checks: CHECKS,
   }
 }

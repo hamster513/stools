@@ -1,8 +1,9 @@
 """Экспозиция AD как слой платформенной матрицы ATT&CK.
 
-Экспозицией считается то, что на экранах модуля показано как незакрытое:
-находки последних снапшотов каждого домена без allowlist и без принятого
-вердикта. Принятое как норма экспозицией быть перестаёт — иначе матрица
+Экспозицией считается то, что на экранах модуля учитывается в подсчётах:
+находки последних снапшотов каждого домена без allowlist, статус которых
+велено учитывать (настройка платформы `counted`). Принятый риск или ложное
+срабатывание по умолчанию экспозицией быть перестаёт — иначе матрица
 спорила бы с решением, которое человек уже принял.
 """
 from __future__ import annotations
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session
 from api.modules.ad.core.checks import CHECK_BY_CODE
 from api.modules.ad.core.findings import SEVERITY_RANK
 from api.modules.ad.models import AdDomain, AdFinding
-from api.modules.ad.services.snapshots import accepted_keys, latest_snapshot
+from api.modules.ad.services.snapshots import latest_snapshot
 from api.modules.attack.layers import (
     MAX_ITEMS,
     Layer,
@@ -24,6 +25,7 @@ from api.modules.attack.layers import (
     LayerResult,
     parent_of,
 )
+from api.platform.findings import service as finding_svc
 
 
 def build(db: Session) -> LayerResult:
@@ -34,12 +36,13 @@ def build(db: Session) -> LayerResult:
     # открытую подтехнику от техники целиком.
     ids: set[str] = set()
     covered_domains = 0
+    counted = finding_svc.counted_statuses(db)
     for domain in domains:
         snap = latest_snapshot(db, domain.id)
         if snap is None:
             continue
         covered_domains += 1
-        accepted = accepted_keys(db, domain.id)
+        states = finding_svc.state_map(db, "ad", domain.id)
         rows = db.execute(
             select(AdFinding).where(
                 AdFinding.snapshot_id == snap.id, AdFinding.allowlisted.is_(False)
@@ -47,7 +50,7 @@ def build(db: Session) -> LayerResult:
         ).scalars()
         label = domain.dns_root or domain.netbios or domain.sid
         for finding in rows:
-            if finding.key in accepted:
+            if not finding_svc.is_counted(states.get(finding.key), counted):
                 continue
             spec = CHECK_BY_CODE.get(finding.check)
             if spec is None:

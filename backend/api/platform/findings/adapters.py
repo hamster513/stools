@@ -64,12 +64,17 @@ def get_bulk_filter(module: str) -> BulkFilter | None:
     return _BULK_FILTERS.get(module)
 
 
-def safe_reconcile(db: Session, module: str, scope_id: int, ref: str) -> None:
-    """Сверка в конце импорта модуля: сбой платформы не должен ронять сам импорт."""
-    from api.platform.findings.service import reconcile
+def safe_reconcile(
+    db: Session, module: str, scope_id: int, ref: str, *, disappeared: Iterable[CurrentFinding] = (),
+) -> None:
+    """Сверка в конце импорта модуля: сбой платформы не должен ронять сам импорт.
+    `disappeared` — находки, пропавшие с прошлых данных области: им заводятся
+    строки, чтобы исчезновение закрыло их системой (`ensure_rows_for_disappeared`)."""
+    from api.platform.findings import service
 
     try:
-        reconcile(db, module, scope_id, ref=ref)
+        service.ensure_rows_for_disappeared(db, module, scope_id, disappeared)
+        service.reconcile(db, module, scope_id, ref=ref)
     except Exception:
         log.exception("сверка статусов находок %s/%s не удалась", module, scope_id)
         db.rollback()

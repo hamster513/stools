@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
@@ -15,7 +15,8 @@ from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.models import KscFinding, KscHost, KscSnapshot
 from api.modules.ksc.services.settings import load_config
-from api.modules.ksc.services.snapshots import accepted_keys, compare
+from api.platform.findings import service as finding_svc
+from api.platform.findings.core import STATUS_TITLES
 
 router = APIRouter(tags=["ksc"])
 
@@ -63,9 +64,16 @@ def _host_key(h: KscHost) -> str:
     return h.fqdn or h.name.lower()
 
 
-def _findings_per_host(db: Session, snapshot_id: int) -> dict[str, int]:
-    rows = db.execute(select(KscFinding.host_key, func.count()).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host_key != "").group_by(KscFinding.host_key)).all()
-    return {str(h): int(n) for h, n in rows}
+def _findings_per_host(db: Session, snap: KscSnapshot) -> dict[str, int]:
+    """Сколько у хоста находок, которые учитываются (настройка платформы `counted`)."""
+    counted = finding_svc.counted_statuses(db)
+    states = finding_svc.state_map(db, "ksc", snap.server_id)
+    rows = db.execute(select(KscFinding.host_key, KscFinding.key).where(KscFinding.snapshot_id == snap.id, KscFinding.host_key != "")).all()
+    per_host: dict[str, int] = {}
+    for host, key in rows:
+        if finding_svc.is_counted(states.get(key), counted):
+            per_host[host] = per_host.get(host, 0) + 1
+    return per_host
 
 
 @router.get("/snapshots/{snapshot_id}/hosts")
@@ -89,7 +97,7 @@ def list_hosts(
         if value is not None and value not in allowed:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{value}»")
     cfg = load_config(db)
-    per_host = _findings_per_host(db, snapshot_id)
+    per_host = _findings_per_host(db, snap)
     rows = list(db.execute(select(KscHost).where(KscHost.snapshot_id == snapshot_id)).scalars())
     # Хостов у сервера тысячи: фасеты и фильтры считаются в памяти, как находки в AD.
     derived = {h.id: (_agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days)) for h in rows}
@@ -140,12 +148,11 @@ def host_detail(snapshot_id: int, host_id: str, db: Session = Depends(get_db), _
     if h is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="хост не найден")
     cfg = load_config(db)
-    cmp_ = compare(db, snap)
-    accepted = accepted_keys(db, snap.server_id)
     findings = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host_key == _host_key(h))).scalars())
-    items = [
-        {"key": f.key, "check": f.check, "check_title": CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check, "severity": f.severity,
-         "status": "accepted" if f.key in accepted else "new" if f.key in cmp_.new_keys else "persisting", "details": json.loads(f.details_json or "{}")}
-        for f in findings
-    ]
+    states = finding_svc.state_map(db, "ksc", snap.server_id, [f.key for f in findings])
+    items = []
+    for f in findings:
+        status_ = finding_svc.effective_status(states.get(f.key))
+        items.append({"key": f.key, "check": f.check, "check_title": CHECK_BY_CODE[f.check].title if f.check in CHECK_BY_CODE else f.check,
+                      "severity": f.severity, "status": status_, "status_title": STATUS_TITLES[status_], "details": json.loads(f.details_json or "{}")})
     return {**_item(h, _agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days), len(items)), "findings": items}

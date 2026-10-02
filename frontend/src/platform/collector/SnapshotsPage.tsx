@@ -45,7 +45,7 @@ export function CollectorSnapshotsPage<S extends SnapshotBase>({ snapshots, rean
         <h1 className="text-base font-semibold text-text">Снапшоты</h1>
         <p className="max-w-2xl text-xs text-text-secondary">
           Каждая выгрузка или сбор — снапшот. Разница считается с предыдущим по времени сбора. Пересчёт заново
-          прогоняет проверки по сохранённой выгрузке с текущими правилами; вердикты живут отдельно и не теряются.
+          прогоняет проверки по сохранённой выгрузке с текущими правилами; статусы находок живут отдельно и не теряются.
         </p>
       </div>
       {snapshots.data.length === 0 ? (

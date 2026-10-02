@@ -1,9 +1,9 @@
 """Таблицы модуля Active Directory (префикс ad_), спека §4.
 
 Снапшот — одна выгрузка домена; сама выгрузка лежит файлом, чтобы
-пересчитывать находки новыми правилами. Вердикты привязаны к домену и
-ключу находки, а не к снапшоту: принятое как норма переживает следующий
-сбор — иначе человек принимал бы одно и то же каждый раз.
+пересчитывать находки новыми правилами. Решения людей о находках — общие
+статусы платформы (api/platform/findings) по домену и ключу находки, а не
+по снапшоту: принятое переживает следующий сбор.
 """
 from __future__ import annotations
 
@@ -117,18 +117,6 @@ class AdFinding(Base):
     right: Mapped[str] = mapped_column(String(255), default="")
     allowlisted: Mapped[bool] = mapped_column(Boolean, default=False)
     details_json: Mapped[str] = mapped_column(Text, default="{}")
-
-
-class AdVerdict(Base):
-    __tablename__ = "ad_verdict"
-
-    domain_id: Mapped[int] = mapped_column(ForeignKey("ad_domain.id", ondelete="CASCADE"), primary_key=True)
-    key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    #: accepted — принято как норма.
-    status: Mapped[str] = mapped_column(String(16), default="accepted")
-    reason: Mapped[str] = mapped_column(Text, default="")
-    decided_by: Mapped[str] = mapped_column(String(255), default="")
-    decided_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class AdJob(JobColumns, Base):

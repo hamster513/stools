@@ -98,20 +98,12 @@ export function useFindingDetail(snapshotId: number | undefined, key: string | u
   })
 }
 
-export function useSetVerdict() {
+/** После смены статусов находок: списки, карточки и обзор модуля читают их заново. */
+export function useFindingsChanged() {
   const qc = useQueryClient()
-  return useMutation<void, ApiRequestError, { key: string; server_id: number; reason: string }>({
-    mutationFn: ({ key, ...body }) => api.put(`/api/ksc/verdicts/${key}`, body),
-    onSuccess: () => invalidateAll(qc),
-  })
-}
-
-export function useDropVerdict() {
-  const qc = useQueryClient()
-  return useMutation<void, ApiRequestError, { key: string; server_id: number }>({
-    mutationFn: ({ key, server_id }) => api.del(`/api/ksc/verdicts/${key}?server_id=${server_id}`),
-    onSuccess: () => invalidateAll(qc),
-  })
+  return () => {
+    for (const key of ['ksc-findings', 'ksc-finding', 'ksc-overview', 'ksc-hosts', 'ksc-host']) qc.invalidateQueries({ queryKey: [key] })
+  }
 }
 
 export function useUploadExport() {

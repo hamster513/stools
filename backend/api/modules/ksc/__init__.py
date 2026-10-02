@@ -9,6 +9,7 @@ from fastapi import APIRouter
 
 from api.jobs import make_jobs_router
 from api.modules.ksc import models as models  # таблицы должны попасть в metadata
+from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ksc.models import KscJob
 from api.modules.ksc.routers import (
     collector,
@@ -21,6 +22,7 @@ from api.modules.ksc.routers import (
     settings,
     snapshots,
 )
+from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/ksc")
 for sub in (
@@ -28,5 +30,7 @@ for sub in (
     settings.router, collector.router, connections.router, make_jobs_router(KscJob, "ksc"),
 ):
     router.include_router(sub)
+
+register_adapter(FINDINGS_ADAPTER)
 
 __all__ = ["router"]

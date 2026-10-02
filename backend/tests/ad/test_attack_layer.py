@@ -29,7 +29,7 @@ def _upload(auth_client: TestClient, data: bytes) -> tuple[int, int]:
     return int(snap["domain_id"]), int(snap["id"])
 
 
-def test_ad_layer_counts_findings_and_respects_verdicts(auth_client: TestClient, db_session: Any) -> None:
+def test_ad_layer_counts_findings_and_respects_statuses(auth_client: TestClient, db_session: Any) -> None:
     domain_id, snapshot_id = _upload(auth_client, export_bytes())
     before = LAYERS["ad"].build(db_session)
     # Kerberoast размечен как T1558.003 — ячейка достаётся родителю,
@@ -52,10 +52,10 @@ def test_ad_layer_counts_findings_and_respects_verdicts(auth_client: TestClient,
     ]
     assert len(set(ranks)) > 1 and ranks == sorted(ranks)
 
-    # Принятая находка перестаёт быть экспозицией.
+    # Принятый риск перестаёт быть экспозицией.
     key = auth_client.get(f"/api/ad/snapshots/{snapshot_id}/findings?check=Kerberoast").json()["items"][0]["key"]
-    r = auth_client.put(f"/api/ad/verdicts/{key}", json={"domain_id": domain_id, "reason": "норма"})
-    assert r.status_code == 204, r.text
+    r = auth_client.put("/api/findings/state", json={"module": "ad", "scope_id": domain_id, "key": key, "status": "risk_accepted", "comment": "норма"})
+    assert r.status_code == 200, r.text
     db_session.expire_all()
     after = LAYERS["ad"].build(db_session)
     assert after.cells["T1558"].count == kerb.count - 1

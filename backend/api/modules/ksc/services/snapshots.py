@@ -22,7 +22,8 @@ from api.modules.ksc.core.checks import ANALYZER_VERSION, run_all
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, KscExport, load_export_path
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding
-from api.modules.ksc.models import KscFinding, KscHost, KscServer, KscSnapshot, KscVerdict
+from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
+from api.modules.ksc.models import KscFinding, KscHost, KscServer, KscSnapshot
 from api.modules.ksc.services.coverage import ad_computers_for
 
 log = logging.getLogger(__name__)
@@ -131,6 +132,7 @@ def import_export(
     _store(db, snapshot, idx, findings, cfg, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
+    FINDINGS_ADAPTER.reconcile(db, server.id)
     _notify_assets(db)
     return snapshot
 
@@ -158,6 +160,7 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     _store(db, snapshot, idx, findings, cfg, handle)
     db.commit()
+    FINDINGS_ADAPTER.reconcile(db, snapshot.server_id)
     return snapshot
 
 
@@ -207,10 +210,6 @@ def compare(db: Session, snapshot: KscSnapshot) -> Comparison:
     fixed_keys = before - current
     fixed = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == prev.id, KscFinding.key.in_(list(fixed_keys)))).scalars()) if fixed_keys else []
     return Comparison(prev.id, prev.collected_at, current - before, fixed)
-
-
-def accepted_keys(db: Session, server_id: int) -> set[str]:
-    return set(db.execute(select(KscVerdict.key).where(KscVerdict.server_id == server_id, KscVerdict.status == "accepted")).scalars())
 
 
 def severity_counts(db: Session, snapshot_id: int) -> Counter[str]:

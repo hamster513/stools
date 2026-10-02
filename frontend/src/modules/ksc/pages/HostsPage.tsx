@@ -3,6 +3,7 @@ import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { ChevronRight, FilterX, Monitor, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useHostDetail, useHosts, useServers } from '@/modules/ksc/api/queries'
+import { StatusBadge } from '@/platform/findings/StatusBadge'
 import {
   AGENT_LABELS,
   BASES_LABELS,
@@ -10,7 +11,6 @@ import {
   IN_AD_LABELS,
   PROTECTION_LABELS,
   RTP_STATE_LABELS,
-  STATUS_LABELS,
   vmTypeLabel,
   type Host,
   type HostAgent,
@@ -252,7 +252,7 @@ function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string 
                         <Link to={`/ksc/servers/${serverId}/findings?check=${f.check}&q=${encodeURIComponent(h.name)}`} className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-row-hover">
                           <SeverityBadge severity={f.severity} />
                           <span className="truncate text-text">{f.check_title}</span>
-                          <span className="ml-auto shrink-0 text-[11px] text-text-secondary">{STATUS_LABELS[f.status]}</span>
+                          <StatusBadge status={f.status} className="ml-auto shrink-0" />
                         </Link>
                       </li>
                     ))}

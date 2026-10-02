@@ -88,3 +88,11 @@ export interface FindingSettings {
   risk_max_days: number | null
   risk_accept_role: 'analyst' | 'admin'
 }
+
+/** Счётчики области (`service.summary`): по статусам, просроченные, «риск истекает», без исполнителя. */
+export interface FindingSummary {
+  by_status: Record<FindingStatus, number>
+  overdue: number
+  risk_expiring: number
+  unassigned: number
+}

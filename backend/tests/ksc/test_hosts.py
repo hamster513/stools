@@ -32,7 +32,7 @@ def test_host_detail_has_findings_and_components(auth_client: TestClient) -> Non
     snap = auth_client.get("/api/ksc/snapshots").json()[0]
     detail = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws11").json()
     assert detail["name"] == "WS11" and ["Firewall", 1] in detail["components"]
-    assert [f["check"] for f in detail["findings"]] == ["COMPONENT_OFF"] and detail["findings"][0]["status"] == "persisting"
+    assert [f["check"] for f in detail["findings"]] == ["COMPONENT_OFF"] and detail["findings"][0]["status"] == "new"
     assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/nope").status_code == 404
 
 
@@ -64,11 +64,11 @@ def test_findings_list_and_detail(auth_client: TestClient) -> None:
     snap = auth_client.get("/api/ksc/snapshots").json()[0]
     body = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/findings").json()
     assert body["total"] == snap["findings"] and body["items"][0]["severity"] == "Critical"
-    assert body["facets"]["status"]["persisting"] == body["total"] and set(body["facets"]["check"]) >= {"RTP_OFF", "LICENSE", "POLICY_NONE"}
+    assert body["facets"]["status"]["new"] == body["total"] and set(body["facets"]["check"]) >= {"RTP_OFF", "LICENSE", "POLICY_NONE"}
     assert body["check_titles"]["RTP_OFF"] == "Постоянная защита не работает"
     lic = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/findings?check=LICENSE").json()["items"][0]
     assert lic["host"] == "" and lic["target"] == "AAAA-BBBB" and lic["details"]["days_left"] == 15
     searched = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/findings?q=servers").json()
     assert {i["check"] for i in searched["items"]} == {"POLICY_NONE", "TASK_NO_SCAN"}
     detail = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/findings/{lic['key']}").json()
-    assert detail["description"] and detail["history"][0]["snapshot_id"] == snap["id"] and detail["verdict"] is None
+    assert detail["description"] and detail["history"][0]["snapshot_id"] == snap["id"] and detail["status"] == "new" and "verdict" not in detail

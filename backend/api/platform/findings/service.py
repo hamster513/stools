@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db.models import ROLE_ADMIN, ROLE_ANALYST, AppUser
-from api.platform.findings.adapters import get_adapter
+from api.platform.findings.adapters import CurrentFinding, get_adapter
 from api.platform.findings.core import (
     NEEDS_REASON,
     OPEN,
@@ -247,6 +247,31 @@ def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str],
 
 
 # ---- Автоматика -------------------------------------------------------------
+
+
+def ensure_rows_for_disappeared(db: Session, module: str, scope_id: int, findings: Iterable[CurrentFinding]) -> int:
+    """Строки `new` для находок, которые пропали из данных, а решений о них не было.
+
+    `reconcile` строк не заводит, и такая находка исчезла бы бесследно; со
+    строкой ближайшая сверка закроет её системой (`resolved`) с событием, а
+    вернувшуюся — переоткроет. Транзакцию не фиксирует: это делает `reconcile`."""
+    wanted = {f.key: f for f in findings}
+    if not wanted:
+        return 0
+    existing = state_map(db, module, scope_id, wanted)
+    adapter = get_adapter(module)
+    made = 0
+    for key, f in wanted.items():
+        if key in existing:
+            continue
+        row = _new_row(module, scope_id, key)
+        row.title, row.severity, row.updated_by = f.title[:512], f.severity[:16], SYSTEM
+        row.first_seen_at = adapter.first_seen(db, scope_id, key)
+        db.add(row)
+        made += 1
+    db.flush()
+    return made
+
 
 
 def reconcile(db: Session, module: str, scope_id: int, *, ref: str, now: dt.datetime | None = None) -> dict[str, int]:

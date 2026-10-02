@@ -11,8 +11,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.collector_routes import (
-    checks_overview,
     comparison_summary,
+    findings_overview,
     read_upload,
     snapshot_or_404,
     start_import,
@@ -29,7 +29,6 @@ from api.modules.ksc.models import KscFinding, KscJob, KscServer, KscSnapshot
 from api.modules.ksc.services.settings import load_config
 from api.modules.ksc.services.snapshots import (
     MAX_UPLOAD,
-    accepted_keys,
     compare,
     delete_snapshot,
     import_export,
@@ -116,7 +115,6 @@ def server_overview(server_id: int, db: Session = Depends(get_db), _user: AppUse
     if snap is None:
         return {"server": {"id": server.id, "name": server.name, "version": server.version}, "snapshot": None, "coverage": None, "checks": []}
     cmp_ = compare(db, snap)
-    accepted = accepted_keys(db, server_id)
     rows = db.execute(select(KscFinding.check, KscFinding.severity, KscFinding.key).where(KscFinding.snapshot_id == snap.id)).all()
     counts = severity_counts(db, snap.id)
     return {
@@ -126,9 +124,8 @@ def server_overview(server_id: int, db: Session = Depends(get_db), _user: AppUse
             "hosts": snap.hosts, "findings": snap.findings, "by_severity": {sev: counts.get(sev, 0) for sev in SEVERITIES},
         },
         "compared_to": comparison_summary(cmp_),
-        "accepted_total": len(accepted & {key for _, _, key in rows}),
         "coverage": stats(snap).get("coverage"),
-        "checks": checks_overview(rows, CHECKS, SEVERITIES, cmp_, accepted),
+        **findings_overview(db, "ksc", server_id, rows, CHECKS, SEVERITIES, cmp_),
     }
 
 

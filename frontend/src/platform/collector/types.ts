@@ -1,8 +1,11 @@
 /**
  * Общие типы модулей-сборщиков (AD, KSC): у обоих есть подключения, снапшоты,
  * фоновые задачи и находки с фасетами. Поля, которые различаются, модули
- * добавляют в своих api/types.ts.
+ * добавляют в своих api/types.ts. Статусы находок — общий механизм
+ * платформы (platform/findings).
  */
+import type { FindingFacetFilters } from '@/platform/findings/facets'
+import type { FindingStatus, FindingSummary } from '@/platform/findings/types'
 
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info'
 export const SEVERITIES: Severity[] = ['Critical', 'High', 'Medium', 'Low', 'Info']
@@ -23,13 +26,8 @@ export const SEVERITY_TEXT: Record<Severity, string> = {
   Info: 'text-text-secondary',
 }
 
-export type FindingStatus = 'new' | 'persisting' | 'accepted' | 'fixed'
-export const STATUS_LABELS: Record<FindingStatus, string> = {
-  new: 'новая',
-  persisting: 'висит',
-  accepted: 'принята',
-  fixed: 'закрыта',
-}
+/** Появилась в этом снапшоте, была и раньше, нет в последнем снапшоте (данные — из прежнего). */
+export type FindingDelta = 'new' | 'same' | 'gone'
 
 /** Сравнение снапшота с предыдущим по времени сбора. */
 export interface ComparedTo {
@@ -57,13 +55,18 @@ export interface CheckSummary {
   code: string
   title: string
   description: string
+  /** Находки со статусами, которые учитываются (настройка платформы); by_severity — по ним же. */
   total: number
   by_severity: Record<Severity, number>
+  /** Все находки проверки в снапшоте. */
+  all: number
+  open: number
+  /** Появились в этом снапшоте. */
   new: number
-  fixed: number
+  /** Пропали с прошлого снапшота. */
+  resolved: number
   /** Почему результат проверки не проверка: в выгрузке не было данных. */
   unchecked?: string | null
-  accepted: number
 }
 
 /** Обзор: в snapshot модуль добавляет свой счётчик (объекты, хосты). */
@@ -77,7 +80,9 @@ export interface OverviewBase {
     by_severity: Record<Severity, number>
   } | null
   compared_to?: ComparedTo
-  accepted_total?: number
+  /** Учитываемые находки последнего снапшота. */
+  counted?: { total: number; by_severity: Record<Severity, number> }
+  summary?: FindingSummary
   checks: CheckSummary[]
 }
 
@@ -90,8 +95,17 @@ export interface FindingBase {
   severity_original: Severity
   target: string
   allowlisted: boolean
-  status: FindingStatus
   details: Record<string, unknown>
+  status: FindingStatus
+  status_title: string
+  assignee: string | null
+  assignee_name: string | null
+  due_date: string | null
+  overdue: boolean
+  risk_until: string | null
+  first_seen_at: string | null
+  age_days: number | null
+  delta: FindingDelta
 }
 
 export interface FindingsResponse<F extends FindingBase> {
@@ -100,8 +114,12 @@ export interface FindingsResponse<F extends FindingBase> {
   facets: {
     check: Record<string, number>
     severity: Record<Severity, number>
-    status: Record<FindingStatus, number>
     allowlisted: Record<'yes' | 'no', number>
+    delta: Record<FindingDelta, number>
+    /** Считаются без фильтра статуса; assignee — без фильтра исполнителя, `none` — без исполнителя. */
+    status: Record<FindingStatus, number>
+    assignee: Record<string, number>
+    flags: { overdue: number; risk_expiring: number }
   } | null
   compared_to: ComparedTo
   check_titles: Record<string, string>
@@ -110,21 +128,30 @@ export interface FindingsResponse<F extends FindingBase> {
 export type FindingDetail<F extends FindingBase> = F & {
   description: string
   history: { snapshot_id: number; collected_at: string }[]
-  verdict: { status: string; reason: string; decided_by: string; decided_at: string } | null
 }
 
+/** Параметры запроса списка: статус — коды через запятую или `all`; без него — открытые. */
 export interface FindingsQuery {
   check?: string
   severity?: Severity
-  status?: FindingStatus
   allowlisted?: boolean
+  delta?: FindingDelta
+  status?: string
+  assignee?: string
+  overdue?: boolean
+  risk_expiring?: boolean
   q?: string
   limit?: number
   offset?: number
 }
 
-/** Поля страницы находок, которые попадают в фасеты. */
-export type FindingFilters = Pick<FindingsQuery, 'check' | 'severity' | 'status' | 'allowlisted'>
+/** Фильтры страницы находок, которые попадают в фасеты. */
+export interface FindingFilters extends FindingFacetFilters {
+  check?: string
+  severity?: Severity
+  allowlisted?: boolean
+  delta?: FindingDelta
+}
 
 export type JobStatus = 'running' | 'done' | 'failed' | 'cancelled'
 

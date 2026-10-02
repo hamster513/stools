@@ -1,20 +1,18 @@
-import { useDropVerdict, useFindingDetail, useSetVerdict } from '@/modules/ad/api/queries'
+import { useFindingDetail } from '@/modules/ad/api/queries'
 import type { Finding } from '@/modules/ad/api/types'
 import { CollectorFindingDrawer } from '@/platform/collector/FindingDrawer'
 
 const HIDDEN = new Set(['details'])
 
-export function FindingDrawer({ finding, snapshotId, domainId, onClose }: { finding: Finding | null; snapshotId: number | undefined; domainId: number; onClose: () => void }) {
-  const accept = useSetVerdict()
-  const drop = useDropVerdict()
+export function FindingDrawer({ findingKey, snapshotId, domainId, onChanged, onClose }: { findingKey: string | null; snapshotId: number | undefined; domainId: number; onChanged: () => void; onClose: () => void }) {
   return (
-    <CollectorFindingDrawer
-      finding={finding}
+    <CollectorFindingDrawer<Finding>
+      findingKey={findingKey}
       snapshotId={snapshotId}
-      scope={{ domain_id: domainId }}
+      module="ad"
+      scopeId={domainId}
       useFindingDetail={useFindingDetail}
-      accept={accept}
-      drop={drop}
+      titleOf={(d) => `${d.check_title}: ${d.identity || d.target}`}
       leadRows={(d) => (
         <>
           <dt className="text-text-secondary">Identity</dt><dd className="font-mono break-all text-text">{d.identity || '—'} {d.identity_sid && <span className="text-[10px] text-text-secondary">{d.identity_sid}</span>}</dd>
@@ -24,8 +22,7 @@ export function FindingDrawer({ finding, snapshotId, domainId, onClose }: { find
       )}
       hiddenDetails={HIDDEN}
       trailRows={(d) => typeof d.details.details === 'string' && <><dt className="text-text-secondary">Детали</dt><dd className="text-text">{d.details.details}</dd></>}
-      reasonPlaceholder="Почему это норма: сервисная учётка, пароль 32 символа…"
-      verdictNote="Вердикт привязан к домену и ключу находки: переживёт следующие снапшоты, пока находка не изменится."
+      onChanged={onChanged}
       onClose={onClose}
     />
   )

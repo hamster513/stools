@@ -1,4 +1,4 @@
-"""Общий код роутеров модулей-сборщиков (AD, KSC): подключения, снапшоты, находки.
+"""Общий код роутеров модулей-сборщиков (AD, KSC): подключения, снапшоты, находки и их статусы.
 
 Модули устроены одинаково, а модели у каждого свои (`AdSnapshot` и
 `KscSnapshot`, `domain_id` и `server_id`), поэтому модели, колонки и
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -18,14 +19,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.audit import changes_summary
+from api.collector_findings import SnapshotFindingAdapter, first_seen_map, last_known
 from api.crypto import encrypt, reseal
 from api.db.models import AppUser
 from api.hosts import take_slot
 from api.jobs import UPLOAD_INTERRUPTED, JobHandle, active_job, fail_job, run_job, start_job
+from api.platform.findings import service as finding_svc
+from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
+from api.platform.findings.models import FindingState
 
 #: Задачи, при которых нельзя начать ещё одну: все пишут в те же снапшоты.
 BUSY_KINDS = ("import_file", "collect", "reanalyze")
-FINDING_STATUSES = ("new", "persisting", "accepted", "fixed")
 SNAPSHOT_NOT_FOUND = "снапшот не найден"
 REENTER_SECRET_TEXT = "при смене адреса или учётной записи пароль нужно ввести заново"
 
@@ -210,102 +214,202 @@ def start_reanalyze(
     return job_id
 
 
-def checks_overview(
-    rows: Iterable[Sequence[Any]], checks: Iterable[Any], severities: Iterable[str], cmp_: Comparison, accepted: set[str],
-    unchecked: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
-    """Сводка по проверкам последнего снапшота: `rows` — (check, severity, key) его находок.
-    `unchecked` — код проверки → почему её результат не проверка (в выгрузке не было данных)."""
-    per_check: dict[str, dict[str, Any]] = {
-        c.code: {"code": c.code, "title": c.title, "description": c.description, "total": 0, "by_severity": dict.fromkeys(severities, 0), "new": 0, "accepted": 0}
-        for c in checks
-    }
-    for check, severity, key in rows:
-        entry = per_check.get(check)
-        if entry is None:
-            continue
-        entry["total"] += 1
-        entry["by_severity"][severity] = entry["by_severity"].get(severity, 0) + 1
-        if key in cmp_.new_keys:
-            entry["new"] += 1
-        if key in accepted:
-            entry["accepted"] += 1
-    fixed_by_check: dict[str, int] = {}
-    for f in cmp_.fixed:
-        fixed_by_check[f.check] = fixed_by_check.get(f.check, 0) + 1
-    for code, entry in per_check.items():
-        entry["fixed"] = fixed_by_check.get(code, 0)
-        entry["unchecked"] = (unchecked or {}).get(code)
-    return list(per_check.values())
+# ---- Находки и их статусы ----------------------------------------------------
+
+#: `delta` строки: появилась в этом снапшоте, была и раньше, нет в последнем снапшоте.
+DELTAS = ("new", "same", "gone")
 
 
-# ---- Находки --------------------------------------------------------------
+@dataclass
+class FindingRow:
+    """Находка с состоянием платформы. У `gone` данные — из последнего снапшота, где она была."""
+
+    finding: Any
+    state: FindingState | None
+    delta: str
+
+    @property
+    def status(self) -> str:
+        return finding_svc.effective_status(self.state)
+
+    @property
+    def assignee(self) -> str | None:
+        return self.state.assignee if self.state is not None else None
 
 
-def finding_rows(
-    db: Session, finding_model: type[Any], snapshot_id: int, cmp_: Comparison, accepted: set[str], status_: str | None,
-) -> tuple[list[Any], dict[int, str]]:
-    """Находки снапшота (или исправленные — для статуса fixed) и статус каждой."""
-    if status_ == "fixed":
-        rows = list(cmp_.fixed)
-        return rows, {f.id: "fixed" for f in rows}
-    rows = list(db.execute(select(finding_model).where(finding_model.snapshot_id == snapshot_id)).scalars())
-    return rows, {
-        f.id: "accepted" if f.key in accepted else "new" if f.key in cmp_.new_keys else "persisting" for f in rows
-    }
+@dataclass(frozen=True)
+class FindingFilter:
+    check: str | None = None
+    severity: str | None = None
+    allowlisted: bool | None = None
+    statuses: frozenset[str] = OPEN
+    delta: str | None = None
+    #: Логин или `none`; `me` уже заменено логином.
+    assignee: str | None = None
+    overdue: bool = False
+    risk_expiring: bool = False
+    q: str | None = None
 
 
-def filter_findings(
-    rows: Iterable[Any], statuses: dict[int, str], *, check: str | None, severity: str | None,
-    allowlisted: bool | None, status_: str | None, q: str | None, haystack: Callable[[Any], Iterable[str]],
-) -> list[Any]:
-    """Отбор по фильтрам списка; `q` ищется без учёта регистра в полях `haystack(f)`."""
+def finding_filter(
+    user: AppUser, *, check: str | None, severity: str | None, allowlisted: bool | None, status_: str | None,
+    delta: str | None, assignee: str | None, overdue: bool, risk_expiring: bool, q: str | None,
+) -> FindingFilter:
+    """Параметры списка. `status` — коды через запятую или `all`; не задан — открытые,
+    а с «риск истекает» — принятые: среди открытых такого риска не бывает."""
+    if not status_:
+        statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN
+    elif status_ == "all":
+        statuses = frozenset(STATUSES)
+    else:
+        statuses = frozenset(s for s in status_.split(",") if s)
+        unknown = statuses - set(STATUSES)
+        if unknown or not statuses:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown)) or status_}")
+    if delta is not None and delta not in DELTAS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="неизвестное значение delta")
+    return FindingFilter(
+        check=check, severity=severity, allowlisted=allowlisted, statuses=statuses, delta=delta,
+        assignee=user.login if assignee == "me" else (assignee or None), overdue=overdue, risk_expiring=risk_expiring, q=q,
+    )
 
-    def keep(f: Any) -> bool:
-        if check and f.check != check:
-            return False
-        if severity and f.severity != severity:
-            return False
-        if allowlisted is not None and f.allowlisted != allowlisted:
-            return False
-        if status_ and status_ != "fixed" and statuses[f.id] != status_:
-            return False
-        if q:
-            needle = q.lower()
-            return any(needle in text.lower() for text in haystack(f))
-        return True
 
-    return [f for f in rows if keep(f)]
+def finding_rows(db: Session, adapter: SnapshotFindingAdapter, snapshot: Any, cmp_: Comparison) -> list[FindingRow]:
+    """Находки снапшота с их состояниями. У последнего снапшота области к ним добавляются
+    находки, которых в нём уже нет, но есть состояние (`present = false`): устранённые
+    системой и принятые людьми, — иначе их негде увидеть."""
+    scope_id = getattr(snapshot, adapter.owner)
+    states = finding_svc.state_map(db, adapter.module, scope_id)
+    fm = adapter.finding_model
+    found = list(db.scalars(select(fm).where(fm.snapshot_id == snapshot.id)))
+    rows = [FindingRow(f, states.get(f.key), "new" if f.key in cmp_.new_keys else "same") for f in found]
+    latest = adapter.latest(db, scope_id)
+    if latest is not None and latest.id == snapshot.id:
+        here = {f.key for f in found}
+        absent = [st.key for st in states.values() if not st.present and st.key not in here]
+        rows += [FindingRow(f, states[f.key], "gone") for f in last_known(db, adapter, scope_id, absent)]
+    return rows
+
+
+def _overdue(r: FindingRow, today: dt.date) -> bool:
+    return r.state is not None and is_overdue(r.status, r.state.due_date, today)
+
+
+def _risk_expiring(r: FindingRow, today: dt.date) -> bool:
+    st = r.state
+    return (st is not None and st.status == "risk_accepted" and st.risk_until is not None
+            and st.risk_until <= today + dt.timedelta(days=finding_svc.RISK_EXPIRING_DAYS))
+
+
+def _matches(r: FindingRow, flt: FindingFilter, today: dt.date, haystack: Callable[[Any], Iterable[str]], skip: str = "") -> bool:
+    """Отбор по фильтрам; `skip` — какой фильтр не применять (фасет считается без своего фильтра)."""
+    f = r.finding
+    if flt.check and f.check != flt.check:
+        return False
+    if flt.severity and f.severity != flt.severity:
+        return False
+    if flt.allowlisted is not None and f.allowlisted != flt.allowlisted:
+        return False
+    if flt.delta and r.delta != flt.delta:
+        return False
+    if skip != "status" and r.status not in flt.statuses:
+        return False
+    if skip != "assignee" and flt.assignee and r.assignee != (None if flt.assignee == "none" else flt.assignee):
+        return False
+    if flt.overdue and not _overdue(r, today):
+        return False
+    if flt.risk_expiring and not _risk_expiring(r, today):
+        return False
+    if flt.q:
+        needle = flt.q.lower()
+        return any(needle in text.lower() for text in haystack(f))
+    return True
+
+
+def state_fields(db: Session, adapter: SnapshotFindingAdapter, scope_id: int, rows: Sequence[FindingRow]) -> list[dict[str, Any]]:
+    """Поля состояния строк списка и карточки (спека §5). Возраст без строки
+    состояния — по снапшотам области, одним запросом на страницу."""
+    today = finding_svc.today()
+    seen = first_seen_map(db, adapter, scope_id, [r.finding.key for r in rows if r.state is None or r.state.first_seen_at is None])
+    logins = {r.assignee for r in rows if r.assignee}
+    names = {u.login: u.display_name or u.login for u in db.scalars(select(AppUser).where(AppUser.login.in_(logins)))} if logins else {}
+    now = dt.datetime.now(dt.UTC)
+    out = []
+    for r in rows:
+        st = r.state
+        first = (st.first_seen_at if st is not None else None) or seen.get(r.finding.key)
+        out.append({
+            "status": r.status,
+            "status_title": STATUS_TITLES[r.status],
+            "assignee": r.assignee,
+            "assignee_name": names.get(r.assignee, r.assignee) if r.assignee else None,
+            "due_date": st.due_date.isoformat() if st is not None and st.due_date else None,
+            "overdue": _overdue(r, today),
+            "risk_until": st.risk_until.isoformat() if st is not None and st.risk_until else None,
+            "first_seen_at": first.isoformat() if first else None,
+            "age_days": (now - first).days if first else None,
+            "delta": r.delta,
+        })
+    return out
 
 
 def findings_page(
-    filtered: list[Any], statuses: dict[int, str], cmp_: Comparison, *, status_: str | None, offset: int, limit: int,
-    item: Callable[[Any, str], dict[str, Any]], severities: Iterable[str], check_titles: dict[str, str],
+    db: Session, adapter: SnapshotFindingAdapter, scope_id: int, rows: list[FindingRow], flt: FindingFilter, cmp_: Comparison, *,
+    offset: int, limit: int, haystack: Callable[[Any], Iterable[str]], sort_key: Callable[[Any], Any],
+    item: Callable[[Any], dict[str, Any]], severities: Iterable[str], check_titles: dict[str, str],
 ) -> dict[str, Any]:
-    """Страница отобранных находок с фасетами (только на первой странице)."""
-    facets: dict[str, dict[str, int]] = {"check": {}, "severity": dict.fromkeys(severities, 0), "status": dict.fromkeys(FINDING_STATUSES, 0), "allowlisted": {"yes": 0, "no": 0}}
-    for f in filtered:
-        facets["check"][f.check] = facets["check"].get(f.check, 0) + 1
-        facets["severity"][f.severity] = facets["severity"].get(f.severity, 0) + 1
-        facets["status"][statuses[f.id]] += 1
-        facets["allowlisted"]["yes" if f.allowlisted else "no"] += 1
-    if status_ != "fixed":
-        facets["status"]["fixed"] = len(cmp_.fixed)
+    """Страница отобранных находок с фасетами (только на первой странице). Фасеты
+    статуса и исполнителя считаются без своего фильтра — иначе выбор одного
+    значения прятал бы счётчики остальных."""
+    today = finding_svc.today()
+    filtered = sorted((r for r in rows if _matches(r, flt, today, haystack)), key=lambda r: sort_key(r.finding))
+    facets: dict[str, dict[str, int]] | None = None
+    if offset == 0:
+        facets = {
+            "check": {}, "severity": dict.fromkeys(severities, 0), "allowlisted": {"yes": 0, "no": 0},
+            "delta": dict.fromkeys(DELTAS, 0), "status": dict.fromkeys(STATUSES, 0), "assignee": {"none": 0},
+            "flags": {"overdue": 0, "risk_expiring": 0},
+        }
+        for r in filtered:
+            f = r.finding
+            facets["check"][f.check] = facets["check"].get(f.check, 0) + 1
+            facets["severity"][f.severity] = facets["severity"].get(f.severity, 0) + 1
+            facets["allowlisted"]["yes" if f.allowlisted else "no"] += 1
+            facets["delta"][r.delta] += 1
+        for r in rows:
+            if _matches(r, flt, today, haystack, skip="status"):
+                facets["status"][r.status] += 1
+                facets["flags"]["overdue"] += _overdue(r, today)
+                facets["flags"]["risk_expiring"] += _risk_expiring(r, today)
+            if _matches(r, flt, today, haystack, skip="assignee"):
+                who = r.assignee or "none"
+                facets["assignee"][who] = facets["assignee"].get(who, 0) + 1
     page = filtered[offset : offset + limit]
     return {
         "total": len(filtered),
-        "items": [item(f, statuses[f.id]) for f in page],
-        "facets": facets if offset == 0 else None,
+        "items": [{**item(r.finding), **fields} for r, fields in zip(page, state_fields(db, adapter, scope_id, page), strict=True)],
+        "facets": facets,
         "compared_to": comparison_summary(cmp_),
         "check_titles": check_titles,
     }
 
 
-def finding_or_404(db: Session, finding_model: type[Any], snapshot_id: int, key: str) -> Any:
-    f = db.execute(select(finding_model).where(finding_model.snapshot_id == snapshot_id, finding_model.key == key)).scalars().first()
+def finding_detail_row(
+    db: Session, adapter: SnapshotFindingAdapter, snapshot: Any, key: str, cmp_: Comparison,
+) -> tuple[Any, dict[str, Any]]:
+    """Находка карточки и поля её состояния. Находку, которой в снапшоте нет, карточка
+    показывает по последнему снапшоту области, где она была (устранённая, принятая)."""
+    scope_id = getattr(snapshot, adapter.owner)
+    fm = adapter.finding_model
+    f = db.scalars(select(fm).where(fm.snapshot_id == snapshot.id, fm.key == key)).first()
+    delta = "new" if key in cmp_.new_keys else "same"
     if f is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="находка не найдена")
-    return f
+        known = last_known(db, adapter, scope_id, [key])
+        if not known:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail="находка не найдена")
+        f, delta = known[0], "gone"
+    row = FindingRow(f, finding_svc.state_map(db, adapter.module, scope_id, [key]).get(key), delta)
+    return f, state_fields(db, adapter, scope_id, [row])[0]
 
 
 def finding_history(
@@ -321,7 +425,51 @@ def finding_history(
     return [{"snapshot_id": sid, "collected_at": at.isoformat()} for sid, at in history]
 
 
-def verdict_view(verdict: Any) -> dict[str, Any] | None:
-    if verdict is None:
-        return None
-    return {"status": verdict.status, "reason": verdict.reason, "decided_by": verdict.decided_by, "decided_at": verdict.decided_at.isoformat()}
+# ---- Обзор ---------------------------------------------------------------------
+
+
+def findings_overview(
+    db: Session, module: str, scope_id: int, rows: Sequence[Sequence[Any]], checks: Iterable[Any], severities: Iterable[str],
+    cmp_: Comparison, unchecked: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Сводка обзора по последнему снапшоту: `rows` — (check, severity, key) его находок.
+
+    `total` и `by_severity` проверки и блок `counted` — находки со статусами, которые
+    велено учитывать (настройка платформы); `all` — все находки проверки, `open` —
+    открытые, `new` — появились в этом снапшоте, `resolved` — пропали с прошлого.
+    `summary` — счётчики статусов области. `unchecked` — код проверки → почему её
+    результат не проверка (в выгрузке не было данных)."""
+    severities = list(severities)
+    states = finding_svc.state_map(db, module, scope_id)
+    counted = finding_svc.counted_statuses(db)
+    per_check: dict[str, dict[str, Any]] = {
+        c.code: {"code": c.code, "title": c.title, "description": c.description, "total": 0, "all": 0, "open": 0,
+                 "by_severity": dict.fromkeys(severities, 0), "new": 0}
+        for c in checks
+    }
+    total, by_severity = 0, dict.fromkeys(severities, 0)
+    for check, severity, key in rows:
+        st = finding_svc.effective_status(states.get(key))
+        if st in counted:
+            total += 1
+            by_severity[severity] = by_severity.get(severity, 0) + 1
+        entry = per_check.get(check)
+        if entry is None:
+            continue
+        entry["all"] += 1
+        entry["open"] += st in OPEN
+        entry["new"] += key in cmp_.new_keys
+        if st in counted:
+            entry["total"] += 1
+            entry["by_severity"][severity] = entry["by_severity"].get(severity, 0) + 1
+    resolved_by_check: dict[str, int] = {}
+    for f in cmp_.fixed:
+        resolved_by_check[f.check] = resolved_by_check.get(f.check, 0) + 1
+    for code, entry in per_check.items():
+        entry["resolved"] = resolved_by_check.get(code, 0)
+        entry["unchecked"] = (unchecked or {}).get(code)
+    return {
+        "counted": {"total": total, "by_severity": by_severity},
+        "summary": finding_svc.summary(db, module, scope_id, keys_present=len({key for _, _, key in rows})),
+        "checks": list(per_check.values()),
+    }

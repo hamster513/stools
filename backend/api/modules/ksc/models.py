@@ -1,4 +1,4 @@
-"""Таблицы модуля KSC: сервер, подключения, снапшоты, хосты, находки, вердикты, задачи."""
+"""Таблицы модуля KSC: сервер, подключения, снапшоты, хосты, находки, задачи (статусы находок — api/platform/findings)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -112,17 +112,6 @@ class KscFinding(Base):
     target: Mapped[str] = mapped_column(String(1024), default="")
     allowlisted: Mapped[bool] = mapped_column(Boolean, default=False)
     details_json: Mapped[str] = mapped_column(Text, default="{}")
-
-
-class KscVerdict(Base):
-    __tablename__ = "ksc_verdict"
-
-    server_id: Mapped[int] = mapped_column(ForeignKey("ksc_server.id", ondelete="CASCADE"), primary_key=True)
-    key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    status: Mapped[str] = mapped_column(String(16), default="accepted")
-    reason: Mapped[str] = mapped_column(Text, default="")
-    decided_by: Mapped[str] = mapped_column(String(255), default="")
-    decided_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class KscJob(JobColumns, Base):

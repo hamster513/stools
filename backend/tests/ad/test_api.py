@@ -1,4 +1,4 @@
-"""Снапшоты, находки, сравнение и вердикты через API на синтетическом домене."""
+"""Снапшоты, находки, сравнение и статусы находок через API на синтетическом домене."""
 from __future__ import annotations
 
 import datetime as dt
@@ -29,7 +29,7 @@ def test_upload_creates_domain_snapshot_and_findings(auth_client: TestClient) ->
     body = auth_client.get(f"/api/ad/snapshots/{snaps[0]['id']}/findings").json()
     assert body["total"] == snaps[0]["findings"] > 20
     assert body["items"][0]["severity"] == "Critical" and body["items"][0]["check"] == "DCSync"
-    assert body["facets"]["status"]["new"] == 0 and body["facets"]["status"]["persisting"] == body["total"]
+    assert body["facets"]["delta"] == {"new": 0, "same": body["total"], "gone": 0} and body["facets"]["status"]["new"] == body["total"]
     assert set(body["facets"]["check"]) >= {"DCSync", "Kerberoast", "ADCS_ESC"}
     filtered = auth_client.get(f"/api/ad/snapshots/{snaps[0]['id']}/findings?check=Kerberoast").json()
     assert filtered["total"] == 1 and filtered["items"][0]["identity"] == "CORP\\svc_sql"
@@ -61,32 +61,36 @@ def test_second_snapshot_compares_new_and_fixed(auth_client: TestClient, db_sess
     snaps = auth_client.get(f"/api/ad/snapshots?domain_id={domain_id}").json()
     assert len(snaps) == 2 and snaps[0]["previous_id"] == snaps[1]["id"]
     assert snaps[0]["new"] == 1 and snaps[0]["fixed"] == 1
-    new = auth_client.get(f"/api/ad/snapshots/{snaps[0]['id']}/findings?status=new").json()
+    new = auth_client.get(f"/api/ad/snapshots/{snaps[0]['id']}/findings?delta=new").json()
     assert new["total"] == 1 and new["items"][0]["identity"] == "CORP\\helpdesk" and new["items"][0]["status"] == "new"
-    fixed = auth_client.get(f"/api/ad/snapshots/{snaps[0]['id']}/findings?status=fixed").json()
-    assert fixed["total"] == 1 and fixed["items"][0]["identity"] == "CORP\\svc_sql" and fixed["items"][0]["status"] == "fixed"
+    fixed = auth_client.get(f"/api/ad/snapshots/{snaps[0]['id']}/findings?status=resolved").json()
+    assert fixed["total"] == 1 and fixed["items"][0]["identity"] == "CORP\\svc_sql" and fixed["items"][0]["status"] == "resolved"
     overview = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()
     assert overview["compared_to"]["new"] == 1 and overview["compared_to"]["fixed"] == 1
     kerb = next(c for c in overview["checks"] if c["code"] == "Kerberoast")
-    assert kerb["new"] == 1 and kerb["fixed"] == 1
+    assert kerb["new"] == 1 and kerb["resolved"] == 1
 
 
-def test_verdict_survives_next_snapshot_and_detail_has_history(auth_client: TestClient) -> None:
+def test_accepted_risk_survives_next_snapshot_and_detail_has_history(auth_client: TestClient) -> None:
     assert _upload(auth_client, build_export())["status"] == "done"
     domain_id = auth_client.get("/api/ad/domains").json()[0]["id"]
     snap1 = auth_client.get(f"/api/ad/snapshots?domain_id={domain_id}").json()[0]["id"]
     item = auth_client.get(f"/api/ad/snapshots/{snap1}/findings?check=Kerberoast").json()["items"][0]
-    r = auth_client.put(f"/api/ad/verdicts/{item['key']}", json={"domain_id": domain_id, "reason": "сервисная учётка, пароль 32 символа"})
-    assert r.status_code == 204
+    ref = {"module": "ad", "scope_id": domain_id, "key": item["key"]}
+    r = auth_client.put("/api/findings/state", json={**ref, "status": "risk_accepted", "comment": "сервисная учётка, пароль 32 символа"})
+    assert r.status_code == 200, r.text
     assert _upload(auth_client, build_export(now=NOW + dt.timedelta(days=1)))["status"] == "done"
     snap2 = auth_client.get(f"/api/ad/snapshots?domain_id={domain_id}").json()[0]["id"]
-    body = auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast").json()
-    assert body["items"][0]["status"] == "accepted" and body["facets"]["status"]["accepted"] == 1
+    body = auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast&status=all").json()
+    assert body["items"][0]["status"] == "risk_accepted" and body["facets"]["status"]["risk_accepted"] == 1
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast").json()["total"] == 0
     detail = auth_client.get(f"/api/ad/snapshots/{snap2}/findings/{item['key']}").json()
-    assert detail["verdict"]["reason"].startswith("сервисная") and len(detail["history"]) == 2
+    assert detail["status"] == "risk_accepted" and len(detail["history"]) == 2
     assert detail["description"]
-    assert auth_client.delete(f"/api/ad/verdicts/{item['key']}?domain_id={domain_id}").status_code == 204
-    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast").json()["items"][0]["status"] == "persisting"
+    state = auth_client.get("/api/findings/state", params=ref).json()
+    assert state["reason"].startswith("сервисная") and state["updated_by"] == "tester"
+    assert auth_client.put("/api/findings/state", json={**ref, "status": "new"}).status_code == 200
+    assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast").json()["items"][0]["status"] == "new"
 
 
 def test_reanalyze_with_new_rules_and_delete(auth_client: TestClient, app_settings: Any) -> None:

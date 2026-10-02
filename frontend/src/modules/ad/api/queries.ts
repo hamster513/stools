@@ -72,20 +72,12 @@ export function useFindingDetail(snapshotId: number | undefined, key: string | u
   })
 }
 
-export function useSetVerdict() {
+/** После смены статусов находок: списки, карточки и обзор модуля читают их заново. */
+export function useFindingsChanged() {
   const qc = useQueryClient()
-  return useMutation<void, ApiRequestError, { key: string; domain_id: number; reason: string }>({
-    mutationFn: ({ key, ...body }) => api.put(`/api/ad/verdicts/${key}`, body),
-    onSuccess: () => invalidateAll(qc),
-  })
-}
-
-export function useDropVerdict() {
-  const qc = useQueryClient()
-  return useMutation<void, ApiRequestError, { key: string; domain_id: number }>({
-    mutationFn: ({ key, domain_id }) => api.del(`/api/ad/verdicts/${key}?domain_id=${domain_id}`),
-    onSuccess: () => invalidateAll(qc),
-  })
+  return () => {
+    for (const key of ['ad-findings', 'ad-finding', 'ad-overview']) qc.invalidateQueries({ queryKey: [key] })
+  }
 }
 
 export function useUploadExport() {

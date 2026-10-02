@@ -10,10 +10,12 @@ from fastapi import APIRouter
 
 from api.jobs import make_jobs_router
 from api.modules.ad import models as models  # таблицы должны попасть в metadata
+from api.modules.ad.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ad.models import AdJob
 from api.modules.ad.routers import ca_data, collector, connections, findings, settings, snapshots
 from api.modules.ad.services.attack_layer import LAYER as ATTACK_LAYER
 from api.modules.attack.layers import register_layer
+from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/ad")
 for sub in (
@@ -30,5 +32,6 @@ for sub in (
 # Экспозиция AD — слой платформенной матрицы: модуль знает про
 # `attack`, `attack` про модули — нет.
 register_layer(ATTACK_LAYER)
+register_adapter(FINDINGS_ADAPTER)
 
 __all__ = ["router"]

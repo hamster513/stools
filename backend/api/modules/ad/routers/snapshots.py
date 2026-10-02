@@ -13,8 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.collector_routes import (
-    checks_overview,
     comparison_summary,
+    findings_overview,
     read_upload,
     snapshot_or_404,
     start_import,
@@ -33,7 +33,6 @@ from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
 from api.modules.ad.services.ca_data import store_ca_data
 from api.modules.ad.services.settings import load_config
 from api.modules.ad.services.snapshots import (
-    accepted_keys,
     compare,
     delete_snapshot,
     import_export,
@@ -122,7 +121,6 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
     if snap is None:
         return {"domain": {"id": domain.id, "dns_root": domain.dns_root, "netbios": domain.netbios}, "snapshot": None, "checks": []}
     cmp_ = compare(db, snap)
-    accepted = accepted_keys(db, domain_id)
     rows = db.execute(select(AdFinding.check, AdFinding.severity, AdFinding.key).where(AdFinding.snapshot_id == snap.id)).all()
     counts = severity_counts(db, snap.id)
     unchecked: dict[str, str] = json.loads(snap.unchecked_json or "{}")
@@ -143,8 +141,7 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
             "analyzer_version": snap.analyzer_version, "stale_analysis": stale,
         },
         "compared_to": comparison_summary(cmp_),
-        "accepted_total": len(accepted & {key for _, _, key in rows}),
-        "checks": checks_overview(rows, CHECKS, SEVERITIES, cmp_, accepted, unchecked),
+        **findings_overview(db, "ad", domain_id, rows, CHECKS, SEVERITIES, cmp_, unchecked),
     }
 
 

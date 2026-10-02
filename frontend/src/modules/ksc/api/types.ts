@@ -1,8 +1,8 @@
 /** Типы API модуля Kaspersky Security Center (docs/ksc/api.md, спека §7). */
 
+import type { FindingStatus } from '@/platform/findings/types'
 import type {
   FindingBase,
-  FindingStatus,
   FindingDetail as CollectorFindingDetail,
   FindingsResponse as CollectorFindingsResponse,
   OverviewBase,
@@ -10,8 +10,9 @@ import type {
   SnapshotBase,
 } from '@/platform/collector/types'
 
-export { SEVERITIES, SEVERITY_LABELS, STAGE_LABELS, STATUS_LABELS } from '@/platform/collector/types'
-export type { CheckSummary, FindingsQuery, FindingStatus, Job, JobStatus, Severity } from '@/platform/collector/types'
+export { SEVERITIES, SEVERITY_LABELS, STAGE_LABELS } from '@/platform/collector/types'
+export type { CheckSummary, FindingsQuery, Job, JobStatus, Severity } from '@/platform/collector/types'
+export type { FindingStatus } from '@/platform/findings/types'
 
 export interface Server {
   id: number
@@ -179,7 +180,7 @@ export interface HostsResponse {
 }
 
 export interface HostDetail extends Omit<Host, 'findings'> {
-  findings: { key: string; check: string; check_title: string; severity: Severity; status: FindingStatus; details: Record<string, unknown> }[]
+  findings: { key: string; check: string; check_title: string; severity: Severity; status: FindingStatus; status_title: string; details: Record<string, unknown> }[]
 }
 
 export interface LockCount {

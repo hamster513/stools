@@ -23,7 +23,8 @@ from api.modules.ad.core.checks.coverage import coverage_gaps
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import AdExport, ExportIndex, load_export_path
 from api.modules.ad.core.findings import SEVERITY_RANK, Finding
-from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot, AdVerdict
+from api.modules.ad.findings_adapter import ADAPTER as FINDINGS_ADAPTER
+from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot
 from api.modules.ad.services.ca_data import effective_ca_data
 
 log = logging.getLogger(__name__)
@@ -125,6 +126,7 @@ def import_export(
     _store_findings(db, snapshot, findings, gaps, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
+    FINDINGS_ADAPTER.reconcile(db, domain.id)
     _notify_assets(db)
     return snapshot
 
@@ -157,6 +159,7 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: 
     snapshot.ca_data_id = ca_data_id
     _store_findings(db, snapshot, findings, gaps, handle)
     db.commit()
+    FINDINGS_ADAPTER.reconcile(db, snapshot.domain_id)
     return snapshot
 
 
@@ -211,10 +214,6 @@ def compare(db: Session, snapshot: AdSnapshot) -> Comparison:
         else []
     )
     return Comparison(prev.id, prev.collected_at, current - before, fixed)
-
-
-def accepted_keys(db: Session, domain_id: int) -> set[str]:
-    return set(db.execute(select(AdVerdict.key).where(AdVerdict.domain_id == domain_id, AdVerdict.status == "accepted")).scalars())
 
 
 def severity_counts(db: Session, snapshot_id: int) -> Counter[str]:

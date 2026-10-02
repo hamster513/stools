@@ -8,8 +8,9 @@ import type {
   SnapshotBase,
 } from '@/platform/collector/types'
 
-export { SEVERITIES, SEVERITY_LABELS, STAGE_LABELS, STATUS_LABELS } from '@/platform/collector/types'
-export type { CheckSummary, FindingsQuery, FindingStatus, Job, JobStatus, Severity } from '@/platform/collector/types'
+export { SEVERITIES, SEVERITY_LABELS, STAGE_LABELS } from '@/platform/collector/types'
+export type { CheckSummary, FindingsQuery, Job, JobStatus, Severity } from '@/platform/collector/types'
+export type { FindingStatus } from '@/platform/findings/types'
 
 export interface Domain {
   id: number
