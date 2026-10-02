@@ -10,6 +10,7 @@ from fastapi import APIRouter
 
 from api.jobs import make_jobs_router
 from api.modules.assets import models as models  # таблицы должны попасть в metadata
+from api.modules.assets.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.assets.models import AssetJob
 from api.modules.assets.routers import assets, dns, networks, overview, scan, settings, zones
 from api.modules.assets.services.dns import schedule_handler as dns_schedule_handler
@@ -18,6 +19,7 @@ from api.modules.assets.services.sync import schedule_handler as sync_schedule_h
 
 # platform_schedule — цель внешних ключей сетей и DNS, её модель должна быть в metadata.
 from api.platform import scheduler as scheduler
+from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 for sub in (
@@ -29,5 +31,6 @@ for sub in (
 scheduler.register_schedule_kind("assets", "scan", schedule_handler)
 scheduler.register_schedule_kind("assets", "dns", dns_schedule_handler)
 scheduler.register_schedule_kind("assets", "sync", sync_schedule_handler)
+register_adapter(FINDINGS_ADAPTER)
 
 __all__ = ["router"]

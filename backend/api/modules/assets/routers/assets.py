@@ -1,10 +1,22 @@
 """Реестр активов: список с фасетами, карточка, ручные поля, объединение, отвязка,
-закрепление полей, синхронизация с модулями и её расписание."""
+закрепление полей, синхронизация с модулями и её расписание, массовая смена статуса
+расхождений (статусы находок платформы)."""
 from __future__ import annotations
 
+import uuid
+from itertools import batched
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,6 +26,8 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.jobs import active_job, run_job, start_job
 from api.modules.assets.core.discrepancies import CODES
+from api.modules.assets.findings_adapter import MODULE, SCOPE
+from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import AssetJob
 from api.modules.assets.routers.scan import ScheduleIn, ScheduleView, schedule_view
 from api.modules.assets.services.assets import (
@@ -25,6 +39,7 @@ from api.modules.assets.services.assets import (
     asset_detail,
     bulk_update,
     detach_observation,
+    discrepancy_keys,
     list_assets,
     lookup_asset,
     matching_ids,
@@ -38,6 +53,9 @@ from api.modules.assets.services.sync import (
     sync_status,
     try_lock_in_transaction,
 )
+from api.platform.findings import service as finding_svc
+from api.platform.findings.core import STATUSES, RoleRequired, TransitionError
+from api.platform.findings.router import ChangeBody
 from api.platform.scheduler import PlatformSchedule, delete_schedule, upsert_schedule
 
 router = APIRouter(tags=["assets"])
@@ -45,6 +63,8 @@ router = APIRouter(tags=["assets"])
 MAX_LIMIT = 500
 #: Столько активов можно выбрать «всеми по фильтру» и изменить одним запросом.
 MAX_BULK = 50_000
+#: Ключей расхождений за один вызов `bulk_change` — как у ручки массовой смены платформы.
+DISC_BULK_CHUNK = 5000
 TASK_WRITING = "идёт запись результатов задачи — повторите позже"
 
 
@@ -69,6 +89,14 @@ class BulkIn(BaseModel):
     criticality: Literal["Critical", "High", "Medium", "Low", ""] | None = None
     tags_add: list[str] = Field(default_factory=list, max_length=50)
     tags_remove: list[str] = Field(default_factory=list, max_length=50)
+
+
+class DiscrepancyBulkIn(BaseModel):
+    """Смена статуса расхождения кода `code` у отмеченных активов; `change` — как у `/api/findings/bulk`."""
+
+    ids: list[int] = Field(min_length=1, max_length=MAX_BULK)
+    code: str = Field(max_length=32)
+    change: ChangeBody
 
 
 class PinIn(BaseModel):
@@ -106,15 +134,24 @@ def _filters(
     port: int | None = Query(default=None, ge=1, le=65535),
     tag: str | None = None,
     criticality: str | None = None,
+    disc_status: str | None = None,
+    assignee: str | None = Query(default=None, max_length=255),
+    overdue: bool | None = None,
 ) -> dict[str, Any]:
-    """Фильтры списка — одни и те же у страницы списка и у выбора «всех по фильтру»."""
+    """Фильтры списка — одни и те же у страницы списка и у выбора «всех по фильтру». `disc_status`
+    (коды статусов через запятую или `all`), `assignee` (`me`, `none`, логин) и `overdue` — про
+    расхождения: актив подходит, если у него есть расхождение под ними (и под `code`, если он задан)."""
     _check(source_has, SOURCES)
     _check(source_missing, SOURCES)
     _check(code, (*CODES, ANY_CODE))
     _check(criticality, (*CRITICALITY, "none"))
+    if disc_status and disc_status != "all":
+        for s in disc_status.split(","):
+            _check(s, STATUSES)
     return {
         "q": q, "source_has": source_has, "source_missing": source_missing, "code": code, "network_id": network_id,
         "zone": zone, "port": port, "tag": tag, "criticality": criticality,
+        "disc_status": disc_status or None, "assignee": assignee or None, "overdue": overdue,
     }
 
 
@@ -124,18 +161,18 @@ def get_assets(
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _user: AppUser = Depends(get_current_user),
+    user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    items, total, facets = list_assets(db, **filters, limit=limit, offset=offset)
+    items, total, facets = list_assets(db, **filters, limit=limit, offset=offset, login=user.login)
     return {"total": total, "items": items, "facets": facets if offset == 0 else None}
 
 
 @router.get("/assets/ids")
 def get_asset_ids(
-    filters: dict[str, Any] = Depends(_filters), db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+    filters: dict[str, Any] = Depends(_filters), db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Id всех активов под фильтрами (не больше `MAX_BULK`) — для выбора «всех по фильтру»."""
-    ids = matching_ids(db, **filters)
+    ids = matching_ids(db, **filters, login=user.login)
     return {"total": len(ids), "ids": ids[:MAX_BULK]}
 
 
@@ -148,6 +185,38 @@ def bulk(payload: BulkIn, db: Session = Depends(get_db), _user: AppUser = Depend
     return {"updated": updated}
 
 
+@router.post("/assets/discrepancies/bulk")
+def bulk_discrepancies(
+    payload: DiscrepancyBulkIn, request: Request, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+) -> dict[str, int]:
+    """Статус, исполнитель, срок расхождения `code` у отмеченных активов — одним массовым действием
+    (`bulk_id`). Ключи — расхождения, которые у этих активов есть сейчас; права — как у
+    `/api/findings/bulk` (принять риск — по `risk_accept_role`, 403)."""
+    _check(payload.code, CODES)
+    change = payload.change.to_change()
+    what = payload.change.describe()
+    try:
+        # До первого куска: отказ по правилам не должен оставить смену сделанной наполовину.
+        finding_svc.check_change(db, change, actor=user)
+    except TransitionError as exc:
+        code = status.HTTP_403_FORBIDDEN if isinstance(exc, RoleRequired) else status.HTTP_422_UNPROCESSABLE_CONTENT
+        raise HTTPException(code, detail=str(exc)) from None
+    keys = discrepancy_keys(db, payload.ids, payload.code)
+    bulk_id = uuid.uuid4().hex
+    request.state.audit_summary = f"{MODULE}: находок {len(keys)}; {what}; bulk_id {bulk_id}"
+    changed = 0
+    try:
+        for chunk in batched(keys, DISC_BULK_CHUNK):
+            changed += finding_svc.bulk_change(db, module=MODULE, scope_id=SCOPE, keys=list(chunk), change=change,
+                                               actor=user, bulk_id=bulk_id)
+    except TransitionError as exc:
+        db.rollback()
+        code = status.HTTP_403_FORBIDDEN if isinstance(exc, RoleRequired) else status.HTTP_422_UNPROCESSABLE_CONTENT
+        raise HTTPException(code, detail=f"изменено {changed} из {len(keys)}, дальше отказ: {exc}") from None
+    request.state.audit_summary = f"{MODULE}: изменено находок {changed} из {len(keys)}; {what}; bulk_id {bulk_id}"
+    return {"changed": changed}
+
+
 @router.get("/assets/{asset_id}")
 def get_asset(asset_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     return dict(_errors(asset_detail, db, asset_id))
@@ -157,6 +226,8 @@ def get_asset(asset_id: int, db: Session = Depends(get_db), _user: AppUser = Dep
 def patch_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     _errors(update_manual, db, asset_id, payload.model_dump(include=payload.model_fields_set))
     db.commit()
+    if payload.model_fields_set & {"network_id", "network_manual"}:
+        reconcile_findings(db, f"сеть актива #{asset_id} изменена вручную")
     return dict(asset_detail(db, asset_id))
 
 
@@ -164,6 +235,7 @@ def patch_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_db
 def pin(asset_id: int, payload: PinIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     _errors(pin_field, db, asset_id, payload.field, payload.pinned)
     db.commit()
+    reconcile_findings(db, f"поле актива #{asset_id} закреплено вручную")
     return dict(asset_detail(db, asset_id))
 
 
@@ -182,6 +254,7 @@ def merge(asset_id: int, payload: MergeIn, db: Session = Depends(get_db), _user:
     _no_running_sync(db)
     _errors(merge_assets, db, asset_id, payload.other_id)
     db.commit()
+    reconcile_findings(db, f"актив #{payload.other_id} объединён с #{asset_id}")
     return dict(asset_detail(db, asset_id))
 
 
@@ -190,6 +263,7 @@ def detach(observation_id: int, db: Session = Depends(get_db), _user: AppUser = 
     _no_running_sync(db)
     fresh = _errors(detach_observation, db, observation_id)
     db.commit()
+    reconcile_findings(db, f"наблюдение #{observation_id} отвязано в актив #{fresh.id}")
     return dict(asset_detail(db, fresh.id))
 
 

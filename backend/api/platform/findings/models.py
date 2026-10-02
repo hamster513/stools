@@ -65,7 +65,7 @@ class FindingEvent(Base):
     at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
     #: Логин или `system`.
     actor: Mapped[str] = mapped_column(String(255))
-    #: status | assign | due | comment | auto_resolved | auto_reopened | risk_expired | migrated
+    #: status | assign | due | comment | auto_resolved | auto_reopened | risk_expired | migrated | rekeyed
     kind: Mapped[str] = mapped_column(String(16))
     from_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     to_status: Mapped[str | None] = mapped_column(String(16), nullable=True)

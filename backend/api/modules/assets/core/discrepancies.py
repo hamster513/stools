@@ -1,5 +1,6 @@
-"""Расхождения между источниками (спека §2). Считаются на лету при чтении: находок и
-вердиктов у них нет, это фильтры списка и подсветка карточки.
+"""Расхождения между источниками (спека §2). Считаются на лету при чтении: это фильтры
+списка и подсветка карточки. Решения людей по ним (статусы находок платформы) хранятся
+по ключу `finding_key`, сами расхождения не хранятся.
 
 Сравниваются имя, FQDN и IP: ОС и домен источники пишут каждый по-своему
 («Windows Server 2022» и «Microsoft Windows Server 2022 Standard», `CORP` и
@@ -35,6 +36,18 @@ class Discrepancy:
     value: str
     current: str
     text: str
+
+
+#: Расхождения полей: у одного актива их несколько, ключ находки — ещё с источником и полем.
+FIELD_CODES = frozenset({"stale", "conflict"})
+
+
+def finding_key(asset_id: int, d: Discrepancy) -> str:
+    """Ключ расхождения как находки (статусы платформы): `asset_id|code`, у расхождений полей —
+    `asset_id|code|source|field`. Значений в ключе нет: смена значения — та же находка."""
+    if d.code in FIELD_CODES:
+        return f"{asset_id}|{d.code}|{d.source}|{d.field}"
+    return f"{asset_id}|{d.code}"
 
 
 def _norm(name: str, value: str) -> str:

@@ -8,12 +8,13 @@ from __future__ import annotations
 import datetime as dt
 from collections import defaultdict
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, defer
 
-from api.modules.assets.core.discrepancies import CODES, Discrepancy, discrepancies
+from api.modules.assets.core.discrepancies import CODES, Discrepancy, discrepancies, finding_key
 from api.modules.assets.core.matching import (
     FIELDS,
     Candidate,
@@ -30,6 +31,9 @@ from api.modules.assets.core.matching import (
 )
 from api.modules.assets.models import Asset, AssetObservation, AssetSettings, Network
 from api.modules.assets.services.networks import NetworkList, network_for_ip
+from api.platform.findings import service as finding_svc
+from api.platform.findings.core import STATUS_TITLES, STATUSES, is_overdue
+from api.platform.findings.models import FindingState
 from api.timeutil import utcnow
 
 DEFAULT_SETTINGS: dict[str, Any] = {"inactive_days": 30, "stale_days": 30, "sync_after_import": True}
@@ -37,6 +41,9 @@ SOURCES = ("vm", "ksc", "ad", "scan", "dns")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
 #: Фильтр и фасет «хоть одно расхождение».
 ANY_CODE = "any"
+#: Расхождения — находки платформы статусов (`findings_adapter`): модуль и единственная область.
+FINDINGS_MODULE = "assets"
+FINDINGS_SCOPE = 0
 
 ScanProbes = tuple[Callable[[str], bool], Callable[[str], bool | None]]
 
@@ -332,7 +339,21 @@ def merge_assets(db: Session, into_id: int, other_id: int) -> Asset:
         earlier.merged_into = into.id
     db.flush()
     recompute(db, into)
+    _move_decisions(db, other.id, into.id)
     return into
+
+
+def _move_decisions(db: Session, old_id: int, new_id: int) -> None:
+    """Решения по расхождениям поглощённого актива — к оставшемуся: в ключе находки id актива.
+    Если у оставшегося решение по тому же ключу уже есть, прежнее остаётся при старом ключе
+    (расхождения у объединённого актива нет — сверка его закроет)."""
+    prefix = f"{old_id}|"
+    keys = list(db.scalars(select(FindingState.key).where(
+        FindingState.module == FINDINGS_MODULE, FindingState.scope_id == FINDINGS_SCOPE,
+        FindingState.key.startswith(prefix, autoescape=True),
+    )))
+    for key in keys:
+        finding_svc.rekey(db, FINDINGS_MODULE, FINDINGS_SCOPE, key, f"{new_id}|{key[len(prefix):]}")
 
 
 def detach_observation(db: Session, observation_id: int) -> Asset:
@@ -454,12 +475,90 @@ def _found(asset: Asset, observations: list[Observed], settings: dict[str, Any],
     return found
 
 
-def _item(asset: Asset, rows: list[AssetObservation], found: list[Discrepancy], network: Network | None, now: dt.datetime, stale_days: int) -> dict[str, Any]:
+@dataclass(slots=True)
+class Tracked:
+    """Расхождение с решением людей по нему (строка состояния; None — решений не было, `new`)."""
+
+    d: Discrepancy
+    key: str
+    state: FindingState | None
+
+    @property
+    def status(self) -> str:
+        return finding_svc.effective_status(self.state)
+
+    @property
+    def assignee(self) -> str | None:
+        return self.state.assignee if self.state is not None else None
+
+    @property
+    def due_date(self) -> dt.date | None:
+        return self.state.due_date if self.state is not None else None
+
+
+def _tracked(asset_id: int, found: list[Discrepancy], states: dict[str, FindingState]) -> list[Tracked]:
+    out = []
+    for d in found:
+        key = finding_key(asset_id, d)
+        out.append(Tracked(d, key, states.get(key)))
+    return out
+
+
+@dataclass(frozen=True)
+class DiscFilter:
+    """Фильтр «есть расхождение под всеми условиями»: код (`any` — любой), статусы (None — любые),
+    исполнитель (логин или `none`), просрочено. Без статусов в запросе — учитываемые
+    (`counted_statuses`): так и до статусов фильтр по коду не видел решённого."""
+
+    code: str | None = None
+    statuses: frozenset[str] | None = None
+    assignee: str | None = None
+    overdue: bool = False
+    #: Задан ли фильтр по расхождениям вообще; нет — активы не отбираются по ним.
+    active: bool = False
+
+
+def disc_filter(
+    counted: frozenset[str], *, code: str | None = None, disc_status: str | None = None,
+    assignee: str | None = None, overdue: bool | None = None, login: str = "",
+) -> DiscFilter:
+    """`disc_status` — коды статусов через запятую или `all`; неизвестный статус — ValueError."""
+    statuses: frozenset[str] | None
+    if not disc_status:
+        statuses = counted
+    elif disc_status == "all":
+        statuses = None
+    else:
+        statuses = frozenset(s for s in disc_status.split(",") if s)
+        unknown = statuses - set(STATUSES)
+        if unknown or not statuses:
+            raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown)) or disc_status}")
+    who = login if assignee == "me" else (assignee or None)
+    return DiscFilter(code or None, statuses, who, bool(overdue), active=bool(code or disc_status or assignee or overdue))
+
+
+def _hits(t: Tracked, f: DiscFilter, today: dt.date, *, code: bool = True, status: bool = True, overdue: bool = True) -> bool:
+    """Подходит ли расхождение под фильтр; `code`/`status`/`overdue=False` — без этой части (фасеты)."""
+    if code and f.code and f.code != ANY_CODE and t.d.code != f.code:
+        return False
+    if status and f.statuses is not None and t.status not in f.statuses:
+        return False
+    if f.assignee == "none" and t.assignee is not None:
+        return False
+    if f.assignee not in (None, "none") and t.assignee != f.assignee:
+        return False
+    return not (overdue and f.overdue and not is_overdue(t.status, t.due_date, today))
+
+
+def _item(asset: Asset, rows: list[AssetObservation], tracked: list[Tracked], network: Network | None, now: dt.datetime,
+          stale_days: int, counted: frozenset[str]) -> dict[str, Any]:
+    """Счётчик и коды расхождений — только с учитываемым статусом: принятый риск не «висит»."""
+    live = [t.d for t in tracked if t.status in counted]
     return {
         "id": asset.id, "name": asset.name, "fqdn": asset.fqdn, "domain": asset.domain, "ip": asset.ip, "os": asset.os,
         "network": _network_view(network), "first_seen": _iso(asset.first_seen), "last_seen": _iso(asset.last_seen),
         "criticality": asset.criticality, "tags": list(asset.tags or []), "pinned": dict(asset.pinned or {}),
-        "sources": _sources(rows, now, stale_days), "discrepancy_count": len(found), "codes": sorted({d.code for d in found}, key=CODES.index),
+        "sources": _sources(rows, now, stale_days), "discrepancy_count": len(live), "codes": sorted({d.code for d in live}, key=CODES.index),
     }
 
 
@@ -492,17 +591,17 @@ def _pick(
     q: str | None = None,
     source_has: str | None = None,
     source_missing: str | None = None,
-    code: str | None = None,
     network_id: int | None = None,
     zone: str | None = None,
     port: int | None = None,
     tag: str | None = None,
     criticality: str | None = None,
 ) -> Picked:
-    """Активы под фильтрами списка: (актив, наблюдения, расхождения). Расхождения считаются на лету,
-    поэтому фильтры — в памяти. `with_found=False` — расхождения нужны только фильтру `code`: без
-    него они не считаются и остаются пустыми (выбор id для массового изменения)."""
-    probes = scan_probes(db) if with_found or code else None
+    """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Расхождения
+    считаются на лету, поэтому фильтры — в памяти; фильтр по расхождениям и их статусам — у
+    вызывающего (`DiscFilter`). `with_found=False` — расхождения не считаются и остаются пустыми
+    (выбор id для массового изменения без фильтра по расхождениям)."""
+    probes = scan_probes(db) if with_found else None
     # Наблюдения с extra нужны расхождениям и фильтру по порту; без них extra не читается вовсе.
     need_observed = probes is not None or port is not None
     assets = list(db.execute(select(Asset).where(Asset.merged_into.is_(None))).scalars())
@@ -537,19 +636,64 @@ def _pick(
         if port is not None and port not in _open_ports(observations):
             continue
         found = _found(asset, observations, settings, probes, now) if probes is not None else []
-        if code == ANY_CODE and not found:
-            continue
-        if code and code != ANY_CODE and code not in {d.code for d in found}:
-            continue
         picked.append((asset, rows, found))
     return picked
 
 
-def matching_ids(db: Session, **filters: Any) -> list[int]:
-    """Id всех активов под фильтрами списка — без фасетов и строк, а расхождения считаются,
-    только если задан фильтр `code`."""
+def current_discrepancies(db: Session, now: dt.datetime | None = None) -> list[tuple[Asset, list[Discrepancy]]] | None:
+    """Все расхождения всех активов — тем же расчётом, что список и карточка: статусы находок
+    (`findings_adapter`) видят ровно то, что люди. None — в реестре нет ни одного актива."""
+    if db.scalar(select(Asset.id).where(Asset.merged_into.is_(None)).limit(1)) is None:
+        return None
     networks = {n.id: n for n in db.execute(select(Network)).scalars()}
-    return [asset.id for asset, _, _ in _pick(db, networks=networks, settings=load_settings(db), now=utcnow(), with_found=False, **filters)]
+    picked = _pick(db, networks=networks, settings=load_settings(db), now=now or utcnow(), with_found=True)
+    return [(asset, found) for asset, _, found in picked]
+
+
+def finding_title(asset: Asset, d: Discrepancy) -> str:
+    """Подпись расхождения для «Моих находок»: «<актив>: <текст>»."""
+    return f"{asset.name or asset.fqdn or asset.ip or f'актив #{asset.id}'}: {d.text}"
+
+
+def discrepancy_keys(db: Session, ids: Iterable[int], code: str) -> list[str]:
+    """Ключи расхождений кода у этих активов — тех, что есть сейчас (у расхождений полей — все
+    ключи кода у актива): массовая смена не заводит строк для расхождений, которых нет."""
+    wanted = set(ids)
+    keys: dict[str, None] = {}
+    for asset, found in current_discrepancies(db) or []:
+        if asset.id in wanted:
+            keys.update((finding_key(asset.id, d), None) for d in found if d.code == code)
+    return list(keys)
+
+
+def _states(db: Session) -> dict[str, FindingState]:
+    return finding_svc.state_map(db, FINDINGS_MODULE, FINDINGS_SCOPE)
+
+
+def _disc_split(picked: Picked, f: DiscFilter, states: dict[str, FindingState], today: dt.date) -> tuple[list[tuple[Asset, list[AssetObservation], list[Tracked]]], list[list[Tracked]]]:
+    """(активы под фильтром по расхождениям, расхождения всех активов под фильтрами по данным)."""
+    all_tracked = [_tracked(asset.id, found, states) for asset, _, found in picked]
+    passed = [
+        (asset, rows, tracked) for (asset, rows, _), tracked in zip(picked, all_tracked, strict=True)
+        if not f.active or any(_hits(t, f, today) for t in tracked)
+    ]
+    return passed, all_tracked
+
+
+def matching_ids(
+    db: Session, *, code: str | None = None, disc_status: str | None = None, assignee: str | None = None,
+    overdue: bool | None = None, login: str = "", **filters: Any,
+) -> list[int]:
+    """Id всех активов под фильтрами списка — без фасетов и строк, а расхождения считаются,
+    только если задан фильтр по ним."""
+    f = disc_filter(finding_svc.counted_statuses(db), code=code, disc_status=disc_status, assignee=assignee,
+                    overdue=overdue, login=login)
+    networks = {n.id: n for n in db.execute(select(Network)).scalars()}
+    picked = _pick(db, networks=networks, settings=load_settings(db), now=utcnow(), with_found=f.active, **filters)
+    if not f.active:
+        return [asset.id for asset, _, _ in picked]
+    passed, _ = _disc_split(picked, f, _states(db), finding_svc.today())
+    return [asset.id for asset, _, _ in passed]
 
 
 def list_assets(
@@ -558,26 +702,46 @@ def list_assets(
     limit: int = 200,
     offset: int = 0,
     now: dt.datetime | None = None,
+    code: str | None = None,
+    disc_status: str | None = None,
+    assignee: str | None = None,
+    overdue: bool | None = None,
+    login: str = "",
     **filters: Any,
 ) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
-    """items, total, facets; `filters` — как у `_pick`. Фасеты — в памяти, как у хостов KSC;
-    `criticality='none'` — критичность не задана; `code='any'` — хоть одно расхождение
-    (фасет `code.any` — сколько таких)."""
+    """items, total, facets; `filters` — как у `_pick`, фильтр по расхождениям — `disc_filter`.
+    Фасеты — в памяти, как у хостов KSC; `criticality='none'` — критичность не задана;
+    `code='any'` — хоть одно расхождение (фасет `code.any` — сколько таких). Фасет `code` считает
+    расхождения под статусами фильтра (по умолчанию учитываемые); `disc_status` — расхождения по
+    статусам без фильтра статуса, `disc_overdue` — просроченные без фильтра статуса и срока: оба
+    по активам под фильтрами по данным."""
     now = now or utcnow()
     settings = load_settings(db)
+    counted = finding_svc.counted_statuses(db)
+    f = disc_filter(counted, code=code, disc_status=disc_status, assignee=assignee, overdue=overdue, login=login)
+    today = finding_svc.today()
     networks = {n.id: n for n in db.execute(select(Network)).scalars()}
-    picked = _pick(db, networks=networks, settings=settings, now=now, with_found=True, **filters)
+    data = _pick(db, networks=networks, settings=settings, now=now, with_found=True, **filters)
+    picked, all_tracked = _disc_split(data, f, _states(db), today)
 
     facets: dict[str, Any] = {
         "source": dict.fromkeys(SOURCES, 0), "code": dict.fromkeys((*CODES, ANY_CODE), 0), "zone": {},
         "criticality": dict.fromkeys([*CRITICALITY, "none"], 0),
+        "disc_status": dict.fromkeys(STATUSES, 0), "disc_overdue": 0,
     }
-    for asset, rows, found in picked:
+    for tracked in all_tracked:
+        for t in tracked:
+            if _hits(t, f, today, status=False):
+                facets["disc_status"][t.status] += 1
+            if _hits(t, f, today, status=False, overdue=False) and is_overdue(t.status, t.due_date, today):
+                facets["disc_overdue"] += 1
+    for asset, rows, tracked in picked:
         for source in {r.source for r in rows if r.gone_at is None}:
             facets["source"][source] += 1
-        for c in {d.code for d in found}:
+        codes = {t.d.code for t in tracked if _hits(t, f, today, code=False)}
+        for c in codes:
             facets["code"][c] += 1
-        if found:
+        if codes:
             facets["code"][ANY_CODE] += 1
         net = networks.get(asset.network_id) if asset.network_id is not None else None
         if net is not None and net.zone:
@@ -587,8 +751,8 @@ def list_assets(
     picked.sort(key=lambda t: (t[0].name_key or normalize_fqdn(t[0].fqdn) or "~", t[0].ip, t[0].id))
     stale_days = int(settings["stale_days"])
     page = [
-        _item(asset, rows, found, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days)
-        for asset, rows, found in picked[offset : offset + limit]
+        _item(asset, rows, tracked, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days, counted)
+        for asset, rows, tracked in picked[offset : offset + limit]
     ]
     return page, len(picked), facets
 
@@ -659,8 +823,12 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
     rows = _observations(db, asset.id)
     found = _found(asset, [observed(r) for r in rows], settings, scan_probes(db), now)
     network = db.get(Network, asset.network_id) if asset.network_id is not None else None
+    counted = finding_svc.counted_statuses(db)
+    keys = [finding_key(asset.id, d) for d in found]
+    tracked = _tracked(asset.id, found, finding_svc.state_map(db, FINDINGS_MODULE, FINDINGS_SCOPE, keys))
+    today = finding_svc.today()
     return {
-        **_item(asset, rows, found, network, now, int(settings["stale_days"])),
+        **_item(asset, rows, tracked, network, now, int(settings["stale_days"]), counted),
         "network_manual": asset.network_manual, "note": asset.note, "merged_into": asset.merged_into,
         "created_at": _iso(asset.created_at), "updated_at": _iso(asset.updated_at),
         "observations": [
@@ -671,9 +839,15 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
             }
             for r in rows
         ],
+        # Все расхождения, и с неучитываемым статусом тоже: решение видно там, где его приняли.
         "discrepancies": [
-            {"code": d.code, "source": d.source, "field": d.field, "value": d.value, "current": d.current, "text": d.text}
-            for d in found
+            {"code": t.d.code, "source": t.d.source, "field": t.d.field, "value": t.d.value, "current": t.d.current,
+             "text": t.d.text, "key": t.key, "status": t.status, "status_title": STATUS_TITLES[t.status],
+             "assignee": t.assignee, "due_date": t.due_date.isoformat() if t.due_date else None,
+             "overdue": is_overdue(t.status, t.due_date, today),
+             "risk_until": t.state.risk_until.isoformat() if t.state is not None and t.state.risk_until else None,
+             "counted": t.status in counted}
+            for t in tracked
         ],
         "links": _links(db, rows),
     }

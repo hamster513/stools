@@ -21,6 +21,7 @@ from api.jobs import JobCancelled, JobHandle, active_job, run_job, start_job
 from api.modules.assets.core import dns as dns_core
 from api.modules.assets.core import scanner
 from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize_name
+from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import Asset, AssetDns, AssetJob, AssetObservation, Network
 from api.modules.assets.services.assets import apply_observation, recompute
 from api.modules.assets.services.networks import load_networks, scan_target
@@ -192,6 +193,7 @@ def run_scan(db: Session, handle: JobHandle, network_id: int) -> None:
         current.last_scan_alive = len(found)
         current.last_scan_icmp = use_icmp
         db.commit()
+        reconcile_findings(db, f"скан сети {cidr}, задача #{handle.id}")
     gone = f" · пропало {len(touched)}" if touched else ""
     handle.stage("done", message=f"сеть {cidr}: живых {len(found)} из {len(scanned)}{gone}{mode}")
 

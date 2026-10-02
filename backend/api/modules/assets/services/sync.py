@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle, active_job, run_job, start_job
 from api.modules.assets.core.matching import Observed, is_ip, normalize_fqdn, normalize_name
+from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import Asset, AssetJob, AssetObservation
 from api.modules.assets.services.assets import (
     MatchIndex,
@@ -284,6 +285,7 @@ def _locked_sync(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> di
     counts = _sync_pass(db, handle, sources)
     while _take_rerun(db):
         counts = _sync_pass(db, handle, sources)
+    reconcile_findings(db, f"синхронизация, задача #{handle.id}")
     return counts
 
 

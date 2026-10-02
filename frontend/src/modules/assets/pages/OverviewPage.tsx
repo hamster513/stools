@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ArrowRight, Server } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useOverview } from '@/modules/assets/api/queries'
+import { useDiscrepancySummary, useOverview } from '@/modules/assets/api/queries'
 import { CODE_LABELS, CODES, SOURCE_LABELS, SOURCES, type DiscrepancyCode } from '@/modules/assets/api/types'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -55,6 +55,7 @@ function MoreLink({ to, children }: { to: string; children: ReactNode }) {
 export function OverviewPage() {
   const { write } = useCan()
   const overview = useOverview()
+  const summary = useDiscrepancySummary()
   if (overview.isLoading) return <FullPageSpinner />
   if (overview.isError || !overview.data) {
     const msg = overview.error instanceof ApiRequestError ? overview.error.message : 'Не удалось загрузить обзор'
@@ -99,6 +100,15 @@ export function OverviewPage() {
         <Counter to="/assets/list?code=any" label="с расхождениями" value={o.codes.any ?? 0} tone="text-risk-high" />
         {CODES.map((c) => <Counter key={c} to={`/assets/list?code=${c}`} label={CODE_LABELS[c]} value={o.codes[c] ?? 0} tone={ALERT[c]} />)}
       </div>
+      {/* Плитки считают расхождения с учитываемым статусом; решённые людьми — здесь. */}
+      {summary.data && (
+        <p className="-mt-2 mb-4 text-xs text-text-secondary">
+          Расхождения: принято рисков{' '}
+          <Link to="/assets/list?disc_status=risk_accepted" className="font-mono tabular-nums text-text hover:underline">{summary.data.by_status.risk_accepted}</Link>,
+          в работе{' '}
+          <Link to="/assets/list?disc_status=in_work" className="font-mono tabular-nums text-text hover:underline">{summary.data.by_status.in_work}</Link>.
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Block title="Источники">

@@ -271,6 +271,22 @@ def comment(db: Session, *, module: str, scope_id: int, key: str, text: str, act
     return event
 
 
+def rekey(db: Session, module: str, scope_id: int, old_key: str, new_key: str) -> bool:
+    """Перенести решение с одного ключа находки на другой (Assets: объединение активов меняет
+    id актива в ключе). Строка и история остаются, событие `rekeyed` пишет, откуда и куда.
+    Ключ уже занят или строки нет — ничего не делает, False. Транзакцию не фиксирует: её
+    фиксирует вызывающий вместе со своей правкой."""
+    lock_scope(db, module, scope_id)
+    rows = state_map(db, module, scope_id, [old_key, new_key], fresh=True)
+    row = rows.get(old_key)
+    if row is None or new_key in rows:
+        return False
+    row.key = new_key
+    db.add(_event(row, SYSTEM, "rekeyed", details={"old": old_key, "new": new_key}))
+    db.flush()
+    return True
+
+
 def check_change(db: Session, change: Change, *, actor: AppUser) -> None:
     """Проверить смену заранее — для фоновой задачи, которая применит её позже кусками: отказ
     по правилам §1, не зависящим от строки (статус и обоснование к нему, роль, срок риска,

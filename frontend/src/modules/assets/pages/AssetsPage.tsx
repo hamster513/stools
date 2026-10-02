@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, FilterX, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAssetIds, useAssets, useBulkUpdate, useNetworks } from '@/modules/assets/api/queries'
+import { useAssetIds, useAssets, useBulkUpdate, useDiscrepancyBulk, useNetworks } from '@/modules/assets/api/queries'
 import {
   ANY_CODE_LABEL,
   CODE_LABELS,
@@ -16,6 +16,7 @@ import {
   type AssetsQuery,
   type CodeFilter,
   type Criticality,
+  type DiscrepancyCode,
 } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
@@ -29,6 +30,9 @@ import { cn } from '@/lib/cn'
 import { useRouter, useSearchParams } from '@/lib/router'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { findingFacetChips, statusForFlag, STATUS_OPTIONS, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
+import { useFindingSettings } from '@/platform/findings/queries'
+import { MANUAL_STATUSES, NEEDS_REASON, STATUSES, STATUS_TITLES, type FindingChange, type FindingStatus } from '@/platform/findings/types'
 import { AssetDrawer } from './AssetDrawer'
 
 const ROW_HEIGHT = 40
@@ -49,7 +53,14 @@ function migrateFiltersOpen() {
 }
 migrateFiltersOpen()
 
-type Filters = Omit<AssetsQuery, 'q' | 'port' | 'tag'>
+type Filters = Omit<AssetsQuery, 'q' | 'port' | 'tag' | 'disc_status' | 'assignee' | 'overdue'>
+/** Фильтр по статусам расхождений: статусы, исполнитель (`me`, `none`, логин), просроченные. */
+type DiscFilters = Omit<FindingFacetFilters, 'risk_expiring'>
+
+function discFromParams(params: URLSearchParams): DiscFilters {
+  const status = (params.get('disc_status') ?? '').split(',').filter((s): s is FindingStatus => (STATUSES as string[]).includes(s))
+  return { status: status.length ? status : undefined, assignee: params.get('assignee') ?? undefined, overdue: params.get('overdue') === 'true' || undefined }
+}
 
 function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
@@ -59,11 +70,12 @@ function day(iso: string | null): string {
   return iso ? new Date(iso).toLocaleDateString('ru-RU') : '—'
 }
 
-function FacetRow({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
+/** `noCount` — у строки нет счётчика (например, «мои»: сервер его не считает). */
+function FacetRow({ active, count, onClick, children, noCount }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode; noCount?: boolean }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')}>
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>
+      {!noCount && <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>}
     </button>
   )
 }
@@ -80,10 +92,12 @@ function FacetSection({ title, children }: { title: string; children: ReactNode 
 const INPUT_BASE = 'rounded border border-border bg-app-bg px-2 py-1 text-xs text-text placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const INPUT = `w-full ${INPUT_BASE}`
 
-function FacetPanel({ facets, filters, onToggle, total, port, onPort, tag, onTag }: {
+function FacetPanel({ facets, filters, onToggle, disc, onDisc, total, port, onPort, tag, onTag }: {
   facets: AssetsFacets | null
   filters: Filters
   onToggle: <K extends keyof Filters>(key: K, value: Filters[K]) => void
+  disc: DiscFilters
+  onDisc: (next: DiscFilters) => void
   total: number
   port: string
   onPort: (v: string) => void
@@ -100,6 +114,14 @@ function FacetPanel({ facets, filters, onToggle, total, port, onPort, tag, onTag
         {CODES.map((c) => (
           <FacetRow key={c} active={filters.code === c} count={facets?.code[c]} onClick={() => onToggle('code', filters.code === c ? undefined : c)}>{CODE_LABELS[c]}</FacetRow>
         ))}
+      </FacetSection>
+      {/* Без выбранного статуса считаются и фильтруются расхождения с учитываемым статусом. */}
+      <FacetSection title="Статус расхождений">
+        {STATUS_OPTIONS.map((o) => (
+          <FacetRow key={o.value} active={disc.status?.includes(o.value) ?? false} count={facets?.disc_status[o.value]} onClick={() => onDisc({ ...disc, status: toggleStatus(disc.status, o.value) })}>{o.label}</FacetRow>
+        ))}
+        <FacetRow active={disc.assignee === 'me'} count={undefined} noCount onClick={() => onDisc({ ...disc, assignee: disc.assignee === 'me' ? undefined : 'me' })}>мои</FacetRow>
+        <FacetRow active={disc.overdue ?? false} count={facets?.disc_overdue} onClick={() => onDisc(disc.overdue ? { ...disc, overdue: undefined } : { ...disc, overdue: true, status: statusForFlag('overdue', disc.status) })}>просроченные</FacetRow>
       </FacetSection>
       <FacetSection title="Источник есть">
         {SOURCES.map((s) => (
@@ -217,8 +239,55 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, 
 
 const split = (text: string) => text.split(',').map((t) => t.trim()).filter(Boolean)
 
-/** Массовое изменение отмеченных активов: критичность и теги (добавить, снять). Заметка и сеть — только в карточке. */
-function BulkBar({ ids, total, selectingAll, onSelectAll, onClear }: { ids: number[]; total: number; selectingAll: boolean; onSelectAll: () => void; onClear: () => void }) {
+/**
+ * Статус расхождения одного кода у отмеченных активов — статусы находок платформы. Коды — те, что есть
+ * в текущем списке (фасет); обоснование обязательно для «Принят риск» и «Ложное срабатывание».
+ */
+function DiscrepancyBulkForm({ ids, facets, code: filterCode }: { ids: number[]; facets: AssetsFacets | null; code: CodeFilter | undefined }) {
+  const bulk = useDiscrepancyBulk()
+  const settings = useFindingSettings()
+  const { admin } = useCan()
+  const present = CODES.filter((c) => (facets?.code[c] ?? 0) > 0)
+  const [code, setCode] = useState<DiscrepancyCode | ''>(filterCode && filterCode !== 'any' ? filterCode : '')
+  const [status, setStatus] = useState<FindingStatus | ''>('')
+  const [riskUntil, setRiskUntil] = useState('')
+  const [comment, setComment] = useState('')
+  const canAcceptRisk = admin || settings.data?.risk_accept_role !== 'admin'
+  const choices = MANUAL_STATUSES.filter((s) => s !== 'risk_accepted' || canAcceptRisk)
+  const needsReason = status !== '' && NEEDS_REASON.includes(status)
+  const blocked = !code || !status || (needsReason && !comment.trim())
+  function apply() {
+    if (!code || !status) return
+    const change: FindingChange = { status }
+    if (status === 'risk_accepted' && riskUntil) change.risk_until = riskUntil
+    if (comment.trim()) change.comment = comment.trim()
+    bulk.mutate({ ids, code, change }, { onSuccess: () => { setStatus(''); setRiskUntil(''); setComment('') } })
+  }
+  return (
+    <div className="flex basis-full flex-wrap items-center gap-2">
+      <span className="text-text-secondary">Расхождение:</span>
+      <select value={code} onChange={(e) => setCode(e.target.value as DiscrepancyCode | '')} aria-label="Код расхождения" className={cn(INPUT_BASE, 'w-52')}>
+        <option value="">— код —</option>
+        {(code && !present.includes(code) ? [code, ...present] : present).map((c) => <option key={c} value={c}>{CODE_LABELS[c]}</option>)}
+      </select>
+      <span className="text-text-secondary">→</span>
+      <select value={status} onChange={(e) => setStatus(e.target.value as FindingStatus | '')} aria-label="Статус расхождения" className={cn(INPUT_BASE, 'w-44')}>
+        <option value="">— статус —</option>
+        {choices.map((s) => <option key={s} value={s}>{STATUS_TITLES[s]}</option>)}
+      </select>
+      {status === 'risk_accepted' && <input type="date" value={riskUntil} onChange={(e) => setRiskUntil(e.target.value)} aria-label="Риск принят до" title="Риск принят до" className={INPUT_BASE} />}
+      <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder={needsReason ? 'обоснование (обязательно)' : 'комментарий'} aria-label="Комментарий к статусу" className={cn(INPUT_BASE, 'w-64')} />
+      <Button variant="primary" disabled={blocked} loading={bulk.isPending} onClick={apply}>Применить статус</Button>
+      {bulk.error && <span className="text-kind-1">{bulk.error.message}</span>}
+      {bulk.isSuccess && !bulk.isPending && <span className="text-text-secondary">изменено расхождений: {bulk.data.changed}</span>}
+    </div>
+  )
+}
+
+/** Массовое изменение отмеченных активов: критичность и теги (добавить, снять), статус расхождения. Заметка и сеть — только в карточке. */
+function BulkBar({ ids, total, selectingAll, onSelectAll, onClear, facets, code }: {
+  ids: number[]; total: number; selectingAll: boolean; onSelectAll: () => void; onClear: () => void; facets: AssetsFacets | null; code: CodeFilter | undefined
+}) {
   const bulk = useBulkUpdate()
   // 'keep' — критичность не менять; '' — сбросить в «не задана».
   const [criticality, setCriticality] = useState<Criticality | '' | 'keep'>('keep')
@@ -248,6 +317,7 @@ function BulkBar({ ids, total, selectingAll, onSelectAll, onClear }: { ids: numb
       <Button variant="ghost" onClick={onClear}>Снять отметки</Button>
       {bulk.error && <span className="text-kind-1">{bulk.error.message}</span>}
       {bulk.isSuccess && !bulk.isPending && <span className="text-text-secondary">изменено активов: {bulk.data.updated}</span>}
+      <DiscrepancyBulkForm key={code ?? ''} ids={ids} facets={facets} code={code} />
     </div>
   )
 }
@@ -267,6 +337,7 @@ export function AssetsPage() {
     criticality: (params.get('criticality') as Criticality | 'none' | null) ?? undefined,
     network_id: params.get('network_id') ? Number(params.get('network_id')) : undefined,
   }))
+  const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
   const [portInput, setPortInput] = useState(params.get('port') ?? '')
   const [tagInput, setTagInput] = useState(params.get('tag') ?? '')
@@ -284,8 +355,11 @@ export function AssetsPage() {
   const allIds = useAssetIds()
 
   const queryArgs = useMemo<AssetsQuery>(
-    () => ({ ...filters, q: q || undefined, port: port ? Number(port) : undefined, tag: tag.trim() || undefined }),
-    [filters, q, port, tag],
+    () => ({
+      ...filters, q: q || undefined, port: port ? Number(port) : undefined, tag: tag.trim() || undefined,
+      disc_status: disc.status?.join(','), assignee: disc.assignee, overdue: disc.overdue || undefined,
+    }),
+    [filters, q, port, tag, disc],
   )
   const query = useAssets(queryArgs)
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
@@ -296,7 +370,7 @@ export function AssetsPage() {
   const selected: AssetItem | null = items[selectedIndex] ?? null
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
-  function clearAll() { setFilters({}); setSearchInput(''); setPortInput(''); setTagInput('') }
+  function clearAll() { setFilters({}); setDisc({}); setSearchInput(''); setPortInput(''); setTagInput('') }
   function check(index: number, range: boolean) {
     const from = range && lastChecked.current !== null ? lastChecked.current : index
     const on = !checked.has(items[index].id)
@@ -318,6 +392,7 @@ export function AssetsPage() {
   if (filters.network_id !== undefined) chips.push({ label: `сеть ${networks.data?.find((n) => n.id === filters.network_id)?.cidr ?? `#${filters.network_id}`}`, clear: () => toggle('network_id', undefined) })
   if (portInput) chips.push({ label: `порт ${portInput}`, clear: () => setPortInput('') })
   if (tagInput.trim()) chips.push({ label: `тег ${tagInput.trim()}`, clear: () => setTagInput('') })
+  chips.push(...findingFacetChips(disc, setDisc).map((c) => ({ ...c, label: `расхождения · ${c.label.toLowerCase()}` })))
   // Карточка по ссылке открывается один раз: параметр снимается, и закрытая карточка не откроется снова при обновлении страницы.
   useEffect(() => {
     if (!params.has('asset')) return
@@ -339,7 +414,7 @@ export function AssetsPage() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [items.length, selected, openId])
 
-  const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== '' || port !== '' || tag !== ''
+  const hasFilters = Object.values(filters).some((v) => v !== undefined) || Object.values(disc).some((v) => v !== undefined) || q !== '' || port !== '' || tag !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить активы' : null
 
   return (
@@ -356,10 +431,10 @@ export function AssetsPage() {
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           {write && checked.size > 0 && (
-            <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)}
+            <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)} facets={first?.facets ?? null} code={filters.code}
               onSelectAll={() => allIds.mutate(queryArgs, { onSuccess: (r) => setChecked(new Set(r.ids)) })} />
           )}
           <div className="min-h-0 flex-1">

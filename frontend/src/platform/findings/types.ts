@@ -22,7 +22,7 @@ export const STATUS_TITLES: Record<FindingStatus, string> = {
   reopened: 'Переоткрыта',
 }
 
-export type FindingEventKind = 'status' | 'assign' | 'due' | 'comment' | 'auto_resolved' | 'auto_reopened' | 'risk_expired' | 'migrated'
+export type FindingEventKind = 'status' | 'assign' | 'due' | 'comment' | 'auto_resolved' | 'auto_reopened' | 'risk_expired' | 'migrated' | 'rekeyed'
 
 export interface FindingEvent {
   at: string

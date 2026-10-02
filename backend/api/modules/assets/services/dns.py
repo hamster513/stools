@@ -37,6 +37,7 @@ from api.modules.assets.core.dns import (
     read_ad_zone,
 )
 from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize_ip, normalize_name
+from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import Asset, AssetDns, AssetJob, AssetObservation
 from api.modules.assets.services.assets import apply_observation, recompute
 from api.modules.assets.services.networks import load_networks
@@ -338,6 +339,7 @@ def _write(run: _Run) -> bool:
                 recompute(db, asset, networks)
         row.last_run_at = run.started
         db.commit()
+        reconcile_findings(db, f"DNS {run.cfg.label}, задача #{run.handle.id}")
     return True
 
 

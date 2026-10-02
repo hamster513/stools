@@ -12,8 +12,9 @@ GET  /overview                         {assets_total, by_zone, by_source, codes,
                                         last_dns, sync}
                                         by_zone: {зона: n, "": n} — "" — актив без сети или в сети без зоны
                                         by_source: {vm, ksc, ad, scan, dns: n} — источник видит актив сейчас
-                                        codes: {код: n, any: n} — активов с этим расхождением (коды ниже);
-                                        any — хотя бы с одним (ссылка в список с code=any)
+                                        codes: {код: n, any: n} — активов с этим расхождением (коды ниже)
+                                        с учитываемым статусом (`counted`); any — хотя бы с одним
+                                        (ссылка в список с code=any)
                                         networks: {total, scanned, no_network_assets} — сетей описано,
                                         сканировалось хоть раз, активов вне описанных сетей
                                         last_scans: [{network_id, cidr, title, last_scan_at, last_scan_alive}]
@@ -22,25 +23,34 @@ GET  /overview                         {assets_total, by_zone, by_source, codes,
 ```
 
 Счётчики — те же фасеты, что у списка без фильтров: активы без
-`merged_into`, расхождения на момент запроса.
+`merged_into`, расхождения на момент запроса с учитываемым статусом.
+Решённые людьми (принят риск, ложное срабатывание) — в сводке статусов
+платформы `GET /api/findings/summary?module=assets&scope_id=0`; обзор в
+интерфейсе показывает её строкой «принято рисков: N, в работе: N».
 
 ## Активы
 
 ```
 GET   /assets                          q, source_has, source_missing, code, network_id, zone, port,
-                                       tag, criticality (Critical|High|Medium|Low|none), limit≤500 (200),
-                                       offset → {total, items, facets|null}
+                                       tag, criticality (Critical|High|Medium|Low|none), disc_status,
+                                       assignee, overdue, limit≤500 (200), offset
+                                       → {total, items, facets|null}
                                        items: [{id, name, fqdn, domain, ip, os, network: {id, cidr, title,
                                        zone}|null, first_seen, last_seen, criticality, tags, pinned,
                                        sources: [{source, live, fresh, seen_at}], discrepancy_count, codes}]
-                                       facets: {source, code, zone, criticality} — только при offset=0;
-                                       code.any — активов хотя бы с одним расхождением
+                                       discrepancy_count, codes — только расхождения с учитываемым статусом
+                                       facets: {source, code, zone, criticality, disc_status, disc_overdue}
+                                       — только при offset=0; code.any — активов хотя бы с одним
+                                       расхождением; code считает расхождения под статусами фильтра
+                                       (без disc_status — учитываемые)
                                        code: код ниже или any — хотя бы одно расхождение
-                                       неизвестное значение source_*/code/criticality — 422
+                                       неизвестное значение source_*/code/criticality/disc_status — 422
 GET   /assets/{id}                     + network_manual, note, merged_into, created_at, updated_at,
                                        observations: [{id, source, source_key, name, fqdn, domain, ip, ips,
                                        os, seen_at, gone_at, extra, marks: {поле: stale|conflict}}],
-                                       discrepancies: [{code, source, field, value, current, text}],
+                                       discrepancies: [{code, source, field, value, current, text, key,
+                                       status, status_title, assignee, due_date, overdue, risk_until,
+                                       counted}] — все, и с неучитываемым статусом (counted: false),
                                        links: {ad_finding_count, ad_domain_id, ad_query, ksc_host_id,
                                        ksc_server_id, vm_host_id, vm_cve_count}
 PATCH /assets/{id}  {criticality?, tags?, note?, network_id?, network_manual?}   → карточка
@@ -52,6 +62,14 @@ POST  /assets/bulk  {ids, criticality?, tags_add?, tags_remove?}   → {updated}
                                        критичность и теги у многих активов: теги добавляются и снимаются,
                                        а не заменяются; несуществующие и объединённые id пропускаются;
                                        422 — менять нечего или ids пуст
+POST  /assets/discrepancies/bulk  {ids (≤ 50 000), code, change: {status?, assignee?, due_date?,
+                                       risk_until?, comment?}}   → {changed}
+                                       статус, исполнитель, срок расхождения code у этих активов — одним
+                                       массовым действием (bulk_id); ключи — расхождения, которые у
+                                       активов есть сейчас (stale/conflict — все ключи кода у актива);
+                                       change — как у /api/findings/bulk; принять риск — по
+                                       risk_accept_role (403); без обоснования для risk_accepted и
+                                       false_positive — 422
 POST  /assets/{id}/pin    {field: name|fqdn|domain|ip|os, pinned}   → карточка
 POST  /assets/{id}/merge  {other_id}   → карточка первого; 409 — уже объединён, идёт синхронизация
                                        или запись результатов скана/DNS («идёт запись результатов
@@ -62,7 +80,14 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 ```
 
 `q` ищет подстроку в имени, FQDN, IP и ОС актива и его наблюдений (старые
-адреса тоже находятся). `source_has`/`source_missing` смотрят на живые
+адреса тоже находятся). `disc_status` (коды статусов через запятую или
+`all`), `assignee` (`me`, `none`, логин) и `overdue=true` — про расхождения:
+актив подходит, если у него есть расхождение под всеми ими сразу, а если
+задан `code` — расхождение этого кода. Без `disc_status` фильтр по
+расхождениям (и `code`) видит только учитываемые статусы — как до статусов.
+Фасет `disc_status` — расхождения по статусам без фильтра статуса,
+`disc_overdue` — просроченные без фильтра статуса и срока; оба — по активам
+под фильтрами по данным. `source_has`/`source_missing` смотрят на живые
 наблюдения (без `gone_at`). Значок источника `fresh` — видит сейчас и видел
 моложе `stale_days`.
 
@@ -74,8 +99,11 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 
 ### Коды расхождений
 
-Считаются при чтении, находок и вердиктов нет — это фильтры списка и
-подсветка карточки. Сравниваются имя, FQDN и IP; ОС и домен источники пишут
+Считаются при чтении, сами не хранятся — это фильтры списка и подсветка
+карточки. Решения людей по ним — статусы находок платформы
+([docs/platform/findings.md](../platform/findings.md)): модуль `assets`,
+`scope_id = 0`, ключ `asset_id|code`, у `stale`/`conflict` —
+`asset_id|code|source|field`. Сравниваются имя, FQDN и IP; ОС и домен источники пишут
 по-разному, их отличие не расхождение.
 
 | Код | Условие | Текст |

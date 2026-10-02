@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Monitor, Pin, PinOff, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAsset, useAssets, useDetachObservation, useMergeAssets, useNetworks, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
+import { useQueryClient } from '@tanstack/react-query'
+import { invalidateDiscrepancies, useAsset, useAssets, useDetachObservation, useMergeAssets, useNetworks, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
 import {
   CODE_LABELS,
   CRITICALITIES,
@@ -11,6 +12,7 @@ import {
   SOURCE_LABELS,
   type AssetDetail,
   type Criticality,
+  type Discrepancy,
   type Observation,
   type PinnableField,
 } from '@/modules/assets/api/types'
@@ -21,6 +23,8 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
+import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
+import { StatusBadge } from '@/platform/findings/StatusBadge'
 
 const PIN_FIELDS: { field: PinnableField; label: string; mono?: boolean }[] = [
   { field: 'name', label: 'Имя' },
@@ -66,6 +70,46 @@ function Confirm({ label, text, action, danger, pending, onConfirm, onCancel }: 
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Расхождения — находки статусов платформы: у строки статус, щелчок раскрывает «Работу с находкой».
+ * Расхождения с неучитываемым статусом (принят риск, ложное) — приглушённо, ниже действующих.
+ */
+function DiscrepancyList({ a }: { a: AssetDetail }) {
+  const qc = useQueryClient()
+  const [openKey, setOpenKey] = useState<string | null>(null)
+  const active = a.discrepancies.filter((d) => d.counted)
+  const decided = a.discrepancies.filter((d) => !d.counted)
+  const row = (d: Discrepancy, i: number) => {
+    const opened = openKey === d.key
+    return (
+      <li key={`${d.key}:${i}`} className={cn(!d.counted && 'opacity-60')}>
+        <button type="button" onClick={() => setOpenKey(opened ? null : d.key)} aria-expanded={opened}
+          className="flex w-full items-start gap-2 rounded px-1 py-0.5 text-left hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+          <span className={cn('shrink-0', CODE_TEXT[d.code])}>{CODE_LABELS[d.code]}</span>
+          <span className="min-w-0 flex-1 text-text-secondary">{d.text}</span>
+          {d.overdue && <span className="shrink-0 text-kind-1">просрочено</span>}
+          <StatusBadge status={d.status} className="shrink-0" />
+        </button>
+        {opened && (
+          <div className="mt-1 mb-2 ml-1 border-l border-grid pl-3">
+            <FindingWorkBlock module="assets" scopeId={0} findingKey={d.key} title={`${title(a)}: ${d.text}`} severity=""
+              onChanged={() => invalidateDiscrepancies(qc)} />
+          </div>
+        )}
+      </li>
+    )
+  }
+  return (
+    <>
+      <SectionTitle>Расхождения ({active.length}{decided.length > 0 ? ` · решено ${decided.length}` : ''})</SectionTitle>
+      <ul className="flex flex-col gap-1">
+        {active.map(row)}
+        {decided.map(row)}
+      </ul>
+    </>
   )
 }
 
@@ -344,19 +388,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
                   )}
                   <CanonicalCard a={a} write={write && a.merged_into === null} />
 
-                  {a.discrepancies.length > 0 && (
-                    <>
-                      <SectionTitle>Расхождения ({a.discrepancies.length})</SectionTitle>
-                      <ul className="flex flex-col gap-1">
-                        {a.discrepancies.map((d, i) => (
-                          <li key={i} className="flex gap-2">
-                            <span className={cn('shrink-0', CODE_TEXT[d.code])}>{CODE_LABELS[d.code]}</span>
-                            <span className="text-text-secondary">{d.text}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
+                  {a.discrepancies.length > 0 && <DiscrepancyList key={a.id} a={a} />}
 
                   <SectionTitle>По источникам</SectionTitle>
                   <SourcesTable a={a} write={write && a.merged_into === null} onDetach={setDetaching} />

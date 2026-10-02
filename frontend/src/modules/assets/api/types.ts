@@ -1,4 +1,5 @@
 /** Типы API модуля Assets. */
+import type { FindingChange, FindingStatus } from '@/platform/findings/types'
 
 export { STAGE_LABELS } from '@/platform/collector/types'
 export type { Job, JobStatus } from '@/platform/collector/types'
@@ -88,9 +89,14 @@ export interface AssetItem {
 
 export interface AssetsFacets {
   source: Record<AssetSource, number>
+  /** Активы с расхождением кода под статусами фильтра (без фильтра — учитываемые в подсчётах). */
   code: Record<CodeFilter, number>
   zone: Record<string, number>
   criticality: Record<Criticality | 'none', number>
+  /** Расхождения по статусам — без фильтра статуса. */
+  disc_status: Record<FindingStatus, number>
+  /** Просроченные расхождения — без фильтра статуса и срока. */
+  disc_overdue: number
 }
 
 export interface AssetsResponse {
@@ -109,6 +115,11 @@ export interface AssetsQuery {
   port?: number
   tag?: string
   criticality?: Criticality | 'none'
+  /** Статусы расхождений через запятую или `all`; без него — учитываемые в подсчётах. */
+  disc_status?: string
+  /** Исполнитель расхождения: `me`, `none` или логин. */
+  assignee?: string
+  overdue?: boolean
 }
 
 export interface Observation {
@@ -128,6 +139,7 @@ export interface Observation {
   marks: Partial<Record<'name' | 'fqdn' | 'ip', 'stale' | 'conflict'>>
 }
 
+/** Расхождение карточки — находка статусов платформы (module `assets`, scope 0, `key`). */
 export interface Discrepancy {
   code: DiscrepancyCode
   source: AssetSource | ''
@@ -135,6 +147,22 @@ export interface Discrepancy {
   value: string
   current: string
   text: string
+  key: string
+  status: FindingStatus
+  status_title: string
+  assignee: string | null
+  due_date: string | null
+  overdue: boolean
+  risk_until: string | null
+  /** Входит ли статус в подсчёты (настройка платформы `counted`). */
+  counted: boolean
+}
+
+/** Массовая смена статуса расхождения `code` у отмеченных активов. */
+export interface DiscrepancyBulk {
+  ids: number[]
+  code: DiscrepancyCode
+  change: FindingChange
 }
 
 export interface AssetLinks {

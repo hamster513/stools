@@ -36,6 +36,8 @@ function describe(e: FindingEvent): string {
       return `срок принятия риска истёк (${day(d.risk_until)})`
     case 'migrated':
       return `перенесено из прежнего вердикта: ${status(e.to_status)}`
+    case 'rekeyed':
+      return `решение перенесено с находки ${String(d.old ?? '')}`
   }
 }
 

@@ -2,8 +2,10 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
+import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/queries'
+import type { FindingSummary } from '@/platform/findings/types'
 import type {
-  AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DnsIn, DnsServer, Job, Network, NetworkIn,
+  AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, Job, Network, NetworkIn,
   NetworkSchedule, PinnableField, ScanStarted, ScheduleIn, SyncStatus, Zone, ZoneIn,
 } from './types'
 
@@ -90,6 +92,22 @@ export function useBulkUpdate() {
   })
 }
 
+/** Статус расхождения у отмеченных активов; меняет списки, карточки, обзор и сводки статусов. */
+export function useDiscrepancyBulk() {
+  const qc = useQueryClient()
+  return useMutation<{ changed: number }, ApiRequestError, DiscrepancyBulk>({
+    mutationFn: (body) => api.post('/api/assets/assets/discrepancies/bulk', body),
+    onSuccess: () => invalidateDiscrepancies(qc),
+  })
+}
+
+/** После смены статуса расхождения: список, карточки, обзор, состояния находок, сводка и «Мои находки». */
+export function invalidateDiscrepancies(qc: ReturnType<typeof useQueryClient>) {
+  for (const key of ['assets-list', 'assets-asset', 'assets-overview', 'finding-state', FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY]) {
+    qc.invalidateQueries({ queryKey: [key] })
+  }
+}
+
 export function useStartSync() {
   const qc = useQueryClient()
   return useMutation<{ job_id: number }, ApiRequestError, void>({
@@ -126,6 +144,14 @@ export function useDeleteSyncSchedule() {
 
 export function useOverview() {
   return useQuery<AssetsOverview, ApiRequestError>({ queryKey: ['assets-overview'], queryFn: () => api.get('/api/assets/overview') })
+}
+
+/** Сводка статусов расхождений (`/api/findings/summary`, module `assets`): строка под плитками обзора. */
+export function useDiscrepancySummary() {
+  return useQuery<FindingSummary, ApiRequestError>({
+    queryKey: [FINDING_SUMMARY_KEY, 'assets', 0],
+    queryFn: () => api.get('/api/findings/summary?module=assets&scope_id=0'),
+  })
 }
 
 export function useAssetSettings() {
