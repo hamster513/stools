@@ -96,3 +96,29 @@ export interface FindingSummary {
   risk_expiring: number
   unassigned: number
 }
+
+/** Строка «Моих находок» (`GET /api/findings/mine`): находки всех модулей, назначенные мне. */
+export interface MyFinding {
+  module: string
+  module_title: string
+  scope_id: number
+  key: string
+  title: string
+  severity: string
+  status: FindingStatus
+  status_title: string
+  due_date: string | null
+  overdue: boolean
+  risk_until: string | null
+  present: boolean
+  first_seen_at: string | null
+  updated_at: string
+  /** Путь карточки находки в интерфейсе модуля. */
+  link: string
+}
+
+/** Значок меню: мои открытые находки и сколько из них просрочено. */
+export interface MyFindingsCount {
+  open: number
+  overdue: number
+}

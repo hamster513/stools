@@ -25,7 +25,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.audit import changes_summary
@@ -158,6 +158,7 @@ class StateView(BaseModel):
 
 class MineItem(BaseModel):
     module: str
+    module_title: str
     scope_id: int
     key: str
     title: str
@@ -171,6 +172,17 @@ class MineItem(BaseModel):
     first_seen_at: dt.datetime | None
     updated_at: dt.datetime
     link: str
+
+
+class MineCount(BaseModel):
+    open: int
+    overdue: int
+
+
+#: Подписи модулей для «Моих находок» — как в рейке интерфейса (frontend/src/platform/modules.ts).
+MODULE_TITLES = {"ad": "Active Directory", "ksc": "Антивирус", "siem": "SIEM", "vm": "VM", "assets": "Assets"}
+#: Порядок тяжести для «Моих находок»; у модулей регистр разный (AD — `High`, VM — `high`).
+SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
 class DirectoryUser(BaseModel):
@@ -303,6 +315,8 @@ def get_mine(
     status_: str = Query(default="", alias="status"), module: str = Query(default="", max_length=16),
     db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
 ) -> list[MineItem]:
+    """Находки, назначенные текущему пользователю, из всех модулей: сначала просроченные,
+    затем по сроку (без срока — в конце), затем по тяжести. По умолчанию — открытые."""
     wanted = [s for s in status_.split(",") if s] or sorted(OPEN)
     unknown = set(wanted) - set(STATUSES)
     if unknown:
@@ -310,21 +324,34 @@ def get_mine(
     query = select(FindingState).where(FindingState.assignee == user.login, FindingState.status.in_(wanted))
     if module:
         query = query.where(FindingState.module == module)
-    rows = db.scalars(query.order_by(FindingState.due_date.asc().nulls_last(), FindingState.updated_at.desc()))
     on = svc.today()
     items = []
-    for row in rows:
+    for row in db.scalars(query.order_by(FindingState.updated_at.desc())):
         try:
             link = get_adapter(row.module).link(row.scope_id, row.key)
         except LookupError:
             link = ""
         items.append(MineItem(
-            module=row.module, scope_id=row.scope_id, key=row.key, title=row.title, severity=row.severity,
+            module=row.module, module_title=MODULE_TITLES.get(row.module, row.module), scope_id=row.scope_id,
+            key=row.key, title=row.title, severity=row.severity,
             status=row.status, status_title=STATUS_TITLES[row.status], due_date=row.due_date,
             overdue=is_overdue(row.status, row.due_date, on), risk_until=row.risk_until, present=row.present,
             first_seen_at=row.first_seen_at, updated_at=row.updated_at, link=link,
         ))
+    # Сортировка устойчивая: при равных сроке и тяжести — свежие изменения выше (порядок запроса).
+    items.sort(key=lambda i: (not i.overdue, i.due_date is None, i.due_date or on,
+                              SEVERITY_ORDER.get(i.severity.lower(), len(SEVERITY_ORDER))))
     return items
+
+
+@router.get("/api/findings/mine/count", response_model=MineCount)
+def get_mine_count(db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> MineCount:
+    """Для значка меню: открытые находки текущего пользователя и сколько из них просрочено."""
+    is_open = (FindingState.assignee == user.login, FindingState.status.in_(OPEN))
+    open_, overdue = db.execute(select(
+        func.count(), func.count().filter(FindingState.due_date < svc.today()),
+    ).where(*is_open)).one()
+    return MineCount(open=open_, overdue=overdue)
 
 
 @router.get("/api/findings/summary")

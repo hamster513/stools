@@ -1,9 +1,10 @@
-import { LogOut, Moon, Settings2, Shield, Sun } from 'lucide-react'
+import { ListChecks, LogOut, Moon, Settings2, Shield, Sun } from 'lucide-react'
 import { useLogout, useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { useCan } from '@/lib/can'
 import { useThemeChoice } from '@/lib/useThemeChoice'
+import { useMyFindingsCount } from './findings/queries'
 import { MODULES } from './modules'
 
 const FOCUS =
@@ -20,6 +21,10 @@ export function ModuleRail() {
   const can = useCan()
   const logout = useLogout()
   const appearance = useThemeChoice()
+  // Исполнителем бывает только аналитик или администратор: аудитору значок ни к чему.
+  const mine = useMyFindingsCount(can.write)
+  const open = mine.data?.open ?? 0
+  const overdue = mine.data?.overdue ?? 0
 
   return (
     <nav aria-label="Модули" className="flex w-16 shrink-0 flex-col border-r border-grid bg-app-bg">
@@ -69,6 +74,31 @@ export function ModuleRail() {
       </ul>
 
       <div className="mt-auto flex flex-col items-center gap-1 border-t border-grid px-1 py-2">
+        {can.write && (
+          <Link
+            to="/findings"
+            className={cn(
+              'relative rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text',
+              FOCUS,
+              path === '/findings' && 'bg-row-selected text-text',
+            )}
+            aria-label={`Мои находки: открытых ${open}${overdue ? `, просрочено ${overdue}` : ''}`}
+            title={overdue ? `Мои находки — открытых ${open}, просрочено ${overdue}` : `Мои находки — открытых ${open}`}
+          >
+            <ListChecks size={16} aria-hidden />
+            {open > 0 && (
+              <span
+                aria-hidden
+                className={cn(
+                  'absolute -top-0.5 -right-1 min-w-4 rounded-full px-1 text-center font-mono text-[9px] leading-4 tabular-nums',
+                  overdue ? 'bg-kind-1 text-white' : 'bg-row-selected text-text',
+                )}
+              >
+                {open > 99 ? '99+' : open}
+              </span>
+            )}
+          </Link>
+        )}
         {/* Общие настройки — только администратору: остальным этот экран
             всё равно отвечает отказом, а значок обещал бы обратное. */}
         {can.admin && (

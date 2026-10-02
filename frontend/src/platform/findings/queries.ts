@@ -1,7 +1,17 @@
 /** Хуки TanStack Query статусов находок. Списки модулей обновляет их `onChanged`/`onDone`. */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
-import type { BulkChangeRequest, DirectoryUser, FindingChange, FindingRef, FindingSettings, FindingState } from './types'
+import type {
+  BulkChangeRequest,
+  DirectoryUser,
+  FindingChange,
+  FindingRef,
+  FindingSettings,
+  FindingState,
+  FindingStatus,
+  MyFinding,
+  MyFindingsCount,
+} from './types'
 
 export function useFindingState(ref: FindingRef | undefined) {
   return useQuery<FindingState, ApiRequestError>({
@@ -57,5 +67,36 @@ export function useFindingSettings() {
   return useQuery<FindingSettings, ApiRequestError>({
     queryKey: ['finding-settings'],
     queryFn: () => api.get('/api/settings/findings'),
+  })
+}
+
+export function useSaveFindingSettings() {
+  const qc = useQueryClient()
+  return useMutation<FindingSettings, ApiRequestError, FindingSettings>({
+    mutationFn: (body) => api.put('/api/settings/findings', body),
+    onSuccess: (saved) => {
+      qc.setQueryData(['finding-settings'], saved)
+      // Подсчёты модулей зависят от `counted`: обзоры и списки перечитываются.
+      qc.invalidateQueries()
+    },
+  })
+}
+
+/** «Мои находки»; без статусов сервер отдаёт открытые. */
+export function useMyFindings(filters: { status?: FindingStatus[]; module?: string }) {
+  const params = { status: filters.status?.join(','), module: filters.module }
+  return useQuery<MyFinding[], ApiRequestError>({
+    queryKey: [FINDINGS_MINE_KEY, 'list', params],
+    queryFn: () => api.get(`/api/findings/mine${buildQuery(params)}`),
+  })
+}
+
+/** Значок меню; ключ под FINDINGS_MINE_KEY — смена статуса его обновляет. */
+export function useMyFindingsCount(enabled: boolean) {
+  return useQuery<MyFindingsCount, ApiRequestError>({
+    queryKey: [FINDINGS_MINE_KEY, 'count'],
+    queryFn: () => api.get('/api/findings/mine/count'),
+    enabled,
+    refetchInterval: 5 * 60_000,
   })
 }

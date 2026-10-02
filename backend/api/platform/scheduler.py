@@ -4,7 +4,10 @@
 `next_run_at <= now` и вызывает обработчик, который модуль зарегистрировал
 через `register_schedule_kind`. Обработчик запускает обычную задачу модуля
 (`start_job`/`run_job`) и возвращает её id; `None` — модуль занят, запуск
-откладывается на следующий тик, а не на интервал.
+откладывается на следующий тик, а не на интервал. Обработчик без задачи
+(`jobless=True`, например истечение принятых рисков) делает работу сам, в
+тике: вернулся без исключения — значит, отработал, и следующий запуск — через
+интервал.
 
 Срок следующего запуска хранится в базе, а не в памяти: после перезапуска
 API просроченные расписания уходят на первом тике (через `period_s` после
@@ -56,10 +59,16 @@ class PlatformSchedule(Base):
 Handler = Callable[[Session, PlatformSchedule], int | None]
 
 _handlers: dict[tuple[str, str], Handler] = {}
+#: Обработчики без задачи: их ответ не id задачи, и `None` не значит «занято».
+_jobless: set[tuple[str, str]] = set()
 
 
-def register_schedule_kind(module: str, kind: str, fn: Handler) -> None:
+def register_schedule_kind(module: str, kind: str, fn: Handler, *, jobless: bool = False) -> None:
     _handlers[(module, kind)] = fn
+    if jobless:
+        _jobless.add((module, kind))
+    else:
+        _jobless.discard((module, kind))
 
 
 _HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
@@ -144,7 +153,10 @@ def tick(db: Session, now: dt.datetime, *, period_s: float = 60, tz: str = "UTC"
                 sched.next_run_at = nxt
                 db.commit()
             continue
-        if job_id is None:
+        if (module, kind) in _jobless:
+            sched.last_run_at = now
+            sched.next_run_at = nxt
+        elif job_id is None:
             sched.next_run_at = now + dt.timedelta(seconds=period_s)
         else:
             sched.last_run_at = now

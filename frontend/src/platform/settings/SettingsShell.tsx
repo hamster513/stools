@@ -12,6 +12,7 @@ import { OidcPage } from './pages/OidcPage'
 import { AuditPage } from './pages/AuditPage'
 import { LlmPage } from './pages/LlmPage'
 import { AttackPage } from './pages/AttackPage'
+import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
 
 /**
  * Маршруты общих настроек — всё под /settings. Права проверяет сервер;
@@ -28,6 +29,8 @@ export function SettingsShell() {
   // пункт, и непонятно, что именно открыто.
   let page: ReactNode
   if (section === 'profile') page = <ProfilePage />
+  // Видят все: от этих настроек зависят подсчёты, которые видит каждый; меняет администратор.
+  else if (section === 'findings') page = <FindingsSettingsPage />
   else if (!admin) page = <Forbidden />
   else if (section === 'users') page = <UsersPage />
   else if (section === 'security') page = <SecurityPage />

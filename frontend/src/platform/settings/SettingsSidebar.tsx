@@ -1,4 +1,4 @@
-import { Bot, Grid3x3, KeyRound, ScrollText, ShieldCheck, UserRound, Users, type LucideIcon } from 'lucide-react'
+import { Bot, Grid3x3, KeyRound, ListChecks, ScrollText, ShieldCheck, UserRound, Users, type LucideIcon } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { useCan } from '@/lib/can'
@@ -66,6 +66,8 @@ export function SettingsSidebar() {
           ADMIN_ITEMS.map(({ key, label, icon }) => (
             <NavItem key={key} to={`/settings/${key}`} label={label} icon={icon} />
           ))}
+        {/* Всем: остальные роли видят, что считается, но не меняют. */}
+        <NavItem to="/settings/findings" label="Статусы находок" icon={ListChecks} />
         <NavItem
           to="/settings/profile"
           label="Мой профиль"

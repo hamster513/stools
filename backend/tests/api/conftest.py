@@ -153,6 +153,9 @@ def app_settings(
     # Синхронизацию Assets после импорта модуля API ведёт отдельным потоком; в тестах — на месте:
     # поток пережил бы тест и писал в базу, которую уже чистит TRUNCATE.
     monkeypatch.setattr("api.modules.assets.services.sync.spawn", lambda fn: fn())
+    # Расписание истечения рисков, которое заводит старт API, в тестах не заводится: тесты
+    # расписаний модулей считают строки platform_schedule. Его проверяет test_mine_and_expiry.py.
+    monkeypatch.setattr("api.main.ensure_platform_schedules", lambda: None)
     from api.settings import get_settings
 
     yield get_settings()

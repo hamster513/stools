@@ -48,6 +48,7 @@ from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
 from api.origin import OriginMiddleware
 from api.platform import router as settings_router
+from api.platform.findings.expiry import ensure_platform_schedules
 from api.platform.findings.router import router as findings_router
 from api.platform.scheduler import Scheduler
 from api.rbac import require_access
@@ -66,6 +67,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         fail_interrupted_jobs(db)
     # После уборки: расписание не должно упереться в «идущую» задачу, которую никто не ведёт.
     scheduler.start(get_sessionmaker())
+    # Расписания самой платформы (истечение принятых рисков) — если их ещё нет.
+    ensure_platform_schedules()
     try:
         yield
     finally:

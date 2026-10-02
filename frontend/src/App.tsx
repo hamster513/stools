@@ -9,6 +9,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { findModule } from '@/platform/modules'
 import { ModuleStubPage } from '@/platform/ModuleStubPage'
 import { SettingsShell } from '@/platform/settings/SettingsShell'
+import { MyFindingsPage } from '@/platform/findings/MyFindingsPage'
 import { AttackModule } from '@/modules/attack/AttackModule'
 import { SiemModule } from '@/modules/siem/SiemModule'
 import { VmModule } from '@/modules/vm/VmModule'
@@ -58,6 +59,14 @@ function Root() {
 
   // Общие настройки — не модуль: они над модулями и живут в своей оболочке.
   if (path === '/settings' || path.startsWith('/settings/')) return <SettingsShell />
+
+  // «Мои находки» — тоже над модулями: находки всех модулей, назначенные мне.
+  if (path === '/findings')
+    return (
+      <AppShell>
+        <MyFindingsPage />
+      </AppShell>
+    )
 
   // Первый сегмент пути — модуль. Корень и неизвестные пути ведут в SIEM:
   // это единственный работающий модуль, а пустой экран хуже любого выбора.
