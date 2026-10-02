@@ -14,15 +14,19 @@ const SMALL = cn(FIELD, 'w-auto py-1 text-xs')
 /**
  * Полоса массовых действий над выбранными находками (спека §6). Пустое поле —
  * «не менять»; исполнителя и срок можно и очистить. «Выбрать всё по фильтру»
- * показывается, только если модуль передал `onSelectAll`. Без права записи
+ * показывается, только если модуль передал `onSelectAll`. Если модуль передал
+ * `filter` (выбрано всё по фильтру), уходит фильтр, а не ключи: модуль с
+ * фоновой задачей отвечает `{job_id}` — его получает `onJob`. Без права записи
  * полосы нет.
  */
-export function BulkBar({ module, scopeId, keys, total, onSelectAll, onDone, onClear }: {
+export function BulkBar({ module, scopeId, keys, total, onSelectAll, filter, onJob, onDone, onClear }: {
   module: string
   scopeId: number
   keys: string[]
   total: number
   onSelectAll?: () => void
+  filter?: Record<string, unknown>
+  onJob?: (jobId: number) => void
   onDone: (changed: number) => void
   onClear: () => void
 }) {
@@ -49,18 +53,21 @@ export function BulkBar({ module, scopeId, keys, total, onSelectAll, onDone, onC
   const blocked = Object.keys(change).length === 0 || (needsReason && !change.comment)
 
   function apply() {
-    bulk.mutate({ module, scope_id: scopeId, keys, change }, {
-      onSuccess: ({ changed }) => {
+    bulk.mutate({ module, scope_id: scopeId, ...(filter ? { filter } : { keys }), change }, {
+      onSuccess: (result) => {
         setStatus(''); setAssignee(''); setDue(''); setClearDue(false); setRiskUntil(''); setComment('')
-        onDone(changed)
+        if ('job_id' in result) onJob?.(result.job_id)
+        else onDone(result.changed)
       },
     })
   }
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-grid bg-row-selected px-4 py-2 text-xs">
-      <span className="text-text">Выбрано <span className="font-mono tabular-nums">{keys.length}</span> из <span className="font-mono tabular-nums">{total}</span></span>
-      {onSelectAll && keys.length < total && <Button variant="ghost" className="px-2 py-1 text-xs" onClick={onSelectAll}>выбрать всё по фильтру</Button>}
+      {filter
+        ? <span className="text-text">Выбрано всё по фильтру: <span className="font-mono tabular-nums">{total}</span></span>
+        : <span className="text-text">Выбрано <span className="font-mono tabular-nums">{keys.length}</span> из <span className="font-mono tabular-nums">{total}</span></span>}
+      {onSelectAll && !filter && keys.length < total && <Button variant="ghost" className="px-2 py-1 text-xs" onClick={onSelectAll}>выбрать всё по фильтру</Button>}
       <select aria-label="Статус" className={SMALL} value={status} onChange={(e) => setStatus(e.target.value as FindingStatus | '')}>
         <option value="">статус: не менять</option>
         {MANUAL_STATUSES.map((s) => <option key={s} value={s}>{STATUS_TITLES[s]}</option>)}

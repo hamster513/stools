@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Download, FilterX, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { exportUrl, useHost, useVulns } from '@/modules/vm/api/queries'
+import { useMe } from '@/api/auth'
+import { exportUrl, useCancelJob, useHost, useJob, useVulns } from '@/modules/vm/api/queries'
 import { AssetLink } from '@/modules/assets/AssetLink'
-import { CVSS_SOURCE_LABELS, LEVEL_LABELS, type RiskLevel, type VulnItem, type VulnSort } from '@/modules/vm/api/types'
+import { CVSS_SOURCE_LABELS, LEVEL_LABELS, type RiskLevel, type VulnItem, type VulnSort, type VulnsQuery } from '@/modules/vm/api/types'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { BulkBar } from '@/platform/findings/BulkBar'
+import { findingFacetChips } from '@/platform/findings/facets'
+import { useUsersDirectory } from '@/platform/findings/queries'
+import { STATUSES, type FindingStatus } from '@/platform/findings/types'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { useCan } from '@/lib/can'
 import { useRouter, useSearchParams } from '@/lib/router'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -21,10 +28,31 @@ function isTypingTarget(el: EventTarget | null): boolean {
 
 const SORTS: VulnSort[] = ['risk_desc', 'risk_asc', 'cvss_desc', 'epss_desc', 'exploits_desc', 'host_asc', 'cve_asc']
 
-/** Главный экран модуля: плоская таблица пар хост–CVE с фасетами и картой расчёта. */
+/** Статусы из ссылки: коды через запятую или `all`; незнакомые коды отбрасываются. */
+function statusesFrom(raw: string | null): FindingStatus[] | undefined {
+  if (!raw) return undefined
+  if (raw === 'all') return [...STATUSES]
+  const picked = raw.split(',').filter((s): s is FindingStatus => (STATUSES as string[]).includes(s))
+  return picked.length ? picked : undefined
+}
+
+/** Ключ пары `hostname|ip|cve` из ссылки («Мои находки»): CVE и IP — справа, имя — всё остальное. */
+function splitKey(key: string | null): { hostname: string; cve: string } | null {
+  const parts = key?.split('|') ?? []
+  if (parts.length < 3) return null
+  return { hostname: parts.slice(0, -2).join('|'), cve: parts[parts.length - 1] }
+}
+
+/**
+ * Главный экран модуля: плоская таблица пар хост–CVE с фасетами и картой расчёта.
+ * У пары — общий статус находки (platform/findings): по умолчанию показываются
+ * открытые; галочки и полоса массовой смены, «выбрать всё по фильтру» меняет
+ * пары фоновой задачей. `?key=` в адресе находит пару и открывает её карточку.
+ */
 export function VulnsPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
+  const linked = splitKey(params.get('key'))
   // Адрес задаёт начальные фильтры: сюда ведут ссылки с обзора и из карточки.
   const [filters, setFilters] = useState<VulnFilters>(() => ({
     level: (params.get('level') as RiskLevel | null) ?? undefined,
@@ -32,34 +60,60 @@ export function VulnsPage() {
     criticality: params.get('criticality') ?? undefined,
     cvss_source: (params.get('cvss_source') as VulnFilters['cvss_source']) ?? undefined,
     exploits: params.get('exploits') === 'true' ? true : undefined,
+    // Пару по ссылке ищут при любом статусе: она могла быть закрыта.
+    status: linked ? [...STATUSES] : statusesFrom(params.get('status')),
+    assignee: params.get('assignee') ?? undefined,
+    overdue: params.get('overdue') === 'true' || undefined,
+    risk_expiring: params.get('risk_expiring') === 'true' || undefined,
   }))
-  const cveParam = params.get('cve') ?? undefined
+  const cveParam = params.get('cve') ?? linked?.cve ?? undefined
   const hostIdParam = params.get('host_id') ? Number(params.get('host_id')) : undefined
   const [sort, setSort] = useState<VulnSort>(() => {
     const s = params.get('sort') as VulnSort | null
     return s && SORTS.includes(s) ? s : 'risk_desc'
   })
-  const [searchInput, setSearchInput] = useState('')
+  const [searchInput, setSearchInput] = useState(linked?.hostname ?? '')
   const q = useDebouncedValue(searchInput, 250)
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [openKey, setOpenKey] = useState<string | null>(null)
+  const [openKey, setOpenKey] = useState<string | null>(() => params.get('key'))
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set())
+  const [anchor, setAnchor] = useState<number | null>(null)
+  const [allByFilter, setAllByFilter] = useState(false)
+  const [jobId, setJobId] = useState<number | undefined>(undefined)
   const searchRef = useRef<HTMLInputElement>(null)
   const filtersPanel = useFiltersPanel('vm-vulns')
+  const { write } = useCan()
+  const me = useMe()
+  const directory = useUsersDirectory()
+  const names = useMemo(() => new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login])), [directory.data])
+  const qc = useQueryClient()
+  const job = useJob(jobId)
+  const cancelJob = useCancelJob()
 
   const host = useHost(hostIdParam)
-  const queryArgs = useMemo(
-    () => ({ ...filters, q: q || undefined, cve: cveParam, host_id: hostIdParam, sort }),
-    [filters, q, cveParam, hostIdParam, sort],
-  )
+  // Без сортировки — фильтр списка как он есть: его же получает массовая смена «всё по фильтру».
+  const listFilter = useMemo<Omit<VulnsQuery, 'limit' | 'offset' | 'sort'>>(() => {
+    const { status, assignee, overdue, risk_expiring, ...data } = filters
+    return {
+      ...data, status: status?.join(','), assignee, overdue: overdue || undefined, risk_expiring: risk_expiring || undefined,
+      q: q || undefined, cve: cveParam, host_id: hostIdParam,
+    }
+  }, [filters, q, cveParam, hostIdParam])
+  const queryArgs = useMemo(() => ({ ...listFilter, sort }), [listFilter, sort])
   const query = useVulns(queryArgs)
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const facets = query.data?.pages[0]?.facets ?? undefined
   const total = query.data?.pages[0]?.total ?? 0
 
-  useEffect(() => setSelectedIndex(0), [queryArgs])
+  useEffect(() => { setSelectedIndex(0); setChecked(new Set()); setAnchor(null); setAllByFilter(false) }, [queryArgs])
+  // Массовая смена закончилась — список и карточки уже другие (useJob обновляет данные модуля).
+  const jobStatus = job.data?.status
+  useEffect(() => {
+    if (jobStatus && jobStatus !== 'running') { setChecked(new Set()); setAnchor(null); setAllByFilter(false) }
+  }, [jobStatus])
 
   const selected: VulnItem | null = items[selectedIndex] ?? null
-  const openItem = items.find((i) => `${i.host_id}:${i.cve_id}` === openKey) ?? null
+  const openItem = items.find((i) => i.key === openKey) ?? null
 
   function toggle<K extends keyof VulnFilters>(key: K, value: VulnFilters[K]) {
     setFilters((prev) => ({ ...prev, [key]: value }))
@@ -67,11 +121,27 @@ export function VulnsPage() {
   function clearAll() {
     setFilters({})
     setSearchInput('')
-    if (cveParam || hostIdParam) navigate('/vm/vulns', { replace: true })
+    if (cveParam || hostIdParam || linked) navigate('/vm/vulns', { replace: true })
+  }
+  function check(i: number, shift: boolean) {
+    const on = !checked.has(items[i].key)
+    const [from, to] = shift && anchor !== null ? [Math.min(anchor, i), Math.max(anchor, i)] : [i, i]
+    const next = new Set(checked)
+    for (const item of items.slice(from, to + 1)) {
+      if (on) next.add(item.key)
+      else next.delete(item.key)
+    }
+    setChecked(next)
+    setAnchor(i)
+    setAllByFilter(false)
+  }
+  function changed() {
+    setChecked(new Set()); setAnchor(null); setAllByFilter(false)
+    for (const key of ['vm-vulns', 'vm-overview']) qc.invalidateQueries({ queryKey: [key] })
   }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
   // Пустая строка — тоже значение фильтра («не задана», «без зоны»).
-  const chips: FilterChip[] = []
+  const chips: FilterChip[] = findingFacetChips(filters, (next) => setFilters((prev) => ({ ...prev, ...next })), names)
   if (filters.level) chips.push({ label: `риск ${LEVEL_LABELS[filters.level]}`, clear: () => toggle('level', undefined) })
   if (filters.criticality !== undefined) chips.push({ label: `критичность ${filters.criticality || 'не задана'}`, clear: () => toggle('criticality', undefined) })
   if (filters.zone !== undefined) chips.push({ label: filters.zone ? `зона ${filters.zone}` : 'без зоны', clear: () => toggle('zone', undefined) })
@@ -91,13 +161,14 @@ export function VulnsPage() {
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
       if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
       if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
-      if (e.key === 'Enter' && selected) { e.preventDefault(); setOpenKey(`${selected.host_id}:${selected.cve_id}`) }
+      if (e.key === 'Enter' && selected) { e.preventDefault(); setOpenKey(selected.key) }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [items.length, selected, openKey])
 
   const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== '' || !!cveParam || hostIdParam !== undefined
+  const running = job.data?.status === 'running' ? job.data : null
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить уязвимости' : null
 
   return (
@@ -146,8 +217,27 @@ export function VulnsPage() {
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
 
+      {job.data && (
+        <div className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text-secondary">
+          <span className="text-text">Массовая смена статусов, задача #{job.data.id}:</span>
+          {running
+            ? <>
+                <span className="font-mono tabular-nums">{running.processed.toLocaleString('ru-RU')} из {(running.total ?? 0).toLocaleString('ru-RU')}</span>
+                <span>{running.message}</span>
+                <button type="button" onClick={() => cancelJob.mutate(running.id)} disabled={running.cancel_requested} className="text-text underline disabled:no-underline disabled:opacity-60">{running.cancel_requested ? 'останавливается…' : 'остановить'}</button>
+              </>
+            : <span>{job.data.status === 'done' ? `готово: ${job.data.message}` : job.data.status === 'cancelled' ? `остановлена: ${job.data.message}` : `ошибка: ${job.data.error ?? ''}`}</span>}
+          {!running && <button type="button" onClick={() => setJobId(undefined)} aria-label="Скрыть" className="ml-auto text-text-secondary hover:text-text"><X size={12} aria-hidden /></button>}
+        </div>
+      )}
+      {write && !running && (
+        <BulkBar module="vm" scopeId={0} keys={[...checked]} total={total}
+          onSelectAll={() => setAllByFilter(true)} filter={allByFilter ? listFilter : undefined}
+          onJob={setJobId} onDone={changed} onClear={() => { setChecked(new Set()); setAllByFilter(false) }} />
+      )}
+
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={facets} filters={filters} onToggle={toggle} total={total} />}
+        {filtersPanel.open && <FacetPanel facets={facets} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
@@ -155,8 +245,8 @@ export function VulnsPage() {
             <div className="p-6">
               <EmptyState
                 icon={FilterX}
-                title={hasFilters ? 'Ничего не найдено' : 'Уязвимостей ещё нет'}
-                description={hasFilters ? 'Ни одна пара не подходит под фильтры. Сбросьте их или измените запрос.' : 'Импортируйте хосты из MaxPatrol VM в настройках модуля.'}
+                title={hasFilters ? 'Ничего не найдено' : 'Открытых уязвимостей нет'}
+                description={hasFilters ? 'Ни одна пара не подходит под фильтры. Сбросьте их или измените запрос.' : 'Открытых пар хост–CVE нет: остальные — в фильтре по статусу. Если импорта ещё не было — импортируйте хосты из MaxPatrol VM в настройках модуля.'}
               />
             </div>
           )}
@@ -167,16 +257,17 @@ export function VulnsPage() {
               sort={sort}
               onSort={setSort}
               onSelectIndex={setSelectedIndex}
-              onOpen={(i) => setOpenKey(`${items[i].host_id}:${items[i].cve_id}`)}
+              onOpen={(i) => setOpenKey(items[i].key)}
               onReachEnd={() => {
                 if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage()
               }}
+              {...(write ? { checked, onCheck: check, onCheckAll: (on: boolean) => { setChecked(on ? new Set(items.map((i) => i.key)) : new Set()); setAllByFilter(false) } } : {})}
             />
           )}
         </div>
       </div>
 
-      <RiskDrawer item={openItem} onClose={() => setOpenKey(null)} />
+      <RiskDrawer item={openItem} onClose={() => setOpenKey(null)} onChanged={() => { for (const key of ['vm-vulns', 'vm-overview']) qc.invalidateQueries({ queryKey: [key] }) }} />
     </div>
   )
 }

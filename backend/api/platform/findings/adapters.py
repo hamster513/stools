@@ -40,10 +40,32 @@ class FindingAdapter(Protocol):
 
 
 #: Выбор находок по фильтру списка модуля для массового действия: (db, scope_id, filter) → ключи.
-BulkFilter = Callable[[Session, int, dict[str, Any]], list[str]]
+#: Ошибка в фильтре — ValueError сразу при вызове, до первого ключа.
+BulkFilter = Callable[[Session, int, dict[str, Any]], Iterable[str]]
+
+
+@dataclass(frozen=True)
+class BulkJobRequest:
+    """Массовая смена по фильтру, которую модуль выполнит фоновой задачей."""
+
+    scope_id: int
+    #: Фильтр списка модуля; `assignee: "me"` уже заменён логином автора.
+    filter: dict[str, Any]
+    #: `service.Change`, уже проверенная `service.check_change`.
+    change: Any
+    #: Логин автора: задача идёт в своей сессии и читает пользователя сама.
+    actor: str
+    #: Общий id массового действия для событий всех кусков.
+    bulk_id: str
+
+
+#: Фоновая массовая смена: заводит задачу модуля и отдаёт её id и работу, которую платформа
+#: запустит после ответа. Ошибка фильтра — ValueError, до того как задача заведена.
+BulkJob = Callable[[Session, BulkJobRequest], tuple[int, Callable[[], None]]]
 
 _ADAPTERS: dict[str, FindingAdapter] = {}
 _BULK_FILTERS: dict[str, BulkFilter] = {}
+_BULK_JOBS: dict[str, BulkJob] = {}
 
 
 def register_adapter(adapter: FindingAdapter) -> None:
@@ -67,6 +89,16 @@ def register_bulk_filter(module: str, fn: BulkFilter) -> None:
 
 def get_bulk_filter(module: str) -> BulkFilter | None:
     return _BULK_FILTERS.get(module)
+
+
+def register_bulk_job(module: str, fn: BulkJob) -> None:
+    """Модуль, у которого выбор по фильтру может дать десятки тысяч находок (VM), меняет их
+    фоновой задачей: `POST /api/findings/bulk` с `filter` отвечает 202 `{job_id}`."""
+    _BULK_JOBS[module] = fn
+
+
+def get_bulk_job(module: str) -> BulkJob | None:
+    return _BULK_JOBS.get(module)
 
 
 def safe_reconcile(

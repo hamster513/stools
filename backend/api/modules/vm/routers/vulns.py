@@ -32,11 +32,14 @@ from api.modules.vm.services.query import (
     SORTS,
     VulnFilters,
     base_select,
-    facets,
+    data_facets,
+    item_with_state,
     iter_rows,
     page,
     page_items,
     row_to_item,
+    status_facets,
+    status_filter,
 )
 from api.modules.vm.services.settings import load_settings
 from api.modules.vm.services.stats import load_stats
@@ -59,8 +62,28 @@ def _filters(
     msf: bool | None = None,
     cvss_source: str | None = None,
     host_id: int | None = None,
+    status_: str | None = Query(default=None, alias="status"),
+    assignee: str | None = None,
+    overdue: bool = False,
+    risk_expiring: bool = False,
+    user: AppUser = Depends(get_current_user),
 ) -> VulnFilters:
-    return VulnFilters(q, host, cve, criticality, zone, os, level, exploits, msf, cvss_source, host_id)
+    """Статус пары: `status` — коды через запятую или `all`, по умолчанию — открытые;
+    `assignee` — `me`, `none` или логин; `overdue`, `risk_expiring` (спека статусов §5)."""
+    try:
+        sf = status_filter(status_, assignee, overdue, risk_expiring, login=user.login)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    return VulnFilters(q, host, cve, criticality, zone, os, level, exploits, msf, cvss_source, host_id, sf)
+
+
+def _with_names(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Имя исполнителя — одним запросом на страницу."""
+    logins = {i["assignee"] for i in items if i["assignee"]}
+    names = {u.login: u.display_name or u.login for u in db.scalars(select(AppUser).where(AppUser.login.in_(logins)))} if logins else {}
+    for i in items:
+        i["assignee_name"] = names.get(i["assignee"], i["assignee"]) if i["assignee"] else None
+    return items
 
 
 class VulnsResponse(BaseModel):
@@ -86,10 +109,14 @@ def list_vulns(
     # отдельный count по миллионам пар не нужен.
     if offset > 0:
         total, items = page(db, f, sort, limit, offset)
-        return VulnsResponse(total=total, items=items, facets=None)
-    cached = load_stats(db).get("facets") if f.is_empty() else None
-    fac = cached if cached and "criticality" in cached else facets(db, f)
-    return VulnsResponse(total=sum(fac["level"].values()), items=page_items(db, f, sort, limit, 0), facets=fac)
+        return VulnsResponse(total=total, items=_with_names(db, items), facets=None)
+    # Статусы: по умолчанию показываются открытые; кэш годится, пока фильтр статуса пропускает
+    # пары без решений, — из него вычитаются пары с решением, не прошедшие фильтр (`data_facets`).
+    cached = load_stats(db).get("facets") if f.data_empty() else None
+    fac = data_facets(db, f, cached)
+    total_all = sum(cached["level"].values()) if cached and "level" in cached else None
+    fac.update(status_facets(db, f, total_all))
+    return VulnsResponse(total=sum(fac["level"].values()), items=_with_names(db, page_items(db, f, sort, limit, 0)), facets=fac)
 
 
 def _factor(fac: Any) -> dict[str, Any]:
@@ -230,6 +257,9 @@ EXPORT_COLUMNS = [
     ("zone", "Зона"),
     ("os_name", "ОС"),
     ("risk_raw", "Риск (сырой)"),
+    ("status_title", "Статус"),
+    ("assignee", "Исполнитель"),
+    ("due_date", "Срок"),
 ]
 
 
@@ -240,7 +270,8 @@ def export_csv(
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    """CSV с BOM и `;` — так его открывает Excel в русской локали без вопросов. Строки (имя хоста,
+    """CSV с BOM и `;` — так его открывает Excel в русской локали без вопросов. Фильтры — как у
+    списка, по умолчанию открытые пары; последние колонки — статус, исполнитель, срок. Строки (имя хоста,
     ОС, зона — из выгрузки MaxPatrol) проходят `_csv_safe`: ячейка с =, +, -, @ в начале не станет
     формулой (аудит L2); числа идут как есть."""
 
@@ -254,8 +285,9 @@ def export_csv(
         writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
         writer.writerow([title for _, title in EXPORT_COLUMNS])
         yield ("﻿" + buf.getvalue()).encode("utf-8")
+        today = f.status.day()
         for row in iter_rows(db, f, sort):
-            item = row_to_item(row)
+            item = item_with_state(row, today)
             buf.seek(0)
             buf.truncate()
             writer.writerow([cell(item.get(key)) for key, _ in EXPORT_COLUMNS])

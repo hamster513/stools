@@ -9,8 +9,11 @@ from fastapi import APIRouter
 
 from api.modules.attack.layers import register_layer
 from api.modules.vm import models as models  # таблицы должны попасть в metadata
+from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
+from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job
 from api.modules.vm.routers import import_, jobs, overview, recalc, refs, settings, vulns, zones
 from api.modules.vm.services.attack_layer import LAYER as ATTACK_LAYER
+from api.platform.findings.adapters import register_adapter, register_bulk_filter, register_bulk_job
 
 router = APIRouter(prefix="/api/vm")
 for sub in (
@@ -28,5 +31,11 @@ for sub in (
 # Экспозиция уязвимостей — слой платформенной матрицы: модуль знает про
 # `attack`, `attack` про модули — нет.
 register_layer(ATTACK_LAYER)
+
+# Статус на паре хост × CVE — общий механизм платформы; «всё по фильтру» меняется
+# фоновой задачей модуля.
+register_adapter(FINDINGS_ADAPTER)
+register_bulk_filter("vm", keys_by_filter)
+register_bulk_job("vm", start_bulk_job)
 
 __all__ = ["router"]

@@ -13,8 +13,18 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmImport, VmRefState, VmZone
+from api.modules.vm.services.query import (
+    MODULE,
+    SCOPE,
+    StatusFilter,
+    VulnFilters,
+    base_select,
+    data_facets,
+    status_conditions,
+)
 from api.modules.vm.services.settings import load_settings
 from api.modules.vm.services.stats import load_stats
+from api.platform.findings import service as finding_svc
 
 router = APIRouter(prefix="/overview", tags=["vm"])
 
@@ -23,13 +33,19 @@ router = APIRouter(prefix="/overview", tags=["vm"])
 def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     settings = load_settings(db)
     hosts = int(db.execute(select(func.count()).select_from(VmHost)).scalar() or 0)
-    pairs = int(db.execute(select(func.count()).select_from(VmHostCve)).scalar() or 0)
+    pairs_all = int(db.execute(select(func.count()).select_from(VmHostCve)).scalar() or 0)
     cves = int(db.execute(select(func.count()).select_from(VmCve)).scalar() or 0)
-    above = int(
-        db.execute(select(func.count()).select_from(VmHostCve).where(VmHostCve.risk >= settings.threshold)).scalar() or 0
-    )
     # Распределение и топы — из кэша, обновляемого после каждого пересчёта.
     stats = load_stats(db)
+    # Пары, распределение и «выше порога» — по учитываемым статусам (настройка платформы
+    # `counted`): принятый риск по умолчанию не считается. Топы — по всем парам, из кэша.
+    counted = VulnFilters(status=StatusFilter(statuses=finding_svc.counted_statuses(db)))
+    distribution = data_facets(db, counted, stats.get("facets"))["level"]
+    above = int(
+        db.execute(
+            base_select([func.count()], state=True).where(VmHostCve.risk >= settings.threshold, *status_conditions(counted.status))
+        ).scalar() or 0
+    )
 
     last_import = db.execute(select(VmImport).order_by(VmImport.id.desc())).scalars().first()
     states = {s.name: s for s in db.execute(select(VmRefState)).scalars()}
@@ -54,11 +70,13 @@ def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current
 
     return {
         "hosts": hosts,
-        "pairs": pairs,
+        "pairs": sum(distribution.values()),
+        "pairs_all": pairs_all,
         "cves": cves,
         "above_threshold": above,
         "threshold": settings.threshold,
-        "distribution": stats["distribution"],
+        "distribution": distribution,
+        "findings": finding_svc.summary(db, MODULE, SCOPE, keys_present=pairs_all),
         "top_cves": stats["top_cves"],
         "top_hosts": stats["top_hosts"],
         "data": {

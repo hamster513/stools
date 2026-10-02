@@ -4,6 +4,11 @@
 справочника CTID: меняется слой ровно тогда же, когда меняется риск.
 Смена порога тоже пересчитывает — её видно по несовпадению порога в кэше.
 
+Пары со статусом, который не учитывается (настройка платформы `counted`,
+по умолчанию «Принят риск», «Ложное срабатывание», «Устранена»), в слой не
+входят. Смена статуса или настройки делает кэш устаревшим: в нём хранится
+отметка состояний VM (`_state_mark`), и несовпадение пересчитывает слой.
+
 Считает СУБД: пар миллионы, выше порога — сотни тысяч, и тащить их в
 процесс незачем. Правило по вектору живёт в `attack_map.technique_for`
 как читаемое определение, а здесь повторено выражением `CASE`; что они
@@ -30,7 +35,10 @@ from api.modules.attack.layers import (
     parent_of,
 )
 from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmRefAttack, VmZone
+from api.modules.vm.services.query import MODULE, SCOPE, ST, StatusFilter, status_conditions
 from api.modules.vm.services.settings import load_settings
+from api.platform.findings import service as finding_svc
+from api.platform.findings.models import FindingState
 
 CACHE_KEY = "vm.attack_layer"
 
@@ -90,9 +98,23 @@ def _technique_expr() -> ColumnElement[str | None]:
     )
 
 
-def _exposure(threshold: int) -> Subquery:
-    """Пары выше порога с техникой: `technique` может быть NULL (вектора нет)."""
-    return (
+def _counted(counted: frozenset[str] | None) -> list[ColumnElement[bool]]:
+    """Условия «статус пары учитывается»; None — все пары."""
+    return [] if counted is None else status_conditions(StatusFilter(statuses=counted))
+
+
+def _state_mark(db: Session) -> str:
+    """Отметка состояний VM и настройки `counted`: меняется с любой сменой статуса пары."""
+    rows, last = db.execute(
+        select(func.count(), func.max(FindingState.updated_at)).where(FindingState.module == MODULE, FindingState.scope_id == SCOPE)
+    ).one()
+    return f"{','.join(sorted(finding_svc.counted_statuses(db)))}|{rows}|{last.isoformat() if last else ''}"
+
+
+def _exposure(threshold: int, counted: frozenset[str] | None = None) -> Subquery:
+    """Пары выше порога с техникой: `technique` может быть NULL (вектора нет).
+    `counted` — учитываемые статусы пар; None — все пары."""
+    stmt = (
         select(
             _technique_expr().label("technique"),
             VmHostCve.host_id.label("host_id"),
@@ -108,16 +130,24 @@ def _exposure(threshold: int) -> Subquery:
         .outerjoin(VmZone, VmZone.name == VmHost.zone)
         .outerjoin(VmRefAttack, VmRefAttack.cve_id == VmHostCve.cve_id)
         .where(VmHostCve.risk >= threshold)
-        .subquery("exposure")
     )
+    if counted is not None:
+        stmt = stmt.outerjoin(ST, and_(ST.c.host_id == VmHostCve.host_id, ST.c.cve_id == VmHostCve.cve_id)).where(*_counted(counted))
+    return stmt.subquery("exposure")
 
 
 def compute(db: Session) -> dict[str, Any]:
     threshold = load_settings(db).attack_min_risk
+    counted = finding_svc.counted_statuses(db)
+    mark = _state_mark(db)
     pairs = int(
-        db.execute(select(func.count()).select_from(VmHostCve).where(VmHostCve.risk >= threshold)).scalar() or 0
+        db.execute(
+            select(func.count()).select_from(VmHostCve)
+            .outerjoin(ST, and_(ST.c.host_id == VmHostCve.host_id, ST.c.cve_id == VmHostCve.cve_id))
+            .where(VmHostCve.risk >= threshold, *_counted(counted))
+        ).scalar() or 0
     )
-    sub = _exposure(threshold)
+    sub = _exposure(threshold, counted)
     marked = sub.c.technique.is_not(None)
 
     hosts: dict[str, set[int]] = defaultdict(set)
@@ -174,6 +204,7 @@ def compute(db: Session) -> dict[str, Any]:
 
     return {
         "threshold": threshold,
+        "state_mark": mark,
         "pairs": pairs,
         "computed_at": dt.datetime.now(dt.UTC).isoformat(),
         "technique_ids": sorted(ids),
@@ -198,7 +229,7 @@ def load(db: Session) -> dict[str, Any]:
     if row is None or not row.value_json:
         return refresh(db)
     data: dict[str, Any] = json.loads(row.value_json)
-    if data.get("threshold") != load_settings(db).attack_min_risk:
+    if data.get("threshold") != load_settings(db).attack_min_risk or data.get("state_mark") != _state_mark(db):
         return refresh(db)
     return data
 

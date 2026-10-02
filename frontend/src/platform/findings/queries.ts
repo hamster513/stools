@@ -31,9 +31,12 @@ export function useChangeFinding() {
   })
 }
 
+/** По ключам — сразу `{changed}`; по фильтру у модуля с фоновой задачей — `{job_id}` (202). */
+export type BulkChangeResult = { changed: number } | { job_id: number }
+
 export function useBulkChange() {
   const qc = useQueryClient()
-  return useMutation<{ changed: number }, ApiRequestError, BulkChangeRequest>({
+  return useMutation<BulkChangeResult, ApiRequestError, BulkChangeRequest>({
     mutationFn: (body) => api.post('/api/findings/bulk', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['finding-state'] })

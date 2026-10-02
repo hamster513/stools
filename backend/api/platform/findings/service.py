@@ -258,6 +258,14 @@ def comment(db: Session, *, module: str, scope_id: int, key: str, text: str, act
     return event
 
 
+def check_change(db: Session, change: Change, *, actor: AppUser) -> None:
+    """Проверить смену заранее, на новой находке, — для фоновой задачи, которая применит её
+    позже: отказ по правилам §1 (обоснование, роль, срок риска, исполнитель) — до её запуска.
+    Ничего не записывает."""
+    _apply(_new_row("", 0, ""), change, actor=actor, settings=load_settings(db), assignable=_directory_logins(db),
+           on=today(), bulk_id=None)
+
+
 def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str], change: Change,
                 actor: AppUser, bulk_id: str | None = None) -> int:
     """Одна и та же смена для многих находок; события помечены общим `bulk_id`.

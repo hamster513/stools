@@ -5,6 +5,7 @@ import type { Factor, VulnItem } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { AssetLink } from '@/modules/assets/AssetLink'
+import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
 import { Spinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -12,6 +13,8 @@ import { cn } from '@/lib/cn'
 interface Props {
   item: VulnItem | null
   onClose: () => void
+  /** Статус пары сохранён — список и обзор устарели. */
+  onChanged?: () => void
 }
 
 function num(v: number): string {
@@ -32,8 +35,8 @@ function FactorRow({ label, f, loaded }: { label: string; f: Factor; loaded?: st
   )
 }
 
-/** Карточка расчёта: формула с числами и происхождение каждого множителя. */
-export function RiskDrawer({ item, onClose }: Props) {
+/** Карточка пары: работа с находкой (статус пары хост × CVE), формула риска с числами и происхождение каждого множителя. */
+export function RiskDrawer({ item, onClose, onChanged }: Props) {
   const open = item !== null
   const card = useRiskCard(item?.host_id, item?.cve_id)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -67,6 +70,9 @@ export function RiskDrawer({ item, onClose }: Props) {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
+              <div className="mb-4 border-b border-grid pb-4">
+                <FindingWorkBlock module="vm" scopeId={0} findingKey={item.key} title={`${item.cve_id} на ${item.hostname}`} severity={item.level} onChanged={onChanged} />
+              </div>
               {card.isLoading && <div className="flex justify-center py-8"><Spinner /></div>}
               {card.isError && <p className="text-kind-1">Не удалось загрузить карточку расчёта.</p>}
               {d && r && (

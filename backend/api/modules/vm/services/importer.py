@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from api.modules.vm.core.mpvm import MpVmClient, build_pdql, make_client
 from api.modules.vm.core.sources import HostRow, iter_csv, iter_json
+from api.modules.vm.findings_adapter import reconcile_after_import
 from api.modules.vm.models import (
     VmCve,
     VmHost,
@@ -225,18 +226,19 @@ def run_import(
         rebuild_hosts_impact(db, settings.weights)
         handle.stage("scoring", message="риск пар")
         rescore_pairs(db)
-        db.add(
-            VmImport(
-                finished_at=dt.datetime.now(dt.UTC),
-                source=source,
-                filename=filename or (path.name if path else ""),
-                hosts=stats.hosts,
-                pairs=stats.pairs,
-                cves=stats.cves,
-                new_zones=stats.new_zones,
-            )
+        done = VmImport(
+            finished_at=dt.datetime.now(dt.UTC),
+            source=source,
+            filename=filename or (path.name if path else ""),
+            hosts=stats.hosts,
+            pairs=stats.pairs,
+            cves=stats.cves,
+            new_zones=stats.new_zones,
         )
+        db.add(done)
         db.commit()
+        # Статусы пар: исчезнувшие с решением закрываются, вернувшиеся переоткрываются.
+        reconcile_after_import(db, done.id)
         _notify_assets(db)
         return stats
     finally:

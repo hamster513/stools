@@ -4,6 +4,7 @@ import { ApiRequestError } from '@/api/client'
 import { useOverview } from '@/modules/vm/api/queries'
 import { LEVEL_LABELS, LEVELS, type Overview, type RiskLevel } from '@/modules/vm/api/types'
 import { LEVEL_TEXT } from '@/modules/vm/components/RiskBadge'
+import { OPEN_STATUSES } from '@/platform/findings/types'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
@@ -73,7 +74,7 @@ export function OverviewPage() {
   }
   const o: Overview = overview.data
 
-  if (o.pairs === 0) {
+  if (o.pairs_all === 0) {
     return (
       <div className="p-6">
         <EmptyState
@@ -91,6 +92,7 @@ export function OverviewPage() {
   }
 
   const totalPairs = LEVELS.reduce((sum, l) => sum + o.distribution[l], 0)
+  const open = OPEN_STATUSES.reduce((sum, st) => sum + o.findings.by_status[st], 0)
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -110,9 +112,18 @@ export function OverviewPage() {
 
       <div className="mb-4 grid gap-3 md:grid-cols-4">
         <Stat label="Хостов с уязвимостями" value={o.hosts} to="/vm/vulns?sort=host_asc" />
-        <Stat label="Пар хост–CVE" value={o.pairs} to="/vm/vulns" />
+        <Stat label={o.pairs === o.pairs_all ? 'Пар хост–CVE' : `Пар хост–CVE (всего ${o.pairs_all.toLocaleString('ru-RU')})`} value={o.pairs} to="/vm/vulns" />
         <Stat label="Уникальных CVE" value={o.cves} to="/vm/vulns?sort=cve_asc" />
         <Stat label={`Выше порога ${o.threshold}`} value={o.above_threshold} to="/vm/vulns?level=critical" tone="text-risk-critical" />
+      </div>
+
+      {/* Статусы пар (общий механизм находок): пары, распределение и «выше порога» выше
+          считают только учитываемые статусы — принятый риск по умолчанию не в счёт. */}
+      <div className="mb-4 grid gap-3 md:grid-cols-4">
+        <Stat label="Открытые" value={open} to="/vm/vulns" />
+        <Stat label="В работе" value={o.findings.by_status.in_work} to="/vm/vulns?status=in_work" />
+        <Stat label="Просроченные" value={o.findings.overdue} to="/vm/vulns?overdue=true" tone={o.findings.overdue ? 'text-kind-1' : undefined} />
+        <Stat label="Принят риск" value={o.findings.by_status.risk_accepted} to="/vm/vulns?status=risk_accepted" />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">

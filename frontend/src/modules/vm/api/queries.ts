@@ -1,6 +1,7 @@
 /** Хуки TanStack Query модуля VM. Ключи запросов держим здесь же. */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
+import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/queries'
 import type {
   HostDetail,
   ImportState,
@@ -18,7 +19,8 @@ import type {
 export const VULNS_PAGE_SIZE = 200
 
 function invalidateData(qc: ReturnType<typeof useQueryClient>) {
-  for (const key of ['vm-vulns', 'vm-overview', 'vm-zones', 'vm-import', 'vm-refs', 'vm-card', 'vm-host']) {
+  // Импорт и массовая смена меняют и статусы пар: устаревают карточки состояний.
+  for (const key of ['vm-vulns', 'vm-overview', 'vm-zones', 'vm-import', 'vm-refs', 'vm-card', 'vm-host', 'finding-state', FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY]) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }

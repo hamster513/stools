@@ -11,9 +11,19 @@
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,7 +33,13 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.platform.findings import service as svc
-from api.platform.findings.adapters import FindingAdapter, get_adapter, get_bulk_filter
+from api.platform.findings.adapters import (
+    BulkJobRequest,
+    FindingAdapter,
+    get_adapter,
+    get_bulk_filter,
+    get_bulk_job,
+)
 from api.platform.findings.core import (
     OPEN,
     STATUS_TITLES,
@@ -237,20 +253,41 @@ def post_comment(payload: CommentBody, request: Request, db: Session = Depends(g
 
 
 @router.post("/api/findings/bulk")
-def post_bulk(payload: BulkBody, request: Request, db: Session = Depends(get_db),
-              user: AppUser = Depends(get_current_user)) -> dict[str, int]:
-    """Смена по списку ключей. Выбор «всё по фильтру» — только у модулей, которые
-    зарегистрировали разбор своего фильтра (`register_bulk_filter`)."""
+def post_bulk(payload: BulkBody, request: Request, response: Response, background: BackgroundTasks,
+              db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> dict[str, int]:
+    """Смена по списку ключей — сразу, `{changed}`. Выбор «всё по фильтру» — только у модулей,
+    которые зарегистрировали разбор своего фильтра: фоновой задачей модуля (`register_bulk_job`,
+    202 `{job_id}`), иначе сразу (`register_bulk_filter`). `assignee: "me"` в фильтре — автор."""
     _scoped(db, payload.module, payload.scope_id)
     if (payload.keys is None) == (payload.filter is None):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="нужны либо ключи, либо фильтр")
+    what = payload.change.describe()
     keys = payload.keys
     if keys is None:
+        flt = dict(payload.filter or {})
+        if flt.get("assignee") == "me":
+            flt["assignee"] = user.login
+        start = get_bulk_job(payload.module)
+        if start is not None:
+            change = payload.change.to_change()
+            try:
+                svc.check_change(db, change, actor=user)
+                job_id, run = start(db, BulkJobRequest(payload.scope_id, flt, change, user.login, uuid.uuid4().hex))
+            except TransitionError as exc:
+                raise _refused(exc) from None
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+            background.add_task(run)
+            request.state.audit_summary = f"{payload.module}: массовая смена по фильтру, задача #{job_id}; {what}"
+            response.status_code = status.HTTP_202_ACCEPTED
+            return {"job_id": job_id}
         select_by_filter = get_bulk_filter(payload.module)
         if select_by_filter is None:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="выбор по фильтру не поддерживается этим модулем")
-        keys = select_by_filter(db, payload.scope_id, payload.filter or {})
-    what = payload.change.describe()
+        try:
+            keys = list(select_by_filter(db, payload.scope_id, flt))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     request.state.audit_summary = f"{payload.module}: находок {len(keys)}; {what}"
     try:
         changed = svc.bulk_change(db, module=payload.module, scope_id=payload.scope_id, keys=keys,

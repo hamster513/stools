@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { VulnItem, VulnSort } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
+import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { cn } from '@/lib/cn'
 
 const ROW_HEIGHT = 32
@@ -17,6 +18,11 @@ interface Props {
   onSelectIndex: (i: number) => void
   onOpen: (i: number) => void
   onReachEnd?: () => void
+  /** Отмеченные для массовой смены ключи пар; без onCheck галочек нет (аудитор). */
+  checked?: ReadonlySet<string>
+  /** shift — отметить диапазон от предыдущей отмеченной строки. */
+  onCheck?: (i: number, shift: boolean) => void
+  onCheckAll?: (on: boolean) => void
 }
 
 function Th({
@@ -48,7 +54,7 @@ function Th({
   )
 }
 
-export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, onOpen, onReachEnd }: Props) {
+export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: Props) {
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 12 })
 
@@ -63,9 +69,12 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
     if (onReachEnd && items.length > 0 && lastVisible >= items.length - 20) onReachEnd()
   }, [lastVisible, items.length, onReachEnd])
 
+  const allChecked = items.length > 0 && items.every((i) => checked?.has(i.key))
+
   return (
     <div ref={parentRef} className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1240px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+      <div className="sticky top-0 z-10 flex min-w-[1420px] items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+        {onCheck && <div className="w-8 shrink-0 pl-3"><input type="checkbox" aria-label="Отметить все загруженные" checked={allChecked} onChange={(e) => onCheckAll?.(e.target.checked)} /></div>}
         <Th className="w-52 shrink-0" sortKey="risk_desc" sort={sort} onSort={onSort}>Риск</Th>
         <Th className="min-w-[240px] flex-1" sortKey="host_asc" sort={sort} onSort={onSort}>Хост</Th>
         <Th className="w-32 shrink-0" sort={sort} onSort={onSort}>IP</Th>
@@ -76,6 +85,7 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
         <Th className="w-20 shrink-0" sort={sort} onSort={onSort}>MSF</Th>
         <Th className="w-20 shrink-0" sort={sort} onSort={onSort}>Крит.</Th>
         <Th className="w-28 shrink-0" sort={sort} onSort={onSort}>Зона</Th>
+        <Th className="w-44 shrink-0" sort={sort} onSort={onSort}>Статус</Th>
       </div>
 
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
@@ -84,18 +94,25 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
           const selected = v.index === selectedIndex
           return (
             <div
-              key={`${item.host_id}:${item.cve_id}`}
+              key={item.key}
               {...clickableRow(() => {
                 onSelectIndex(v.index)
                 onOpen(v.index)
               })}
               className={cn(
                 ROW_FOCUS,
-                'absolute top-0 left-0 flex w-full min-w-[1240px] cursor-pointer items-center border-b border-grid text-xs',
+                'absolute top-0 left-0 flex w-full min-w-[1420px] cursor-pointer items-center border-b border-grid text-xs',
                 selected ? 'bg-row-selected' : 'hover:bg-row-hover',
               )}
               style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}
             >
+              {onCheck && (
+                // Галочка не открывает карточку: клик и клавиши до строки не доходят.
+                <div className="w-8 shrink-0 pl-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                  <input type="checkbox" aria-label="Отметить" checked={checked?.has(item.key) ?? false} onChange={() => undefined}
+                    onClick={(e) => onCheck(v.index, e.shiftKey)} />
+                </div>
+              )}
               <div className="w-52 shrink-0 px-2"><RiskBadge score={item.risk} level={item.level} /></div>
               <div className="min-w-[240px] flex-1 truncate px-2 font-mono text-text" title={item.hostname}>{item.hostname}</div>
               <div className="w-32 shrink-0 truncate px-2 font-mono text-text-secondary">{item.ip}</div>
@@ -111,6 +128,10 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
               <div className="w-20 shrink-0 truncate px-2 text-text-secondary">{item.msf_rank ?? '—'}</div>
               <div className="w-20 shrink-0 truncate px-2 text-text-secondary">{item.criticality || '—'}</div>
               <div className="w-28 shrink-0 truncate px-2 text-text-secondary" title={item.zone}>{item.zone || '—'}</div>
+              <div className="flex w-44 shrink-0 items-center gap-1 px-2" title={item.assignee_name ? `исполнитель: ${item.assignee_name}` : undefined}>
+                <StatusBadge status={item.status} />
+                {item.overdue && <span className="text-[11px] text-kind-1" title={`срок ${item.due_date ?? ''}`}>просрочена</span>}
+              </div>
               <ChevronRight size={14} className="mr-2 ml-auto shrink-0 text-text-secondary/40" aria-hidden />
             </div>
           )

@@ -2,6 +2,7 @@
  * Типы запросов и ответов API модуля Vulnerability Management.
  * Источник — спека §8 и роутеры backend/api/modules/vm/routers.
  */
+import type { FindingStatus, FindingSummary } from '@/platform/findings/types'
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical'
 
@@ -23,6 +24,8 @@ export const CVSS_SOURCE_LABELS: Record<CvssSource, string> = {
 }
 
 export interface VulnItem {
+  /** Ключ пары в статусах находок: `hostname|ip|cve`. */
+  key: string
   host_id: number
   hostname: string
   ip: string
@@ -40,6 +43,15 @@ export interface VulnItem {
   exploits_count: number
   msf_rank: string | null
   msf_modules: number
+  status: FindingStatus
+  status_title: string
+  assignee: string | null
+  assignee_name: string | null
+  due_date: string | null
+  overdue: boolean
+  risk_until: string | null
+  /** Истории пар VM не хранит: возраст есть, только если его знает строка состояния. */
+  first_seen_at: string | null
 }
 
 export interface VulnsFacets {
@@ -50,6 +62,10 @@ export interface VulnsFacets {
   exploits: Record<string, number>
   msf: Record<string, number>
   cvss_source: Record<string, number>
+  status: Record<FindingStatus, number>
+  /** Логин → число; `none` — без исполнителя. */
+  assignee: Record<string, number>
+  flags: { overdue: number; risk_expiring: number }
 }
 
 export interface VulnsResponse {
@@ -79,6 +95,12 @@ export interface VulnsQuery {
   msf?: boolean
   cvss_source?: CvssSource
   host_id?: number
+  /** Коды через запятую или `all`; не задан — открытые. */
+  status?: string
+  /** `me`, `none` или логин. */
+  assignee?: string
+  overdue?: boolean
+  risk_expiring?: boolean
   sort?: VulnSort
   limit?: number
   offset?: number
@@ -146,11 +168,15 @@ export interface RefOverview {
 
 export interface Overview {
   hosts: number
+  /** Пары с учитываемым статусом (настройка платформы `counted`). */
   pairs: number
+  /** Все пары последнего импорта. */
+  pairs_all: number
   cves: number
   above_threshold: number
   threshold: number
   distribution: Record<RiskLevel, number>
+  findings: FindingSummary
   top_cves: { cve_id: string; hosts: number; risk_sum: number; risk_max: number; cvss: number | null; epss: number | null; exploitdb_type: string | null }[]
   top_hosts: { host_id: number; hostname: string; ip: string; zone: string; criticality: string; pairs: number; risk_sum: number; risk_max: number }[]
   data: {
@@ -242,6 +268,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   ref_exploitdb: 'Справочник ExploitDB',
   ref_msf: 'Справочник Metasploit',
   recalculate: 'Пересчёт риска',
+  bulk_status: 'Массовая смена статусов',
 }
 
 export const STAGE_LABELS: Record<string, string> = {
@@ -256,6 +283,7 @@ export const STAGE_LABELS: Record<string, string> = {
   cves: 'множители CVE',
   hosts: 'Impact хостов',
   pairs: 'риск пар',
+  status: 'смена статусов',
   done: 'готово',
 }
 
