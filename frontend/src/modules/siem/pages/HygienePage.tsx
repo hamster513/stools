@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, FilterX, Search } from 'lucide-react'
-import { useFindings, useRuleDetail, useSetVerdict } from '@/modules/siem/api/queries'
-import { FINDING_KIND_LABELS, FINDING_STATUS_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS, type FindingListItem } from '@/modules/siem/api/types'
+import { useFindings, useRuleDetail } from '@/modules/siem/api/queries'
+import { FINDING_KIND_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS, type FindingListItem } from '@/modules/siem/api/types'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { BulkBar } from '@/platform/findings/BulkBar'
+import { findingFacetChips } from '@/platform/findings/facets'
+import { useUsersDirectory } from '@/platform/findings/queries'
+import { useMe } from '@/api/auth'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useCan } from '@/lib/can'
 import { Link, useSearchParams } from '@/lib/router'
 import { FacetPanel, type HygieneFilters } from './hygiene/FacetPanel'
 import { FindingsTable } from './hygiene/FindingsTable'
 import { DetailDrawer } from './hygiene/DetailDrawer'
-import { AcceptDialog } from './hygiene/AcceptDialog'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -21,6 +25,12 @@ function isTypingTarget(el: EventTarget | null): boolean {
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable
 }
 
+/**
+ * Находки гигиены снапшота. Статусы — общие статусы находок платформы
+ * (module `siem`, область 0): по умолчанию показаны открытые, галочки и
+ * полоса массовой смены, в карточке — блок «Работа с находкой». `?key=` в
+ * адресе (ссылка из «Моих находок») открывает карточку находки.
+ */
 export function HygienePage({ snapshotId }: { snapshotId: number }) {
   const searchParams = useSearchParams()
   const [filters, setFilters] = useState<HygieneFilters>(() => {
@@ -30,10 +40,17 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   const [searchInput, setSearchInput] = useState('')
   const q = useDebouncedValue(searchInput, 250)
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [openFindingId, setOpenFindingId] = useState<number | null>(null)
-  const [acceptFindingId, setAcceptFindingId] = useState<number | null>(null)
+  const [openFinding, setOpenFinding] = useState<FindingListItem | null>(null)
+  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set())
+  const [anchor, setAnchor] = useState<number | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const filtersPanel = useFiltersPanel('siem-hygiene')
+  const qc = useQueryClient()
+  const me = useMe()
+  const directory = useUsersDirectory()
+  const names = useMemo(() => new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login])), [directory.data])
+  // Изменения статусов — решения, а решения аудитор не выносит: галочек и полосы у него нет.
+  const { write } = useCan()
 
   // Экран открывают двумя путями: из инвентаря по конкретному правилу
   // и целиком по снапшоту. Правило приходит идентификатором в адресе —
@@ -41,12 +58,32 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   const objectUuid = searchParams.get('object_uuid') ?? undefined
   const rule = useRuleDetail(objectUuid, snapshotId)
 
-  const query = useFindings({
-    snapshot_id: snapshotId,
-    object_uuid: objectUuid,
-    ...filters,
-    q: q || undefined,
-  })
+  const queryArgs = useMemo(() => {
+    const { status, assignee, overdue, risk_expiring, ...own } = filters
+    return {
+      snapshot_id: snapshotId,
+      object_uuid: objectUuid,
+      ...own,
+      status: status?.join(','),
+      assignee,
+      overdue,
+      risk_expiring,
+      q: q || undefined,
+    }
+  }, [snapshotId, objectUuid, filters, q])
+  const query = useFindings(queryArgs)
+
+  // Карточка по ссылке `?key=`: находка ищется в любом статусе, один раз.
+  const linkedKey = searchParams.get('key')
+  const linked = useFindings({ snapshot_id: snapshotId, key: linkedKey ?? undefined, status: 'all' }, { enabled: linkedKey !== null })
+  const linkedItem = linked.data?.pages[0]?.items[0]
+  const linkedShown = useRef(false)
+  useEffect(() => {
+    if (linkedItem && !linkedShown.current) {
+      linkedShown.current = true
+      setOpenFinding(linkedItem)
+    }
+  }, [linkedItem])
 
   // Страницы склеиваются в один список: таблица виртуализирована, и для
   // неё это по-прежнему один массив, просто растущий по мере прокрутки.
@@ -64,16 +101,32 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
 
   useEffect(() => {
     setSelectedIndex(0)
-  }, [filters, q])
+    setChecked(new Set())
+    setAnchor(null)
+  }, [queryArgs])
 
   const selected: FindingListItem | null = items[selectedIndex] ?? null
-  const openFinding = items.find((f) => f.id === openFindingId) ?? null
-  const acceptFinding = items.find((f) => f.id === acceptFindingId) ?? null
+  // Открытая карточка — со свежими полями, если находка есть в обновлённом списке.
+  const shownFinding = openFinding ? (items.find((f) => f.id === openFinding.id) ?? openFinding) : null
 
-  const verdict = useSetVerdict()
-  // Горячая клавиша «a» — тот же вердикт, что и кнопка в ящике: скрыв
-  // кнопку и оставив клавишу, мы вернули бы аудитору 403 обходным путём.
-  const { write } = useCan()
+  function check(i: number, shift: boolean) {
+    const on = !checked.has(items[i].key)
+    const [from, to] = shift && anchor !== null ? [Math.min(anchor, i), Math.max(anchor, i)] : [i, i]
+    const next = new Set(checked)
+    for (const f of items.slice(from, to + 1)) {
+      if (on) next.add(f.key)
+      else next.delete(f.key)
+    }
+    setChecked(next)
+    setAnchor(i)
+  }
+
+  function refresh() {
+    qc.invalidateQueries({ queryKey: ['findings'] })
+    // «Требует внимания» в инвентаре и карточке правила зависит от статусов.
+    qc.invalidateQueries({ queryKey: ['rules'] })
+    qc.invalidateQueries({ queryKey: ['rule-detail'] })
+  }
 
   function toggleFilter<K extends keyof HygieneFilters>(key: K, value: HygieneFilters[K]) {
     setFilters((prev) => ({ ...prev, [key]: value }))
@@ -85,25 +138,20 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   }
 
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
-  const chips: FilterChip[] = []
+  const chips: FilterChip[] = findingFacetChips(filters, (next) => setFilters((prev) => ({ ...prev, ...next })), names)
   if (filters.kind) chips.push({ label: `класс ${FINDING_KIND_LABELS[filters.kind]}`, clear: () => toggleFilter('kind', undefined) })
   if (filters.object_type) chips.push({ label: `тип ${OBJECT_TYPE_LABELS[filters.object_type]}`, clear: () => toggleFilter('object_type', undefined) })
   if (filters.polarity) chips.push({ label: `полярность ${POLARITY_LABELS[filters.polarity]}`, clear: () => toggleFilter('polarity', undefined) })
   if (filters.shape) chips.push({ label: `форма ${SHAPE_LABELS[filters.shape]}`, clear: () => toggleFilter('shape', undefined) })
   if (filters.in_table !== undefined) chips.push({ label: filters.in_table ? 'есть в табличном списке' : 'нет в табличном списке', clear: () => toggleFilter('in_table', undefined) })
-  if (filters.status) chips.push({ label: `статус ${FINDING_STATUS_LABELS[filters.status]}`, clear: () => toggleFilter('status', undefined) })
   if (filters.field) chips.push({ label: `поле ${filters.field}`, clear: () => toggleFilter('field', undefined) })
 
-  // --- Клавиатура: j/k строки, Enter раскрыть, a принять, / поиск, Esc свернуть.
+  // --- Клавиатура: j/k строки, Enter раскрыть, / поиск, Esc свернуть.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        if (openFindingId !== null) {
-          setOpenFindingId(null)
-          return
-        }
-        if (acceptFindingId !== null) {
-          setAcceptFindingId(null)
+        if (openFinding !== null) {
+          setOpenFinding(null)
           return
         }
         if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
@@ -129,17 +177,12 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
       }
       if (e.key === 'Enter') {
         e.preventDefault()
-        if (selected) setOpenFindingId(selected.id)
-        return
-      }
-      if (e.key === 'a' && write) {
-        e.preventDefault()
-        if (selected) setAcceptFindingId(selected.id)
+        if (selected) setOpenFinding(selected)
       }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [items.length, selected, openFindingId, acceptFindingId, write])
+  }, [items.length, selected, openFinding])
 
   const hasActiveFilters = Object.values(filters).some((v) => v !== undefined) || q !== ''
 
@@ -195,9 +238,19 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
         </div>
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
+      {write && (
+        <BulkBar
+          module="siem"
+          scopeId={0}
+          keys={[...checked]}
+          total={total}
+          onDone={() => { setChecked(new Set()); setAnchor(null); refresh() }}
+          onClear={() => setChecked(new Set())}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={facets} fieldFacet={fieldFacet} filters={filters} onToggle={toggleFilter} total={total} />}
+        {filtersPanel.open && <FacetPanel facets={facets} fieldFacet={fieldFacet} filters={filters} onToggle={toggleFilter} total={total} myLogin={me.data?.login} names={names} />}
 
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
@@ -206,8 +259,10 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
             <div className="p-6">
               <EmptyState
                 icon={FilterX}
-                title="Ничего не найдено"
-                description="Ни одна находка не подходит под текущие фильтры. Сбросьте фильтры или измените запрос поиска."
+                title={hasActiveFilters ? 'Ничего не найдено' : 'Открытых находок нет'}
+                description={hasActiveFilters
+                  ? 'Ни одна находка не подходит под текущие фильтры. Сбросьте фильтры или измените запрос поиска.'
+                  : 'В этом снапшоте нет открытых находок; остальные — в фильтре по статусу.'}
                 action={
                   hasActiveFilters ? (
                     <button
@@ -228,38 +283,21 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
               offset={0}
               selectedIndex={selectedIndex}
               onSelectIndex={setSelectedIndex}
-              onOpen={(index) => setOpenFindingId(items[index].id)}
+              onOpen={(index) => setOpenFinding(items[index])}
               onReachEnd={() => {
                 if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage()
               }}
+              {...(write ? { checked, onCheck: check, onCheckAll: (on: boolean) => setChecked(on ? new Set(items.map((f) => f.key)) : new Set()) } : {})}
             />
           )}
         </div>
       </div>
 
       <DetailDrawer
-        finding={openFinding}
-        ordinal={openFinding ? items.findIndex((f) => f.id === openFinding.id) + 1 : null}
-        onClose={() => setOpenFindingId(null)}
-        onAccept={() => {
-          if (openFinding) setAcceptFindingId(openFinding.id)
-        }}
-        onTakeInWork={() => {
-          if (openFinding) verdict.mutate({ finding_id: openFinding.id, status: 'in_progress' })
-        }}
-      />
-
-      <AcceptDialog
-        finding={acceptFinding}
-        pending={verdict.isPending}
-        onConfirm={(reason) => {
-          if (!acceptFinding) return
-          verdict.mutate(
-            { finding_id: acceptFinding.id, status: 'accepted', reason },
-            { onSuccess: () => setAcceptFindingId(null) },
-          )
-        }}
-        onCancel={() => setAcceptFindingId(null)}
+        finding={shownFinding}
+        ordinal={shownFinding ? items.findIndex((f) => f.id === shownFinding.id) + 1 || null : null}
+        onClose={() => setOpenFinding(null)}
+        onChanged={refresh}
       />
     </div>
   )

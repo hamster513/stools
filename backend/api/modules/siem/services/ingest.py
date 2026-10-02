@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from api.db.base import get_sessionmaker
 from api.db.models import Job, Snapshot, SnapshotProfile
+from api.modules.siem.findings_adapter import reconcile as reconcile_findings
 from api.modules.siem.services.persist import persist_report
 from api.settings import Settings
 from kbaudit.models import ParsedArchive
@@ -152,6 +153,8 @@ def _run_stages(db: Session, job: Job, snapshot: Snapshot, snapshot_id: int) -> 
     job.progress = 100
     db.add(job)
     db.commit()
+    # Снапшот разобран и стал активным — статусы находок сверяются с ним.
+    reconcile_findings(db)
 
 
 def _load_profile(db: Session, snapshot_id: int, parsed: ParsedArchive) -> Profile:

@@ -52,7 +52,7 @@ def test_reads_are_not_recorded_but_writes_and_denials_are(
 
 
 def test_summary_keeps_query_but_never_body(auth_client: TestClient, db_session: Any) -> None:
-    auth_client.post("/api/siem/findings/verdict?snapshot_id=7", json={"finding_id": 1, "status": "open", "note": "секрет"})
+    auth_client.post("/api/siem/snapshots/7/reparse?snapshot_id=7", json={"finding_id": 1, "note": "секрет"})
     last = _events(db_session)[-1]
     assert last.summary == "snapshot_id=7"
     assert "секрет" not in (last.summary or "")

@@ -22,8 +22,11 @@ class Span(BaseModel):
     start: int
     end: int
     kind: int
-    #: open | in_progress | accepted — принятое замечание гасится.
+    #: Код общего статуса находки.
     status: str
+    #: Учитывается ли статус в подсчётах (настройка `counted`): неучитываемое
+    #: замечание — принятый риск, ложное срабатывание — гасится.
+    counted: bool = True
 
 
 def _occurrences(body: str, value: str) -> list[tuple[int, int]]:
@@ -58,12 +61,13 @@ def spans_for(body: str | None, findings: list[dict[str, object]]) -> list[Span]
         if len(value) < MIN_VALUE_LEN:
             continue
         kind = int(finding.get("kind") or 0)
-        status = str(finding.get("status") or "open")
+        status = str(finding.get("status") or "new")
+        counted = bool(finding.get("counted", True))
         for start, end in _occurrences(body, value):
             current = best.get((start, end))
             if current is None or kind < current.kind:
                 best[(start, end)] = Span(
-                    start=start, end=end, kind=kind, status=status
+                    start=start, end=end, kind=kind, status=status, counted=counted
                 )
 
     spans = sorted(best.values(), key=lambda s: (s.start, -s.end))

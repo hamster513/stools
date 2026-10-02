@@ -18,15 +18,15 @@ def test_roles_nest() -> None:
 def test_auditor_reads_but_cannot_write(client_as: Callable[[str], TestClient]) -> None:
     auditor = client_as("auditor")
     assert auditor.get("/api/siem/snapshots").status_code == 200
-    denied = auditor.post("/api/siem/findings/verdict", json={"finding_id": 1, "status": "open"})
+    denied = auditor.put("/api/findings/state", json={"module": "siem", "scope_id": 0, "key": "k", "status": "in_work"})
     assert denied.status_code == 403
     assert "аналитик" in denied.json()["detail"]
 
 
 def test_analyst_writes_in_modules_but_not_settings(client_as: Callable[[str], TestClient]) -> None:
     analyst = client_as("analyst")
-    # Мутация в модуле проходит проверку прав (404 — правило не найдено, а не 403).
-    assert analyst.post("/api/siem/findings/verdict", json={"finding_id": 1, "status": "open"}).status_code != 403
+    # Смена статуса находки проходит проверку прав (не 403).
+    assert analyst.put("/api/findings/state", json={"module": "siem", "scope_id": 0, "key": "k", "status": "in_work"}).status_code != 403
     # Панель администратора аналитику не показывается вовсе — ни запись, ни чтение.
     assert analyst.get("/api/settings/security").status_code == 403
     assert analyst.put("/api/settings/security", json={}).status_code == 403

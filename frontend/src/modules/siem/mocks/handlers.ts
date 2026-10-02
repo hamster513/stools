@@ -10,7 +10,6 @@ import { delay, http, HttpResponse } from 'msw'
 import type {
   DivergencesResponse,
   FindingsListResponse,
-  FindingStatus,
   GraphResponse,
   InstallationProfile,
   JobStatusResponse,
@@ -42,7 +41,6 @@ import {
   ruleDetail,
   SETTINGS,
   TABLE_RANKING,
-  VERDICTS,
 } from './data'
 import { FIELDS, TECHNIQUE_CATALOG } from './fixtures'
 
@@ -328,8 +326,12 @@ export const handlers = [
       field?: string
       shape?: string
       object_uuid?: string
+      key?: string
       q?: string
     }
+    // Без статуса — открытые, как на сервере; `all` — все.
+    const rawStatus = p.get('status')
+    const statuses = rawStatus === 'all' ? null : (rawStatus ?? 'new,in_work,fixed,reopened').split(',')
     const filters: Filters = {
       kind: p.get('kind') ?? undefined,
       polarity: p.get('polarity') ?? undefined,
@@ -339,6 +341,7 @@ export const handlers = [
       field: p.get('field') ?? undefined,
       shape: p.get('shape') ?? undefined,
       object_uuid: p.get('object_uuid') ?? undefined,
+      key: p.get('key') ?? undefined,
       q: p.get('q') ?? undefined,
     }
 
@@ -347,7 +350,8 @@ export const handlers = [
       if (filters.polarity && except !== 'polarity' && f.polarity !== filters.polarity) return false
       if (filters.object_type && except !== 'object_type' && f.object_type !== filters.object_type) return false
       if (filters.in_table && except !== 'in_table' && String(f.in_table) !== filters.in_table) return false
-      if (filters.status && except !== 'status' && findingStatus(f.id) !== filters.status) return false
+      if (statuses && except !== 'status' && !statuses.includes(findingStatus(f.id))) return false
+      if (filters.key && f.key !== filters.key) return false
       if (filters.field && except !== 'field' && f.field !== filters.field) return false
       if (filters.shape && except !== 'shape' && (f.shape ?? 'plain') !== filters.shape) return false
       if (filters.object_uuid && except !== 'object_uuid' && f.object_uuid !== filters.object_uuid)
@@ -402,6 +406,8 @@ export const handlers = [
         in_table: facetCounts('in_table', (f) => String(f.in_table)) as { true?: number; false?: number },
         shape: facetCounts('shape', (f) => f.shape ?? 'plain'),
         status: facetCounts('status', (f) => findingStatus(f.id)),
+        assignee: { none: withStatus.filter((f) => applies(f, null)).length },
+        flags: { overdue: 0, risk_expiring: 0 },
       },
     }
     return HttpResponse.json(response)
@@ -425,16 +431,6 @@ export const handlers = [
       table_name: finding.table_name,
       affected_rules: affectedRulesFor(finding.object_name),
     })
-  }),
-
-  http.post('/api/siem/findings/verdict', async ({ request }) => {
-    if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
-    const body = (await request.json()) as { finding_id: number; status: FindingStatus; reason?: string }
-    if (body.status === 'accepted' && !body.reason?.trim()) {
-      return HttpResponse.json({ detail: 'Обоснование обязательно при принятии как нормы' }, { status: 422 })
-    }
-    VERDICTS.set(body.finding_id, { status: body.status, reason: body.reason })
-    return new HttpResponse(null, { status: 204 })
   }),
 
   // --- Расхождения ------------------------------------------------------

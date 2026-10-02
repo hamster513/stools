@@ -11,6 +11,10 @@
 // перенос типов — не повод править каждый импорт.
 export { tacticLabel } from '@/modules/attack/api/types'
 
+// Статусы находок — общие статусы платформы (platform/findings).
+import type { FindingStatus } from '@/platform/findings/types'
+export type { FindingStatus }
+
 // ---------------------------------------------------------------------------
 // Общие
 // ---------------------------------------------------------------------------
@@ -105,11 +109,12 @@ export interface JobStatusResponse {
 // Находки
 // ---------------------------------------------------------------------------
 
-export type FindingStatus = 'open' | 'accepted' | 'in_progress'
 export type FindingSeverity = 'high' | 'medium' | 'low'
 
 export interface FindingListItem {
   id: number
+  /** Ключ находки для статусов платформы (module `siem`, scope 0). */
+  key: string
   kind: FindingKind
   severity: FindingSeverity
   object_type: ObjectType
@@ -123,6 +128,16 @@ export interface FindingListItem {
   shape: ValueShape
   table_name: string | null
   status: FindingStatus
+  status_title: string
+  assignee: string | null
+  assignee_name: string | null
+  due_date: string | null
+  overdue: boolean
+  risk_until: string | null
+  first_seen_at: string | null
+  age_days: number | null
+  /** Находки нет в активном снапшоте: показана по последнему, где была. */
+  gone: boolean
   has_value: boolean
 }
 
@@ -133,6 +148,9 @@ export interface FindingsFacets {
   in_table: { true?: number; false?: number }
   shape: Record<string, number>
   status: Partial<Record<FindingStatus, number>>
+  /** Логин → число; `none` — без исполнителя. */
+  assignee: Record<string, number>
+  flags: { overdue: number; risk_expiring: number }
   /** Поля не перечислимы заранее — их набор зависит от выгрузки.
    *  Сервер отдаёт их по убыванию числа находок. */
   field: Record<string, number>
@@ -159,7 +177,14 @@ export interface FindingsQuery {
   object_type?: ObjectType
   in_table?: boolean
   shape?: ShapeFilter
-  status?: FindingStatus
+  /** Коды через запятую или `all`; не задан — открытые. */
+  status?: string
+  /** `me`, `none` или логин. */
+  assignee?: string
+  overdue?: boolean
+  risk_expiring?: boolean
+  /** Одна находка по ключу — ссылка `?key=`. */
+  key?: string
   field?: string
   q?: string
   sort?: string
@@ -178,12 +203,6 @@ export interface FindingDetail {
   body_excerpt: string
   table_name: string | null
   affected_rules: AffectedRule[]
-}
-
-export interface FindingVerdictRequest {
-  finding_id: number
-  status: FindingStatus
-  reason?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +295,8 @@ export interface RuleFindingSummary {
   kind: FindingKind
   field: string
   status: FindingStatus
+  /** Статус учитывается в подсчётах (настройка платформы `counted`). */
+  counted: boolean
 }
 
 /** Отрезок тела правила, занятый значением находки. */
@@ -284,6 +305,8 @@ export interface RuleBodySpan {
   end: number
   kind: FindingKind | number
   status: FindingStatus
+  /** Неучитываемое замечание (принят риск, ложное срабатывание) гасится. */
+  counted: boolean
 }
 
 export interface RuleDetail {
@@ -705,12 +728,6 @@ export const SHAPE_LABELS: Record<ShapeFilter, string> = {
   ip: 'IP-адрес',
   cidr: 'подсеть',
   plain: 'обычное значение',
-}
-
-export const FINDING_STATUS_LABELS: Record<FindingStatus, string> = {
-  open: 'открыта',
-  accepted: 'принята как норма',
-  in_progress: 'в работе',
 }
 
 /** Итог сверки одного правила с эталоном. */

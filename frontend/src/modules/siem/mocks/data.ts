@@ -239,6 +239,7 @@ function buildFindings(): FindingListItem[] {
 
     findings.push({
       id: i + 1,
+      key: `${object.uuid}|${kind}|mock${i + 1}`,
       kind,
       severity: kind === '1' || kind === '2' ? 'high' : kind === '5' ? 'low' : 'medium',
       object_type: object.object_type,
@@ -251,7 +252,16 @@ function buildFindings(): FindingListItem[] {
       // имя узла, класс 1 бывает и тем и другим.
       shape: kind === '2' ? 'ip' : kind === '1' && i % 3 === 0 ? 'fqdn' : null,
       table_name: tableName,
-      status: 'open',
+      status: 'new',
+      status_title: 'Новая',
+      assignee: null,
+      assignee_name: null,
+      due_date: null,
+      overdue: false,
+      risk_until: null,
+      first_seen_at: '2026-09-01T10:00:00Z',
+      age_days: 31,
+      gone: false,
       has_value: rng() < 0.92,
     })
   }
@@ -272,11 +282,16 @@ function buildFindings(): FindingListItem[] {
 export const FINDINGS = buildFindings()
 const findingsById = new Map(FINDINGS.map((f) => [f.id, f]))
 
-// Изменяемое состояние вердиктов, живёт поверх сгенерированных находок.
+// Изменяемое состояние статусов, живёт поверх сгенерированных находок.
 export const VERDICTS = new Map<number, { status: FindingStatus; reason?: string }>()
 
 export function findingStatus(id: number): FindingStatus {
-  return VERDICTS.get(id)?.status ?? findingsById.get(id)?.status ?? 'open'
+  return VERDICTS.get(id)?.status ?? findingsById.get(id)?.status ?? 'new'
+}
+
+/** Учитывается ли статус — как настройка платформы `counted` по умолчанию. */
+export function findingCounted(id: number): boolean {
+  return !['risk_accepted', 'false_positive', 'resolved'].includes(findingStatus(id))
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +424,7 @@ export function ruleDetail(uuid: string): RuleDetail | undefined {
       parents: deps.slice(0, 1).map((d) => d.name),
       children: deps.slice(1, 3).map((d) => d.name),
     },
-    findings: findings.map((f) => ({ id: f.id, kind: f.kind, field: f.field, status: findingStatus(f.id) })),
+    findings: findings.map((f) => ({ id: f.id, kind: f.kind, field: f.field, status: findingStatus(f.id), counted: findingCounted(f.id) })),
     attack: ruleAttack(rule.name),
     body: rule.body,
     // Значения в списке находок не приходят и в моке тоже: отрезки
@@ -422,6 +437,7 @@ export function ruleDetail(uuid: string): RuleDetail | undefined {
         end: m.index! + 1 + m[1].length,
         kind: Number(findings[i]?.kind ?? 5),
         status: findingStatus(findings[i]?.id ?? 0),
+        counted: findingCounted(findings[i]?.id ?? 0),
       })),
   }
 }
@@ -517,7 +533,7 @@ export function ruleAttention(uuid: string): { open: number; worst: FindingSever
   let open = 0
   let worst: FindingSeverity | null = null
   for (const f of FINDINGS) {
-    if (f.object_uuid !== uuid || findingStatus(f.id) === 'accepted') continue
+    if (f.object_uuid !== uuid || !findingCounted(f.id)) continue
     open += 1
     if (worst === null || order.indexOf(f.severity) < order.indexOf(worst)) worst = f.severity
   }

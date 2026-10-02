@@ -5,7 +5,7 @@ import { CheckCircle2, ChevronRight, XCircle } from 'lucide-react'
 import type { FindingListItem } from '@/modules/siem/api/types'
 import { OBJECT_TYPE_LABELS, POLARITY_LABELS } from '@/modules/siem/api/types'
 import { KindBadge } from '@/modules/siem/components/ui/KindBadge'
-import { StatusBadge } from '@/modules/siem/components/ui/StatusBadge'
+import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { cn } from '@/lib/cn'
 
 const ROW_HEIGHT = 32
@@ -19,6 +19,15 @@ interface FindingsTableProps {
   selectedIndex: number
   onSelectIndex: (index: number) => void
   onOpen: (index: number) => void
+  /** Отмеченные для массовой смены ключи; без onCheck галочек нет (аудитор). */
+  checked?: ReadonlySet<string>
+  /** Отметить строку; shift — диапазон от прошлой отмеченной. */
+  onCheck?: (index: number, shift: boolean) => void
+  onCheckAll?: (on: boolean) => void
+}
+
+function age(days: number | null): string {
+  return days === null ? '—' : `${days} дн.`
 }
 
 /**
@@ -33,8 +42,12 @@ export function FindingsTable({
   onSelectIndex,
   onOpen,
   onReachEnd,
+  checked,
+  onCheck,
+  onCheckAll,
 }: FindingsTableProps) {
   const parentRef = useRef<HTMLDivElement>(null)
+  const allChecked = items.length > 0 && items.every((f) => checked?.has(f.key))
 
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -66,14 +79,16 @@ export function FindingsTable({
       {/* Минимальная ширина: при узкой области колонка объекта иначе
           схлопывается до одной буквы. Прокрутка горизонтальная — внутри
           таблицы, у страницы её быть не должно. */}
-      <div className="sticky top-0 z-10 flex min-w-[980px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+      <div className="sticky top-0 z-10 flex min-w-[1140px] items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+        {onCheck && <div className="w-8 shrink-0 pl-3"><input type="checkbox" aria-label="Отметить все загруженные" checked={allChecked} onChange={(e) => onCheckAll?.(e.target.checked)} /></div>}
         <div className="w-12 shrink-0 px-2 py-2 text-right">№</div>
         <div className="w-40 shrink-0 px-2 py-2">Класс</div>
         <div className="min-w-0 flex-1 px-2 py-2">Объект</div>
         <div className="w-44 shrink-0 px-2 py-2">Поле</div>
         <div className="w-24 shrink-0 px-2 py-2">Полярность</div>
         <div className="w-20 shrink-0 px-2 py-2">В списке</div>
-        <div className="w-32 shrink-0 px-2 py-2">Статус</div>
+        <div className="w-44 shrink-0 px-2 py-2">Статус</div>
+        <div className="w-20 shrink-0 px-2 py-2">Возраст</div>
       </div>
 
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
@@ -82,7 +97,7 @@ export function FindingsTable({
           const isSelected = virtualRow.index === selectedIndex
           return (
             <div
-              key={item.id}
+              key={`${item.id}-${item.key}`}
               data-index={virtualRow.index}
               {...clickableRow(() => {
                 onSelectIndex(virtualRow.index)
@@ -90,11 +105,18 @@ export function FindingsTable({
               })}
               className={cn(
                 ROW_FOCUS,
-                'absolute top-0 left-0 flex w-full min-w-[980px] cursor-pointer items-center border-b border-grid text-xs',
+                'absolute top-0 left-0 flex w-full min-w-[1140px] cursor-pointer items-center border-b border-grid text-xs',
                 isSelected ? 'bg-row-selected' : 'hover:bg-row-hover',
               )}
               style={{ height: ROW_HEIGHT, transform: `translateY(${virtualRow.start}px)` }}
             >
+              {onCheck && (
+                // Галочка не открывает карточку: клик и клавиши до строки не доходят.
+                <div className="w-8 shrink-0 pl-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                  <input type="checkbox" aria-label="Отметить" checked={checked?.has(item.key) ?? false} onChange={() => undefined}
+                    onClick={(e) => onCheck(virtualRow.index, e.shiftKey)} />
+                </div>
+              )}
               <div className="w-12 shrink-0 px-2 text-right font-mono tabular-nums text-text-secondary">
                 {offset + virtualRow.index + 1}
               </div>
@@ -116,9 +138,11 @@ export function FindingsTable({
                   <XCircle size={14} className="text-text-secondary/50" aria-label="нет в списке" />
                 )}
               </div>
-              <div className="flex w-32 shrink-0 items-center gap-1.5 px-2">
+              <div className="flex w-44 shrink-0 items-center gap-1 px-2">
                 <StatusBadge status={item.status} />
+                {item.overdue && <span className="text-[11px] text-kind-1" title={`срок ${item.due_date ?? ''}`}>просрочена</span>}
               </div>
+              <div className="w-20 shrink-0 px-2 font-mono tabular-nums text-text-secondary">{age(item.age_days)}</div>
               <ChevronRight size={14} className="ml-auto mr-2 shrink-0 text-text-secondary/40" aria-hidden />
             </div>
           )

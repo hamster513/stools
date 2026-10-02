@@ -1,33 +1,40 @@
-"""Находки: список с фасетами, деталь по запросу, вердикт.
+"""Находки: список с фасетами и деталь по запросу.
 
 Список НИКОГДА не содержит значений находок (контракт, «Общие правила»):
 `FindingListItem` ниже физически не может нести поле `value` — сокрытие
 проверяется отдельным тестом
-(tests/api/test_findings_values_hidden.py), а не соглашением.
+(tests/api/test_findings_values_hidden.py), а не соглашением. Ключ находки
+несёт не хеш значения, а подпись с солью установки (findings_adapter).
+
+Статусы, исполнитель и сроки — общие статусы находок платформы: меняются
+через /api/findings/*, здесь только отбираются и показываются.
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
+from collections.abc import Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
-from api.db.models import AppUser, DivergenceRow, FindingVerdict
+from api.db.models import AppUser, DivergenceRow
 from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
-from api.modules.siem.services.facets import FindingFilters, FindingQuery
-from api.security import hash_value
+from api.modules.siem.findings_adapter import ADAPTER, SCOPE
+from api.modules.siem.services.facets import FindingFilters, FindingQuery, ListRow
+from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES
 
 router = APIRouter(prefix="/findings", tags=["findings"])
-
-_VALID_STATUS = {"open", "accepted", "in_progress"}
 
 
 class FindingListItem(BaseModel):
     id: int
+    #: Ключ находки для статусов платформы: (object_uuid, kind, field, значение) под подписью.
+    key: str
     kind: int
     severity: str
     object_type: str
@@ -41,6 +48,16 @@ class FindingListItem(BaseModel):
     shape: str | None = None
     table_name: str | None = None
     status: str
+    status_title: str
+    assignee: str | None = None
+    assignee_name: str | None = None
+    due_date: dt.date | None = None
+    overdue: bool = False
+    risk_until: dt.date | None = None
+    first_seen_at: dt.datetime | None = None
+    age_days: int | None = None
+    #: Находки нет в активном снапшоте: показана по последнему снапшоту, где была.
+    gone: bool = False
     has_value: bool
 
 
@@ -50,17 +67,50 @@ class FindingListResponse(BaseModel):
     facets: dict[str, dict[str, int]]
 
 
+def _statuses(raw: str | None, risk_expiring: bool) -> frozenset[str]:
+    """`status` — коды через запятую или `all`; не задан — открытые, а с «риск
+    истекает» — принятые: среди открытых такого риска не бывает."""
+    if not raw:
+        return frozenset({"risk_accepted"}) if risk_expiring else OPEN
+    if raw == "all":
+        return frozenset(STATUSES)
+    picked = frozenset(s for s in raw.split(",") if s)
+    unknown = picked - set(STATUSES)
+    if unknown or not picked:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown)) or raw}")
+    return picked
+
+
+def _items(db: Session, rows: Sequence[ListRow]) -> list[FindingListItem]:
+    """Строки страницы с полями состояния (спека статусов §5). Возраст без строки
+    состояния — по снапшотам, одним запросом на страницу."""
+    seen = ADAPTER.first_seen_many(db, SCOPE, [r.key for r in rows if r.state is None or r.state.first_seen_at is None])
+    logins = {r.assignee for r in rows if r.assignee}
+    names = {u.login: u.display_name or u.login for u in db.scalars(select(AppUser).where(AppUser.login.in_(logins)))} if logins else {}
+    now = dt.datetime.now(dt.UTC)
+    items = []
+    for r in rows:
+        f, st = r.finding, r.state
+        first = (st.first_seen_at if st is not None else None) or seen.get(r.key)
+        items.append(FindingListItem(
+            id=f.id, key=r.key, kind=f.kind, severity=f.severity, object_type=f.object_type,
+            object_name=f.object_name, object_uuid=f.object_uuid, field=f.field, polarity=f.polarity,
+            in_table=f.in_table, shape=f.shape, table_name=f.table_name,
+            status=r.status, status_title=STATUS_TITLES[r.status], assignee=r.assignee,
+            assignee_name=names.get(r.assignee, r.assignee) if r.assignee else None,
+            due_date=st.due_date if st is not None else None, overdue=r.overdue,
+            risk_until=st.risk_until if st is not None else None,
+            first_seen_at=first, age_days=(now - first).days if first else None, gone=r.gone,
+            has_value=bool(f.value),
+        ))
+    return items
+
+
 class FindingDetail(BaseModel):
     value: str
     body_excerpt: str | None = None
     table_name: str | None = None
     affected_rules: list[str]
-
-
-class VerdictRequest(BaseModel):
-    finding_id: int
-    status: str
-    reason: str | None = None
 
 
 @router.get("", response_model=FindingListResponse)
@@ -72,6 +122,10 @@ def list_findings(
     in_table: bool | None = None,
     shape: str | None = None,
     status_: str | None = Query(default=None, alias="status"),
+    assignee: str | None = Query(default=None, max_length=255),
+    overdue: bool = False,
+    risk_expiring: bool = False,
+    key: str | None = Query(default=None, max_length=128),
     field: str | None = None,
     object_uuid: str | None = None,
     q: str | None = None,
@@ -80,8 +134,10 @@ def list_findings(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _user: AppUser = Depends(get_current_user),
+    user: AppUser = Depends(get_current_user),
 ) -> FindingListResponse:
+    """По умолчанию — открытые статусы; `status` — коды через запятую или `all`;
+    `assignee` — `me`, `none` или логин."""
     filters = FindingFilters(
         snapshot_id=snapshot_id,
         kind=kind,
@@ -89,32 +145,18 @@ def list_findings(
         object_type=object_type,
         in_table=in_table,
         shape=shape,
-        status=status_,
+        statuses=_statuses(status_, risk_expiring),
         field=field,
         object_uuid=object_uuid,
+        key=key,
+        assignee=user.login if assignee == "me" else (assignee or None),
+        overdue=overdue,
+        risk_expiring=risk_expiring,
         q=q,
     )
     query = FindingQuery(db, filters)
     rows = query.page(sort=sort, order=order, limit=limit, offset=offset)
-    items = [
-        FindingListItem(
-            id=r.finding.id,
-            kind=r.finding.kind,
-            severity=r.finding.severity,
-            object_type=r.finding.object_type,
-            object_name=r.finding.object_name,
-            object_uuid=r.finding.object_uuid,
-            field=r.finding.field,
-            polarity=r.finding.polarity,
-            in_table=r.finding.in_table,
-            shape=r.finding.shape,
-            table_name=r.finding.table_name,
-            status=r.status,
-            has_value=bool(r.finding.value),
-        )
-        for r in rows
-    ]
-    return FindingListResponse(total=query.total(), items=items, facets=query.facets())
+    return FindingListResponse(total=query.total(), items=_items(db, rows), facets=query.facets())
 
 
 @router.get("/{finding_id}/detail", response_model=FindingDetail)
@@ -146,61 +188,3 @@ def finding_detail(
         table_name=finding.table_name,
         affected_rules=affected,
     )
-
-
-@router.post("/verdict", status_code=status.HTTP_204_NO_CONTENT)
-def set_verdict(
-    payload: VerdictRequest,
-    db: Session = Depends(get_db),
-    user: AppUser = Depends(get_current_user),
-) -> None:
-    if payload.status not in _VALID_STATUS:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"недопустимый статус: {payload.status}"
-        )
-    if payload.status == "accepted" and not (payload.reason or "").strip():
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="обоснование обязательно при статусе accepted",
-        )
-
-    finding = db.get(FindingRow, payload.finding_id)
-    if finding is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="находка не найдена")
-
-    value_hash = hash_value(finding.value)
-    existing = (
-        db.query(FindingVerdict)
-        .filter_by(
-            object_key=finding.object_uuid,
-            key_kind="uuid",
-            kind=finding.kind,
-            field=finding.field,
-            value_hash=value_hash,
-        )
-        .one_or_none()
-    )
-
-    if payload.status == "open":
-        # Отсутствие строки означает open (спека §4.2) — явный сброс
-        # вердикта удаляет запись, а не хранит статус "open" как значение.
-        if existing is not None:
-            db.delete(existing)
-            db.commit()
-        return
-
-    if existing is None:
-        existing = FindingVerdict(
-            object_key=finding.object_uuid,
-            key_kind="uuid",
-            kind=finding.kind,
-            field=finding.field,
-            value_hash=value_hash,
-        )
-        db.add(existing)
-
-    existing.status = payload.status
-    existing.reason = payload.reason
-    existing.decided_by = user.login
-    existing.decided_at = dt.datetime.now(dt.UTC)
-    db.commit()

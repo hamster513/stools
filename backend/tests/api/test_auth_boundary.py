@@ -30,7 +30,6 @@ PUBLIC = {
 #: защиту сессией, а не валидацию входа.
 _JSON_BODIES: dict[tuple[str, str], dict[str, Any]] = {
     ("/api/auth/login", "POST"): {"login": "x", "password": "x"},
-    ("/api/siem/findings/verdict", "POST"): {"finding_id": 1, "status": "open"},
     ("/api/siem/profile", "PUT"): {"snapshot_id": 1},
 }
 

@@ -13,7 +13,9 @@ def test_facets_present_all_known_values_with_zero_counts(
     facets = response.json()["facets"]
 
     assert facets["kind"] == {"1": 1, "2": 1, "3": 0, "4": 0, "5": 0}
-    assert facets["status"] == {"open": 2, "accepted": 0, "in_progress": 0}
+    assert facets["status"] == {
+        "new": 2, "in_work": 0, "risk_accepted": 0, "false_positive": 0, "fixed": 0, "resolved": 0, "reopened": 0,
+    }
     assert set(facets["in_table"]) == {"true", "false"}
     assert facets["in_table"]["true"] == 1
     assert facets["in_table"]["false"] == 1

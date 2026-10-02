@@ -9,7 +9,9 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from api.db.models import Finding as FindingRow
-from api.db.models import FindingVerdict, RuleRow
+from api.db.models import RuleRow
+from api.modules.siem.findings_adapter import MODULE, SCOPE, finding_key, key_salt
+from api.platform.findings import service as finding_svc
 
 #: Порядок тяжести, от большего к меньшему.
 SEVERITY_ORDER = ("high", "medium", "low")
@@ -25,11 +27,13 @@ def group_key(row: RuleRow) -> str:
 
 
 def attention_by_rule(db: Session, snapshot_id: int) -> dict[str, tuple[int, str | None]]:
-    """Открытые находки и их наибольшая тяжесть по каждому правилу.
+    """Учитываемые находки и их наибольшая тяжесть по каждому правилу.
 
-    Вердикты живут вне снапшотов и соединяются с находками по ключу
-    (object_uuid, kind, field, value_hash), а не по идентификатору находки:
-    принятое решение обязано пережить загрузку новой выгрузки.
+    Статусы — общие статусы находок платформы, вне снапшотов, по ключу
+    находки (object_uuid, kind, field, значение), а не по её идентификатору:
+    принятое решение обязано пережить загрузку новой выгрузки. Какие статусы
+    учитываются, задаёт настройка платформы `counted` (по умолчанию не
+    учитываются «Принят риск», «Ложное срабатывание», «Устранена»).
     """
     findings = (
         db.query(
@@ -42,16 +46,13 @@ def attention_by_rule(db: Session, snapshot_id: int) -> dict[str, tuple[int, str
         .filter(FindingRow.snapshot_id == snapshot_id)
         .all()
     )
-    accepted = {
-        (v.object_key, v.kind, v.field, v.value_hash)
-        for v in db.query(FindingVerdict).filter(
-            FindingVerdict.key_kind == "uuid", FindingVerdict.status == "accepted"
-        )
-    }
+    salt = key_salt(db)
+    states = finding_svc.state_map(db, MODULE, SCOPE)
+    counted = finding_svc.counted_statuses(db)
 
     out: dict[str, tuple[int, str | None]] = {}
     for object_uuid, kind, field, value_hash, severity in findings:
-        if (object_uuid, kind, field, value_hash) in accepted:
+        if not finding_svc.is_counted(states.get(finding_key(salt, object_uuid, kind, field, value_hash)), counted):
             continue
         count, worst = out.get(object_uuid, (0, None))
         if worst is None or SEVERITY_ORDER.index(severity) < SEVERITY_ORDER.index(worst):

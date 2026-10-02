@@ -8,8 +8,8 @@ from api.modules.siem.services.highlight import spans_for
 BODY = 'filter { subject.account.name == "srv99" and dst.ip == "10.0.0.1" }'
 
 
-def finding(kind: int, value: str, status: str = "open") -> dict[str, object]:
-    return {"kind": kind, "value": value, "status": status}
+def finding(kind: int, value: str, status: str = "new", counted: bool = True) -> dict[str, object]:
+    return {"kind": kind, "value": value, "status": status, "counted": counted}
 
 
 def test_span_points_at_the_value_not_at_the_quotes() -> None:
@@ -44,10 +44,11 @@ def test_heavier_class_wins_on_the_same_place() -> None:
 
 
 def test_status_travels_with_the_span() -> None:
-    """Принятое замечание гасится, а не исчезает: решение принято,
-    но код остался прежним."""
-    spans = spans_for(BODY, [finding(1, "srv99", status="accepted")])
-    assert spans[0].status == "accepted"
+    """Неучитываемое замечание (принят риск — по умолчанию) гасится, а не
+    исчезает: решение принято, но код остался прежним."""
+    spans = spans_for(BODY, [finding(1, "srv99", status="risk_accepted", counted=False)])
+    assert (spans[0].status, spans[0].counted) == ("risk_accepted", False)
+    assert spans_for(BODY, [finding(1, "srv99", status="in_work")])[0].counted is True
 
 
 def test_spans_never_overlap() -> None:

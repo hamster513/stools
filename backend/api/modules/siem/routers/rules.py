@@ -13,13 +13,15 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
-from api.db.models import AppUser, FindingVerdict, RuleDependency, RuleMsgid, RuleRow, RuleTableRef
+from api.db.models import AppUser, RuleDependency, RuleMsgid, RuleRow, RuleTableRef
 from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
 from api.modules.attack.services.attack_bundle import current as current_bundle
+from api.modules.siem.findings_adapter import MODULE, SCOPE, key_of, key_salt
 from api.modules.siem.services.attack import STATUS_UNMAPPED, markup_by_rule, techniques_of
 from api.modules.siem.services.highlight import spans_for
 from api.modules.siem.services.rule_attention import attention_by_rule, group_key
+from api.platform.findings import service as finding_svc
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -257,17 +259,15 @@ def get_rule(
         .filter(FindingRow.snapshot_id == snapshot_id, FindingRow.object_uuid == rule_uuid)
         .all()
     )
-    verdicts = {
-        (v.object_key, v.kind, v.field, v.value_hash): v.status
-        for v in db.query(FindingVerdict).filter(
-            FindingVerdict.key_kind == "uuid", FindingVerdict.object_key == rule_uuid
-        )
-    }
+    salt = key_salt(db)
+    keys = {f.id: key_of(salt, f) for f in finding_rows}
+    states = finding_svc.state_map(db, MODULE, SCOPE, keys.values())
+    counted = finding_svc.counted_statuses(db)
+    status_of = {f.id: finding_svc.effective_status(states.get(keys[f.id])) for f in finding_rows}
     # Значение нужно здесь только чтобы найти его место в теле: наружу
     # оно не уходит, клиент получает отрезки и класс.
     findings_with_values = [
-        {"kind": f.kind, "value": f.value,
-         "status": verdicts.get((f.object_uuid, f.kind, f.field, f.value_hash), "open")}
+        {"kind": f.kind, "value": f.value, "status": status_of[f.id], "counted": status_of[f.id] in counted}
         for f in finding_rows
     ]
 
@@ -280,7 +280,8 @@ def get_rule(
             "polarity": f.polarity,
             "in_table": f.in_table,
             "table_name": f.table_name,
-            "status": verdicts.get((f.object_uuid, f.kind, f.field, f.value_hash), "open"),
+            "status": status_of[f.id],
+            "counted": status_of[f.id] in counted,
             "has_value": bool(f.value),
         }
         for f in finding_rows

@@ -28,6 +28,10 @@ export function SiemModule() {
   if (path === '/siem/settings' || path === '/siem/upload') {
     return <SettingsRoute />
   }
+  // Ссылка на находку из «Моих находок» не знает снапшота: `?key=` открывается на актуальном.
+  if (path === '/siem/hygiene') {
+    return <HygieneRedirect />
+  }
 
   const match = matchPath('/siem/snapshots/:id/:section', path)
   if (match && SECTIONS.has(match.section)) {
@@ -78,6 +82,17 @@ function SettingsRoute() {
       </ErrorBoundary>
     </AppShell>
   )
+}
+
+/** `/siem/hygiene?key=…` — находки актуального снапшота с той же строкой запроса. */
+function HygieneRedirect() {
+  const { search } = useRouter()
+  const { data: snapshots, isLoading } = useSnapshots()
+
+  if (isLoading || !snapshots) return <FullPageSpinner />
+
+  const latest = latestOf(snapshots)
+  return <Redirect to={latest ? `/siem/snapshots/${latest.id}/hygiene${search}` : '/siem/settings'} />
 }
 
 /** `/siem` и неизвестные пути модуля ведут на актуальный снапшот или на загрузку. */

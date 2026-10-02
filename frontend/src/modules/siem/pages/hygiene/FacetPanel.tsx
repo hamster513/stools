@@ -2,7 +2,6 @@ import type { ReactNode } from 'react'
 import type {
   FindingKind,
   FindingsFacets,
-  FindingStatus,
   ObjectType,
   Polarity,
   ShapeFilter,
@@ -10,15 +9,15 @@ import type {
 import { OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS } from '@/modules/siem/api/types'
 import { cn } from '@/lib/cn'
 import { KindBadge } from '@/modules/siem/components/ui/KindBadge'
-import { StatusBadge } from '@/modules/siem/components/ui/StatusBadge'
+import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
 
-export interface HygieneFilters {
+/** Статус, исполнитель и сроки — общие фасеты статусов находок платформы. */
+export interface HygieneFilters extends FindingFacetFilters {
   kind?: FindingKind
   polarity?: Polarity
   object_type?: ObjectType
   in_table?: boolean
   shape?: ShapeFilter
-  status?: FindingStatus
   field?: string
 }
 
@@ -28,6 +27,9 @@ interface FacetPanelProps {
   filters: HygieneFilters
   onToggle: <K extends keyof HygieneFilters>(key: K, value: HygieneFilters[K]) => void
   total: number
+  myLogin: string | undefined
+  /** Логин → имя из справочника исполнителей. */
+  names: Map<string, string>
 }
 
 function Row({
@@ -58,10 +60,11 @@ function Row({
   )
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <div className="border-b border-grid px-2 py-3">
       <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{title}</div>
+      {hint && <div className="mb-1.5 px-2 text-[11px] text-text-secondary">{hint}</div>}
       <div className="flex flex-col gap-0.5">{children}</div>
     </div>
   )
@@ -80,12 +83,15 @@ const SHAPES = [
 ] as const
 
 const POLARITIES: Polarity[] = ['negation', 'assertion']
-const STATUSES: FindingStatus[] = ['open', 'in_progress', 'accepted']
 
-export function FacetPanel({ facets, fieldFacet, filters, onToggle, total }: FacetPanelProps) {
+export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLogin, names }: FacetPanelProps) {
   const topFields = Object.entries(fieldFacet ?? {})
     .sort((a, b) => b[1] - a[1])
     .slice(0, 12)
+  const assignees = Object.entries(facets?.assignee ?? {})
+    .filter(([login]) => login !== 'none' && login !== myLogin)
+    .sort((a, b) => b[1] - a[1])
+  const pickAssignee = (value: string) => onToggle('assignee', filters.assignee === value ? undefined : value)
 
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
@@ -94,6 +100,27 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total }: Fac
           Всего находок <span className="font-mono tabular-nums text-text">{total}</span>
         </div>
       </div>
+
+      <Section title="Статус" hint={filters.status ? undefined : 'не выбран — показаны открытые: новая, в работе, исправлено, переоткрыта'}>
+        {STATUS_OPTIONS.map(({ value, label }) => (
+          <Row key={value} active={filters.status ? filters.status.includes(value) : false} count={facets?.status[value]} onClick={() => onToggle('status', toggleStatus(filters.status, value))}>
+            {label}
+          </Row>
+        ))}
+      </Section>
+
+      <Section title="Исполнитель">
+        <Row active={filters.assignee === 'me'} count={myLogin ? facets?.assignee[myLogin] : undefined} onClick={() => pickAssignee('me')}>{ASSIGNEE_SPECIAL.me}</Row>
+        <Row active={filters.assignee === 'none'} count={facets?.assignee.none} onClick={() => pickAssignee('none')}>{ASSIGNEE_SPECIAL.none}</Row>
+        {assignees.map(([login, n]) => (
+          <Row key={login} active={filters.assignee === login} count={n} onClick={() => pickAssignee(login)}>{names.get(login) ?? login}</Row>
+        ))}
+      </Section>
+
+      <Section title="Сроки">
+        <Row active={filters.overdue === true} count={facets?.flags.overdue} onClick={() => onToggle('overdue', filters.overdue ? undefined : true)}>просроченные</Row>
+        <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => onToggle('risk_expiring', filters.risk_expiring ? undefined : true)}>риск истекает (≤ 30 дней)</Row>
+      </Section>
 
       <Section title="Класс">
         {KINDS.map((k) => (
@@ -155,14 +182,6 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total }: Fac
         <Row active={filters.in_table === false} count={facets?.in_table.false} onClick={() => onToggle('in_table', filters.in_table === false ? undefined : false)}>
           Нет в списке
         </Row>
-      </Section>
-
-      <Section title="Статус">
-        {STATUSES.map((s) => (
-          <Row key={s} active={filters.status === s} count={facets?.status[s]} onClick={() => onToggle('status', filters.status === s ? undefined : s)}>
-            <StatusBadge status={s} className="border-none bg-transparent px-0 py-0" />
-          </Row>
-        ))}
       </Section>
 
       <Section title="Поле">

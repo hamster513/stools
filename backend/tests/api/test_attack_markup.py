@@ -432,10 +432,11 @@ def test_accepted_finding_stops_demanding_attention(
     finding = auth_client.get(
         f"/api/siem/findings?snapshot_id={snapshot_id}&object_uuid={target['uuid']}"
     ).json()["items"][0]
-    auth_client.post(
-        "/api/siem/findings/verdict",
-        json={"finding_id": finding["id"], "status": "accepted", "reason": "проверено"},
+    accepted = auth_client.put(
+        "/api/findings/state",
+        json={"module": "siem", "scope_id": 0, "key": finding["key"], "status": "risk_accepted", "comment": "проверено"},
     )
+    assert accepted.status_code == 200, accepted.text
 
     again = auth_client.get(f"/api/siem/rules?snapshot_id={snapshot_id}").json()
     after = next(r for r in again["items"] if r["uuid"] == target["uuid"])

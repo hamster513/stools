@@ -290,9 +290,16 @@ GET /api/siem/jobs/{id} -> {id, stage, status, progress, error}
 
 ```
 GET /api/siem/findings?snapshot_id=1&kind=1&polarity=negation&object_type=correlation
-                 &in_table=true&status=open&field=src.ip&q=текст
+                 &in_table=true&status=new,in_work&assignee=me&overdue=true
+                 &risk_expiring=true&key=…&field=src.ip&q=текст
                  &sort=kind&order=asc&limit=100&offset=0
 ```
+
+Статусы — общие статусы находок платформы (`new`, `in_work`, `risk_accepted`,
+`false_positive`, `fixed`, `resolved`, `reopened`). `status` — коды через
+запятую или `all`; не задан — открытые (`new`, `in_work`, `fixed`,
+`reopened`), с `risk_expiring=true` — `risk_accepted`. `assignee` — `me`,
+`none` или логин. `key` — одна находка по ключу (ссылка из «Моих находок»).
 
 Ответ:
 
@@ -300,18 +307,25 @@ GET /api/siem/findings?snapshot_id=1&kind=1&polarity=negation&object_type=correl
 {
   "total": 1093,
   "items": [
-    {"id": 42, "kind": 1, "severity": "high", "object_type": "correlation",
+    {"id": 42, "key": "000ffb49-…|1|5f1c…", "kind": 1, "severity": "high",
+     "object_type": "correlation",
      "object_name": "DEMO_HC_002_029_Impacket", "object_uuid": "000ffb49-…",
      "field": "subject.account.name", "polarity": "assertion",
      "in_table": true, "table_name": "DEMO_Hosts, DEMO_TTX_Servers",
-     "status": "open", "has_value": true}
+     "status": "new", "status_title": "Новая", "assignee": null,
+     "assignee_name": null, "due_date": null, "overdue": false,
+     "risk_until": null, "first_seen_at": "2026-09-01T10:00:00Z",
+     "age_days": 31, "gone": false, "has_value": true}
   ],
   "facets": {
     "kind": {"1": 488, "2": 371, "3": 33, "4": 20, "5": 181},
     "polarity": {"negation": 140, "assertion": 953},
     "object_type": {"correlation": 1059, "filter": 26, "enrichment": 8},
     "in_table": {"true": 488, "false": 605},
-    "status": {"open": 1093, "accepted": 0, "in_progress": 0}
+    "status": {"new": 1093, "in_work": 0, "risk_accepted": 0, "false_positive": 0,
+               "fixed": 0, "resolved": 0, "reopened": 0},
+    "assignee": {"none": 1093},
+    "flags": {"overdue": 0, "risk_expiring": 0}
   }
 }
 ```
@@ -322,14 +336,24 @@ GET /api/siem/findings?snapshot_id=1&kind=1&polarity=negation&object_type=correl
 ```
 GET  /api/siem/findings/{id}/detail -> {value, body_excerpt, table_name,
                                    affected_rules: [...]}
-POST /api/siem/findings/verdict     {finding_id, status, reason} -> 204
 ```
 
-`status ∈ {open, accepted, in_progress}`. При `accepted` поле `reason`
-обязательно, пустое — `422`.
+Статус, исполнитель, срок и история меняются общими ручками платформы
+`/api/findings/*` с `module = "siem"`, `scope_id = 0` и `key` из списка;
+прежний `POST /api/siem/findings/verdict` удалён. Статус переживает
+загрузку нового снапшота: ключ находки — `object_uuid|kind|подпись`, где
+подпись — HMAC с солью установки от `(object_uuid, kind, field, value_hash)`;
+хеша значения в ключе нет (несолёный sha256 адреса восстанавливается
+словарём). Свежие данные для автоматики — находки активного снапшота
+(последнего разобранного): пропавшая открытая находка становится
+`resolved`, вернувшаяся — `reopened`. У активного снапшота в список
+добавляются пропавшие находки с решением (`gone: true`).
 
-Вердикт переживает загрузку нового снапшота: он привязан к
-`(object_uuid, kind, field, value_hash)`, а не к идентификатору находки.
+«Требует внимания» (`open_finding_count` правил) и подсветка в теле правила
+учитывают настройку платформы `counted`: находка со статусом, который не
+считается (по умолчанию «Принят риск», «Ложное срабатывание», «Устранена»),
+не требует внимания, а в теле правила гасится (`body_spans[].counted`,
+`findings[].counted` в `GET /api/siem/rules/{uuid}`).
 
 ## Расхождения правило ↔ список
 

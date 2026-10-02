@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from api.modules.attack.layers import register_layer
+from api.modules.siem.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.siem.routers import (
     attack,
     clones,
@@ -23,6 +24,7 @@ from api.modules.siem.routers import (
     tables,
 )
 from api.modules.siem.services.attack_layer import LAYER as ATTACK_LAYER
+from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/siem")
 for sub in (
@@ -43,3 +45,4 @@ for sub in (
 # Покрытие правилами — слой платформенной матрицы: модуль знает про
 # `attack`, `attack` про модули — нет.
 register_layer(ATTACK_LAYER)
+register_adapter(FINDINGS_ADAPTER)

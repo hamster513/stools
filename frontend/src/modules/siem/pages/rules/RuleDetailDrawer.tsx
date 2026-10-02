@@ -260,9 +260,9 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
                       подсвечены значения из замечаний, цвет — класс
                     </span>
                   )}
-                  {/* Легенда только для принятого: остальные цвета
+                  {/* Легенда только для неучитываемого: остальные цвета
                       совпадают со значками выше и в пояснении не нуждаются. */}
-                  {data.body_spans?.some((s) => s.status === 'accepted') && (
+                  {data.body_spans?.some((s) => !s.counted) && (
                     <span className="inline-flex items-center gap-1 text-xs text-kind-accepted">
                       <span
                         className="rounded-[2px] px-1"
@@ -273,7 +273,7 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
                       >
                         значение ✓
                       </span>
-                      <span>— принято как норма</span>
+                      <span>— решение принято, не учитывается</span>
                     </span>
                   )}
                 </div>
@@ -313,7 +313,7 @@ function FindingsSection({
     const byKind = new Map<FindingKind, { open: number; accepted: number; fields: Map<string, number> }>()
     for (const f of findings) {
       const g = byKind.get(f.kind) ?? { open: 0, accepted: 0, fields: new Map() }
-      if (f.status === 'accepted') g.accepted += 1
+      if (!f.counted) g.accepted += 1
       else g.open += 1
       g.fields.set(f.field, (g.fields.get(f.field) ?? 0) + 1)
       byKind.set(f.kind, g)
@@ -321,7 +321,7 @@ function FindingsSection({
     return [...byKind.entries()].sort((a, b) => b[1].open - a[1].open || Number(a[0]) - Number(b[0]))
   }, [findings])
 
-  const open = findings.filter((f) => f.status !== 'accepted').length
+  const open = findings.filter((f) => f.counted).length
 
   return (
     <div>
@@ -372,7 +372,7 @@ function FindingsSection({
                   {settled ? (
                     <span className="inline-flex items-center gap-1.5 text-xs text-kind-accepted">
                       <CheckCircle2 size={13} aria-hidden />
-                      Принято как норма
+                      Решение принято
                       <span className="font-mono text-text-secondary">
                         {g.accepted === 1 ? 'одно значение' : `значений: ${g.accepted}`}
                       </span>
@@ -380,7 +380,7 @@ function FindingsSection({
                   ) : (
                     <span className="font-mono text-xs text-text-secondary">
                       открытых: {g.open}
-                      {g.accepted > 0 && `, принято как норма: ${g.accepted}`}
+                      {g.accepted > 0 && `, не учитываются: ${g.accepted}`}
                     </span>
                   )}
                 </div>

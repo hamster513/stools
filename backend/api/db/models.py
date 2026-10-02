@@ -6,9 +6,9 @@ Pydantic-модели, а сюда их раскладывает `api/services/i
 
 1. `finding` ключуется `object_type` + `object_uuid`, а не `rule_uuid` —
    находки бывают не только у корреляционных правил.
-2. `finding_verdict` — отдельная таблица вне снапшотов, ключ
-   `(object_key, key_kind, kind, field, value_hash)`. Значение не хранится,
-   только хеш.
+2. Решения по находкам — вне снапшотов: прежде таблица `finding_verdict`,
+   с 02.10.2026 — общие статусы находок платформы (api/platform/findings,
+   ключ — api/modules/siem/findings_adapter.py). Значение не хранится.
 3. `rule.parse_status` различает «не разобрали» и «событий не требует».
 """
 from __future__ import annotations
@@ -328,8 +328,8 @@ class Finding(Base):
     severity: Mapped[str] = mapped_column(String(8))
     field: Mapped[str] = mapped_column(String(255), index=True)
     value: Mapped[str] = mapped_column(Text)
-    #: sha256 значения — используется для соединения с finding_verdict без
-    #: хранения самого значения во второй таблице (спека §4.2).
+    #: sha256 значения — входит в ключ статуса находки без хранения самого
+    #: значения вне снапшота (спека §4.2; findings_adapter).
     value_hash: Mapped[str] = mapped_column(String(64), index=True)
     polarity: Mapped[str] = mapped_column(String(16), index=True)
     #: Форма значения: ip | cidr | fqdn. Отдельно от класса, потому что
@@ -347,30 +347,6 @@ class Finding(Base):
         Index("ix_finding_snapshot_kind", "snapshot_id", "kind"),
         Index("ix_finding_verdict_key", "object_uuid", "kind", "field", "value_hash"),
     )
-
-
-class FindingVerdict(Base):
-    """Вне снапшотов намеренно: статус обязан переживать загрузку нового
-    снапшота (спека §4.2). Соединяется с `finding` по
-    (object_key, kind, field, value_hash), а не по id находки."""
-
-    __tablename__ = "finding_verdict"
-    __table_args__ = (
-        UniqueConstraint(
-            "object_key", "key_kind", "kind", "field", "value_hash", name="uq_finding_verdict_key"
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    object_key: Mapped[str] = mapped_column(String(255), index=True)
-    key_kind: Mapped[str] = mapped_column(String(8), default="uuid")  # uuid | name
-    kind: Mapped[int] = mapped_column(Integer)
-    field: Mapped[str] = mapped_column(String(255))
-    value_hash: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(16), default="open")
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    decided_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    decided_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class ClonePairRow(Base):

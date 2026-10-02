@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { useFindingDetail } from '@/modules/siem/api/queries'
 import type { FindingListItem } from '@/modules/siem/api/types'
-import { OBJECT_TYPE_LABELS, POLARITY_LABELS } from '@/modules/siem/api/types'
+import { FINDING_KIND_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS } from '@/modules/siem/api/types'
 
 const SHAPE_LABELS: Record<string, string> = {
   fqdn: 'имя узла',
@@ -11,29 +11,31 @@ const SHAPE_LABELS: Record<string, string> = {
 }
 import { KindBadge } from '@/modules/siem/components/ui/KindBadge'
 import { HighlightedBody, spansForValue } from '@/modules/siem/components/ui/HighlightedBody'
-import { StatusBadge } from '@/modules/siem/components/ui/StatusBadge'
 import { Spinner } from '@/components/ui/Spinner'
-import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
+import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
+import { useFindingSettings } from '@/platform/findings/queries'
+import { StatusBadge } from '@/platform/findings/StatusBadge'
 
 interface DetailDrawerProps {
   finding: FindingListItem | null
   ordinal: number | null
   onClose: () => void
-  onAccept: () => void
-  onTakeInWork: () => void
+  /** Статус, исполнитель или срок изменены — список обновляется. */
+  onChanged: () => void
 }
 
 /**
  * Значение и фрагмент тела приходят только сюда, по явному запросу
- * /detail — списки находок их никогда не показывают.
+ * /detail — списки находок их никогда не показывают. Внизу — блок «Работа
+ * с находкой» общих статусов платформы (module `siem`, область 0).
  */
-export function DetailDrawer({ finding, ordinal, onClose, onAccept, onTakeInWork }: DetailDrawerProps) {
+export function DetailDrawer({ finding, ordinal, onClose, onChanged }: DetailDrawerProps) {
   const open = finding !== null
   const { data, isLoading, isError } = useFindingDetail(finding?.id, { enabled: open })
   const closeRef = useRef<HTMLButtonElement>(null)
-  // Вердикт — решение, а решения аудитор не выносит: сервер ответит 403.
-  const { write } = useCan()
+  // Неучитываемое замечание (настройка `counted`) подсвечивается приглушённо.
+  const counted = useFindingSettings().data?.counted
 
   useEffect(() => {
     if (open) closeRef.current?.focus()
@@ -107,9 +109,16 @@ export function DetailDrawer({ finding, ordinal, onClose, onAccept, onTakeInWork
                 <dt className="text-text-secondary">Полярность</dt>
                 <dd className="text-text">{POLARITY_LABELS[finding.polarity]}</dd>
                 <dt className="text-text-secondary">Статус</dt>
-                <dd>
+                <dd className="text-text">
                   <StatusBadge status={finding.status} />
+                  {finding.gone && <span className="ml-1 text-text-secondary">· нет в последней выгрузке</span>}
                 </dd>
+                {finding.first_seen_at && (
+                  <>
+                    <dt className="text-text-secondary">Впервые</dt>
+                    <dd className="text-text">{new Date(finding.first_seen_at).toLocaleString('ru-RU')} ({finding.age_days ?? 0} дн.)</dd>
+                  </>
+                )}
               </dl>
 
               <div className="mt-4 border-t border-grid pt-4">
@@ -143,6 +152,7 @@ export function DetailDrawer({ finding, ordinal, onClose, onAccept, onTakeInWork
                           data.value,
                           Number(finding.kind),
                           finding.status,
+                          counted?.[finding.status] ?? true,
                         )}
                       />
                     </div>
@@ -171,28 +181,18 @@ export function DetailDrawer({ finding, ordinal, onClose, onAccept, onTakeInWork
                   </div>
                 )}
               </div>
-            </div>
 
-            {write && (
-            <div className="flex gap-2 border-t border-grid px-4 py-3">
-              <button
-                type="button"
-                onClick={onTakeInWork}
-                disabled={finding.status !== 'open'}
-                className="flex-1 rounded border border-border px-3 py-1.5 text-xs font-medium text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Взять в работу
-              </button>
-              <button
-                type="button"
-                onClick={onAccept}
-                disabled={finding.status === 'accepted'}
-                className="flex-1 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Принять как норму
-              </button>
+              <div className="mt-4 border-t border-grid pt-4">
+                <FindingWorkBlock
+                  module="siem"
+                  scopeId={0}
+                  findingKey={finding.key}
+                  title={`${finding.object_name}: ${FINDING_KIND_LABELS[finding.kind]}, поле ${finding.field}`}
+                  severity={finding.severity}
+                  onChanged={onChanged}
+                />
+              </div>
             </div>
-            )}
           </>
         )}
       </aside>

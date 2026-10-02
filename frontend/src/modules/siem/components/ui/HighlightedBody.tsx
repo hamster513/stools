@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { tint } from '@/lib/tint'
 import type { FindingKind, FindingStatus, RuleBodySpan } from '@/modules/siem/api/types'
 import { FINDING_KIND_LABELS } from '@/modules/siem/api/types'
+import { STATUS_TITLES } from '@/platform/findings/types'
 import { cn } from '@/lib/cn'
 
 /**
@@ -25,13 +26,14 @@ const KIND_COLOR: Record<number, string> = {
 /**
  * Одно подсвеченное значение.
  *
- * Принятое как норма показывается иначе не для красоты: приглушённая
+ * Неучитываемое замечание (принят риск, ложное срабатывание — настройка
+ * платформы `counted`) показывается иначе не для красоты: приглушённая
  * подсветка сама по себе не читается — человек видит бледное пятно и
- * гадает, замечание это или нет. Поэтому у принятого зелёная пунктирная
+ * гадает, замечание это или нет. Поэтому у него зелёная пунктирная
  * черта и галочка: решение видно, а не угадывается.
  */
 function Mark({ span, text }: { span: RuleBodySpan; text: string }) {
-  const accepted = span.status === 'accepted'
+  const accepted = !span.counted
   const color = accepted
     ? 'var(--color-kind-accepted)'
     : (KIND_COLOR[span.kind] ?? 'var(--color-kind-5)')
@@ -45,7 +47,7 @@ function Mark({ span, text }: { span: RuleBodySpan; text: string }) {
         boxShadow: accepted ? 'none' : `inset 0 -1px 0 ${color}`,
         borderBottom: accepted ? `1px dashed ${color}` : undefined,
       }}
-      title={accepted ? `${label} — принято как норма` : label}
+      title={accepted ? `${label} — ${STATUS_TITLES[span.status]}, не учитывается` : label}
     >
       {text}
       {accepted && (
@@ -114,6 +116,7 @@ export function spansForValue(
   value: string,
   kind: number,
   status: FindingStatus,
+  counted: boolean,
 ): RuleBodySpan[] {
   if (!excerpt || value.length < 2) return []
   const needle = `"${value}"`
@@ -122,7 +125,7 @@ export function spansForValue(
   for (;;) {
     const at = excerpt.indexOf(needle, from)
     if (at < 0) break
-    out.push({ start: at + 1, end: at + 1 + value.length, kind, status })
+    out.push({ start: at + 1, end: at + 1 + value.length, kind, status, counted })
     from = at + 1
   }
   return out

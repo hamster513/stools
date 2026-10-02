@@ -27,7 +27,6 @@ import type {
   DivergencesQuery,
   DivergencesResponse,
   FindingDetail,
-  FindingVerdictRequest,
   FindingsListResponse,
   FindingsQuery,
   InstallationProfile,
@@ -104,9 +103,10 @@ export const FINDINGS_PAGE_SIZE = 300
  * снапшоту. Считать их по загруженным строкам нельзя: счётчики менялись
  * бы по мере прокрутки, и это выглядело бы как поломка.
  */
-export function useFindings(query: Omit<FindingsQuery, 'limit' | 'offset'>) {
+export function useFindings(query: Omit<FindingsQuery, 'limit' | 'offset'>, options?: { enabled?: boolean }) {
   return useInfiniteQuery<FindingsListResponse, ApiRequestError>({
     queryKey: ['findings', query],
+    enabled: options?.enabled ?? true,
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       api.get(
@@ -132,16 +132,6 @@ export function useFindingDetail(
     queryKey: ['finding-detail', id],
     queryFn: () => api.get(`/api/siem/findings/${id}/detail`),
     enabled: id !== undefined && (options?.enabled ?? true),
-  })
-}
-
-export function useSetVerdict() {
-  const qc = useQueryClient()
-  return useMutation<void, ApiRequestError, FindingVerdictRequest>({
-    mutationFn: (body) => api.post('/api/siem/findings/verdict', body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['findings'] })
-    },
   })
 }
 
