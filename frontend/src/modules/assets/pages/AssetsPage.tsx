@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, Filter, FilterX, Search, X } from 'lucide-react'
+import { ChevronRight, FilterX, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useAssetIds, useAssets, useBulkUpdate, useNetworks } from '@/modules/assets/api/queries'
 import {
@@ -27,11 +27,27 @@ import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useRouter, useSearchParams } from '@/lib/router'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { AssetDrawer } from './AssetDrawer'
 
 const ROW_HEIGHT = 40
-/** Панель фильтров свёрнута, пока аналитик сам её не раскроет; выбор запоминается в браузере. */
-const FILTERS_OPEN_KEY = 'stools-assets-filters-open'
+/** Ключ панели фильтров у общих фильтров платформы (useFiltersPanel). */
+const FILTERS_PAGE = 'assets-list'
+
+/** Открытость панели жила под своим ключом до перехода на общие фильтры: переносится один раз. */
+function migrateFiltersOpen() {
+  const old = 'stools-assets-filters-open'
+  try {
+    const value = localStorage.getItem(old)
+    if (value === null) return
+    localStorage.setItem(`stools-filters-open:${FILTERS_PAGE}`, value)
+    localStorage.removeItem(old)
+  } catch {
+    // Хранилище недоступно — панель просто начнёт свёрнутой.
+  }
+}
+migrateFiltersOpen()
 
 type Filters = Omit<AssetsQuery, 'q' | 'port' | 'tag'>
 
@@ -262,7 +278,7 @@ export function AssetsPage() {
   const searchRef = useRef<HTMLInputElement>(null)
   const { write } = useCan()
   const networks = useNetworks()
-  const [filtersOpen, setFiltersOpen] = useState(() => localStorage.getItem(FILTERS_OPEN_KEY) === '1')
+  const filtersPanel = useFiltersPanel(FILTERS_PAGE)
   const [checked, setChecked] = useState<Set<number>>(() => new Set())
   const lastChecked = useRef<number | null>(null)
   const allIds = useAssetIds()
@@ -281,9 +297,6 @@ export function AssetsPage() {
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput(''); setPortInput(''); setTagInput('') }
-  function toggleFilters() {
-    setFiltersOpen((open) => { localStorage.setItem(FILTERS_OPEN_KEY, open ? '0' : '1'); return !open })
-  }
   function check(index: number, range: boolean) {
     const from = range && lastChecked.current !== null ? lastChecked.current : index
     const on = !checked.has(items[index].id)
@@ -296,7 +309,7 @@ export function AssetsPage() {
   }
   function checkAll(on: boolean) { setChecked(on ? new Set(items.map((a) => a.id)) : new Set()); lastChecked.current = null }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки обзора не должен действовать незаметно.
-  const chips: { label: string; clear: () => void }[] = []
+  const chips: FilterChip[] = []
   if (filters.code) chips.push({ label: filters.code === 'any' ? ANY_CODE_LABEL : CODE_LABELS[filters.code], clear: () => toggle('code', undefined) })
   if (filters.source_has) chips.push({ label: `есть в ${SOURCE_LABELS[filters.source_has]}`, clear: () => toggle('source_has', undefined) })
   if (filters.source_missing) chips.push({ label: `нет в ${SOURCE_LABELS[filters.source_missing]}`, clear: () => toggle('source_missing', undefined) })
@@ -333,27 +346,17 @@ export function AssetsPage() {
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Активы</h1>
-        <button type="button" onClick={toggleFilters} aria-expanded={filtersOpen} className={cn('flex items-center gap-1.5 rounded border px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', filtersOpen ? 'border-border bg-row-selected text-text' : 'border-border text-text-secondary hover:bg-row-hover hover:text-text')}>
-          <Filter size={13} aria-hidden /> Фильтры{chips.length > 0 && <span className="font-mono tabular-nums text-text">{chips.length}</span>}
-        </button>
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, FQDN, IP, ОС… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
-        {!filtersOpen && chips.length > 0 && (
-          <div className="flex basis-full flex-wrap gap-1.5">
-            {chips.map((c) => (
-              <button key={c.label} type="button" onClick={c.clear} title="Снять фильтр" className="flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
-                {c.label} <X size={11} className="text-text-secondary" aria-hidden />
-              </button>
-            ))}
-          </div>
-        )}
+        {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersOpen && <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           {write && checked.size > 0 && (
             <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)}
