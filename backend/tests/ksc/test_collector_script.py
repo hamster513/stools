@@ -11,11 +11,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
-from api.modules.ksc.core.export import load_export
+from api.modules.ksc.core.export import load_export, strip_params
 from tests.ksc.fake_ksc import MFA_SECRET, PASSWORD, USER, totp_code
 from tests.ksc.synthetic import (
     BAIT_VALUES,
@@ -24,6 +25,7 @@ from tests.ksc.synthetic import (
     assert_storage_shapes,
     build_export,
     expected_policy_contents,
+    expected_policy_profiles,
 )
 
 SCRIPT = Path("api/modules/ksc/collector/STools-KSC-Collector.ps1")
@@ -51,8 +53,9 @@ def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, objec
     """Поднимает поддельный KSC на порту и прогоняет скрипт в контейнере; отдаёт файл выгрузки.
 
     С `config` скрипт получает только `-ConfigPath` (и `extra_args`): сервер, учётка, пароль и
-    секрет второго фактора берутся из файла `<каталог прогона>/config.json`. `script_dir` —
-    каталог с изменённой копией скрипта. `expect_ok=False` — прогон должен завершиться ошибкой."""
+    секрет второго фактора берутся из файла `<каталог прогона>/config.json`; без `config` `extra_args`
+    добавляются к параметрам командной строки. `script_dir` — каталог с изменённой копией скрипта.
+    `expect_ok=False` — прогон должен завершиться ошибкой."""
     env = {**os.environ, "STOOLS_FAKE_VARIANT": variant}
     server = subprocess.Popen([sys.executable, "-m", "tests.ksc.fake_ksc_http", str(port)], cwd=Path.cwd(), env=env)
     try:
@@ -68,7 +71,7 @@ def _run_script(tmp_path: Path, port: int, variant: str, config: dict[str, objec
         mounts = ["-v", f"{(script_dir or SCRIPT.resolve().parent)}:/script:ro", "-v", f"{out}:/out", IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1"]
         if config is None:
             cmd = [*docker, "-e", f"STOOLS_KSC_PASSWORD={PASSWORD}", *mounts, "-Server", "host.docker.internal", "-Port", str(port),
-                   "-Scheme", "http", "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz"]
+                   "-Scheme", "http", "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz", *extra_args]
         else:
             (out / "config.json").write_text(json.dumps({**config, "port": port}), encoding="utf-8")
             cmd = [*docker, *mounts, "-ConfigPath", "/out/config.json", *extra_args]
@@ -486,10 +489,105 @@ def test_script_reports_progress_and_where_it_failed(tmp_path: Path) -> None:
     """Ход работы виден по шагам со счётчиками, а отказ называет шаг и строку скрипта."""
     _run_script(tmp_path, 18362, "")
     console = (tmp_path / "default.console.txt").read_text(encoding="utf-8")
-    for line in ("Хосты: 14", "Политики: 3", "Задачи: 2", "Лицензии: 1"):
+    for line in ("Хосты: 14", "Теги хостов", "Политики: 3", "профилей прочитано: 2", "Задачи: 2", "Лицензии: 1"):
         assert line in console, console
     assert re.search(r"\[\d\d:\d\d\]", console), console   # время от начала у каждого шага
     failed = _run_script(tmp_path, 18363, "hosts_failed", expect_ok=False)
     console = (tmp_path / "hosts_failed.console.txt").read_text(encoding="utf-8")
     assert "Сбор прерван на шаге «Хосты»" in console and re.search(r"строка \d+", console), console
     assert not failed.exists()
+
+
+def _script_and_online(tmp_path: Path, port: int, variant: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Скрипт в контейнере и онлайн-`collect()` против одного поддельного KSC варианта `variant`:
+    сырые (неразобранные) выгрузки обоих."""
+    server = subprocess.Popen([sys.executable, "-m", "tests.ksc.fake_ksc_http", str(port)], cwd=Path.cwd(), env={**os.environ, "STOOLS_FAKE_VARIANT": variant})
+    try:
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        out = tmp_path / (variant or "default")
+        out.mkdir()
+        docker = ["docker", "run", "--rm", "--add-host=host.docker.internal:host-gateway", "-e", f"STOOLS_KSC_PASSWORD={PASSWORD}",
+                  "-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{out}:/out", IMAGE, "pwsh", "-File", "/script/STools-KSC-Collector.ps1",
+                  "-Server", "host.docker.internal", "-Port", str(port), "-Scheme", "http", "-User", USER, "-Internal", "-OutputPath", "/out/ksc.json.gz"]
+        run = subprocess.run(docker, capture_output=True, text=True, timeout=300, check=False)
+        assert run.returncode == 0, run.stdout + run.stderr
+        script_raw = json.loads(gzip.decompress((out / "ksc.json.gz").read_bytes()))
+
+        from api.modules.ksc.core.client import KscClient
+        from api.modules.ksc.core.collector import collect
+
+        with KscClient(f"http://127.0.0.1:{port}", USER, PASSWORD) as c:
+            online_raw = collect(c, username=USER)
+    finally:
+        server.terminate()
+    return script_raw, online_raw
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_and_online_tags_and_profiles_match(tmp_path: Path) -> None:
+    """Скрипт 1.2 и онлайн-сбор против одного поддельного KSC: те же `host_tags` и `policy_profiles`;
+    политика без профилей — пустые списки, а не null; секрет профиля скрыт."""
+    script_raw, online_raw = _script_and_online(tmp_path, 18370, "")
+    assert script_raw["server"]["collector_version"] == "1.2"
+    assert script_raw["host_tags"] == online_raw["host_tags"] == build_export()["host_tags"]
+    assert strip_params(script_raw["policy_profiles"]) == strip_params(online_raw["policy_profiles"]) == expected_policy_profiles()
+    assert script_raw["policy_profiles"]["3"] == {"profiles": [], "priorities": [], "errors": []}
+    assert "profile-secret" not in json.dumps(script_raw["policy_profiles"], ensure_ascii=False)
+    assert script_raw["server"]["warnings"] == []
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_and_online_tags_and_profiles_match_with_params_wrappers(tmp_path: Path) -> None:
+    """Вариант params (ответы в обёртках, как у живого KSC): скрипт читает теги и профили сквозь
+    обёртки, сырой JSON профилей совпадает с онлайн-сбором, после снятия обёрток — с эталоном."""
+    script_raw, online_raw = _script_and_online(tmp_path, 18371, "params")
+    assert script_raw["host_tags"] == online_raw["host_tags"] == build_export()["host_tags"]
+    assert script_raw["policy_profiles"] == online_raw["policy_profiles"]
+    assert strip_params(script_raw["policy_profiles"]) == expected_policy_profiles()
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_tags_fall_back_and_survive_denial(tmp_path: Path) -> None:
+    """Пакетный вызов тегов отклонён — теги читаются по одному хосту; отклонены оба вызова —
+    секции `host_tags` нет (не собрано), одно предупреждение, остальной сбор на месте."""
+    raw = json.loads(gzip.decompress(_run_script(tmp_path, 18372, "tags_batch_denied").read_bytes()))
+    assert raw["host_tags"] == build_export()["host_tags"]
+    assert not [w for w in raw["server"]["warnings"] if w.startswith("host_tags")]
+    raw = json.loads(gzip.decompress(_run_script(tmp_path, 18373, "tags_denied").read_bytes()))
+    assert "host_tags" not in raw and len(raw["hosts"]) == 14
+    assert len(raw["server"]["warnings"]) == 1 and raw["server"]["warnings"][0].startswith("host_tags: ")
+    assert "Теги хостов" in (tmp_path / "tags_denied.console.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_tag_fallback_tolerates_single_host_error(tmp_path: Path) -> None:
+    """По одному хосту: отказ на h-ws02 не теряет теги остальных — у него `[]`, одно предупреждение."""
+    raw = json.loads(gzip.decompress(_run_script(tmp_path, 18374, "tags_host_failed").read_bytes()))
+    assert set(raw["host_tags"]) == set(build_export()["host_tags"])
+    assert raw["host_tags"]["h-ws01"] == ["VIP", "Бухгалтерия"] and raw["host_tags"]["h-srv01"] == ["Server"] and raw["host_tags"]["h-ws02"] == []
+    tag_warnings = [w for w in raw["server"]["warnings"] if w.startswith("host_tags")]
+    assert len(tag_warnings) == 1 and tag_warnings[0].startswith("host_tags: теги не прочитаны у 1 хостов: ")
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_profiles_denied_keeps_export(tmp_path: Path) -> None:
+    """Отказ (403) на PolicyProfiles.EnumProfiles: файл записан, у политики ошибка, профилей и порядка нет,
+    содержимое политик на месте."""
+    path = _run_script(tmp_path, 18375, "profiles_denied")
+    raw = json.loads(gzip.decompress(path.read_bytes()))
+    pol1 = raw["policy_profiles"]["1"]
+    assert pol1["errors"] and pol1["profiles"] == [] and pol1["priorities"] == []
+    assert load_export(path.read_bytes()).policy_contents == expected_policy_contents()
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_skip_policy_contents_skips_profiles(tmp_path: Path) -> None:
+    """-SkipPolicyContents: ни содержимого политик, ни профилей (ключа `policy_profiles` нет вовсе)."""
+    raw = json.loads(gzip.decompress(_run_script(tmp_path, 18376, "", extra_args=("-SkipPolicyContents",)).read_bytes()))
+    assert "policy_profiles" not in raw and raw["policy_contents"] == {}
+    assert raw["host_tags"] == build_export()["host_tags"]

@@ -11,7 +11,8 @@
 
   Что собирается: группы, хосты (включая сборку ОС, архитектуру, тип
   виртуализации, признак ожидающей перезагрузки), продукты и компоненты,
-  политики, задачи со статистикой, лицензии, а также роли и внутренние
+  теги хостов, политики с содержимым и профилями, задачи со статистикой,
+  лицензии, а также роли и внутренние
   учётные записи KSC, состояние обязательной двухэтапной проверки,
   сертификат сервера, подчинённые серверы и точки распространения. Из
   учётных записей — только отображаемое имя, логин, UPN и признаки
@@ -34,7 +35,7 @@
                        кроме латиницы, цифр, точки, дефиса и подчёркивания, заменяется на _).
 .PARAMETER SkipTlsCheck Не проверять сертификат сервера KSC (самоподписанный); остальные адреса проверяются как обычно.
 .PARAMETER SkipProducts Не запрашивать продукты и компоненты по каждому хосту (быстрее).
-.PARAMETER SkipPolicyContents Не собирать содержимое политик (секция policy_contents; файл заметно больше).
+.PARAMETER SkipPolicyContents Не собирать содержимое и профили политик (секции policy_contents и policy_profiles; файл заметно больше).
 .PARAMETER PageSize    Размер страницы при чтении хостов, по умолчанию 500.
 .PARAMETER Scheme      https (по умолчанию) или http — только для тестов.
 
@@ -76,7 +77,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $FormatVersion = "stools-ksc/1"
-$CollectorVersion = "1.1"
+$CollectorVersion = "1.2"
 #: Имя секции или ключ на любой глубине её параметров с одним из этих слов (подстрокой, без учёта
 #: регистра) — всё поддерево под ним в режиме скрытия: строки → "<скрыто>", ключи остаются; двоичные
 #: значения скрываются всегда (см. Hide-Value). Список совпадает с SECRET_MARKERS в
@@ -84,6 +85,10 @@ $CollectorVersion = "1.1"
 $SecretMarkers = @("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE", "PASSPHRASE", "APIKEY", "API_KEY", "AUTH", "PIN", "KEY")
 $PolicyContentsMaxPolicies = 200
 $PolicyContentsSectionMaxBytes = 2097152
+#: Хостов в одном вызове ListTags.GetTags; вызовов HostTagsApi.GetHostTags подряд, после отказа всех
+#: которых чтение тегов по одному хосту бросается (TAGS_BATCH, TAGS_FALLBACK_GIVE_UP онлайн-сбора).
+$TagsBatch = 500
+$TagsFallbackGiveUp = 20
 
 if ($InitConfig) {
   if (-not [System.IO.Path]::IsPathRooted($InitConfig)) { $InitConfig = Join-Path $PWD.ProviderPath $InitConfig }
@@ -392,6 +397,28 @@ function Read-SrvView([string]$view, [string[]]$fields, [string]$filter = "") {
   }
 }
 
+# Секции хранилища $ssid (политики или её профиля): SS_GetNames → Ss_Read по каждой, Ss_Release в finally.
+# Ошибка секции — строка в errors, остальные остаются; ошибка SS_GetNames уходит вызывающему.
+function Read-SsSections($ssid, [string]$product, [string]$version) {
+  try {
+    $names = @((Prop (Invoke-Ksc "SsContents.SS_GetNames" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version }) "PxgRetVal") | Where-Object { $null -ne $_ })
+    $sections = [ordered]@{}
+    $errors = New-Object System.Collections.ArrayList
+    foreach ($sectionName in $names) {
+      try {
+        $raw = (Invoke-Ksc "SsContents.Ss_Read" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version; wstrSection = $sectionName }).PxgRetVal
+        $hidden = Hide-Secrets $sectionName $raw
+        $bytes = [Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $hidden -Depth 100 -Compress))
+        if ($bytes -gt $PolicyContentsSectionMaxBytes) { [void]$errors.Add("$($sectionName): секция больше лимита") }
+        else { $sections[$sectionName] = $hidden }
+      } catch { [void]$errors.Add("$($sectionName): $($_.Exception.Message)") }
+    }
+    return @{ sections = $sections; errors = @($errors.ToArray()) }
+  } finally {
+    Invoke-Ksc "SsContents.Ss_Release" @{ wstrID = $ssid } | Out-Null
+  }
+}
+
 $HostFields = @(
   "KLHST_WKS_HOSTNAME","KLHST_WKS_DN","KLHST_WKS_WINHOSTNAME","KLHST_WKS_WINDOMAIN","KLHST_WKS_DNSDOMAIN","KLHST_WKS_DNSNAME","KLHST_WKS_FQDN",
   "KLHST_WKS_GROUPID","KLHST_WKS_OS_NAME","KLHST_WKS_OS_VER_MAJOR","KLHST_WKS_OS_VER_MINOR","KLHST_WKS_IP_LONG","KLHST_WKS_CTYPE",
@@ -413,6 +440,7 @@ try {
   Write-Host "STools KSC Collector $CollectorVersion → $base" -ForegroundColor Green
   $warnings = New-Object System.Collections.ArrayList
   $policyContents = [ordered]@{}
+  $policyProfiles = [ordered]@{}
   Write-Step "Вход"
   $script:session = Start-KscSession
   if (-not $script:session) { throw "KSC не выдал сессию" }
@@ -464,6 +492,58 @@ try {
       }
     }
 
+    # Теги — только у хостов с агентом: пачками через ListTags.GetTags (чужие идентификаторы в ответе
+    # отбрасываются); не сработала пачка — заново по одному хосту через HostTagsApi.GetHostTags. Отказ на
+    # одном хосте не теряет остальные: у него пусто, одно предупреждение. Отказали все первые
+    # $TagsFallbackGiveUp вызовов (или все, когда хостов меньше) — секции host_tags в файле нет: «не собрано».
+    Write-Step "Теги хостов"
+    $tagIds = New-Object System.Collections.ArrayList
+    foreach ($h in $hosts) {
+      $hv = Unwrap $h
+      $hid = [string](Prop $hv "KLHST_WKS_HOSTNAME")
+      if (-not $hid -or ((AsInt (Prop $hv "KLHST_WKS_STATUS")) -band 4) -eq 0) { continue }
+      [void]$tagIds.Add($hid)
+    }
+    $hostTags = [ordered]@{}
+    foreach ($hid in $tagIds) { $hostTags[$hid] = @() }
+    try {
+      for ($i = 0; $i -lt $tagIds.Count; $i += $TagsBatch) {
+        $chunk = $tagIds.GetRange($i, [Math]::Min($TagsBatch, $tagIds.Count - $i)).ToArray()
+        $items = @((Prop (Invoke-Ksc "HostsTags.ListTags.GetTags" @{ pIdArray = $chunk; pParams = @{} }) "PxgRetVal") | Where-Object { $null -ne $_ })
+        foreach ($item in $items) {
+          $iv = Unwrap $item
+          $key = [string](Prop $iv "KLTAGS_ITEM_ID")
+          if ($key -and $hostTags.Contains($key)) { $hostTags[$key] = @((Unwrap (Prop $iv "KLTAGS_TAGS")) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ }) }
+        }
+      }
+    } catch {
+      $batchError = $_.Exception.Message
+      foreach ($hid in $tagIds) { $hostTags[$hid] = @() }
+      $failed = 0
+      $firstError = $null
+      $probe = [Math]::Min($TagsFallbackGiveUp, $tagIds.Count)
+      $n = 0
+      foreach ($hid in $tagIds) {
+        $n++
+        try { $hostTags[$hid] = @((Unwrap (Prop (Invoke-Ksc "HostTagsApi.GetHostTags" @{ szwHostId = $hid }) "PxgRetVal")) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ }) }
+        catch {
+          $failed++
+          if ($null -eq $firstError) { $firstError = $_.Exception.Message }
+        }
+        if ($n -eq $probe -and $failed -eq $n) {
+          $hostTags = $null
+          Write-Warning ("теги хостов: {0}; по одному хосту: {1}" -f $batchError, $firstError)
+          [void]$warnings.Add("host_tags: $($batchError); по одному хосту: $($firstError)")
+          break
+        }
+      }
+      if ($null -ne $hostTags -and $failed -gt 0) {
+        Write-Warning ("теги хостов: не прочитаны у {0} хостов: {1}" -f $failed, $firstError)
+        [void]$warnings.Add("host_tags: теги не прочитаны у $($failed) хостов: $($firstError)")
+      }
+    }
+    if ($null -ne $hostTags) { Write-Step ("  Теги: {0} хостов" -f $hostTags.Count) }
+
     Write-Step "Политики"
     $policies = @((Prop (Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ })
     Write-Step ("  Политики: {0}" -f $policies.Count)
@@ -477,6 +557,8 @@ try {
     if (-not $SkipPolicyContents) {
       Write-Step "Содержимое политик"
       $policyCount = 0
+      # Отобранные политики (тот же отбор и лимит) — потом по ним читаются профили.
+      $protectionPolicies = New-Object System.Collections.ArrayList
       foreach ($p in $policies) {
         $pv = Unwrap $p
         if (-not (AsBool (Prop $pv "KLPOL_ACTIVE"))) { continue }
@@ -486,6 +568,7 @@ try {
         if ($policyCount % 10 -eq 0) { Write-Step ("  политик прочитано: {0}" -f $policyCount) }
         $npolicy = AsInt (Prop $pv "KLPOL_ID")
         $version = [string](Prop $pv "KLPOL_VERSION")
+        [void]$protectionPolicies.Add(@{ id = $npolicy; product = $product; version = $version })
         if ($policyCount -gt $PolicyContentsMaxPolicies) {
           # Пропущенная по лимиту политика остаётся в секции с причиной — POLICY_CONTENT_MISSING её покажет.
           if ($policyCount -eq $PolicyContentsMaxPolicies + 1) {
@@ -497,28 +580,59 @@ try {
         }
         try {
           $ssid = (Invoke-Ksc "Policy.GetPolicyContents" @{ nPolicy = $npolicy; nRevisionId = 0; nLifeTime = 0 }).PxgRetVal
-          try {
-            $names = @((Prop (Invoke-Ksc "SsContents.SS_GetNames" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version }) "PxgRetVal") | Where-Object { $null -ne $_ })
-            $sections = [ordered]@{}
-            $errors = New-Object System.Collections.ArrayList
-            foreach ($sectionName in $names) {
-              try {
-                $raw = (Invoke-Ksc "SsContents.Ss_Read" @{ wstrID = $ssid; wstrProduct = $product; wstrVersion = $version; wstrSection = $sectionName }).PxgRetVal
-                $hidden = Hide-Secrets $sectionName $raw
-                $bytes = [Text.Encoding]::UTF8.GetByteCount((ConvertTo-Json -InputObject $hidden -Depth 100 -Compress))
-                if ($bytes -gt $PolicyContentsSectionMaxBytes) { [void]$errors.Add("$($sectionName): секция больше лимита") }
-                else { $sections[$sectionName] = $hidden }
-              } catch { [void]$errors.Add("$($sectionName): $($_.Exception.Message)") }
-            }
-            $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = $sections; errors = @($errors.ToArray()) }
-          } finally {
-            Invoke-Ksc "SsContents.Ss_Release" @{ wstrID = $ssid } | Out-Null
-          }
+          $read = Read-SsSections $ssid $product $version
+          $policyContents["$npolicy"] = @{ product = $product; version = $version; sections = $read.sections; errors = @($read.errors) }
         } catch {
           Write-Warning ("содержимое политики {0}: {1}" -f $npolicy, $_.Exception.Message)
           [void]$warnings.Add("policy_contents[$($npolicy)]: $($_.Exception.Message)")
         }
       }
+
+      # Профили: EnumProfiles → по каждому имени GetProfile (атрибуты, секреты скрыты) и GetProfileSettings
+      # (хранилище, секции читаются как у политики), плюс GetPriorities. Ошибки — строки errors на своём
+      # уровне: EnumProfiles и GetPriorities — у политики (без EnumProfiles нет ни профилей, ни порядка),
+      # GetProfile и GetProfileSettings — у профиля, остальные профили читаются.
+      Write-Step "Профили политик"
+      $profileCount = 0
+      $n = 0
+      foreach ($pp in $protectionPolicies) {
+        $n++
+        $profiles = New-Object System.Collections.ArrayList
+        $priorities = @()
+        $policyErrors = New-Object System.Collections.ArrayList
+        if ($n -gt $PolicyContentsMaxPolicies) { [void]$policyErrors.Add("лимит политик") }
+        else {
+          $names = $null
+          try {
+            $enum = Unwrap (Prop (Invoke-Ksc "PolicyProfiles.EnumProfiles" @{ nPolicy = $pp.id; nRevision = 0 }) "PxgRetVal")
+            # Политика без профилей отвечает пустым объектом {} — это обычный случай.
+            $names = @(if ($null -ne $enum) { $enum.PSObject.Properties | ForEach-Object { $_.Name } })
+          } catch { [void]$policyErrors.Add($_.Exception.Message) }
+          if ($null -ne $names) {
+            foreach ($name in $names) {
+              $attrs = [ordered]@{}
+              $profileSections = [ordered]@{}
+              $profileErrors = New-Object System.Collections.ArrayList
+              try {
+                $rawAttrs = Prop (Invoke-Ksc "PolicyProfiles.GetProfile" @{ nPolicy = $pp.id; nRevision = 0; szwName = $name }) "PxgRetVal"
+                if ($null -ne $rawAttrs) { $attrs = Hide-Secrets "" $rawAttrs }
+              } catch { [void]$profileErrors.Add($_.Exception.Message) }
+              try {
+                $ssid = (Invoke-Ksc "PolicyProfiles.GetProfileSettings" @{ nPolicy = $pp.id; nRevision = 0; szwName = $name; nLifeTime = 0 }).PxgRetVal
+                $read = Read-SsSections $ssid $pp.product $pp.version
+                $profileSections = $read.sections
+                foreach ($e in $read.errors) { [void]$profileErrors.Add($e) }
+              } catch { [void]$profileErrors.Add($_.Exception.Message) }
+              [void]$profiles.Add([ordered]@{ name = [string]$name; attrs = $attrs; sections = $profileSections; errors = @($profileErrors.ToArray()) })
+              $profileCount++
+            }
+            try { $priorities = @((Unwrap (Prop (Invoke-Ksc "PolicyProfiles.GetPriorities" @{ nPolicy = $pp.id; nRevision = 0 }) "PxgRetVal")) | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ }) }
+            catch { [void]$policyErrors.Add($_.Exception.Message) }
+          }
+        }
+        $policyProfiles["$($pp.id)"] = [ordered]@{ profiles = @($profiles.ToArray()); priorities = $priorities; errors = @($policyErrors.ToArray()) }
+      }
+      Write-Step ("  профилей прочитано: {0}" -f $profileCount)
     }
 
     Write-Step "Задачи"
@@ -629,6 +743,9 @@ try {
     server_certs = $serverCerts; secondary_servers = @($secondaryServers); update_agents = @($updateAgents)
     policy_contents = $policyContents
   }
+  # «Не собрано» отличается от «пусто»: несобранной секции в файле нет вовсе.
+  if ($null -ne $hostTags) { $export["host_tags"] = $hostTags }
+  if (-not $SkipPolicyContents) { $export["policy_profiles"] = $policyProfiles }
 
   # Имя сервера пришло из ответа KSC: в имя файла — только латиница, цифры, точка, дефис и подчёркивание.
   $safeName = $serverName -creplace '[^A-Za-z0-9._-]', '_'

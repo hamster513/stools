@@ -10,7 +10,10 @@
 `policy_denied` — отказ (403) на `Policy.GetPolicyContents` политики 3 (её нет
 в `policy_contents`, есть предупреждение) и PxgError на одну секцию политики 1
 (она в `errors`, остальные секции политики на месте), `secrets` — секреты под новыми
-маркерами, в параметрах задач и имя сервера с `/` (synthetic.add_secret_bait).
+маркерами, в параметрах задач и имя сервера с `/` (synthetic.add_secret_bait),
+`tags_batch_denied` — отказ (403) на пакетный `HostsTags.ListTags.GetTags` (теги читаются
+по одному хосту), `tags_host_failed` — то же плюс PxgError на `HostTagsApi.GetHostTags`
+хоста h-ws02, `tags_denied` / `profiles_denied` — см. FakeKsc.
 Отвечает той же логикой, что и `FakeKsc.handle` (см. fake_ksc.py), но
 по-настоящему слушает сокет — скрипт внутри контейнера ходит на него как на
 боевой KSC Open API.
@@ -24,7 +27,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from tests.ksc.fake_ksc import FakeKsc, parse_request
 
-ksc = FakeKsc(variant=os.environ.get("STOOLS_FAKE_VARIANT", ""))
+variant = os.environ.get("STOOLS_FAKE_VARIANT", "")
+ksc = FakeKsc(variant=variant, deny_tags_batch=variant in ("tags_batch_denied", "tags_host_failed"),
+              fail_host_tags={"h-ws02"} if variant == "tags_host_failed" else None)
 
 
 class Handler(BaseHTTPRequestHandler):
