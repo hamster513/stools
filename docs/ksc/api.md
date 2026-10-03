@@ -100,11 +100,27 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 ```
 GET  /snapshots/{id}/hosts             group, product, agent(none|silent|alive), protection(none|off|on),
                                        bases(fresh|old|unknown), in_ad(both|ksc_only),
-                                       status(ok|warning|critical), q, limit≤1000, offset
-                                       → {total, items, facets|null}
+                                       status(ok|warning|critical), component, component_state(on|off|other|none),
+                                       tag, policy, q, limit≤1000, offset
+                                       → {total, items, facets|null, tags_collected}
 GET  /snapshots/{id}/hosts/{host_id}   + findings[] (каждая: key, check, check_title, severity, status, status_title, details),
-                                       findings_counted — учитываемые (то же правило, что `findings` в списке)
+                                       findings_counted — учитываемые (то же правило, что `findings` в списке),
+                                       policies[] — действующие политики группы хоста: {id, name, product, active, own}
 ```
+
+Компонент защиты: `component=<название>` без состояния — хосты, у которых компонент есть; с `component_state`:
+`on` — работает (код 4), `off` — остановлен, приостановлен, сбой, не установлен, нет лицензии
+(`COMPONENT_OFF_STATES`), `other` — прочие коды, `none` — у хоста такого компонента нет.
+`component_state` без `component` или с неизвестным значением — 422. Если хост перечисляет компонент дважды
+(две версии продукта), берётся худшее состояние: выключен, затем прочее, затем работает.
+
+`tag=<тег>` — хосты с этим тегом (точное совпадение), `tag=-` — хосты без тегов; `policy=<policy_id>` — хосты групп,
+на которые действует политика (своя или унаследованная). `q` дополнительно ищет по тегам.
+
+Фасеты (по отфильтрованному набору) дополнены: `component: {название: {on, off, other}}` и `tag: {тег: n}`.
+Теги приходят не от всех сборщиков: `tags_collected` — в выгрузке снапшота была секция тегов. Если нет, у хоста
+`tags: null`, фасета `tag` в ответе нет, фильтр `tag` (включая `-`) ничего не находит. Если секция была, у хоста
+без тегов — `tags: []`.
 
 Элемент хоста несёт `extra`: `os_build`, `cpu_arch`, `vm_type`,
 `reboot_required`, `reboot_requested_at`, `reboot_reason`, `edr_status`,

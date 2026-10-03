@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from tests.ksc.synthetic import add_ws02_twin, build_export
+from tests.ksc.synthetic import add_ws02_twin, build_export, without_new_sections
 from tests.ksc.test_api import upload
 
 
@@ -72,3 +72,85 @@ def test_findings_list_and_detail(auth_client: TestClient) -> None:
     assert {i["check"] for i in searched["items"]} == {"POLICY_NONE", "TASK_NO_SCAN"}
     detail = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/findings/{lic['key']}").json()
     assert detail["description"] and detail["history"][0]["snapshot_id"] == snap["id"] and detail["status"] == "new" and "verdict" not in detail
+
+
+def _hosts(auth_client: TestClient, query: str = "") -> dict:
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    return auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts{query}").json()
+
+
+def test_hosts_filter_by_component_state(auth_client: TestClient) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    off = _hosts(auth_client, "?component=Firewall&component_state=off")
+    assert [h["name"] for h in off["items"]] == ["WS11"]
+    on = _hosts(auth_client, "?component=Firewall&component_state=on")
+    assert on["total"] == 9 and "WS11" not in {h["name"] for h in on["items"]}
+    assert _hosts(auth_client, "?component=Firewall&component_state=other")["total"] == 0
+    # none — у хоста нет такого компонента: хосты без защиты
+    none = _hosts(auth_client, "?component=Firewall&component_state=none")
+    assert none["total"] == 4 and {h["name"] for h in none["items"]} == {"WS05", "WS06", "WS07", "WS08"}
+    # без состояния — хосты, у которых компонент есть
+    assert _hosts(auth_client, "?component=Firewall")["total"] == 10
+    assert _hosts(auth_client, "?component=Нет такого")["total"] == 0
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts?component_state=off").status_code == 422
+    assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts?component=Firewall&component_state=bad").status_code == 422
+    firewall = _hosts(auth_client)["facets"]["component"]["Firewall"]
+    assert firewall == {"on": 9, "off": 1, "other": 0}
+
+
+def test_hosts_component_worst_state_wins_over_duplicates_and_other_state(auth_client: TestClient) -> None:
+    raw = build_export()
+    rows = next(iter(raw["host_components"]["h-ws01"].values()))
+    # тот же компонент записан дважды: 4 («работает») и 3 («запускается») — побеждает худшее, не «работает»
+    rows.append(dict(next(r for r in rows if r["KLHST_PRCST_COMPONENT_DN"] == "Web Control"), KLHST_PRCST_COMPONENT_STATUS=3))
+    assert upload(auth_client, raw)["status"] == "done"
+    web = _hosts(auth_client, "?component=Web Control&component_state=other")
+    assert [h["name"] for h in web["items"]] == ["WS01"]
+    assert _hosts(auth_client, "?component=Web Control&component_state=on")["total"] == 9
+    assert _hosts(auth_client)["facets"]["component"]["Web Control"] == {"on": 9, "off": 0, "other": 1}
+
+
+def test_hosts_filter_by_tag_and_tags_in_items(auth_client: TestClient) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    body = _hosts(auth_client)
+    assert body["tags_collected"] is True
+    by_name = {h["name"]: h for h in body["items"]}
+    assert by_name["WS01"]["tags"] == ["VIP", "Бухгалтерия"] and by_name["SRV01"]["tags"] == ["Server"]
+    assert by_name["WS02"]["tags"] == [] and by_name["WS06"]["tags"] == []  # у хоста без агента ключа нет, но теги собраны
+    assert body["facets"]["tag"] == {"VIP": 1, "Бухгалтерия": 1, "Server": 1}
+    assert [h["name"] for h in _hosts(auth_client, "?tag=VIP")["items"]] == ["WS01"]
+    assert _hosts(auth_client, "?tag=Бухгалтерия")["total"] == 1
+    assert _hosts(auth_client, "?tag=vip")["total"] == 0
+    untagged = _hosts(auth_client, "?tag=-")
+    assert untagged["total"] == 12 and {"WS01", "SRV01"}.isdisjoint(h["name"] for h in untagged["items"])
+    assert [h["name"] for h in _hosts(auth_client, "?q=бухгалт")["items"]] == ["WS01"]
+
+
+def test_hosts_tags_not_collected_are_null(auth_client: TestClient) -> None:
+    assert upload(auth_client, without_new_sections(build_export()))["status"] == "done"
+    body = _hosts(auth_client)
+    assert body["tags_collected"] is False and "tag" not in body["facets"]
+    assert all(h["tags"] is None for h in body["items"])
+    assert _hosts(auth_client, "?tag=VIP")["total"] == 0 and _hosts(auth_client, "?tag=-")["total"] == 0
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws01").json()["tags"] is None
+
+
+def test_hosts_filter_by_policy_and_card_policies(auth_client: TestClient) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    # политика 1 действует в группах 0 и 2 (в Lab не наследуется, Servers и Unassigned её не получают)
+    kes = _hosts(auth_client, "?policy=1")
+    assert {h["name"] for h in kes["items"]} == {f"WS{n:02d}" for n in (1, 2, 3, 4, 5, 6, 7, 9, 10, 11)} | {"WG01"}
+    lab = _hosts(auth_client, "?policy=3")
+    assert [h["name"] for h in lab["items"]] == ["LAB01"]
+    assert _hosts(auth_client, "?policy=999")["total"] == 0
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    ws01 = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws01").json()
+    assert ws01["tags"] == ["VIP", "Бухгалтерия"]
+    assert ws01["policies"] == [
+        {"id": 2, "name": "Agent", "product": "1103", "active": True, "own": False},
+        {"id": 1, "name": "KES workstations", "product": "KES", "active": True, "own": False},
+    ]
+    srv = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-srv01").json()
+    assert [p["id"] for p in srv["policies"]] == [2]
