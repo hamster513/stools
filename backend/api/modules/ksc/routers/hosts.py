@@ -15,9 +15,11 @@ from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.checks.hosts import COMPONENT_OFF_STATES
 from api.modules.ksc.models import KscFinding, KscHost, KscPolicy, KscPolicyScope, KscSnapshot
+from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.settings import load_config
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUS_TITLES
+from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ksc"])
 
@@ -85,10 +87,12 @@ def _item(h: KscHost, agent: str, bases: str, findings: int, tags: list[str] | N
     }
 
 
-def _snapshot(db: Session, snapshot_id: int) -> KscSnapshot:
+def _snapshot(db: Session, snapshot_id: int, settings: Settings) -> KscSnapshot:
+    """Снапшот с заполненными таблицами политик и группами хостов (старый дозаполняется из файла при первом чтении)."""
     snap = db.get(KscSnapshot, snapshot_id)
     if snap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
+    ensure_policy_tables(db, snap, settings.data_dir)
     return snap
 
 
@@ -140,9 +144,10 @@ def list_hosts(
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    snap = _snapshot(db, snapshot_id)
+    snap = _snapshot(db, snapshot_id, settings)
     checked = (
         (agent, AGENT), (protection, PROTECTION), (bases, BASES), (in_ad, ("both", "ksc_only")),
         (status_, ("ok", "warning", "critical")), (component_state, COMPONENT_STATES),
@@ -227,8 +232,14 @@ def list_hosts(
 
 
 @router.get("/snapshots/{snapshot_id}/hosts/{host_id}")
-def host_detail(snapshot_id: int, host_id: str, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
-    snap = _snapshot(db, snapshot_id)
+def host_detail(
+    snapshot_id: int,
+    host_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    snap = _snapshot(db, snapshot_id, settings)
     h = db.execute(select(KscHost).where(KscHost.snapshot_id == snapshot_id, KscHost.host_id == host_id)).scalars().first()
     if h is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="хост не найден")

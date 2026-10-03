@@ -18,6 +18,8 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.policy_model import Exclusion, covered_by
 from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy, KscSnapshot
+from api.modules.ksc.services.policy_store import ensure_policy_tables
+from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ksc"])
 
@@ -25,10 +27,12 @@ MAX_LIMIT = 1000
 DUP = ("multi", "single", "covered")
 
 
-def _snapshot(db: Session, snapshot_id: int) -> KscSnapshot:
+def _snapshot(db: Session, snapshot_id: int, settings: Settings) -> KscSnapshot:
+    """Снапшот с заполненными таблицами политик (старый дозаполняется из файла при первом чтении)."""
     snap = db.get(KscSnapshot, snapshot_id)
     if snap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
+    ensure_policy_tables(db, snap, settings.data_dir)
     return snap
 
 
@@ -88,9 +92,10 @@ def list_exclusions(
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    _snapshot(db, snapshot_id)
+    _snapshot(db, snapshot_id, settings)
     if dup and dup not in DUP:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{dup}»")
     policies = _policies(db, snapshot_id)
@@ -164,9 +169,10 @@ def list_net_rules(
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    _snapshot(db, snapshot_id)
+    _snapshot(db, snapshot_id, settings)
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id)).scalars())
     needle = q.strip().lower()

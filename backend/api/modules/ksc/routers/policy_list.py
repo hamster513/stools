@@ -29,6 +29,7 @@ from api.modules.ksc.models import (
     KscSnapshot,
 )
 from api.modules.ksc.routers.policies import task_fields
+from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.snapshots import snapshot_path
 from api.settings import Settings, get_settings
 
@@ -143,10 +144,12 @@ class TasksResponse(BaseModel):
     facets: dict[str, dict[str, int]]
 
 
-def _snapshot(db: Session, snapshot_id: int) -> KscSnapshot:
+def _snapshot(db: Session, snapshot_id: int, settings: Settings) -> KscSnapshot:
+    """Снапшот с заполненными таблицами политик (старый дозаполняется из файла при первом чтении)."""
     snap = db.get(KscSnapshot, snapshot_id)
     if snap is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
+    ensure_policy_tables(db, snap, settings.data_dir)
     return snap
 
 
@@ -158,10 +161,12 @@ def _policy(db: Session, snapshot_id: int, policy_id: int) -> KscPolicy:
 
 
 def _index(snap: KscSnapshot, settings: Settings) -> ExportIndex:
+    """Индекс без хостов: ручкам нужны содержимое, профили, задачи и пути групп, а записи хостов большой выгрузки строятся секундами."""
     path = snapshot_path(settings.data_dir, snap.id)
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="файл выгрузки не найден")
-    return ExportIndex(load_export_path(path))
+    export = load_export_path(path)
+    return ExportIndex(export.model_copy(update={"hosts": []}))
 
 
 def _grade_reason(p: KscPolicy) -> str:
@@ -205,7 +210,7 @@ def get_policy_list(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> PolicyListResponse:
-    snap = _snapshot(db, snapshot_id)
+    snap = _snapshot(db, snapshot_id, settings)
     rows = list(db.execute(select(KscPolicy).where(KscPolicy.snapshot_id == snapshot_id)).scalars())
     # Файл выгрузки нужен только ради замков; без содержимого у политик его не открываем.
     idx = _index(snap, settings) if any(p.has_contents for p in rows) else None
@@ -242,7 +247,7 @@ def get_policy_card(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> PolicyCard:
-    snap = _snapshot(db, snapshot_id)
+    snap = _snapshot(db, snapshot_id, settings)
     p = _policy(db, snapshot_id, policy_id)
     idx = _index(snap, settings)
     findings = _findings_by_policy(db, snapshot_id).get(p.name, 0)
@@ -258,9 +263,10 @@ def get_policy_scope(
     snapshot_id: int,
     policy_id: int,
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> ScopeResponse:
-    _snapshot(db, snapshot_id)
+    _snapshot(db, snapshot_id, settings)
     p = _policy(db, snapshot_id, policy_id)
     rows = db.execute(
         select(KscPolicyScope).where(KscPolicyScope.snapshot_id == snapshot_id, KscPolicyScope.policy_id == policy_id)
@@ -287,7 +293,7 @@ def get_policy_profiles(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> ProfilesResponse:
-    snap = _snapshot(db, snapshot_id)
+    snap = _snapshot(db, snapshot_id, settings)
     p = _policy(db, snapshot_id, policy_id)
     rows = list(
         db.execute(
@@ -327,7 +333,7 @@ def get_tasks(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> TasksResponse:
-    idx = _index(_snapshot(db, snapshot_id), settings)
+    idx = _index(_snapshot(db, snapshot_id, settings), settings)
     items: list[TaskItem] = []
     for t in idx.export.tasks:
         info: dict[str, Any] = unwrap(t.get("TASK_INFO_PARAMS")) or {}

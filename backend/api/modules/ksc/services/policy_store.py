@@ -1,22 +1,25 @@
 """Запись политик снапшота в таблицы: политики, привязка к группам, профили, исключения, сетевые правила.
 
 Вызывается из `snapshots._store` — при импорте и при пересчёте: строки снапшота удаляются и пишутся заново.
+Снапшоты, импортированные до появления таблиц, заполняются при первом чтении (`ensure_policy_tables`).
 """
 from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.orm import Session
 
-from api.modules.ksc.core.export import ExportIndex
+from api.modules.ksc.core.export import ExportIndex, load_export_path
 from api.modules.ksc.core.policy_contents import walk_settings
 from api.modules.ksc.core.policy_index import policy_objects, policy_rows, profile_rows, scope_rows
 from api.modules.ksc.core.policy_model import exclusion_key, net_rule_key
 from api.modules.ksc.models import (
     KscExclusion,
+    KscHost,
     KscNetRule,
     KscPolicy,
     KscPolicyScope,
@@ -25,6 +28,8 @@ from api.modules.ksc.models import (
 )
 
 TABLES = (KscPolicy, KscPolicyScope, KscProfile, KscExclusion, KscNetRule)
+#: Первый ключ блокировки дозаполнения (второй — id снапшота): свой у модуля, чтобы не пересечься с чужими.
+BACKFILL_LOCK = 0x4B5343  # "KSC"
 
 
 def _insert(db: Session, model: type[Any], rows: list[dict[str, Any]]) -> None:
@@ -98,3 +103,34 @@ def _profiles_count(entry: dict[str, Any] | None) -> int | None:
     if not profiles and entry.get("errors"):
         return None
     return len(profiles)
+
+
+def _has_policies(db: Session, snapshot_id: int) -> bool:
+    return db.scalar(select(KscPolicy.id).where(KscPolicy.snapshot_id == snapshot_id).limit(1)) is not None
+
+
+def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> bool:
+    """Таблицы политик снапшота, импортированного до их появления: пишутся из файла выгрузки при первом чтении,
+    вместе с группой у хостов. Находки, сводка и журнал изменений не трогаются. True — дозаполнено сейчас;
+    False — строки уже были, или файла нет (тогда экраны остаются пустыми, как раньше)."""
+    from api.modules.ksc.services.snapshots import snapshot_path
+
+    if _has_policies(db, snapshot.id):
+        return False
+    path = snapshot_path(data_dir, snapshot.id)
+    if not path.exists():
+        return False
+    # Два одновременных первых чтения: второй ждёт первого и находит строки уже записанными.
+    db.execute(text("SELECT pg_advisory_xact_lock(CAST(:ns AS integer), CAST(:sid AS integer))"), {"ns": BACKFILL_LOCK, "sid": snapshot.id})
+    if _has_policies(db, snapshot.id):
+        db.commit()
+        return False
+    idx = ExportIndex(load_export_path(path))
+    store_policies(db, snapshot, idx)
+    groups: dict[int, list[str]] = {}
+    for h in idx.hosts:
+        groups.setdefault(h.group_id, []).append(h.host_id[:64])
+    for group_id, host_ids in groups.items():
+        db.execute(update(KscHost).where(KscHost.snapshot_id == snapshot.id, KscHost.host_id.in_(host_ids)).values(group_id=group_id))
+    db.commit()
+    return True

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from api.modules.ksc.core.policy_model import (
@@ -22,6 +23,7 @@ from api.modules.ksc.models import (
     KscPolicyScope,
     KscProfile,
 )
+from api.modules.ksc.services.snapshots import snapshot_path
 from tests.ksc.synthetic import build_export, without_new_sections
 from tests.ksc.test_api import upload
 
@@ -125,3 +127,57 @@ def test_extracted_objects_stored_and_reanalyze_and_delete(auth_client: TestClie
     assert auth_client.delete(f"/api/ksc/snapshots/{sid}").status_code == 204
     db_session.expire_all()
     assert _counts(db_session, sid) == dict.fromkeys(before, 0)
+
+
+def _drop_policy_tables(db: Session, snapshot_id: int) -> None:
+    """Как у снапшота, импортированного до таблиц политик: строк нет, у хостов нет группы."""
+    for m in TABLES:
+        db.execute(delete(m).where(m.snapshot_id == snapshot_id))
+    db.execute(update(KscHost).where(KscHost.snapshot_id == snapshot_id).values(group_id=None))
+    db.commit()
+
+
+def test_old_snapshot_backfilled_on_first_read(auth_client: TestClient, db_session: Session) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    sid = _snapshot_id(auth_client)
+    before = _counts(db_session, sid)
+    full = auth_client.get(f"/api/ksc/snapshots/{sid}/policy-list").json()
+    _drop_policy_tables(db_session, sid)
+    assert _counts(db_session, sid) == dict.fromkeys(before, 0)
+
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/policy-list").json() == full
+    db_session.expire_all()
+    assert _counts(db_session, sid) == before
+    host = auth_client.get(f"/api/ksc/snapshots/{sid}/hosts/h-ws01").json()
+    assert [p["id"] for p in host["policies"]] == [2, 1]
+    # Второе чтение не дублирует строк.
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/policy-list").json() == full
+    db_session.expire_all()
+    assert _counts(db_session, sid) == before
+
+
+@pytest.mark.parametrize("path", ["policies/1", "exclusions", "net-rules", "hosts/h-ws01", "hosts?policy=1"])
+def test_each_route_backfills(auth_client: TestClient, db_session: Session, path: str) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    sid = _snapshot_id(auth_client)
+    before = _counts(db_session, sid)
+    _drop_policy_tables(db_session, sid)
+    r = auth_client.get(f"/api/ksc/snapshots/{sid}/{path}")
+    assert r.status_code == 200, r.text
+    db_session.expire_all()
+    assert _counts(db_session, sid) == before
+    if path == "hosts?policy=1":
+        assert r.json()["total"] == 11
+
+
+def test_old_snapshot_without_file_stays_empty(auth_client: TestClient, db_session: Session, app_settings: Any) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    sid = _snapshot_id(auth_client)
+    _drop_policy_tables(db_session, sid)
+    snapshot_path(app_settings.data_dir, sid).unlink()
+    body = auth_client.get(f"/api/ksc/snapshots/{sid}/policy-list").json()
+    assert body == {"items": [], "facets": {"product": {}, "active": {"true": 0, "false": 0}}, "profiles_collected": False}
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/hosts/h-ws01").json()["policies"] == []
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/exclusions").json()["total"] == 0
+    db_session.expire_all()
+    assert _counts(db_session, sid)["ksc_policy"] == 0
