@@ -81,8 +81,8 @@ export function RawTab({ snapshotId, policyId }: { snapshotId: number; policyId:
     return <ErrorState message={msg} onRetry={() => contents.refetch()} />
   }
 
-  const { summary, errors } = contents.data
-  if (!summary) return <EmptyState icon={FileWarning} title="Содержимого нет" description={errors[0] ?? 'Содержимое этой политики не собрано.'} />
+  const { summary } = contents.data
+  if (!summary) return <EmptyState icon={FileWarning} title="Содержимого нет" description="Содержимое этой политики не собрано; причина, если пришла, — в ошибках сбора в шапке карточки." />
 
   return (
     <>
@@ -95,11 +95,6 @@ export function RawTab({ snapshotId, policyId }: { snapshotId: number; policyId:
       {summary.with_lock_flag === 0 && (
         <div className="mb-3 rounded border border-grid bg-surface px-3 py-2 text-xs text-text-secondary">
           Замки в этой политике не распознаны: ни у одной настройки нет признака замка, проверки замков её не оценивают.
-        </div>
-      )}
-      {errors.length > 0 && (
-        <div className="mb-3 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-xs text-text">
-          Не прочитались секции: {errors.join('; ')}
         </div>
       )}
       <div className="mb-3 flex flex-wrap items-center gap-3">

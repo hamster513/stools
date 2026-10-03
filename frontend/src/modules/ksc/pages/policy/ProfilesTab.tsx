@@ -12,7 +12,7 @@ function Errors({ errors }: { errors: string[] }) {
   if (errors.length === 0) return null
   return (
     <div className="mb-3 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-xs text-text">
-      Ошибки чтения профилей: {errors.join('; ')}
+      Ошибки чтения профиля: {errors.join('; ')}
     </div>
   )
 }
@@ -71,29 +71,18 @@ export function ProfilesTab({ snapshotId, policyId }: { snapshotId: number; poli
     const msg = profiles.error instanceof ApiRequestError ? profiles.error.message : 'Не удалось загрузить профили политики'
     return <ErrorState message={msg} onRetry={() => profiles.refetch()} />
   }
-  const { collected, errors } = profiles.data
+  const { collected } = profiles.data
   const items = [...profiles.data.profiles].sort((a, b) => a.priority - b.priority)
 
   if (!collected) {
-    return (
-      <>
-        <Errors errors={errors} />
-        <EmptyState icon={Layers} title="Профили не собраны" description="Профили политик читает сборщик версии 1.2 и новее; у политик агента и сервера профилей нет." />
-      </>
-    )
+    return <EmptyState icon={Layers} title="Профили не собраны" description="Профили политик читает сборщик версии 1.2 и новее; у политик агента и сервера профилей нет." />
   }
+  if (items.length === 0) return <EmptyState icon={Layers} title="Профилей нет" description="Профили собраны, у этой политики их нет." />
   return (
-    <>
-      <Errors errors={errors} />
-      {items.length === 0 ? (
-        <EmptyState icon={Layers} title="Профилей нет" description="Профили собраны, у этой политики их нет." />
-      ) : (
-        <div className="flex flex-col gap-2">
-          {items.map((p) => (
-            <ProfileBlock key={`${p.priority}|${p.name}`} profile={p} />
-          ))}
-        </div>
-      )}
-    </>
+    <div className="flex flex-col gap-2">
+      {items.map((p) => (
+        <ProfileBlock key={`${p.priority}|${p.name}`} profile={p} />
+      ))}
+    </div>
   )
 }

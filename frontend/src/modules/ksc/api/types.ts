@@ -277,9 +277,6 @@ export interface PolicyContents {
   errors: string[]
 }
 
-/** Оценка защиты политики — этап 2; на этапе 1 API всегда отдаёт `null`. */
-export type PolicyGrade = 'bad' | 'ok' | 'good'
-
 export interface PolicyLocks {
   locked: number
   /** Настройки с признаком замка; 0 — замки в политике не распознаны. */

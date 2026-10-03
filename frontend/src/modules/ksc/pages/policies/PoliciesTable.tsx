@@ -34,7 +34,7 @@ function Table({ items, serverId }: { items: PolicyListItem[]; serverId: number 
   const { navigate } = useRouter()
   return (
     <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1240px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+      <div className="sticky top-0 z-10 flex min-w-[1320px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
         <div className="min-w-[240px] flex-1 px-2 py-2">Политика</div>
         <div className="w-40 shrink-0 px-2 py-2">Продукт</div>
         <div className="w-48 shrink-0 px-2 py-2">Группа</div>
@@ -49,7 +49,7 @@ function Table({ items, serverId }: { items: PolicyListItem[]; serverId: number 
         <div className="w-6 shrink-0" />
       </div>
       {items.map((p) => (
-        <div key={p.id} {...clickableRow(() => navigate(`/ksc/servers/${serverId}/policies/${p.id}`))} className={cn(ROW_FOCUS, 'flex min-w-[1240px] cursor-pointer items-center border-b border-grid py-2 text-xs hover:bg-row-hover')}>
+        <div key={p.id} {...clickableRow(() => navigate(`/ksc/servers/${serverId}/policies/${p.id}`))} className={cn(ROW_FOCUS, 'flex min-w-[1320px] cursor-pointer items-center border-b border-grid py-2 text-xs hover:bg-row-hover')}>
           <div className="min-w-[240px] flex-1 truncate px-2 text-text" title={p.name}>{p.name}</div>
           <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={`${p.product} ${p.version}`.trim()}>{p.product}{p.version ? ` ${p.version}` : ''}</div>
           <div className="w-48 shrink-0 truncate px-2 text-text-secondary" title={p.group}>{p.group || '—'}</div>

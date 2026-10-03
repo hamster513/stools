@@ -21,7 +21,7 @@ function when(iso: string | null): string {
 function Table({ items }: { items: TaskListItem[] }) {
   return (
     <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1180px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+      <div className="sticky top-0 z-10 flex min-w-[1212px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
         <div className="w-48 shrink-0 px-2 py-2">Тип</div>
         <div className="min-w-[220px] flex-1 px-2 py-2">Название</div>
         <div className="w-40 shrink-0 px-2 py-2">Продукт</div>
@@ -33,7 +33,7 @@ function Table({ items }: { items: TaskListItem[] }) {
         <div className="w-16 shrink-0 px-2 py-2 text-right">Провал</div>
       </div>
       {items.map((t) => (
-        <div key={t.id} className="flex min-w-[1180px] items-center border-b border-grid py-2 text-xs">
+        <div key={t.id} className="flex min-w-[1212px] items-center border-b border-grid py-2 text-xs">
           <div className="w-48 shrink-0 truncate px-2 text-text" title={t.type}>{t.type}</div>
           <div className="min-w-[220px] flex-1 truncate px-2 text-text" title={t.name}>{t.name}</div>
           <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={t.product}>{t.product || '—'}</div>
