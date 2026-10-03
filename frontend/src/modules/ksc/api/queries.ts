@@ -15,18 +15,26 @@ import type {
   KscConfig,
   Overview,
   PoliciesResponse,
+  PolicyCard,
   PolicyContents,
+  PolicyListQuery,
+  PolicyListResponse,
+  PolicyProfiles,
+  PolicyScope,
   Server,
   ServerData,
   SettingsView,
   Snapshot,
+  TasksQuery,
+  TasksResponse,
 } from './types'
 
 export const FINDINGS_PAGE_SIZE = 200
 export const HOSTS_PAGE_SIZE = 200
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
-  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-server', 'ksc-connections', 'ksc-jobs']) {
+  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-policy-list', 'ksc-policy',
+    'ksc-policy-scope', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -147,6 +155,48 @@ export function usePolicyContents(snapshotId: number | undefined, policyId: numb
     queryKey: ['ksc-policy-contents', snapshotId, policyId],
     queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}/contents`),
     enabled: snapshotId !== undefined && policyId !== undefined,
+  })
+}
+
+export function usePolicyList(snapshotId: number | undefined, query: PolicyListQuery) {
+  return useQuery<PolicyListResponse, ApiRequestError>({
+    queryKey: ['ksc-policy-list', snapshotId, query],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policy-list${buildQuery({ ...query })}`),
+    enabled: snapshotId !== undefined,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function usePolicy(snapshotId: number | undefined, policyId: number | undefined) {
+  return useQuery<PolicyCard, ApiRequestError>({
+    queryKey: ['ksc-policy', snapshotId, policyId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}`),
+    enabled: snapshotId !== undefined && policyId !== undefined,
+  })
+}
+
+export function usePolicyScope(snapshotId: number | undefined, policyId: number | undefined) {
+  return useQuery<PolicyScope, ApiRequestError>({
+    queryKey: ['ksc-policy-scope', snapshotId, policyId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}/scope`),
+    enabled: snapshotId !== undefined && policyId !== undefined,
+  })
+}
+
+export function usePolicyProfiles(snapshotId: number | undefined, policyId: number | undefined) {
+  return useQuery<PolicyProfiles, ApiRequestError>({
+    queryKey: ['ksc-policy-profiles', snapshotId, policyId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}/profiles`),
+    enabled: snapshotId !== undefined && policyId !== undefined,
+  })
+}
+
+export function useTasks(snapshotId: number | undefined, query: TasksQuery) {
+  return useQuery<TasksResponse, ApiRequestError>({
+    queryKey: ['ksc-tasks', snapshotId, query],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/tasks${buildQuery({ ...query })}`),
+    enabled: snapshotId !== undefined,
+    placeholderData: (prev) => prev,
   })
 }
 

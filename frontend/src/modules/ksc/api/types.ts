@@ -277,6 +277,132 @@ export interface PolicyContents {
   errors: string[]
 }
 
+/** Оценка защиты политики — этап 2; на этапе 1 API всегда отдаёт `null`. */
+export type PolicyGrade = 'bad' | 'ok' | 'good'
+
+export interface PolicyLocks {
+  locked: number
+  /** Настройки с признаком замка; 0 — замки в политике не распознаны. */
+  with_lock_flag: number
+}
+
+/** Политика в плоском списке «Политики и задачи» → «Политики». */
+export interface PolicyListItem {
+  id: number
+  name: string
+  product: string
+  version: string
+  /** Группа, в которой политика создана. */
+  group: string
+  active: boolean
+  accept_parent: boolean
+  modified_at: string | null
+  has_contents: boolean
+  /** Для продукта есть извлекатель исключений и сетевых правил. */
+  described: boolean
+  /** Групп, где политика действует, и хостов прямо в них. */
+  groups: number
+  hosts: number
+  /** null — профили не собраны; 0 — собраны, профилей нет. */
+  profiles: number | null
+  exclusions: number
+  net_rules: number
+  /** null — содержимого нет в выгрузке. */
+  locks: PolicyLocks | null
+  /** На этапе 1 всегда null, причина — в `grade_reason`. */
+  grade: null
+  grade_reason: string
+  /** Находки снапшота `POLICY_*` с именем этой политики в `target`. */
+  findings: number
+}
+
+export interface PolicyCard extends PolicyListItem {
+  settings_total: number
+  settings_known: number
+  /** Ошибки сбора: содержимого и чтения профилей. */
+  errors: string[]
+  /** Записей журнала изменений этого снапшота по политике. */
+  changes: number
+}
+
+export interface PolicyListQuery {
+  q?: string
+  product?: string
+  active?: boolean
+}
+
+export interface PolicyListResponse {
+  items: PolicyListItem[]
+  facets: Record<string, Record<string, number>>
+  /** Хотя бы у одной политики снапшота профили собраны; иначе профили в выгрузке не собирались. */
+  profiles_collected: boolean
+}
+
+export interface PolicyScopeGroup {
+  group_id: number
+  path: string
+  /** Политика создана в этой группе; false — унаследована. */
+  own: boolean
+  hosts: number
+}
+
+export interface PolicyScope {
+  groups: PolicyScopeGroup[]
+  hosts: number
+}
+
+export interface ProfileDiffItem {
+  section: string
+  path: string
+  value: string
+  /** Значение той же настройки в политике; null — в политике её нет (или содержимого политики нет в выгрузке). */
+  policy_value: string | null
+  locked: boolean | null
+}
+
+export interface PolicyProfile {
+  name: string
+  enabled: boolean
+  priority: number
+  /** Атрибуты профиля как пришли (включённость, условие активации), секреты скрыты при загрузке. */
+  condition: Record<string, unknown>
+  settings: number
+  errors: string[]
+  diff: ProfileDiffItem[]
+}
+
+export interface PolicyProfiles {
+  collected: boolean
+  errors: string[]
+  profiles: PolicyProfile[]
+}
+
+/** Задача в плоском списке «Политики и задачи» → «Задачи». */
+export interface TaskListItem {
+  id: string
+  name: string
+  type: string
+  product: string
+  /** Путь группы задачи; пусто — задача для набора устройств. */
+  group: string
+  schedule: number
+  last_run_at: string | null
+  ok: number
+  warning: number
+  failed: number
+}
+
+export interface TasksQuery {
+  q?: string
+  type?: string
+  failed?: boolean
+}
+
+export interface TasksResponse {
+  items: TaskListItem[]
+  facets: Record<string, Record<string, number>>
+}
+
 export interface ServerAdmin {
   account: string
   internal: boolean

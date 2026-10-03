@@ -8,7 +8,7 @@ import { OverviewPage } from './pages/OverviewPage'
 import { HostsPage } from './pages/HostsPage'
 import { FindingsPage } from './pages/FindingsPage'
 import { PoliciesPage } from './pages/PoliciesPage'
-import { PolicyContentsPage } from './pages/PolicyContentsPage'
+import { PolicyPage } from './pages/PolicyPage'
 import { ServerPage } from './pages/ServerPage'
 import { SnapshotsPage } from './pages/SnapshotsPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -31,7 +31,7 @@ export function KscModule() {
     return <Redirect to={list.length ? `/ksc/servers/${list[0].id}` : '/ksc/settings'} />
   } else if (path === '/ksc/settings') page = <SettingsPage />
   else if (path === '/ksc/jobs') page = <JobsPage />
-  else if (policyMatch) page = <PolicyContentsPage serverId={Number(policyMatch.id)} policyId={Number(policyMatch.policyId)} />
+  else if (policyMatch) page = <PolicyPage serverId={Number(policyMatch.id)} policyId={Number(policyMatch.policyId)} />
   else if (serverId !== null && section === '') page = <OverviewPage serverId={serverId} />
   else if (serverId !== null && section === 'hosts') page = <HostsPage serverId={serverId} />
   else if (serverId !== null && section === 'findings') page = <FindingsPage serverId={serverId} />
