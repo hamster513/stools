@@ -18,7 +18,7 @@ from api.modules.ksc.core.export import (
 )
 from api.modules.ksc.core.secrets import hide_secrets, hide_task_params
 
-COLLECTOR_VERSION = "1.2"
+COLLECTOR_VERSION = "1.3"
 
 #: Не больше стольки политик собираем за один сбор — предупреждение при превышении.
 POLICY_CONTENTS_MAX_POLICIES = 200

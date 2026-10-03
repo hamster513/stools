@@ -245,6 +245,10 @@ def test_script_and_online_policy_contents_match(tmp_path: Path) -> None:
     script_raw = json.loads(gzip.decompress((out / "ksc.json.gz").read_bytes()))["policy_contents"]
     assert_secrets_hidden(script_raw)
     assert_storage_shapes(script_raw)
+    # сборщик 1.3: адрес в сетевом правиле — исходное base64, пустой Login под признаком — пустая строка
+    sections = script_raw["1"]["sections"]
+    assert sections["KLPRSS_Firewall"]["rules"]["KLPRSS_Val"][0]["octets"] == {"type": "binary", "value": "wKgBAQ=="}
+    assert sections["KLPRSS_Basic"]["PasswordProtection"]["KLPRSS_Val"]["Login"] == ""
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -297,7 +301,7 @@ def test_script_policy_contents_survives_denied_policy_and_section(tmp_path: Pat
     assert any("policy_contents[3]" in w for w in export.server.warnings)
     pol1 = export.policy_contents["1"]
     assert pol1["errors"] and pol1["errors"][0].startswith("KLPRSS_Components:")
-    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Passwords", "KLPRSS_Secret", "KLPRSS_Deep"}
+    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Passwords", "KLPRSS_Secret", "KLPRSS_Deep", "KLPRSS_Firewall"}
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
@@ -533,7 +537,7 @@ def test_script_and_online_tags_and_profiles_match(tmp_path: Path) -> None:
     """Скрипт 1.2 и онлайн-сбор против одного поддельного KSC: те же `host_tags` и `policy_profiles`;
     политика без профилей — пустые списки, а не null; секрет профиля скрыт."""
     script_raw, online_raw = _script_and_online(tmp_path, 18370, "")
-    assert script_raw["server"]["collector_version"] == "1.2"
+    assert script_raw["server"]["collector_version"] == "1.3"
     assert script_raw["host_tags"] == online_raw["host_tags"] == build_export()["host_tags"]
     assert strip_params(script_raw["policy_profiles"]) == strip_params(online_raw["policy_profiles"]) == expected_policy_profiles()
     assert script_raw["policy_profiles"]["3"] == {"profiles": [], "priorities": [], "errors": []}

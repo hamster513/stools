@@ -322,7 +322,7 @@ def test_collect_policy_contents_denied_policy_and_section_error(monkeypatch: An
     assert any("policy_contents[3]" in w for w in export.server.warnings)
     pol1 = export.policy_contents["1"]
     assert pol1["errors"] and pol1["errors"][0].startswith("KLPRSS_Components:")
-    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Passwords", "KLPRSS_Secret", "KLPRSS_Deep"}
+    assert set(pol1["sections"]) == {"KLPRSS_Basic", "KLPRSS_Password", "KLPRSS_Passwords", "KLPRSS_Secret", "KLPRSS_Deep", "KLPRSS_Firewall"}
     assert_secrets_hidden(raw["policy_contents"])
 
 
@@ -394,7 +394,7 @@ def test_collect_reads_tags_in_batches(fake: FakeKsc) -> None:
         raw = collect(c, username=USER)
     assert raw["host_tags"] == build_export()["host_tags"] and len(raw["host_tags"]) == 12
     assert "HostsTags.ListTags.GetTags" in fake.calls and "HostTagsApi.GetHostTags" not in fake.calls
-    assert raw["server"]["collector_version"] == "1.2"
+    assert raw["server"]["collector_version"] == "1.3"
 
 
 def test_collect_falls_back_to_per_host_tags(monkeypatch: Any) -> None:

@@ -2,6 +2,7 @@
 скрытие при разборе файла — одно правило у онлайн-сборщика, разбора и PowerShell-скрипта."""
 from __future__ import annotations
 
+import base64
 import json
 import re
 from pathlib import Path
@@ -13,7 +14,7 @@ from api.modules.ksc.core import client as client_mod
 from api.modules.ksc.core.client import KscClient
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.export import load_export
-from api.modules.ksc.core.secrets import HIDDEN, SECRET_MARKERS, hide_secrets
+from api.modules.ksc.core.secrets import BINARY_KEEP, HIDDEN, SECRET_MARKERS, hide_secrets
 from tests.ksc.fake_ksc import PASSWORD, USER, FakeKsc, http_factory_for
 from tests.ksc.synthetic import (
     BAIT_VALUES,
@@ -40,6 +41,28 @@ def test_binary_is_hidden_under_any_key_other_typed_values_stay() -> None:
     assert hide_secrets(value) == {"Certificate": HIDDEN, "When": when, "N": {"type": "long", "value": 5},
                                    "Nested": {"type": "params", "value": {"Blob": HIDDEN, "Name": "x"}}}
     assert hide_secrets({"type": "binary", "value": "AAAA"}) == HIDDEN
+
+
+def test_address_octets_are_kept_longer_binary_under_octets_is_hidden() -> None:
+    """Сборщик 1.3: адрес IPv4/IPv6 (4 или 16 байт) под ключом `octets` — не секрет; двоичное
+    длиннее 16 байт под тем же ключом — не адрес, скрывается как прежде."""
+    v4 = {"type": "binary", "value": "wKgBAQ=="}
+    assert hide_secrets({"scope": {"remoteAddresses": [{"octets": v4, "mask": 32}]}}) == {"scope": {"remoteAddresses": [{"octets": v4, "mask": 32}]}}
+    v6 = {"type": "binary", "value": base64.b64encode(bytes(range(16))).decode()}
+    assert hide_secrets({"Octets": v6}) == {"Octets": v6}
+    assert hide_secrets({"octets": {"type": "binary", "value": base64.b64encode(bytes(24)).decode()}}) == {"octets": HIDDEN}
+    assert hide_secrets({"octets": {"type": "binary", "value": "не base64"}}) == {"octets": HIDDEN}
+    assert hide_secrets({"address": v4}) == {"address": HIDDEN}
+    assert BINARY_KEEP == ("octets",)
+
+
+def test_empty_string_under_marker_stays_empty() -> None:
+    """Сборщик 1.3: под признаком скрывается только непустая строка — «не настроено» отличимо от
+    «настроено»."""
+    assert hide_secrets({"passwordProtection": {"login": "", "passwordHash": "abc"}}) == {"passwordProtection": {"login": "", "passwordHash": HIDDEN}}
+    assert hide_secrets({"Login": "", "Name": "x"}, "KLPRSS_Password") == {"Login": "", "Name": HIDDEN}
+    value = {"scope": {"remoteAddresses": [{"octets": {"type": "binary", "value": "wKgBAQ=="}}]}, "passwordProtection": {"login": "", "hash": "abc"}}
+    assert hide_secrets(hide_secrets(value)) == hide_secrets(value)
 
 
 def test_section_name_with_marker_hides_whole_section() -> None:
@@ -85,5 +108,6 @@ def test_script_mirrors_secret_markers_and_binary_rule() -> None:
     m = re.search(r"^\$SecretMarkers = @\(([^)]*)\)", text, re.MULTILINE)
     assert m is not None
     assert tuple(re.findall(r'"([^"]+)"', m.group(1))) == SECRET_MARKERS
-    assert 'if ($v.type -eq "binary") { return "<скрыто>" }' in text
+    keep = re.search(r"^\$BinaryKeep = @\(([^)]*)\)", text, re.MULTILINE)
+    assert keep is not None and tuple(re.findall(r'"([^"]+)"', keep.group(1))) == BINARY_KEEP
     assert '"TASK_ADDITIONAL_PARAMS", "TASK_INFO_PARAMS"' in text

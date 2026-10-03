@@ -77,12 +77,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $FormatVersion = "stools-ksc/1"
-$CollectorVersion = "1.2"
+$CollectorVersion = "1.3"
 #: Имя секции или ключ на любой глубине её параметров с одним из этих слов (подстрокой, без учёта
-#: регистра) — всё поддерево под ним в режиме скрытия: строки → "<скрыто>", ключи остаются; двоичные
-#: значения скрываются всегда (см. Hide-Value). Список совпадает с SECRET_MARKERS в
-#: api/modules/ksc/core/secrets.py (сверяет тест). Не больше стольки политик и байт на секцию.
+#: регистра) — всё поддерево под ним в режиме скрытия: непустые строки → "<скрыто>", ключи остаются;
+#: двоичные значения скрываются, кроме адресов под ключами BinaryKeep (см. Hide-Value). Списки совпадают
+#: с SECRET_MARKERS и BINARY_KEEP в api/modules/ksc/core/secrets.py (сверяет тест). Не больше стольки
+#: политик и байт на секцию.
 $SecretMarkers = @("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE", "PASSPHRASE", "APIKEY", "API_KEY", "AUTH", "PIN", "KEY")
+$BinaryKeep = @("octets")
 $PolicyContentsMaxPolicies = 200
 $PolicyContentsSectionMaxBytes = 2097152
 #: Хостов в одном вызове ListTags.GetTags; вызовов HostTagsApi.GetHostTags подряд, после отказа всех
@@ -227,28 +229,39 @@ function Test-TypedWrapper($v) {
   $names = @($v.PSObject.Properties | ForEach-Object { $_.Name })
   return ($names.Count -eq 2) -and ($names -contains "type") -and ($names -contains "value") -and ($v.type -is [string])
 }
+# Двоичное значение @{ type = "binary"; value = <base64> } под ключом $key — адрес сетевого правила:
+# ключ из BinaryKeep (без учёта регистра) и 4 байта IPv4 или 16 байт IPv6. Не base64 — не адрес.
+function Test-BinaryKept([string]$key, $v) {
+  if (-not ($BinaryKeep -contains $key) -or -not ($v.value -is [string])) { return $false }
+  try { $n = [Convert]::FromBase64String($v.value).Length } catch { return $false }
+  return ($n -eq 4) -or ($n -eq 16)
+}
 # Обход поддерева с режимом скрытия. Ключ с признаком секрета включает режим для всего, что под ним.
-# В режиме строки → "<скрыто>"; булевы, числа и прочие типизированные значения остаются. Двоичные
-# значения (@{ type = "binary"; ... }) скрываются всегда, под любым ключом. Обёртки params проходятся
-# насквозь и остаются на месте, списки — поэлементно. То же правило — hide_secrets в
+# В режиме непустые строки → "<скрыто>"; пустая строка, булевы, числа и прочие типизированные значения
+# остаются. Двоичные значения (@{ type = "binary"; ... }) скрываются под любым ключом, кроме адреса
+# (Test-BinaryKept). Обёртки params проходятся насквозь и остаются на месте, списки — поэлементно;
+# $key — ключ, под которым лежит значение (сквозь обёртки и списки). То же правило — hide_secrets в
 # api/modules/ksc/core/secrets.py.
 # Списки возвращаются через ",": иначе конвейер разворачивает список из одного элемента в скаляр,
 # а пустой — в $null. По той же причине результат присваивается переменной, а не выражением if.
-function Hide-Value($v, [bool]$hide) {
+function Hide-Value($v, [bool]$hide, [string]$key = "") {
   if ($null -eq $v) { return $null }
   if (Test-TypedWrapper $v) {
     if ($v.type -eq "params") {
-      $inner = Hide-Value $v.value $hide
+      $inner = Hide-Value $v.value $hide $key
       return [ordered]@{ type = "params"; value = $inner }
     }
-    if ($v.type -eq "binary") { return "<скрыто>" }
+    if ($v.type -eq "binary") {
+      if (Test-BinaryKept $key $v) { return $v }
+      return "<скрыто>"
+    }
     return $v
   }
   if ($v -is [System.Management.Automation.PSCustomObject]) {
     $out = [ordered]@{}
     foreach ($p in $v.PSObject.Properties) {
       $childHide = $hide -or (Test-SecretMarker $p.Name)
-      $child = Hide-Value $p.Value $childHide
+      $child = Hide-Value $p.Value $childHide $p.Name
       $out[$p.Name] = $child
     }
     return $out
@@ -256,12 +269,12 @@ function Hide-Value($v, [bool]$hide) {
   if ($v -is [array]) {
     $items = New-Object System.Collections.ArrayList
     foreach ($item in $v) {
-      $child = Hide-Value $item $hide
+      $child = Hide-Value $item $hide $key
       [void]$items.Add($child)
     }
     return ,($items.ToArray())
   }
-  if ($hide -and (($v -is [string]) -or ($v -is [datetime]))) { return "<скрыто>" }
+  if ($hide -and ((($v -is [string]) -and ($v.Length -gt 0)) -or ($v -is [datetime]))) { return "<скрыто>" }
   return $v
 }
 # Секреты в содержимом политики: имя секции или ключ на любой глубине с признаком секрета —

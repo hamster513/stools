@@ -39,7 +39,7 @@ def test_policy_list_items_facets_sort(auth_client: TestClient) -> None:
         "grade_reason": "структура продукта не описана", "findings": kes["findings"],
     }
     assert kes["modified_at"] is not None
-    assert kes["locks"] == {"locked": 6, "with_lock_flag": 11}
+    assert kes["locks"] == {"locked": 7, "with_lock_flag": 12}
 
     agent = _item(body, 2)  # политика агента: содержимое и профили не собираются
     assert agent["has_contents"] is False and agent["locks"] is None and agent["profiles"] is None
@@ -47,7 +47,7 @@ def test_policy_list_items_facets_sort(auth_client: TestClient) -> None:
     assert (agent["groups"], agent["hosts"]) == (4, 13)
 
     lab = _item(body, 3)
-    assert lab["profiles"] == 0 and lab["locks"] == {"locked": 0, "with_lock_flag": 11}
+    assert lab["profiles"] == 0 and lab["locks"] == {"locked": 0, "with_lock_flag": 12}
 
 
 def test_policy_list_findings_counted_by_policy_name(auth_client: TestClient, db_session: Session) -> None:
@@ -106,7 +106,7 @@ def test_policy_card(auth_client: TestClient, db_session: Session) -> None:
     body = r.json()
     listed = _item(auth_client.get(f"/api/ksc/snapshots/{snap}/policy-list").json(), 1)
     assert {k: v for k, v in body.items() if k not in ("settings_total", "settings_known", "errors", "changes")} == listed
-    assert body["settings_total"] == 12 and body["settings_known"] == 0
+    assert body["settings_total"] == 13 and body["settings_known"] == 0
     assert body["errors"] == []
     assert body["changes"] == 2
     assert auth_client.get(f"/api/ksc/snapshots/{snap}/policies/3").json()["changes"] == 1

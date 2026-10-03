@@ -15,7 +15,14 @@ from api.modules.ksc.core.export import (
     load_export_path,
     unwrap,
 )
-from tests.ksc.synthetic import NOW, SECRET_VALUES, build_export, export_bytes, without_new_sections
+from tests.ksc.synthetic import (
+    NOW,
+    SECRET_VALUES,
+    build_export,
+    expected_policy_contents,
+    export_bytes,
+    without_new_sections,
+)
 
 
 def test_unwrap_typed_values() -> None:
@@ -160,6 +167,25 @@ def test_export_hides_secrets_in_profiles() -> None:
     assert export.policy_profiles["1"]["profiles"][0]["sections"]["KLPRSS_Basic"]["ProxyPassword"]["KLPRSS_Val"] == "<скрыто>"
     text = json.dumps(export.policy_profiles, ensure_ascii=False)
     assert not [v for v in SECRET_VALUES if v in text]
+
+
+def test_old_collector_file_keeps_what_it_hid() -> None:
+    """Файл сборщика 1.2: адрес `octets`, пустой `Login` и пустые строки замка под признаком уже
+    скрыты. Разбор их не восстанавливает и ничего не меняет — адреса и пустые строки появятся только
+    в выгрузках 1.3+."""
+    raw = build_export()
+    raw["server"]["collector_version"] = "1.2"
+    contents = expected_policy_contents()
+    for policy in contents.values():
+        sections = policy["sections"]
+        sections["KLPRSS_Firewall"]["rules"]["KLPRSS_Val"][0]["octets"] = "<скрыто>"
+        protection = sections["KLPRSS_Basic"]["PasswordProtection"]
+        protection.update(KLPRSS_ValLckPolicy="<скрыто>", KLPRSS_ValLckGroup="<скрыто>")
+        protection["KLPRSS_Val"]["Login"] = "<скрыто>"
+    raw["policy_contents"] = contents
+    export = load_export(json.dumps(raw).encode())
+    assert export.server.collector_version == "1.2"
+    assert export.policy_contents == contents
 
 
 def test_host_tags_keys_match_hosts_with_agent() -> None:
