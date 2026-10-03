@@ -67,7 +67,8 @@ def get_policy_contents(
     path = snapshot_path(settings.data_dir, snap.id)
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="файл выгрузки не найден")
-    idx = ExportIndex(load_export_path(path))
+    # Без хостов: нужен только путь группы, а записи хостов большой выгрузки строятся секундами.
+    idx = ExportIndex(load_export_path(path).model_copy(update={"hosts": []}))
     policy = next((p for p in idx.export.policies if _int(p.get("KLPOL_ID")) == policy_id), None)
     if policy is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="политика не найдена")

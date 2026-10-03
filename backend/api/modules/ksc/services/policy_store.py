@@ -6,14 +6,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import delete, select, text, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from api.modules.ksc.core.export import ExportIndex, load_export_path
+from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_export_path
 from api.modules.ksc.core.policy_contents import walk_settings
 from api.modules.ksc.core.policy_index import policy_objects, policy_rows, profile_rows, scope_rows
 from api.modules.ksc.core.policy_model import exclusion_key, net_rule_key
@@ -26,6 +28,8 @@ from api.modules.ksc.models import (
     KscProfile,
     KscSnapshot,
 )
+
+log = logging.getLogger(__name__)
 
 TABLES = (KscPolicy, KscPolicyScope, KscProfile, KscExclusion, KscNetRule)
 #: Первый ключ блокировки дозаполнения (второй — id снапшота): свой у модуля, чтобы не пересечься с чужими.
@@ -112,7 +116,8 @@ def _has_policies(db: Session, snapshot_id: int) -> bool:
 def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> bool:
     """Таблицы политик снапшота, импортированного до их появления: пишутся из файла выгрузки при первом чтении,
     вместе с группой у хостов. Находки, сводка и журнал изменений не трогаются. True — дозаполнено сейчас;
-    False — строки уже были, или файла нет (тогда экраны остаются пустыми, как раньше)."""
+    False — строки уже были, файла нет или он не разобран/не записан (тогда экраны остаются пустыми, как раньше,
+    причина — в журнале API: чтение не должно падать из-за дозаполнения)."""
     from api.modules.ksc.services.snapshots import snapshot_path
 
     if _has_policies(db, snapshot.id):
@@ -125,12 +130,17 @@ def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> 
     if _has_policies(db, snapshot.id):
         db.commit()
         return False
-    idx = ExportIndex(load_export_path(path))
-    store_policies(db, snapshot, idx)
-    groups: dict[int, list[str]] = {}
-    for h in idx.hosts:
-        groups.setdefault(h.group_id, []).append(h.host_id[:64])
-    for group_id, host_ids in groups.items():
-        db.execute(update(KscHost).where(KscHost.snapshot_id == snapshot.id, KscHost.host_id.in_(host_ids)).values(group_id=group_id))
-    db.commit()
+    try:
+        idx = ExportIndex(load_export_path(path))
+        store_policies(db, snapshot, idx)
+        groups: dict[int, list[str]] = {}
+        for h in idx.hosts:
+            groups.setdefault(h.group_id, []).append(h.host_id[:64])
+        for group_id, host_ids in groups.items():
+            db.execute(update(KscHost).where(KscHost.snapshot_id == snapshot.id, KscHost.host_id.in_(host_ids)).values(group_id=group_id))
+        db.commit()
+    except (ExportFormatError, OSError, SQLAlchemyError):
+        db.rollback()
+        log.exception("таблицы политик снапшота KSC #%s не дозаполнены", snapshot.id)
+        return False
     return True
