@@ -152,7 +152,12 @@ export interface Host {
   components: [string, number][]
   extra: HostExtra
   findings: number
+  /** `null` — сборщик не присылал теги; `[]` — теги собраны, у хоста их нет. */
+  tags: string[] | null
 }
+
+/** Состояние компонента защиты в фильтре хостов: `none` — у хоста нет такого компонента. */
+export type ComponentState = 'on' | 'off' | 'other' | 'none'
 
 export interface HostsQuery {
   group?: string
@@ -162,6 +167,13 @@ export interface HostsQuery {
   bases?: HostBases
   in_ad?: string
   status?: string
+  /** Название компонента защиты; без `component_state` — хосты, у которых он есть. */
+  component?: string
+  component_state?: ComponentState
+  /** Тег; `-` — хосты без тегов. */
+  tag?: string
+  /** Хосты групп, где действует политика. */
+  policy?: number
   q?: string
   limit?: number
   offset?: number
@@ -178,13 +190,29 @@ export interface HostsResponse {
     bases: Record<HostBases, number>
     in_ad: Record<string, number>
     status: Record<string, number>
+    component: Record<string, { on: number; off: number; other: number }>
+    /** Нет в ответе, если теги не собраны. */
+    tag?: Record<string, number>
   } | null
+  /** В выгрузке снапшота была секция тегов. */
+  tags_collected: boolean
+}
+
+/** Политика, действующая на хост (по группе хоста). */
+export interface HostPolicy {
+  id: number
+  name: string
+  product: string
+  active: boolean
+  /** Создана в группе хоста; иначе унаследована. */
+  own: boolean
 }
 
 export interface HostDetail extends Omit<Host, 'findings'> {
   findings: { key: string; check: string; check_title: string; severity: Severity; status: FindingStatus; status_title: string; details: Record<string, unknown> }[]
   /** Учитываемые находки хоста — то же правило, что счётчик в списке хостов. */
   findings_counted: number
+  policies: HostPolicy[]
 }
 
 export interface LockCount {

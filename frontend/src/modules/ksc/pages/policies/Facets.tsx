@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/cn'
 
-/** Строка фасета боковой панели фильтров, как на странице хостов; без `count` — переключатель без счётчика. */
-export function FacetRow({ active, count, onClick, children }: { active: boolean; count?: number; onClick: () => void; children: ReactNode }) {
+/** Строка фасета боковой панели фильтров, как на странице хостов; без `count` — переключатель без счётчика; строка вместо числа — для «—». */
+export function FacetRow({ active, count, onClick, children }: { active: boolean; count?: number | string; onClick: () => void; children: ReactNode }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')}>
       <span className="min-w-0 flex-1 truncate">{children}</span>

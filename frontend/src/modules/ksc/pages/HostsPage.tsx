@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { ChevronRight, FilterX, Monitor, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useHostDetail, useHosts, useServers } from '@/modules/ksc/api/queries'
+import { useHostDetail, useHosts, usePolicy, useServers } from '@/modules/ksc/api/queries'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import {
   AGENT_LABELS,
@@ -12,6 +12,7 @@ import {
   PROTECTION_LABELS,
   RTP_STATE_LABELS,
   vmTypeLabel,
+  type ComponentState,
   type Host,
   type HostAgent,
   type HostBases,
@@ -30,6 +31,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
+import { FacetRow, FacetSection } from './policies/Facets'
 
 const ROW_HEIGHT = 40
 
@@ -44,7 +46,22 @@ const COMPONENT_STATUS_LABELS: Record<number, string> = {
   11: 'нет лицензии',
 }
 
-type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status'>
+type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'component' | 'component_state' | 'tag' | 'policy'>
+
+const COMPONENT_STATES: { key: ComponentState; label: string }[] = [
+  { key: 'on', label: 'работает' },
+  { key: 'off', label: 'не работает' },
+  { key: 'other', label: 'прочее' },
+  { key: 'none', label: 'нет компонента' },
+]
+const COMPONENT_STATE_LABELS = Object.fromEntries(COMPONENT_STATES.map((c) => [c.key, c.label])) as Record<ComponentState, string>
+
+/** Ширины колонок таблицы хостов в пикселях (классы w-*) — минимальная ширина строки считается из них. */
+const BASE_COLUMNS_WIDTH = 1312
+const TAGS_COLUMN_WIDTH = 192
+/** Стрелка в конце строки: 14 px и отступ 8 px. */
+const CHEVRON_WIDTH = 22
+const TAGS_SHOWN = 3
 
 function edrLabel(code: number): string {
   return code === 0 ? 'нет данных' : `код ${code}`
@@ -58,44 +75,38 @@ function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
 }
 
-function FacetRow({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')}>
-      <span className="min-w-0 flex-1 truncate">{children}</span>
-      <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>
-    </button>
-  )
-}
-
-function FacetSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="border-b border-grid px-2 py-3">
-      <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{title}</div>
-      <div className="flex flex-col gap-0.5">{children}</div>
-    </div>
-  )
-}
-
-function HostFacetPanel({ facets, filters, onToggle, total }: { facets: HostsResponse['facets']; filters: HostFilters; onToggle: <K extends keyof HostFilters>(key: K, value: HostFilters[K]) => void; total: number }) {
+function HostFacetPanel({ facets, filters, onToggle, onComponent, tagsCollected, total }: {
+  facets: HostsResponse['facets']
+  filters: HostFilters
+  onToggle: <K extends keyof HostFilters>(key: K, value: HostFilters[K]) => void
+  onComponent: (name: string | undefined) => void
+  tagsCollected: boolean
+  total: number
+}) {
   const groups = Object.entries(facets?.group ?? {}).sort((a, b) => b[1] - a[1])
   const products = Object.entries(facets?.product ?? {}).sort((a, b) => b[1] - a[1])
   const hasAd = Object.keys(facets?.in_ad ?? {}).length > 0
+  // Выбранный компонент остаётся в списке, даже если под «нет компонента» его не осталось ни у одного хоста.
+  const componentFacet = facets?.component ?? {}
+  const components = Object.keys(componentFacet).concat(filters.component && !(filters.component in componentFacet) ? [filters.component] : [])
+    .sort((a, b) => (componentFacet[b]?.off ?? 0) - (componentFacet[a]?.off ?? 0) || a.localeCompare(b, 'ru'))
+  const tags = Object.entries(facets?.tag ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'))
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Хостов <span className="font-mono tabular-nums text-text">{total}</span></div>
       <FacetSection title="Защита">
         {(Object.keys(PROTECTION_LABELS) as HostProtection[]).map((p) => (
-          <FacetRow key={p} active={filters.protection === p} count={facets?.protection[p]} onClick={() => onToggle('protection', filters.protection === p ? undefined : p)}>{PROTECTION_LABELS[p]}</FacetRow>
+          <FacetRow key={p} active={filters.protection === p} count={facets?.protection[p] ?? 0} onClick={() => onToggle('protection', filters.protection === p ? undefined : p)}>{PROTECTION_LABELS[p]}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Агент">
         {(Object.keys(AGENT_LABELS) as HostAgent[]).map((a) => (
-          <FacetRow key={a} active={filters.agent === a} count={facets?.agent[a]} onClick={() => onToggle('agent', filters.agent === a ? undefined : a)}>{AGENT_LABELS[a]}</FacetRow>
+          <FacetRow key={a} active={filters.agent === a} count={facets?.agent[a] ?? 0} onClick={() => onToggle('agent', filters.agent === a ? undefined : a)}>{AGENT_LABELS[a]}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Базы">
         {(Object.keys(BASES_LABELS) as HostBases[]).map((b) => (
-          <FacetRow key={b} active={filters.bases === b} count={facets?.bases[b]} onClick={() => onToggle('bases', filters.bases === b ? undefined : b)}>{BASES_LABELS[b]}</FacetRow>
+          <FacetRow key={b} active={filters.bases === b} count={facets?.bases[b] ?? 0} onClick={() => onToggle('bases', filters.bases === b ? undefined : b)}>{BASES_LABELS[b]}</FacetRow>
         ))}
       </FacetSection>
       {hasAd && (
@@ -107,9 +118,32 @@ function HostFacetPanel({ facets, filters, onToggle, total }: { facets: HostsRes
       )}
       <FacetSection title="Статус KSC">
         {(['ok', 'warning', 'critical'] as const).map((s) => (
-          <FacetRow key={s} active={filters.status === s} count={facets?.status[s]} onClick={() => onToggle('status', filters.status === s ? undefined : s)}>{s === 'ok' ? 'ок' : s === 'warning' ? 'предупреждение' : 'критично'}</FacetRow>
+          <FacetRow key={s} active={filters.status === s} count={facets?.status[s] ?? 0} onClick={() => onToggle('status', filters.status === s ? undefined : s)}>{s === 'ok' ? 'ок' : s === 'warning' ? 'предупреждение' : 'критично'}</FacetRow>
         ))}
       </FacetSection>
+      <FacetSection title="Компонент защиты">
+        <div className="mb-1 px-2 text-[10px] text-text-secondary">число — хостов, где компонент не работает</div>
+        {components.map((name) => (
+          <div key={name}>
+            <FacetRow active={filters.component === name} count={componentFacet[name]?.off ?? 0} onClick={() => onComponent(filters.component === name ? undefined : name)}>{name}</FacetRow>
+            {filters.component === name && (
+              <div className="mt-0.5 mb-1 ml-3 flex flex-col gap-0.5 border-l border-grid pl-1">
+                {COMPONENT_STATES.map(({ key, label }) => (
+                  <FacetRow key={key} active={filters.component_state === key} count={key === 'none' ? '—' : componentFacet[name]?.[key] ?? 0} onClick={() => onToggle('component_state', filters.component_state === key ? undefined : key)}>{label}</FacetRow>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </FacetSection>
+      {tagsCollected && facets?.tag && (
+        <FacetSection title="Тег">
+          <FacetRow active={filters.tag === '-'} onClick={() => onToggle('tag', filters.tag === '-' ? undefined : '-')}>без тегов</FacetRow>
+          {tags.map(([t, n]) => (
+            <FacetRow key={t} active={filters.tag === t} count={n} onClick={() => onToggle('tag', filters.tag === t ? undefined : t)}>{t}</FacetRow>
+          ))}
+        </FacetSection>
+      )}
       <FacetSection title="Группа">
         {groups.map(([g, n]) => (
           <FacetRow key={g} active={filters.group === g} count={n} onClick={() => onToggle('group', filters.group === g ? undefined : g)}>{g}</FacetRow>
@@ -124,14 +158,26 @@ function HostFacetPanel({ facets, filters, onToggle, total }: { facets: HostsRes
   )
 }
 
-function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, serverId }: { items: Host[]; selectedIndex: number; onSelectIndex: (i: number) => void; onOpen: (i: number) => void; onReachEnd?: () => void; serverId: number }) {
+function TagChips({ tags }: { tags: string[] }) {
+  if (tags.length === 0) return <span className="text-text-secondary">—</span>
+  return (
+    <div className="flex items-center gap-1 overflow-hidden" title={tags.join(', ')}>
+      {tags.slice(0, TAGS_SHOWN).map((t) => <span key={t} className="max-w-[64px] truncate rounded bg-row-hover px-1.5 py-0.5 text-[10px] text-text">{t}</span>)}
+      {tags.length > TAGS_SHOWN && <span className="shrink-0 text-[10px] text-text-secondary">+{tags.length - TAGS_SHOWN}</span>}
+    </div>
+  )
+}
+
+function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, serverId, tagsCollected }: { items: Host[]; selectedIndex: number; onSelectIndex: (i: number) => void; onOpen: (i: number) => void; onReachEnd?: () => void; serverId: number; tagsCollected: boolean }) {
   const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
+  const minWidth = BASE_COLUMNS_WIDTH + CHEVRON_WIDTH + (tagsCollected ? TAGS_COLUMN_WIDTH : 0)
 
   return (
     <div ref={parentRef} className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1200px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+      <div style={{ minWidth }} className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
         <div className="w-56 shrink-0 px-2 py-2">Хост</div>
         <div className="w-40 shrink-0 px-2 py-2">Группа</div>
+        {tagsCollected && <div className="w-48 shrink-0 px-2 py-2">Теги</div>}
         <div className="w-40 shrink-0 px-2 py-2">ОС</div>
         <div className="w-32 shrink-0 px-2 py-2">Агент</div>
         <div className="w-40 shrink-0 px-2 py-2">Защита</div>
@@ -146,12 +192,13 @@ function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, s
           const h = items[v.index]
           const selected = v.index === selectedIndex
           return (
-            <div key={h.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-full min-w-[1200px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+            <div key={h.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-full cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, minWidth, transform: `translateY(${v.start}px)` }}>
               <div className="w-56 shrink-0 truncate px-2">
                 <div className="truncate text-text" title={h.name}>{h.name}</div>
                 <div className="truncate text-[10px] text-text-secondary" title={h.fqdn}>{h.fqdn}</div>
               </div>
               <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.group}>{h.group}</div>
+              {tagsCollected && <div className="w-48 shrink-0 px-2"><TagChips tags={h.tags ?? []} /></div>}
               <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.os}>{h.os}</div>
               <div className="w-32 shrink-0 truncate px-2 text-text-secondary">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · ${h.agent_version}` : ''}</div>
               <div className={cn('w-40 shrink-0 truncate px-2', h.protection === 'off' ? 'text-risk-high' : 'text-text-secondary')}>
@@ -221,6 +268,28 @@ function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string 
                   </dl>
                   <AssetLink source="ksc" hostKey={`${serverId}:${h.host_id}`} className="mb-4 text-[11px]" />
 
+                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Теги</div>
+                  <div className="mb-4 flex flex-wrap gap-1">
+                    {h.tags === null && <span className="text-text-secondary">не собраны</span>}
+                    {h.tags?.length === 0 && <span className="text-text-secondary">нет</span>}
+                    {h.tags?.map((t) => <span key={t} className="rounded bg-row-hover px-1.5 py-0.5 text-[11px] text-text">{t}</span>)}
+                  </div>
+
+                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Политики ({h.policies.length})</div>
+                  <ul className="mb-4 flex flex-col gap-0.5">
+                    {h.policies.length === 0 && <li className="text-text-secondary">нет действующих политик</li>}
+                    {h.policies.map((p) => (
+                      <li key={p.id}>
+                        <Link to={`/ksc/servers/${serverId}/policies/${p.id}`} className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-row-hover">
+                          <span className="min-w-0 flex-1 truncate text-text" title={p.name}>{p.name}</span>
+                          <span className="shrink-0 text-[11px] text-text-secondary">{p.product}</span>
+                          <span className="shrink-0 text-[11px] text-text-secondary">{p.own ? 'своя' : 'унаследована'}</span>
+                          {!p.active && <span className="shrink-0 text-[11px] text-risk-medium">неактивна</span>}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+
                   <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Система</div>
                   <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
                     <dt className="text-text-secondary">Сборка ОС</dt><dd className="font-mono text-text">{h.extra.os_build || '—'}</dd>
@@ -281,6 +350,11 @@ export function HostsPage({ serverId }: { serverId: number }) {
     bases: (params.get('bases') as HostFilters['bases']) ?? undefined,
     in_ad: params.get('in_ad') ?? undefined,
     status: params.get('status') ?? undefined,
+    component: params.get('component') ?? undefined,
+    // Состояние без компонента сервер отвергает (422), поэтому из адреса оно читается только вместе с компонентом.
+    component_state: params.get('component') ? COMPONENT_STATES.find((c) => c.key === params.get('component_state'))?.key : undefined,
+    tag: params.get('tag') ?? undefined,
+    policy: Number(params.get('policy')) || undefined,
   }))
   const [searchInput, setSearchInput] = useState('')
   const q = useDebouncedValue(searchInput, 250)
@@ -288,16 +362,19 @@ export function HostsPage({ serverId }: { serverId: number }) {
   const [openHostId, setOpenHostId] = useState<string | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const filtersPanel = useFiltersPanel('ksc-hosts')
+  const policyName = usePolicy(snapshotId, filters.policy).data?.name
 
   const queryArgs = useMemo(() => ({ ...filters, q: q || undefined }), [filters, q])
   const query = useHosts(snapshotId, queryArgs)
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const first = query.data?.pages[0]
   const total = first?.total ?? 0
+  const tagsCollected = first?.tags_collected ?? false
   useEffect(() => setSelectedIndex(0), [queryArgs, snapshotId])
   const selected: Host | null = items[selectedIndex] ?? null
 
   function toggle<K extends keyof HostFilters>(key: K, value: HostFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
+  function setComponent(name: string | undefined) { setFilters((prev) => ({ ...prev, component: name, component_state: undefined })) }
   function clearAll() { setFilters({}); setSearchInput('') }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
   const chips: FilterChip[] = []
@@ -306,6 +383,9 @@ export function HostsPage({ serverId }: { serverId: number }) {
   if (filters.bases) chips.push({ label: `базы ${BASES_LABELS[filters.bases]}`, clear: () => toggle('bases', undefined) })
   if (filters.in_ad) chips.push({ label: `AD ${IN_AD_LABELS[filters.in_ad] ?? filters.in_ad}`, clear: () => toggle('in_ad', undefined) })
   if (filters.status) chips.push({ label: `статус KSC ${({ ok: 'ок', warning: 'предупреждение', critical: 'критично' } as Record<string, string>)[filters.status] ?? filters.status}`, clear: () => toggle('status', undefined) })
+  if (filters.component) chips.push({ label: `компонент ${filters.component}${filters.component_state ? ` · ${COMPONENT_STATE_LABELS[filters.component_state]}` : ''}`, clear: () => setComponent(undefined) })
+  if (filters.tag) chips.push({ label: filters.tag === '-' ? 'без тегов' : `тег ${filters.tag}`, clear: () => toggle('tag', undefined) })
+  if (filters.policy) chips.push({ label: `политика #${filters.policy}${policyName ? ` · ${policyName}` : ''}`, clear: () => toggle('policy', undefined) })
   if (filters.group) chips.push({ label: `группа ${filters.group}`, clear: () => toggle('group', undefined) })
   if (filters.product) chips.push({ label: `продукт ${filters.product}`, clear: () => toggle('product', undefined) })
 
@@ -344,7 +424,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <HostFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} />}
+        {filtersPanel.open && <HostFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} onComponent={setComponent} tagsCollected={tagsCollected} total={total} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
@@ -352,7 +432,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
             <div className="p-6"><EmptyState icon={FilterX} title={hasFilters ? 'Ничего не найдено' : 'Хостов нет'} description={hasFilters ? 'Ни один хост не подходит под фильтры.' : 'В снапшоте нет хостов.'} /></div>
           )}
           {!query.isLoading && !errorMessage && items.length > 0 && (
-            <HostsTable items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenHostId(items[i].host_id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }} serverId={serverId} />
+            <HostsTable items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenHostId(items[i].host_id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }} serverId={serverId} tagsCollected={tagsCollected} />
           )}
         </div>
       </div>
