@@ -11,6 +11,19 @@ from api.modules.ad.core.findings import Finding, finalize
 
 CheckFunc = Callable[[ExportIndex, AdConfig], list[Finding]]
 
+#: Категории проверок в порядке показа на обзоре.
+CATEGORIES: dict[str, str] = {
+    "accounts": "Учётные записи",
+    "privileged": "Привилегированные учётные записи",
+    "kerberos": "Kerberos и делегирование",
+    "acl": "Права на объекты",
+    "gpo": "Групповые политики",
+    "dc": "Контроллеры домена",
+    "domain": "Настройки домена и леса",
+    "trust": "Доверие",
+    "pki": "AD CS и сертификаты",
+}
+
 
 @dataclass(frozen=True)
 class CheckSpec:
@@ -20,6 +33,10 @@ class CheckSpec:
     func: CheckFunc
     #: Техники ATT&CK, которые открывает находка проверки (спека, раздел «AD»).
     techniques: tuple[str, ...] = ()
+    #: Категория, «Как исправить» и ссылки (название, URL) — из catalog.py.
+    category: str = ""
+    remediation: str = ""
+    references: tuple[tuple[str, str], ...] = ()
 
 
 def date_str(filetime: int | None) -> str:

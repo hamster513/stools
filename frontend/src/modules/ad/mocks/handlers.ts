@@ -1,7 +1,7 @@
 /**
  * Обработчики MSW модуля AD — ровно столько, чтобы в `npm run dev` открывались
- * обзор домена и настройки: три проверки AD CS (две проверены частично) и
- * загрузки данных ЦС. Находки и снапшоты не отвечаются.
+ * обзор домена и настройки: проверки двух категорий, три из них AD CS (две
+ * проверены частично), и загрузки данных ЦС. Находки и снапшоты не отвечаются.
  */
 import { http, HttpResponse } from 'msw'
 import { noSession } from '@/modules/siem/mocks/handlers'
@@ -11,18 +11,20 @@ const DOMAIN: Domain = { id: 1, sid: 'S-1-5-21-1000-2000-3000', dns_root: 'corp.
 
 const NONE = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 }
 
-function check(code: string, title: string, description: string, by: Partial<CheckSummary['by_severity']>, unchecked: string | null = null): CheckSummary {
+const CATEGORY_TITLES: Record<string, string> = { kerberos: 'Kerberos и делегирование', pki: 'AD CS и сертификаты' }
+
+function check(code: string, title: string, description: string, category: string, by: Partial<CheckSummary['by_severity']>, unchecked: string | null = null): CheckSummary {
   const by_severity = { ...NONE, ...by }
   const total = Object.values(by_severity).reduce((a, b) => a + b, 0)
-  return { code, title, description, total, all: total, open: total, by_severity, new: 0, resolved: 0, unchecked }
+  return { code, title, description, total, all: total, open: total, by_severity, new: 0, resolved: 0, unchecked, category, category_title: CATEGORY_TITLES[category] }
 }
 
 const CHECKS: CheckSummary[] = [
-  check('ASREP', 'AS-REP roastable', 'Учётные записи без предварительной аутентификации Kerberos.', { Medium: 2 }),
-  check('RBCD', 'RBCD (AllowedToActOnBehalfOfOtherIdentity)', 'Делегирование на основе ресурсов.', {}),
-  check('ADCS_ESC', 'Шаблоны AD CS (ESC1–4, 9, 13, 15)', 'Шаблоны сертификатов, по которым небезопасный заявитель может выпустить сертификат для входа от чужого имени.', { High: 2, Low: 1 }),
-  check('ADCS_CA', 'Центр сертификации (ESC5–8, 11, 16)', 'Права на объекты PKI и центр сертификации, настройки ЦС и веб-выдачи. ESC12 (доступ к HSM) удалённо не определяется.', { High: 1 }, 'ESC8 не проверен: нужна проверка веб-выдачи (сборщик, пункт 7)'),
-  check('ADCS_MAPPING', 'Привязка сертификатов к учётным записям (ESC10, 14)', 'Слабая привязка сертификата к учётной записи на контроллерах и слабые явные сопоставления.', {}, 'ESC10 не проверен: нужен реестр контроллеров (сборщик, пункт 6)'),
+  check('ASREP', 'AS-REP roastable', 'Учётные записи без предварительной аутентификации Kerberos.', 'kerberos', { Medium: 2 }),
+  check('RBCD', 'RBCD (AllowedToActOnBehalfOfOtherIdentity)', 'Делегирование на основе ресурсов.', 'kerberos', {}),
+  check('ADCS_ESC', 'Шаблоны AD CS (ESC1–4, 9, 13, 15)', 'Шаблоны сертификатов, по которым небезопасный заявитель может выпустить сертификат для входа от чужого имени.', 'pki', { High: 2, Low: 1 }),
+  check('ADCS_CA', 'Центр сертификации (ESC5–8, 11, 16)', 'Права на объекты PKI и центр сертификации, настройки ЦС и веб-выдачи. ESC12 (доступ к HSM) удалённо не определяется.', 'pki', { High: 1 }, 'ESC8 не проверен: нужна проверка веб-выдачи (сборщик, пункт 7)'),
+  check('ADCS_MAPPING', 'Привязка сертификатов к учётным записям (ESC10, 14)', 'Слабая привязка сертификата к учётной записи на контроллерах и слабые явные сопоставления.', 'pki', {}, 'ESC10 не проверен: нужен реестр контроллеров (сборщик, пункт 6)'),
 ]
 
 function overview(): Overview {

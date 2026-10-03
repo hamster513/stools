@@ -22,6 +22,7 @@ from api.modules.ad.core.checks.acl import (
 from api.modules.ad.core.checks.adcs import check_adcs_templates
 from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
 from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
+from api.modules.ad.core.checks.catalog import with_guidance
 from api.modules.ad.core.checks.common import CheckSpec
 from api.modules.ad.core.checks.domain import check_krbtgt_password_age, check_machine_account_quota
 from api.modules.ad.core.checks.gpo import check_user_rights_assignment
@@ -36,7 +37,7 @@ from api.modules.ad.core.findings import Finding
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
 ANALYZER_VERSION = "2"
 
-CHECKS: list[CheckSpec] = [
+_CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
     CheckSpec("PrivilegedGroups", "Члены привилегированных групп", "Членство в привилегированных группах даёт расширенные права. Лишние или неожиданные участники повышают риск компрометации.", check_privileged_groups, ("T1078.002",)),
     CheckSpec("Delegation", "Делегация Kerberos", "Делегация Kerberos может позволить перехват и использование учётных данных. Unconstrained особенно рискованна.", check_delegation, ("T1558", "T1187")),
@@ -61,6 +62,7 @@ CHECKS: list[CheckSpec] = [
     CheckSpec("ADCS_MAPPING", "Привязка сертификатов к учётным записям (ESC10, 14)", "Слабая привязка сертификата к учётной записи на контроллерах домена и слабые явные сопоставления (altSecurityIdentities) позволяют войти по сертификату, выпущенному на другого.", check_adcs_mapping, ("T1649",)),
 ]
 
+CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]
 CHECK_BY_CODE: dict[str, CheckSpec] = {c.code: c for c in CHECKS}
 
 

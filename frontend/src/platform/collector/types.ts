@@ -67,7 +67,13 @@ export interface CheckSummary {
   resolved: number
   /** Почему результат проверки не проверка: в выгрузке не было данных. */
   unchecked?: string | null
+  /** Категория проверки и её название; у модулей без категорий (KSC) пустые. */
+  category?: string
+  category_title?: string
 }
+
+/** Порядок категорий на обзоре — как CATEGORIES в backend/api/modules/ad/core/checks/common.py. */
+export const CATEGORY_ORDER = ['accounts', 'privileged', 'kerberos', 'acl', 'gpo', 'dc', 'domain', 'trust', 'pki']
 
 /** Обзор: в snapshot модуль добавляет свой счётчик (объекты, хосты). */
 export interface OverviewBase {
@@ -131,6 +137,8 @@ export interface FindingsResponse<F extends FindingBase> {
 
 export type FindingDetail<F extends FindingBase> = F & {
   description: string
+  /** «Как исправить» и ссылки; есть у модулей с каталогом проверок (AD). */
+  guidance?: { remediation: string; references: { title: string; url: string }[] }
   history: { snapshot_id: number; collected_at: string }[]
 }
 

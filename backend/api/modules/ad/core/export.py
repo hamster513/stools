@@ -30,6 +30,8 @@ FORMAT = "stools-ad/1"
 MAX_UNPACKED = 512 * MB
 
 UAC_DISABLED = 0x2
+UAC_SERVER_TRUST_ACCOUNT = 0x2000
+UAC_PARTIAL_SECRETS_ACCOUNT = 0x4000000
 UAC_DONT_EXPIRE_PASSWORD = 0x10000
 UAC_TRUSTED_FOR_DELEGATION = 0x80000
 UAC_DONT_REQ_PREAUTH = 0x400000
@@ -311,6 +313,8 @@ class ExportIndex:
         for o in export.objects:
             self.by_class.setdefault(o.cls, []).append(o)
         self._sd_cache: dict[str, SecurityDescriptor | None] = {}
+        #: Производные списки проверок (админы, защищённые объекты) — считаются один раз на выгрузку.
+        self.cache: dict[Any, Any] = {}
 
     def objects(self, cls: str) -> list[AdObject]:
         return self.by_class.get(cls, [])
@@ -359,6 +363,21 @@ class ExportIndex:
 
     def group_by_rid(self, rid: int) -> AdObject | None:
         return self.by_sid.get(self.domain_rid_sid(rid))
+
+    def group_for_rid(self, rid: int) -> AdObject | None:
+        """RID 544–582 — встроенная группа S-1-5-32-<RID>, остальные — RID своего домена."""
+        if 544 <= rid <= 582:
+            return self.by_sid.get(f"S-1-5-32-{rid}")
+        return self.group_by_rid(rid)
+
+    @staticmethod
+    def is_dc(obj: AdObject) -> bool:
+        """Контроллер домена, в том числе RODC."""
+        return obj.cls == "computer" and bool((obj.uac or 0) & (UAC_SERVER_TRUST_ACCOUNT | UAC_PARTIAL_SECRETS_ACCOUNT))
+
+    @cached_property
+    def dcs(self) -> list[AdObject]:
+        return [o for o in self.objects("computer") if self.is_dc(o)]
 
     def group_by_name(self, name: str) -> AdObject | None:
         needle = name.lower()

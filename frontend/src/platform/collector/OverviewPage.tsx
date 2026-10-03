@@ -7,10 +7,24 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
-import { SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type CheckSummary, type OverviewBase, type Severity } from './types'
+import { SeverityBadge } from './SeverityBadge'
+import { CATEGORY_ORDER, SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type CheckSummary, type OverviewBase, type Severity } from './types'
 
-function worst(c: CheckSummary): Severity | null {
-  return SEVERITIES.find((s) => (c.by_severity[s] ?? 0) > 0) ?? null
+function worst(...cs: CheckSummary[]): Severity | null {
+  return SEVERITIES.find((s) => cs.some((c) => (c.by_severity[s] ?? 0) > 0)) ?? null
+}
+
+/** Проверки по категориям в порядке CATEGORY_ORDER; незнакомые категории — следом, в порядке появления. */
+function byCategory(checks: CheckSummary[]): { code: string; title: string; checks: CheckSummary[] }[] {
+  const groups = new Map<string, { code: string; title: string; checks: CheckSummary[] }>()
+  for (const c of checks) {
+    const code = c.category ?? ''
+    const g = groups.get(code) ?? { code, title: c.category_title || 'Прочие', checks: [] }
+    g.checks.push(c)
+    groups.set(code, g)
+  }
+  const rank = (code: string) => { const i = CATEGORY_ORDER.indexOf(code); return i < 0 ? CATEGORY_ORDER.length : i }
+  return [...groups.values()].sort((a, b) => rank(a.code) - rank(b.code))
 }
 
 function when(iso: string): string {
@@ -21,7 +35,8 @@ type Snap<O extends OverviewBase> = NonNullable<O['snapshot']>
 
 /**
  * Обзор последнего снапшота: плитки severity и счётчики статусов находок
- * (ссылки на отфильтрованный список), карточки проверок. Числа severity и
+ * (ссылки на отфильтрованный список), карточки проверок — по категориям, если
+ * проверки модуля их несут. Числа severity и
  * проверок — по статусам, которые велено учитывать (настройка платформы). Модуль
  * задаёт заголовок, подпись источника и счётчика и блок над плитками.
  */
@@ -52,6 +67,7 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
   const snap: Snap<O> = o.snapshot
   const cmp = o.compared_to
   const withFindings = o.checks.filter((c) => c.all > 0 || c.resolved > 0)
+  const groups = o.checks.some((c) => c.category) ? byCategory(withFindings) : null
   // Проверка с находками тоже бывает проверена частично (у AD CS часть ESC — только по данным ЦС).
   const unchecked = o.checks.filter((c) => c.unchecked)
   const clean = o.checks.filter((c) => c.all === 0 && c.resolved === 0 && !c.unchecked)
@@ -67,6 +83,26 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
     { label: 'переоткрытые', value: summary.by_status.reopened, to: `${base}?status=reopened` },
     { label: 'риск истекает', value: summary.risk_expiring, to: `${base}?risk_expiring=true` },
   ] : []
+  const card = (c: CheckSummary) => {
+    const w = worst(c)
+    return (
+      <Link key={c.code} to={`${base}?check=${c.code}${countedStatus}`} className="flex flex-col gap-1.5 rounded border border-grid bg-surface p-3 hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+        <div className="flex items-start justify-between gap-2">
+          <span className="text-sm text-text">{c.title}</span>
+          <span className={cn('font-mono text-lg tabular-nums', w ? SEVERITY_TEXT[w] : 'text-text-secondary')}>{c.total}</span>
+        </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-text-secondary">
+          {SEVERITIES.filter((s) => (c.by_severity[s] ?? 0) > 0).map((s) => (
+            <span key={s}><span className={SEVERITY_TEXT[s]}>{SEVERITY_LABELS[s]}</span> {c.by_severity[s]}</span>
+          ))}
+          {c.all !== c.total && <span>всего {c.all}</span>}
+          {c.new > 0 && <span className="text-risk-high">+{c.new} новых</span>}
+          {c.resolved > 0 && <span className="text-kind-accepted">−{c.resolved} пропало</span>}
+        </div>
+        <p className="text-[11px] leading-relaxed text-text-secondary">{c.description}</p>
+      </Link>
+    )
+  }
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -110,28 +146,21 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
       )}
 
       <div className="mb-2 text-xs font-semibold tracking-wide text-text-secondary uppercase">Проверки</div>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {withFindings.map((c) => {
-          const w = worst(c)
-          return (
-            <Link key={c.code} to={`${base}?check=${c.code}${countedStatus}`} className="flex flex-col gap-1.5 rounded border border-grid bg-surface p-3 hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
-              <div className="flex items-start justify-between gap-2">
-                <span className="text-sm text-text">{c.title}</span>
-                <span className={cn('font-mono text-lg tabular-nums', w ? SEVERITY_TEXT[w] : 'text-text-secondary')}>{c.total}</span>
-              </div>
-              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-text-secondary">
-                {SEVERITIES.filter((s) => (c.by_severity[s] ?? 0) > 0).map((s) => (
-                  <span key={s}><span className={SEVERITY_TEXT[s]}>{SEVERITY_LABELS[s]}</span> {c.by_severity[s]}</span>
-                ))}
-                {c.all !== c.total && <span>всего {c.all}</span>}
-                {c.new > 0 && <span className="text-risk-high">+{c.new} новых</span>}
-                {c.resolved > 0 && <span className="text-kind-accepted">−{c.resolved} пропало</span>}
-              </div>
-              <p className="text-[11px] leading-relaxed text-text-secondary">{c.description}</p>
-            </Link>
-          )
-        })}
-      </div>
+      {groups ? groups.map((g) => {
+        const w = worst(...g.checks)
+        return (
+          <section key={g.code} className="mb-4">
+            <h2 className="mb-2 flex items-center gap-2 text-sm text-text">
+              {g.title}
+              <span className="font-mono text-xs tabular-nums text-text-secondary">{g.checks.reduce((a, c) => a + c.total, 0)}</span>
+              {w && <SeverityBadge severity={w} />}
+            </h2>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{g.checks.map(card)}</div>
+          </section>
+        )
+      }) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{withFindings.map(card)}</div>
+      )}
       {unchecked.length > 0 && (
         <div className="mt-4 text-xs text-text-secondary">
           <p className="text-kind-1">Не проверено или проверено частично — не было данных:</p>

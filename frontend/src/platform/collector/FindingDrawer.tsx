@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
-import { X } from 'lucide-react'
+import { ExternalLink, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
@@ -30,7 +30,7 @@ function fmt(v: unknown, key = ''): string {
 const NONE: ReadonlySet<string> = new Set()
 
 /**
- * Карточка находки справа: описание, поля, снапшоты с находкой и блок
+ * Карточка находки справа: описание, поля, «Как исправить», снапшоты с находкой и блок
  * «Работа с находкой» (статус, исполнитель, срок, история) — общий механизм
  * платформы, область модуля — module/scopeId. Открывается по ключу: находка
  * может быть не в загруженной странице списка (ссылка `?key=`). Строки до
@@ -90,6 +90,19 @@ export function CollectorFindingDrawer<F extends FindingBase>({ findingKey, snap
                     ))}
                     {trailRows?.(d)}
                   </dl>
+                  {d.guidance?.remediation && (
+                    <div className="mb-4">
+                      <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Как исправить</div>
+                      <p className="mb-1.5 leading-relaxed text-text">{d.guidance.remediation}</p>
+                      {d.guidance.references.length > 0 && (
+                        <ul className="flex flex-col gap-0.5">
+                          {d.guidance.references.map((r) => (
+                            <li key={r.url}><a href={r.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-text underline">{r.title} <ExternalLink size={11} aria-hidden /></a></li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                   <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Снапшоты с находкой</div>
                   <ul className="mb-4 flex flex-col gap-0.5 text-text-secondary">
                     {d.history.map((h) => <li key={h.snapshot_id}>снапшот #{h.snapshot_id} · {new Date(h.collected_at).toLocaleString('ru-RU')}</li>)}

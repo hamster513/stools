@@ -86,5 +86,9 @@ def finding_detail(snapshot_id: int, key: str, db: Session = Depends(get_db), _u
         **_item(f),
         **fields,
         "description": spec.description if spec else "",
+        "guidance": {
+            "remediation": spec.remediation if spec else "",
+            "references": [{"title": t, "url": u} for t, u in spec.references] if spec else [],
+        },
         "history": finding_history(db, AdSnapshot, AdFinding, AdSnapshot.domain_id, snap.domain_id, key),
     }

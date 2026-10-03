@@ -496,7 +496,7 @@ def finding_history(
 
 def findings_overview(
     db: Session, module: str, scope_id: int, rows: Sequence[Sequence[Any]], checks: Iterable[Any], severities: Iterable[str],
-    cmp_: Comparison, unchecked: dict[str, str] | None = None,
+    cmp_: Comparison, unchecked: dict[str, str] | None = None, categories: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Сводка обзора по последнему снапшоту: `rows` — (check, severity, key) его находок.
 
@@ -504,13 +504,15 @@ def findings_overview(
     велено учитывать (настройка платформы); `all` — все находки проверки, `open` —
     открытые, `new` — появились в этом снапшоте, `resolved` — пропали с прошлого.
     `summary` — счётчики статусов области. `unchecked` — код проверки → почему её
-    результат не проверка (в выгрузке не было данных)."""
+    результат не проверка (в выгрузке не было данных). `categories` — код категории →
+    название; у проверок без категории (KSC) оба поля пустые."""
     severities = list(severities)
     states = finding_svc.state_map(db, module, scope_id)
     counted = finding_svc.counted_statuses(db)
     per_check: dict[str, dict[str, Any]] = {
         c.code: {"code": c.code, "title": c.title, "description": c.description, "total": 0, "all": 0, "open": 0,
-                 "by_severity": dict.fromkeys(severities, 0), "new": 0}
+                 "by_severity": dict.fromkeys(severities, 0), "new": 0,
+                 "category": getattr(c, "category", ""), "category_title": (categories or {}).get(getattr(c, "category", ""), "")}
         for c in checks
     }
     total, by_severity = 0, dict.fromkeys(severities, 0)

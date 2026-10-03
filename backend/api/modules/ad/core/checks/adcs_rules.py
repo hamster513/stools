@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from typing import Literal
 
 from api.modules.ad.core import sd
@@ -101,17 +101,22 @@ def _nested_broad(idx: ExportIndex, cfg: AdConfig, group: AdObject) -> bool:
     return False
 
 
-def requester_kind(idx: ExportIndex, cfg: AdConfig, sid: str) -> Kind:
+def requester_kind(
+    idx: ExportIndex, cfg: AdConfig, sid: str, *,
+    safe_rids: Sequence[int] | None = None, safe_principals: Sequence[str] | None = None,
+) -> Kind:
     """safe — из adcs_safe_* (RID — для доменов своего леса, имя или SID из
     adcs_safe_principals); broad — широкая группа сама или среди вложенных членов
-    своей группы; иначе other."""
+    своей группы; иначе other. safe_rids и safe_principals заменяют adcs_safe_rids
+    и adcs_safe_principals (ACL вне AD CS)."""
     forest_rid = _forest_rid(idx, sid)
     name = idx.principal_name(sid)
+    principals = list(cfg.adcs_safe_principals if safe_principals is None else safe_principals)
     if (
         sid in cfg.adcs_safe_sids
-        or (forest_rid is not None and forest_rid in cfg.adcs_safe_rids)
-        or _name_in(name, cfg.adcs_safe_principals)
-        or sid.upper() in {p.upper().strip() for p in cfg.adcs_safe_principals}
+        or (forest_rid is not None and forest_rid in (cfg.adcs_safe_rids if safe_rids is None else safe_rids))
+        or _name_in(name, principals)
+        or sid.upper() in {p.upper().strip() for p in principals}
     ):
         return "safe"
     if _broad(cfg, sid, name):
@@ -172,10 +177,15 @@ def _ca_server_sid(idx: ExportIndex, obj: AdObject) -> str | None:
     return next((c.sid for c in idx.objects("computer") if (c.sam or "").lower() == sam and c.sid), None)
 
 
-def unsafe_writers(idx: ExportIndex, cfg: AdConfig, obj: AdObject, desc: SecurityDescriptor) -> list[Writer]:
+def unsafe_writers(
+    idx: ExportIndex, cfg: AdConfig, obj: AdObject, desc: SecurityDescriptor, *,
+    safe_rids: Sequence[int] | None = None, safe_principals: Sequence[str] | None = None, dangerous: int | None = None,
+) -> list[Writer]:
     """Небезопасные субъекты с правом менять объект: разрешающие ACE с WRITE_RIGHTS
-    (у контейнеров PKI и CreateChild) и владелец — он неявно имеет WriteDacl."""
-    dangerous = CONTAINER_WRITE_RIGHTS if obj.cls == "pkiContainer" else WRITE_RIGHTS
+    (у контейнеров PKI и CreateChild) и владелец — он неявно имеет WriteDacl.
+    dangerous заменяет права по классу объекта, safe_rids и safe_principals — как у requester_kind."""
+    if dangerous is None:
+        dangerous = CONTAINER_WRITE_RIGHTS if obj.cls == "pkiContainer" else WRITE_RIGHTS
     concrete = specific_rights(dangerous) & ~(sd.GENERIC_ALL | sd.GENERIC_WRITE) & dangerous
     # Сервер ЦС управляет своим объектом pKIEnrollmentService.
     own = _ca_server_sid(idx, obj) if obj.cls == "pKIEnrollmentService" else None
@@ -199,7 +209,7 @@ def unsafe_writers(idx: ExportIndex, cfg: AdConfig, obj: AdObject, desc: Securit
     for sid, names in rights.items():
         if sid == own:
             continue
-        kind = requester_kind(idx, cfg, sid)
+        kind = requester_kind(idx, cfg, sid, safe_rids=safe_rids, safe_principals=safe_principals)
         if kind != "safe":
             out.append((sid, kind, sorted(names, key=order.index)))
     return out

@@ -91,6 +91,11 @@ class AdConfig(BaseModel):
     adcs_safe_rids: list[int] = Field(default_factory=lambda: [500, 512, 516, 518, 519, 498, 521, 517])
     #: Имена (свои группы администраторов ЦС).
     adcs_safe_principals: list[str] = Field(default_factory=list)
+    #: Админы — включённые рекурсивные члены этих групп и учётка RID 500. RID 544–582 —
+    #: встроенные (S-1-5-32-<RID>): Domain Admins, Schema Admins, Enterprise Admins, Administrators.
+    admin_rids: list[int] = Field(default_factory=lambda: [512, 518, 519, 544])
+    #: Безопасные субъекты ACL вне AD CS (RID доменов своего леса) — как adcs_safe_rids, но без Cert Publishers.
+    tier0_safe_rids: list[int] = Field(default_factory=lambda: [500, 512, 516, 518, 519, 498, 521])
     #: OUs | Computers | Both
     sensitive_acl_scope: str = "Both"
     sensitive_acl_search_base: str = ""

@@ -27,6 +27,7 @@ from api.export_files import file_sha256
 from api.jobs import JobCancelled, JobHandle
 from api.modules.ad.core.ca_data import load_ca_data_path, sniff_format
 from api.modules.ad.core.checks import ANALYZER_VERSION, CHECK_BY_CODE, CHECKS
+from api.modules.ad.core.checks.common import CATEGORIES
 from api.modules.ad.core.export import ExportFormatError
 from api.modules.ad.core.findings import SEVERITIES
 from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
@@ -141,7 +142,7 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
             "analyzer_version": snap.analyzer_version, "stale_analysis": stale,
         },
         "compared_to": comparison_summary(cmp_),
-        **findings_overview(db, "ad", domain_id, rows, CHECKS, SEVERITIES, cmp_, unchecked),
+        **findings_overview(db, "ad", domain_id, rows, CHECKS, SEVERITIES, cmp_, unchecked, CATEGORIES),
     }
 
 

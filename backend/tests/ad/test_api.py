@@ -41,6 +41,19 @@ def test_upload_creates_domain_snapshot_and_findings(auth_client: TestClient) ->
     assert dcsync["total"] == 4 and dcsync["by_severity"]["Critical"] == 1
 
 
+def test_overview_has_categories_and_detail_has_guidance(auth_client: TestClient) -> None:
+    assert _upload(auth_client, build_export())["status"] == "done"
+    domain_id = auth_client.get("/api/ad/domains").json()[0]["id"]
+    checks = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()["checks"]
+    assert checks and all(c["category"] and c["category_title"] for c in checks)
+    assert next(c for c in checks if c["code"] == "DCSync")["category_title"] == "Права на объекты"
+    snap = auth_client.get(f"/api/ad/snapshots?domain_id={domain_id}").json()[0]["id"]
+    item = auth_client.get(f"/api/ad/snapshots/{snap}/findings?check=Kerberoast").json()["items"][0]
+    guidance = auth_client.get(f"/api/ad/snapshots/{snap}/findings/{item['key']}").json()["guidance"]
+    assert "gMSA" in guidance["remediation"]
+    assert guidance["references"] and all(r["title"] and r["url"].startswith("https://") for r in guidance["references"])
+
+
 def test_bad_file_fails_job_with_message(auth_client: TestClient) -> None:
     r = auth_client.post("/api/ad/snapshots/file", files={"file": ("x.json", b'{"format": "other"}', "application/json")})
     job = auth_client.get(f"/api/ad/jobs/{r.json()['job_id']}").json()
