@@ -106,9 +106,16 @@ export function ObjectsEmpty({ snapshotId, policyId, undescribed, hasFilters, wh
   const all = list.data?.items.length ?? 0
   const collected = list.data?.items.filter((p) => p.has_contents).length ?? 0
   const partial = policyId === undefined && collected > 0 && collected < all ? ` Содержимое собрано только у ${collected} из ${all} политик.` : ''
+  // Пока не известно, собрано ли содержимое, «нет» не говорится: без ответа о политиках это была бы догадка.
+  const source = policyId === undefined ? list : policy
   let body: ReactNode
   if (hasFilters) body = <EmptyState icon={FilterX} title="Ничего не найдено" description={nothing} />
-  else if (policyId === undefined && all > 0 && collected === 0) {
+  else if (source.isLoading) body = <div className="flex justify-center py-16"><Spinner /></div>
+  else if (source.isError) {
+    body = (
+      <EmptyState icon={FileQuestion} title={policyId === undefined ? 'Не удалось загрузить список политик' : 'Не удалось загрузить политику'} description={`Неизвестно, собраны ли ${what}: обновите страницу.`} />
+    )
+  } else if (policyId === undefined && all > 0 && collected === 0) {
     body = (
       <EmptyState icon={FileQuestion} title="Содержимое политик не собрано" description={`Без содержимого политик ${what} не извлекаются; это не значит, что их нет. Соберите выгрузку с содержимым политик — скрипт сбора без ключа -SkipPolicyContents.`} />
     )
