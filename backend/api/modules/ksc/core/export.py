@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import zlib
 from collections.abc import Callable
 from functools import cached_property
 from pathlib import Path
@@ -199,7 +200,8 @@ def _read(path: Path) -> bytes | bytearray:
 def _unpacked(unpack: Callable[[], bytearray]) -> bytearray:
     try:
         return unpack()
-    except (OSError, EOFError) as exc:
+    except (OSError, EOFError, zlib.error) as exc:
+        # Порча внутри потока deflate — `zlib.error`, не `OSError`.
         raise ExportFormatError("файл не разобран как JSON выгрузки (битый gzip)") from exc
     except ValueError as exc:
         raise ExportFormatError(f"выгрузка не распакована: {exc}") from exc

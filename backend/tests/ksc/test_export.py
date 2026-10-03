@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import gzip
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from api.modules.ksc.core.export import (
     ExportIndex,
     ip_from_long,
     load_export,
+    load_export_path,
     unwrap,
 )
 from tests.ksc.synthetic import NOW, SECRET_VALUES, build_export, export_bytes, without_new_sections
@@ -106,6 +108,22 @@ def test_gzip_bomb_rejected_with_limit_in_message(monkeypatch: pytest.MonkeyPatc
         load_export(bomb)
     # Под лимитом та же выгрузка в gzip разбирается как раньше.
     assert load_export(gzip.compress(export_bytes())).format == "stools-ksc/1"
+
+
+def corrupted_gzip() -> bytes:
+    """Выгрузка в gzip с испорченным потоком deflate: распаковка падает `zlib.error`, а не `OSError`."""
+    data = bytearray(gzip.compress(export_bytes()))
+    data[20:40] = b"\xff" * 20
+    return bytes(data)
+
+
+def test_corrupted_gzip_is_a_format_error(tmp_path: Path) -> None:
+    path = tmp_path / "1.json.gz"
+    path.write_bytes(corrupted_gzip())
+    with pytest.raises(ExportFormatError, match="битый gzip"):
+        load_export_path(path)
+    with pytest.raises(ExportFormatError, match="битый gzip"):
+        load_export(corrupted_gzip())
 
 
 def test_deeply_nested_json_is_a_format_error() -> None:

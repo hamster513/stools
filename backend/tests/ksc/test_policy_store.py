@@ -26,6 +26,7 @@ from api.modules.ksc.models import (
 from api.modules.ksc.services.snapshots import snapshot_path
 from tests.ksc.synthetic import build_export, without_new_sections
 from tests.ksc.test_api import upload
+from tests.ksc.test_export import corrupted_gzip
 
 TABLES = (KscPolicy, KscPolicyScope, KscProfile, KscExclusion, KscNetRule)
 
@@ -183,12 +184,13 @@ def test_old_snapshot_without_file_stays_empty(auth_client: TestClient, db_sessi
     assert _counts(db_session, sid)["ksc_policy"] == 0
 
 
-def test_old_snapshot_with_broken_file_stays_empty(auth_client: TestClient, db_session: Session, app_settings: Any) -> None:
+@pytest.mark.parametrize("broken", [b"\x00not a gzip export\xff", corrupted_gzip()], ids=["garbage", "corrupted-gzip"])
+def test_old_snapshot_with_broken_file_stays_empty(auth_client: TestClient, db_session: Session, app_settings: Any, broken: bytes) -> None:
     """Файл снапшота не разбирается: дозаполнение не роняет чтение, экраны пусты, как до него."""
     assert upload(auth_client, build_export())["status"] == "done"
     sid = _snapshot_id(auth_client)
     _drop_policy_tables(db_session, sid)
-    snapshot_path(app_settings.data_dir, sid).write_bytes(b"\x00not a gzip export\xff")
+    snapshot_path(app_settings.data_dir, sid).write_bytes(broken)
     r = auth_client.get(f"/api/ksc/snapshots/{sid}/policy-list")
     assert r.status_code == 200, r.text
     assert r.json()["items"] == []
