@@ -243,4 +243,54 @@ GUIDANCE: dict[str, Guidance] = {
             ("Microsoft: конфликты репликации AD", f"{_LEARN}/troubleshoot/windows-server/active-directory/active-directory-replication-errors"),
         ),
     ),
+    "InactiveComputers": Guidance(
+        "accounts",
+        "Определите владельца машины. Ненужные компьютеры отключите (Disable-ADAccount), через положенный срок удалите; для контроллера проверьте репликацию и при выводе из эксплуатации снимите роль через dcpromo или Uninstall-ADDSDomainController, а не удаляйте объект вручную.",
+        (
+            ("Microsoft: Search-ADAccount", f"{_LEARN}/powershell/module/activedirectory/search-adaccount"),
+            ("Microsoft: Disable-ADAccount", f"{_LEARN}/powershell/module/activedirectory/disable-adaccount"),
+            _attack("T1078.002", "Valid Accounts: Domain Accounts"),
+        ),
+    ),
+    "ComputerPasswordAge": Guidance(
+        "accounts",
+        "Проверьте, что смена пароля компьютера не отключена: политика «Domain member: Disable machine account password changes» должна быть выключена, а значение DisablePasswordChange в реестре равно 0. Сбросьте пароль учётки (Reset-ComputerMachinePassword) или верните машину в домен.",
+        (
+            ("Microsoft: Domain member, отключение смены пароля учётной записи компьютера", f"{_PREV}/domain-member-disable-machine-account-password-changes"),
+            ("Microsoft: Reset-ComputerMachinePassword", f"{_LEARN}/powershell/module/microsoft.powershell.management/reset-computermachinepassword"),
+            _attack("T1078.002", "Valid Accounts: Domain Accounts"),
+        ),
+    ),
+    "ObsoleteOs": Guidance(
+        "accounts",
+        "Обновите ОС до поддерживаемой версии или выведите компьютер из эксплуатации. Если обновить нельзя, изолируйте машину в отдельный сегмент сети, ограничьте доступ к ней и из неё и включите расширенные обновления безопасности, если они предлагаются. Устаревшие контроллеры замените в первую очередь. Даты окончания поддержки сборок хранятся в настройках проверки.",
+        (
+            ("Microsoft: жизненный цикл Windows", f"{_LEARN}/lifecycle/products/?products=windows"),
+            _attack("T1210", "Exploitation of Remote Services"),
+        ),
+    ),
+    "DcCount": Guidance(
+        "dc",
+        "Добавьте в домен минимум второй контроллер (Install-ADDSDomainController), желательно на другой площадке или хосте виртуализации, и убедитесь, что репликация работает (repadmin /replsummary).",
+        (
+            ("Microsoft: добавление контроллера домена в существующий домен", f"{_LEARN}/windows-server/identity/ad-ds/deploy/introduction-to-active-directory-domain-services-ad-ds-virtualization-level-100"),
+        ),
+    ),
+    "DcDelegation": Guidance(
+        "dc",
+        "Очистите msDS-AllowedToDelegateTo у контроллера и снимите флаг «Доверять компьютеру делегирование указанных служб с любым протоколом аутентификации» (Set-ADComputer <имя> -Clear msDS-AllowedToDelegateTo; Set-ADAccountControl <имя> -TrustedToAuthForDelegation $false). Если делегация действительно нужна, перенесите её на отдельную службу.",
+        (
+            DELEGATION,
+            SET_ACCOUNT_CONTROL,
+            _attack("T1558", "Steal or Forge Kerberos Tickets"),
+        ),
+    ),
+    "DcOwner": Guidance(
+        "dc",
+        "Верните владельцем объекта контроллера группу Domain Admins (вкладка «Безопасность» → «Дополнительно» → «Владелец» в «Пользователях и компьютерах»). Проверьте, кто и когда создавал объект и какие права успел выдать, и отмените лишние. Владельцем становится учётка, создавшая объект, а при вводе контроллера в домен делегированной учёткой владельцем остаётся она.",
+        (
+            ("Microsoft: защита контроллеров домена от атак", f"{_LEARN}/windows-server/identity/ad-ds/plan/security-best-practices/best-practices-for-securing-active-directory"),
+            _attack("T1098", "Account Manipulation"),
+        ),
+    ),
 }

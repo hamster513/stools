@@ -110,7 +110,7 @@ def test_reanalyze_with_new_rules_and_delete(auth_client: TestClient, app_settin
     assert _upload(auth_client, build_export())["status"] == "done"
     snap = auth_client.get("/api/ad/snapshots").json()[0]
     settings = auth_client.get("/api/ad/settings").json()
-    assert len(settings["checks"]) == 29 and settings["config"]["user_inactivity_days"] == 90
+    assert len(settings["checks"]) == 35 and settings["config"]["user_inactivity_days"] == 90
     cfg = settings["config"]
     cfg["allowlist_short"].append("SVC_BACKUP")
     assert auth_client.put("/api/ad/settings", json=cfg).status_code == 200

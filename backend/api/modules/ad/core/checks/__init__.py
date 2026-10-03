@@ -33,6 +33,14 @@ from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
 from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
 from api.modules.ad.core.checks.catalog import with_guidance
 from api.modules.ad.core.checks.common import CheckSpec
+from api.modules.ad.core.checks.computers import (
+    check_computer_password_age,
+    check_dc_count,
+    check_dc_delegation,
+    check_dc_owner,
+    check_inactive_computers,
+    check_obsolete_os,
+)
 from api.modules.ad.core.checks.domain import check_krbtgt_password_age, check_machine_account_quota
 from api.modules.ad.core.checks.gpo import check_user_rights_assignment
 from api.modules.ad.core.checks.groups import (
@@ -76,6 +84,12 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("GuestEnabled", "Включена учётка Guest", "Включённая учётка Guest даёт вход в домен без личной учётной записи.", check_guest_enabled, ("T1078.001",)),
     CheckSpec("AzureSsoKeyAge", "Возраст ключа Entra Seamless SSO", "Пароль компьютерной учётки AZUREADSSOACC$ — ключ для билетов Kerberos в облако; редкая смена позволяет подделывать билеты (silver ticket).", check_azure_sso_key_age, ("T1558",)),
     CheckSpec("DuplicateObjects", "Объекты-дубликаты", "Объекты с CNF: в имени и учётки $DUPLICATE- возникают из-за конфликтов репликации и указывают на проблемы каталога.", check_duplicate_objects, ()),
+    CheckSpec("InactiveComputers", "Неактивные компьютеры", "Включённые компьютеры без входа дольше порога: забытые машины остаются без обновлений и мониторинга. Неактивный контроллер — отдельный риск.", check_inactive_computers, ("T1078.002",)),
+    CheckSpec("ComputerPasswordAge", "Возраст паролей компьютеров", "Работающий компьютер меняет пароль учётки сам; старый пароль у активной машины говорит об отключённой смене или клонировании.", check_computer_password_age, ("T1078.002",)),
+    CheckSpec("ObsoleteOs", "Устаревшие операционные системы", "Компьютеры с ОС, снятой с поддержки, не получают исправлений безопасности и уязвимы к известным атакам. Контроллер с такой ОС опаснее рядового компьютера.", check_obsolete_os, ("T1210",)),
+    CheckSpec("DcCount", "Число контроллеров домена", "Один контроллер домена — единая точка отказа: при его потере домен недоступен, а восстановление затруднено.", check_dc_count, ()),
+    CheckSpec("DcDelegation", "Делегация контроллеров домена", "Ограниченная делегация у контроллера (служб или protocol transition) позволяет от имени его учётки получать доступ к службам; контроллер — цель высшей ценности.", check_dc_delegation, ("T1558",)),
+    CheckSpec("DcOwner", "Владелец объекта контроллера", "Владелец объекта контроллера домена может менять его права независимо от ACL; владельцем должны быть только администраторы.", check_dc_owner, ("T1098",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

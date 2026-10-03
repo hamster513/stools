@@ -5,6 +5,8 @@ RID не зависят от языка домена, а прототип дер
 """
 from __future__ import annotations
 
+import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -71,6 +73,12 @@ class AdConfig(BaseModel):
     admin_password_max_age_days: int = Field(default=1095, ge=1)
     builtin_admin_recent_days: int = Field(default=35, ge=1)
     azure_sso_key_max_age_days: int = Field(default=90, ge=1)
+    computer_inactivity_days: int = Field(default=90, ge=1)
+    computer_password_max_age_days: int = Field(default=90, ge=1)
+    #: Сборка Windows (из operatingSystemVersion) → дата окончания поддержки; после неё ОС считается устаревшей.
+    obsolete_os_builds: dict[str, datetime.date] = Field(
+        default_factory=lambda: {"22000": datetime.date(2024, 10, 8), "22621": datetime.date(2025, 10, 14)}
+    )
     low_priv_groups: list[str] = Field(
         default_factory=lambda: [
             "AUTHENTICATED USERS",

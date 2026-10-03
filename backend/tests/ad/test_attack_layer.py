@@ -12,11 +12,14 @@ from api.modules.attack.layers import LAYERS
 from api.modules.attack.services.attack_bundle import current as current_bundle
 from tests.ad.synthetic import export_bytes
 
+NO_TECHNIQUE = {"DuplicateObjects", "DcCount", "FunctionalLevel"}
+
 
 def test_every_check_maps_to_known_techniques(db_session: Any) -> None:
     known = set(current_bundle(db_session).by_id())
     for spec in CHECKS:
-        # Проверки гигиены без техники (спека: «—») допустимы; заданные техники обязаны быть известны.
+        # Проверки без техники в спеке («—») перечислены явно; заданные техники обязаны быть известны.
+        assert spec.techniques or spec.code in NO_TECHNIQUE, spec.code
         for technique in spec.techniques:
             assert technique in known, f"{spec.code}: {technique}"
 

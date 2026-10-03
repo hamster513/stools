@@ -9,16 +9,24 @@ from __future__ import annotations
 
 from api.modules.ad.core.ca_data import CaAuthority, CaData, DcBinding
 from api.modules.ad.core.checks.adcs_ca import broken_security, unread
-from api.modules.ad.core.export import AdExport
+from api.modules.ad.core.export import AdExport, ExportIndex
 
 
 def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
-    users = gpos = templates = pki_objects = enrollment_services = 0
+    users = gpos = templates = pki_objects = enrollment_services = computers = 0
+    has_os = False
+    dcs = dc_acl = 0
     logon_dates = False
     for o in export.objects:
         if o.cls == "user":
             users += 1
             logon_dates = logon_dates or bool(o.lastLogonTimestamp)
+        elif o.cls == "computer":
+            computers += 1
+            has_os = has_os or bool(o.operatingSystem)
+            if ExportIndex.is_dc(o):
+                dcs += 1
+                dc_acl += bool(o.sd)
         elif o.cls == "groupPolicyContainer":
             gpos += 1
         elif o.cls == "pKICertificateTemplate":
@@ -29,6 +37,12 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     gaps: dict[str, str] = {}
     if users and not logon_dates:
         gaps["InactiveUsers"] = "в выгрузке нет дат последнего входа ни у одной учётной записи"
+    if computers and not has_os:
+        gaps["ObsoleteOs"] = "в выгрузке нет ОС компьютеров (сборщик старой версии)"
+    if not dcs:
+        gaps["DcCount"] = "в выгрузке нет контроллеров домена"
+    if dcs and not dc_acl:
+        gaps["DcOwner"] = "компьютеры собраны без ACL: владелец контроллеров не известен"
     if gpos and not export.sysvol:
         note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
