@@ -26,8 +26,8 @@ def idents(fs: list[Finding]) -> set[str]:
     return {f.identity for f in fs}
 
 
-def test_registry_has_twenty_one_checks() -> None:
-    assert len(CHECKS) == 21 and len({c.code for c in CHECKS}) == 21
+def test_registry_has_twenty_nine_checks() -> None:
+    assert len(CHECKS) == 29 and len({c.code for c in CHECKS}) == 29
 
 
 def test_dcsync(findings: list[Finding]) -> None:

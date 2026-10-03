@@ -1,6 +1,16 @@
 """Реестр проверок: код, название, описание из прототипа, функция."""
 from __future__ import annotations
 
+from api.modules.ad.core.checks.account_flags import (
+    check_admin_delegable,
+    check_admin_password_age,
+    check_azure_sso_key_age,
+    check_builtin_admin_used,
+    check_duplicate_objects,
+    check_guest_enabled,
+    check_password_not_required,
+    check_reversible_password,
+)
 from api.modules.ad.core.checks.accounts import (
     check_admin_count,
     check_asrep_roastable,
@@ -58,6 +68,14 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("ADCS_ESC", "Шаблоны AD CS (ESC1–4, 9, 13, 15)", "Шаблоны сертификатов, по которым небезопасный заявитель может выпустить сертификат для входа от чужого имени или с чужими правами, либо изменить сам шаблон. Безопасными заявителями считаются только заведомые администраторы; для широких групп серьёзность выше, для прочих — на ступень ниже. Неопубликованный шаблон даёт находку Low.", check_adcs_templates, ("T1649",)),
     CheckSpec("ADCS_CA", "Центр сертификации (ESC5–8, 11, 16)", "Права на объекты PKI и центр сертификации, настройки ЦС и веб-выдачи, которые позволяют выпустить сертификат от чужого имени. ESC12 (доступ к HSM) удалённо не определяется.", check_adcs_ca, ("T1649",)),
     CheckSpec("ADCS_MAPPING", "Привязка сертификатов к учётным записям (ESC10, 14)", "Слабая привязка сертификата к учётной записи на контроллерах домена и слабые явные сопоставления (altSecurityIdentities) позволяют войти по сертификату, выпущенному на другого.", check_adcs_mapping, ("T1649",)),
+    CheckSpec("PasswordNotRequired", "Пароль не требуется", "Флаг «пароль не требуется» позволяет учётке иметь пустой пароль и входить без него.", check_password_not_required, ("T1078.002",)),
+    CheckSpec("ReversiblePassword", "Обратимое шифрование пароля", "Пароль с обратимым шифрованием восстанавливается из базы AD в открытом виде при компрометации контроллера.", check_reversible_password, ("T1003",)),
+    CheckSpec("AdminDelegable", "Делегируемые администраторы", "Администратор без запрета делегирования и вне Protected Users: его билеты могут быть использованы службами с делегацией.", check_admin_delegable, ("T1558",)),
+    CheckSpec("AdminPasswordAge", "Возраст паролей администраторов", "Давно не менявшийся пароль администратора повышает риск использования ранее украденных учётных данных.", check_admin_password_age, ("T1078.002",)),
+    CheckSpec("BuiltinAdminUsed", "Встроенный Administrator в работе", "Встроенная учётка Administrator (RID 500) не подлежит блокировке и должна использоваться только в аварийных случаях.", check_builtin_admin_used, ("T1078.002",)),
+    CheckSpec("GuestEnabled", "Включена учётка Guest", "Включённая учётка Guest даёт вход в домен без личной учётной записи.", check_guest_enabled, ("T1078.001",)),
+    CheckSpec("AzureSsoKeyAge", "Возраст ключа Entra Seamless SSO", "Пароль компьютерной учётки AZUREADSSOACC$ — ключ для билетов Kerberos в облако; редкая смена позволяет подделывать билеты (silver ticket).", check_azure_sso_key_age, ("T1558",)),
+    CheckSpec("DuplicateObjects", "Объекты-дубликаты", "Объекты с CNF: в имени и учётки $DUPLICATE- возникают из-за конфликтов репликации и указывают на проблемы каталога.", check_duplicate_objects, ()),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

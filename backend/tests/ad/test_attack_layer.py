@@ -16,7 +16,7 @@ from tests.ad.synthetic import export_bytes
 def test_every_check_maps_to_known_techniques(db_session: Any) -> None:
     known = set(current_bundle(db_session).by_id())
     for spec in CHECKS:
-        assert spec.techniques, spec.code
+        # Проверки гигиены без техники (спека: «—») допустимы; заданные техники обязаны быть известны.
         for technique in spec.techniques:
             assert technique in known, f"{spec.code}: {technique}"
 

@@ -191,4 +191,56 @@ GUIDANCE: dict[str, Guidance] = {
             CERT_T1649,
         ),
     ),
+    "PasswordNotRequired": Guidance(
+        "accounts",
+        "Снимите флаг PASSWD_NOTREQD (Set-ADAccountControl <имя> -PasswordNotRequired $false) и задайте учётке пароль, соответствующий парольной политике. Найти такие учётки: Get-ADUser -Filter 'PasswordNotRequired -eq $true'.",
+        (SET_ACCOUNT_CONTROL, UAC_FLAGS, _attack("T1078.002", "Valid Accounts: Domain Accounts")),
+    ),
+    "ReversiblePassword": Guidance(
+        "accounts",
+        "Снимите флаг «Хранить пароль с использованием обратимого шифрования» (Set-ADAccountControl <имя> -AllowReversiblePasswordEncryption $false) и смените пароль, чтобы старое значение перестало храниться. Проверьте политику домена «Store passwords using reversible encryption»: она должна быть отключена.",
+        (
+            ("Microsoft: хранение паролей с обратимым шифрованием", f"{_PREV}/store-passwords-using-reversible-encryption"),
+            SET_ACCOUNT_CONTROL,
+            _attack("T1003", "OS Credential Dumping"),
+        ),
+    ),
+    "AdminDelegable": Guidance(
+        "privileged",
+        "Включите администраторам флаг «Учётная запись важна и не может быть делегирована» (Set-ADAccountControl <имя> -AccountNotDelegated $true) или добавьте их в группу Protected Users. Перед этим проверьте, что учётка не нужна службам с делегацией.",
+        (SET_ACCOUNT_CONTROL, PROTECTED_ACCOUNTS, _attack("T1558", "Steal or Forge Kerberos Tickets")),
+    ),
+    "AdminPasswordAge": Guidance(
+        "privileged",
+        "Смените пароль администратора на длинный уникальный (от 20 символов). Для учёток с постоянным паролем настройте регулярную смену по графику; для сервисных — переведите на gMSA.",
+        (LEAST_PRIVILEGE, GMSA, _attack("T1078.002", "Valid Accounts: Domain Accounts")),
+    ),
+    "BuiltinAdminUsed": Guidance(
+        "privileged",
+        "Не используйте встроенный Administrator для повседневной работы: заведите отдельные именные учётки администраторов. Пароль Administrator сделайте длинным и уникальным, храните в сейфе, а недавний вход разберите по журналу событий 4624 на контроллерах.",
+        (PROTECTED_ACCOUNTS, LEAST_PRIVILEGE, _attack("T1078.002", "Valid Accounts: Domain Accounts")),
+    ),
+    "GuestEnabled": Guidance(
+        "privileged",
+        "Отключите учётку Guest (Disable-ADAccount -Identity Guest) и убедитесь, что она не состоит в привилегированных группах и не имеет прав на ресурсы.",
+        (
+            ("Microsoft: Disable-ADAccount", f"{_LEARN}/powershell/module/activedirectory/disable-adaccount"),
+            _attack("T1078.001", "Valid Accounts: Default Accounts"),
+        ),
+    ),
+    "AzureSsoKeyAge": Guidance(
+        "trust",
+        "Смените ключ Kerberos для Seamless SSO командой Update-AzureADSSOForest (модуль AzureADSSO в Microsoft Entra Connect) и повторяйте не реже раза в 30 дней. Меняйте ключ в каждом лесу, где включён Seamless SSO.",
+        (
+            ("Microsoft: Seamless SSO в Microsoft Entra, вопросы и ответы", f"{_LEARN}/entra/identity/hybrid/connect/how-to-connect-sso-faq"),
+            _attack("T1558", "Steal or Forge Kerberos Tickets"),
+        ),
+    ),
+    "DuplicateObjects": Guidance(
+        "accounts",
+        "Определите, какой из конфликтующих объектов настоящий (по SID, дате создания и использованию), удалите лишний и проверьте репликацию (repadmin /replsummary). Объекты с CNF: в имени — следы конфликта репликации.",
+        (
+            ("Microsoft: конфликты репликации AD", f"{_LEARN}/troubleshoot/windows-server/active-directory/active-directory-replication-errors"),
+        ),
+    ),
 }
