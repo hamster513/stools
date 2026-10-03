@@ -95,8 +95,9 @@ def _policy_sections(*, locked: bool) -> dict[str, Any]:
     значение и замок остаются. Для формы хранения: `Exclusions` — список из одного элемента,
     `TrustedApps` — пустой список и без признака замка, `KLPRSS_Deep` — вложенность глубже 20.
     Замки: `EnableSelfProtection` — наследованный, `KLPRSS_Components` — вложенный `KLPRSS_Val`.
-    `KLPRSS_Firewall` — сетевое правило с двоичным адресом IPv4 `octets`: адрес не секрет, остаётся
-    как пришёл (сборщик 1.3)."""
+    `KLPRSS_Firewall` — сетевые правила с двоичным `octets` (сборщик 1.3): адрес IPv4 (4 байта) и
+    IPv6 (16 байт) не секрет и остаются как пришли; 24 байта — не адрес, скрывается; адрес IPv4 под
+    ключом с признаком (`PasswordHint`) скрывается."""
     return {
         "KLPRSS_Basic": {
             "EnableSelfProtection": _lock(True, locked=locked, inherited=locked,
@@ -122,13 +123,18 @@ def _policy_sections(*, locked: bool) -> dict[str, Any]:
         },
         "KLPRSS_Secret": {"type": "binary", "value": "c2VjcmV0LWJsb2I="},
         "KLPRSS_Deep": _deep(DEEP_LEVELS),
-        "KLPRSS_Firewall": {"rules": _lock([{"name": "lan", "octets": {"type": "binary", "value": "wKgBAQ=="}, "mask": 24}], locked=locked)},
+        "KLPRSS_Firewall": {"rules": _lock([
+            {"name": "lan", "octets": {"type": "binary", "value": "wKgBAQ=="}, "mask": 24},
+            {"name": "lan6", "octets": {"type": "binary", "value": "IAENuAAAAAAAAAAAAAAAAQ=="}, "mask": 64},
+            {"name": "blob", "octets": {"type": "binary", "value": "cnVsZS1ibG9iLXR3ZW50eS1mb3VyLWJ5"}, "mask": 24},
+            {"name": "hint", "PasswordHint": {"octets": {"type": "binary", "value": "CgAAAQ=="}}, "mask": 32},
+        ], locked=locked)},
     }
 
 
 #: Значения-секреты синтетики: ни одно не должно попасть в выгрузку ни одного сборщика.
 SECRET_VALUES = ("hunter2", "proxy-secret", "aGFzaC1ibG9i", "e10adc3949ba59abbe56e057f20f883e", "uninstall-secret", "exit-secret", "c2VjcmV0LWJsb2I=",
-                 "profile-secret")
+                 "profile-secret", "cnVsZS1ibG9iLXR3ZW50eS1mb3VyLWJ5", "CgAAAQ==")
 
 
 def _policy_contents() -> dict[str, Any]:
@@ -281,7 +287,7 @@ def expected_policy_contents() -> dict[str, Any]:
     каждая непустая строка и каждое двоичное значение под ключом или секцией с признаком секрета —
     "<скрыто>", булевы, числа и пустые строки (`Login`, пустые строки замка) остаются;
     `EnablePasswordProtection` видима и замкнута; адрес `octets` в `KLPRSS_Firewall` остаётся
-    двоичной обёрткой как пришёл."""
+    двоичной обёрткой как пришёл у адресов IPv4/IPv6 и скрыт у 24 байт и под `PasswordHint`."""
     out = json.loads(json.dumps(_policy_contents()))
     for pid in ("1", "3"):
         sections = out[pid]["sections"]
@@ -293,6 +299,9 @@ def expected_policy_contents() -> dict[str, Any]:
         passwords = sections["KLPRSS_Passwords"]
         passwords["Uninstall"]["KLPRSS_Val"] = "<скрыто>"
         passwords["Exit"]["KLPRSS_Val"]["Value"] = "<скрыто>"
+        rules = sections["KLPRSS_Firewall"]["rules"]["KLPRSS_Val"]
+        rules[2]["octets"] = "<скрыто>"
+        rules[3]["PasswordHint"]["octets"] = "<скрыто>"
         sections["KLPRSS_Secret"] = "<скрыто>"
     return out
 
@@ -327,7 +336,12 @@ def assert_secrets_hidden(policy_contents: dict[str, Any]) -> None:
     assert sections["KLPRSS_Passwords"]["Exit"]["KLPRSS_Val"] == {"Value": "<скрыто>", "Required": True, "Attempts": 3}
     assert sections["KLPRSS_Secret"] == "<скрыто>"
     assert basic["EnablePasswordProtection"]["KLPRSS_Val"] is True and basic["EnablePasswordProtection"]["KLPRSS_Mnd"] is True
-    assert sections["KLPRSS_Firewall"]["rules"]["KLPRSS_Val"] == [{"name": "lan", "octets": {"type": "binary", "value": "wKgBAQ=="}, "mask": 24}]
+    assert sections["KLPRSS_Firewall"]["rules"]["KLPRSS_Val"] == [
+        {"name": "lan", "octets": {"type": "binary", "value": "wKgBAQ=="}, "mask": 24},
+        {"name": "lan6", "octets": {"type": "binary", "value": "IAENuAAAAAAAAAAAAAAAAQ=="}, "mask": 64},
+        {"name": "blob", "octets": "<скрыто>", "mask": 24},
+        {"name": "hint", "PasswordHint": {"octets": "<скрыто>"}, "mask": 32},
+    ]
 
 
 def assert_storage_shapes(policy_contents: dict[str, Any]) -> None:

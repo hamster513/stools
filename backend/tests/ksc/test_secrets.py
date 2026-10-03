@@ -53,6 +53,9 @@ def test_address_octets_are_kept_longer_binary_under_octets_is_hidden() -> None:
     assert hide_secrets({"octets": {"type": "binary", "value": base64.b64encode(bytes(24)).decode()}}) == {"octets": HIDDEN}
     assert hide_secrets({"octets": {"type": "binary", "value": "не base64"}}) == {"octets": HIDDEN}
     assert hide_secrets({"address": v4}) == {"address": HIDDEN}
+    # под признаком секрета `octets` скрывается: 16 байт — и длина MD5/NTLM/AES-128
+    assert hide_secrets({"PasswordHash": {"octets": v6}}) == {"PasswordHash": {"octets": HIDDEN}}
+    assert hide_secrets({"octets": v4}, "KLPRSS_Secret") == {"octets": HIDDEN}
     assert BINARY_KEEP == ("octets",)
 
 

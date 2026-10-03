@@ -178,7 +178,8 @@ def test_old_collector_file_keeps_what_it_hid() -> None:
     contents = expected_policy_contents()
     for policy in contents.values():
         sections = policy["sections"]
-        sections["KLPRSS_Firewall"]["rules"]["KLPRSS_Val"][0]["octets"] = "<скрыто>"
+        for rule in sections["KLPRSS_Firewall"]["rules"]["KLPRSS_Val"][:2]:
+            rule["octets"] = "<скрыто>"
         protection = sections["KLPRSS_Basic"]["PasswordProtection"]
         protection.update(KLPRSS_ValLckPolicy="<скрыто>", KLPRSS_ValLckGroup="<скрыто>")
         protection["KLPRSS_Val"]["Login"] = "<скрыто>"

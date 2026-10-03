@@ -9,18 +9,19 @@ STools-KSC-Collector.ps1 повторяет его; список маркеро�
   пустая строка остаётся пустой (сборщик 1.3: «пароль не задан» отличим от «задан»), булевы,
   числа и типизированные значения (datetime, long) остаются, ключи остаются.
 - Двоичные значения (`{"type": "binary", …}`) скрываются под любым ключом: в них лежат хеши, ключи
-  и зашифрованные пароли. Исключение (сборщик 1.3) — ключи `BINARY_KEEP` (`octets`): там KSC
-  хранит адрес сетевого правила, 4 байта IPv4 или 16 байт IPv6; адрес не секрет и нужен
-  проверкам сетевых правил. Под тем же ключом значение другой длины или не base64 — не адрес,
-  скрывается.
+  и зашифрованные пароли. Исключение (сборщик 1.3) — ключи `BINARY_KEEP` (`octets`) вне режима
+  скрытия: там KSC хранит адрес сетевого правила, 4 байта IPv4 или 16 байт IPv6; адрес не секрет
+  и нужен проверкам сетевых правил. Под тем же ключом значение другой длины или не base64 — не
+  адрес, скрывается. В режиме скрытия (под признаком секрета) `octets` скрывается тоже: 16 байт —
+  это и длина MD5, NTLM-хеша, ключа AES-128.
 - Обёртки `{"type": "params", "value": …}` проходятся насквозь и остаются на месте, списки —
-  поэлементно. Скрытие повторяемо: уже скрытое не меняется — и не восстанавливается: в файлах
-  сборщиков 1.0–1.2 адреса и пустые строки остаются скрытыми.
+  поэлементно. Скрытие повторяемо: уже скрытое не меняется — и не восстанавливается: файлы
+  сборщиков до 1.3 остаются как записаны (1.1–1.2 скрывали все двоичные значения и все строки под
+  признаком).
 """
 from __future__ import annotations
 
 import base64
-import binascii
 from typing import Any
 
 SECRET_MARKERS = (
@@ -53,7 +54,7 @@ def _binary_kept(key: str, value: Any) -> bool:
         return False
     try:
         return len(base64.b64decode(value, validate=True)) in (4, 16)
-    except (binascii.Error, ValueError):
+    except ValueError:  # binascii.Error — подкласс ValueError
         return False
 
 
@@ -63,7 +64,7 @@ def _hide(value: Any, hide: bool, key: str = "") -> Any:
         if value["type"] == "params":
             return {"type": "params", "value": _hide(value["value"], hide, key)}
         if value["type"] == "binary":
-            return value if _binary_kept(key, value["value"]) else HIDDEN
+            return value if not hide and _binary_kept(key, value["value"]) else HIDDEN
         return value
     if isinstance(value, dict):
         return {k: _hide(v, hide or has_secret_marker(str(k)), str(k)) for k, v in value.items()}

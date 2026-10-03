@@ -80,7 +80,7 @@ $FormatVersion = "stools-ksc/1"
 $CollectorVersion = "1.3"
 #: Имя секции или ключ на любой глубине её параметров с одним из этих слов (подстрокой, без учёта
 #: регистра) — всё поддерево под ним в режиме скрытия: непустые строки → "<скрыто>", ключи остаются;
-#: двоичные значения скрываются, кроме адресов под ключами BinaryKeep (см. Hide-Value). Списки совпадают
+#: двоичные значения скрываются, кроме адресов под ключами BinaryKeep вне режима (см. Hide-Value). Списки совпадают
 #: с SECRET_MARKERS и BINARY_KEEP в api/modules/ksc/core/secrets.py (сверяет тест). Не больше стольки
 #: политик и байт на секцию.
 $SecretMarkers = @("PASSWORD", "PASSWD", "PWD", "SECRET", "CRYPTED", "TOKEN", "CREDENTIAL", "PRIVATE", "PASSPHRASE", "APIKEY", "API_KEY", "AUTH", "PIN", "KEY")
@@ -233,13 +233,14 @@ function Test-TypedWrapper($v) {
 # ключ из BinaryKeep (без учёта регистра) и 4 байта IPv4 или 16 байт IPv6. Не base64 — не адрес.
 function Test-BinaryKept([string]$key, $v) {
   if (-not ($BinaryKeep -contains $key) -or -not ($v.value -is [string])) { return $false }
+  # FromBase64String пропускает пробелы внутри, b64decode(validate=True) в Python — нет; от KSC их не бывает.
   try { $n = [Convert]::FromBase64String($v.value).Length } catch { return $false }
   return ($n -eq 4) -or ($n -eq 16)
 }
 # Обход поддерева с режимом скрытия. Ключ с признаком секрета включает режим для всего, что под ним.
 # В режиме непустые строки → "<скрыто>"; пустая строка, булевы, числа и прочие типизированные значения
 # остаются. Двоичные значения (@{ type = "binary"; ... }) скрываются под любым ключом, кроме адреса
-# (Test-BinaryKept). Обёртки params проходятся насквозь и остаются на месте, списки — поэлементно;
+# (Test-BinaryKept) вне режима: в режиме 16 байт под octets могут быть хешем или ключом. Обёртки params проходятся насквозь и остаются на месте, списки — поэлементно;
 # $key — ключ, под которым лежит значение (сквозь обёртки и списки). То же правило — hide_secrets в
 # api/modules/ksc/core/secrets.py.
 # Списки возвращаются через ",": иначе конвейер разворачивает список из одного элемента в скаляр,
@@ -252,7 +253,7 @@ function Hide-Value($v, [bool]$hide, [string]$key = "") {
       return [ordered]@{ type = "params"; value = $inner }
     }
     if ($v.type -eq "binary") {
-      if (Test-BinaryKept $key $v) { return $v }
+      if ((-not $hide) -and (Test-BinaryKept $key $v)) { return $v }
       return "<скрыто>"
     }
     return $v
