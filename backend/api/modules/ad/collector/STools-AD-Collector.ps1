@@ -9,8 +9,9 @@
 
   Выгрузка AD: объекты, дескрипторы безопасности, GptTmpl.inf из SYSVOL,
   шаблоны сертификатов, центры сертификации и контейнеры PKI, политики выдачи,
-  доверенные домены — один JSON (gzip), ad-<NETBIOS>-<дата>.json.gz. Хватает
-  прав чтения каталога.
+  доверенные домены, настройки домена и леса, политики паролей (PSO), зоны DNS,
+  сайты и подсети — один JSON (gzip), ad-<NETBIOS>-<дата>.json.gz. Хватает
+  прав чтения каталога; PSO видны только администратору домена.
 
   Данные ЦС (их по LDAP не прочитать, STools сам их не собирает):
     ca  — флаги и права каждого ЦС (certutil, при отказе — удалённый реестр);
@@ -79,7 +80,7 @@ Import-Module ActiveDirectory
 
 $FormatVersion = "stools-ad/1"
 $CaFormatVersion = "stools-ad-ca/1"
-$CollectorVersion = "2.0"
+$CollectorVersion = "2.1"
 
 $ad = @{}
 if ($Server) { $ad["Server"] = $Server }
@@ -161,6 +162,63 @@ function SidString($value) {
   try { return $value.Value } catch { return [string]$value }
 }
 
+# SID атрибута со строковым синтаксисом (ms-DS-CreatorSID) модуль отдаёт байтами, с синтаксисом SID — объектом.
+function AnySid($value) {
+  if ($value -is [byte[]]) { return SidFromBytes $value }
+  return SidString $value
+}
+
+function SidList($value) {
+  if ($null -eq $value) { return ,@() }
+  return ,@($value | ForEach-Object { AnySid $_ })
+}
+
+# Время AD → ISO 8601 UTC; формат не зависит от языковых настроек Windows.
+function IsoTime($value) {
+  if ($null -eq $value) { return $null }
+  return ([datetime]$value).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function AsBool($value) {
+  if ($null -eq $value) { return $null }
+  return [bool]$value
+}
+
+# Время последней резервной копии домена: резервное копирование меняет dSASignature корня, время
+# изменения — в msDS-ReplAttributeMetaData (XML на каждый атрибут, у значений бывает завершающий \0).
+# Записи dSASignature нет — $null.
+function Get-LastBackup([string[]]$metadata) {
+  foreach ($item in @($metadata)) {
+    if (-not $item) { continue }
+    $m = [regex]::Match($item, '<pszAttributeName>\s*([^<]*?)\s*</pszAttributeName>.*?<ftimeLastOriginatingChange>\s*([^<]*?)\s*</ftimeLastOriginatingChange>', 'Singleline')
+    if (-not $m.Success -or $m.Groups[1].Value -cne "dSASignature") { continue }
+    try {
+      $t = [DateTimeOffset]::Parse($m.Groups[2].Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
+    } catch { return $null }
+    return $t.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+  }
+  return $null
+}
+
+# Режим динамических обновлений зоны из dNSProperty: заголовок 20 байт (DataLength, NameLength, Flag,
+# Version, Id), затем данные; у записи с Id 2 — первый байт данных: 0 — нет, 1 — любые, 2 — безопасные.
+function Get-DnsAllowUpdate([byte[][]]$properties) {
+  foreach ($p in @($properties)) {
+    if ($null -eq $p -or $p.Length -lt 20) { continue }
+    $length = [BitConverter]::ToUInt32($p, 0)
+    $id = [BitConverter]::ToUInt32($p, 16)
+    if ($id -eq 2 -and $length -gt 0 -and $p.Length -gt 20) { return [int]$p[20] }
+  }
+  return $null
+}
+
+# DN-Binary «B:<длина>:<hex>:<DN>» → DN; в самом DN двоеточие допустимо.
+function Get-DnBinaryDn([string]$value) {
+  $parts = $value.Split([char[]]":", 4)
+  if ($parts.Count -eq 4 -and $parts[0] -eq "B") { return $parts[3] }
+  return $value
+}
+
 # Имена SID: собираются из ACE и самих объектов, чтобы анализатор не
 # ходил в домен за именами.
 $principals = @{}
@@ -237,9 +295,16 @@ function Get-AdOptional([string]$what, [hashtable]$query) {
   catch { Add-Warning ("{0}: {1}" -f $what, $_.Exception.Message); return @() }
 }
 
+# То же, но отказ отличим от пустого ответа: $null — раздел не прочитан (поле выгрузки тогда null).
+function Read-AdSection([string]$what, [hashtable]$query) {
+  try { return ,@(Get-ADObject @ad @query -ErrorAction SilentlyContinue) }
+  catch { Add-Warning ("{0}: {1}" -f $what, $_.Exception.Message); return $null }
+}
+
 function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   Write-Step "Свойства домена"
-  $domainObj = Get-ADObject @ad -Identity $domain.DistinguishedName -Properties "ms-DS-MachineAccountQuota", nTSecurityDescriptor
+  $domainObj = Get-ADObject @ad -Identity $domain.DistinguishedName -Properties "ms-DS-MachineAccountQuota", nTSecurityDescriptor, minPwdLength, lockoutThreshold, pwdProperties, pwdHistoryLength
+  # null у поля — «не прочитано»: отказ необязательного чтения ниже оставляет его null.
   $domainInfo = @{
     dns_root = $domain.DNSRoot
     dn = $domain.DistinguishedName
@@ -249,6 +314,20 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
     schema_dn = $root.schemaNamingContext
     machine_account_quota = AsInt $domainObj."ms-DS-MachineAccountQuota"
     functional_level = [string]$domain.DomainMode
+    min_pwd_length = AsInt $domainObj.minPwdLength
+    lockout_threshold = AsInt $domainObj.lockoutThreshold
+    pwd_properties = AsInt $domainObj.pwdProperties
+    pwd_history_length = AsInt $domainObj.pwdHistoryLength
+    forest_functional_level = $null
+    recycle_bin = $null
+    ds_heuristics = $null
+    smartcard_rotation = $null
+    laps_legacy_schema = $null
+    laps_schema = $null
+    last_backup = $null
+    backup_read = $null
+    sysvol_replication = $null
+    schema_poss_superiors = $null
   }
 
   Write-Step "GUID расширенных прав и атрибутов схемы"
@@ -260,6 +339,54 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   $schemaAttrs = @{}
   $kc = Get-ADObject @ad -SearchBase $root.schemaNamingContext -LDAPFilter "(lDAPDisplayName=msDS-KeyCredentialLink)" -Properties schemaIDGUID -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($kc -and $kc.schemaIDGUID) { $schemaAttrs["msDS-KeyCredentialLink"] = ([Guid]::new([byte[]]$kc.schemaIDGUID)).ToString() }
+
+  Write-Step "Настройки домена и леса"
+  try { $domainInfo["forest_functional_level"] = [string](Get-ADForest @ad).ForestMode }
+  catch { Add-Warning ("функциональный уровень леса не прочитан: {0}" -f $_.Exception.Message) }
+  try { $domainInfo["recycle_bin"] = [bool](@((Get-ADOptionalFeature @ad -Identity "Recycle Bin Feature").EnabledScopes | Where-Object { $_ }).Count -gt 0) }
+  catch { Add-Warning ("корзина AD не прочитана: {0}" -f $_.Exception.Message) }
+  $dsh = Read-AdSection "dSHeuristics не прочитан" @{ SearchBase = "CN=Directory Service,CN=Windows NT,CN=Services," + $root.configurationNamingContext; SearchScope = "Base"; LDAPFilter = "(objectClass=*)"; Properties = @("dSHeuristics") }
+  if ($null -ne $dsh -and $dsh.Count -gt 0) { $domainInfo["ds_heuristics"] = [string]$dsh[0].dSHeuristics }
+  # Объекта DFSR нет — SYSVOL реплицирует FRS. Поиск от CN=System (он есть всегда), а не по самому
+  # объекту: отсутствие базы поиска модуль может счесть ошибкой.
+  $dfsrDn = "CN=Domain System Volume,CN=DFSR-GlobalSettings,CN=System," + $domain.DistinguishedName
+  $dfsr = Read-AdSection "способ репликации SYSVOL не определён" @{ SearchBase = "CN=System," + $domain.DistinguishedName; LDAPFilter = "(cn=Domain System Volume)"; Properties = @("cn") }
+  if ($null -ne $dfsr) { $domainInfo["sysvol_replication"] = $(if (@($dfsr | Where-Object { $_.DistinguishedName -eq $dfsrDn }).Count -gt 0) { "dfsr" } else { "ntfrs" }) }
+
+  # Имена схемы, которых может не быть (LAPS, Server 2016, Exchange, dMSA): модуль отвергает запрос с
+  # неизвестным свойством целиком, поэтому такие свойства запрашиваются только после этой проверки.
+  $smartcardAttr = "msDS-ExpirePasswordsOnSmartCardOnlyAccounts"
+  $lapsExpiry = [ordered]@{ "ms-Mcs-AdmPwdExpirationTime" = "lapsExpiry"; "msLAPS-PasswordExpirationTime" = "lapsNewExpiry" }
+  $optionalNames = @("ms-Mcs-AdmPwd", "msLAPS-Password", $smartcardAttr, "msExchStorageGroup", "msDS-DelegatedManagedServiceAccount") + @($lapsExpiry.Keys)
+  $schemaFilter = "(|" + (($optionalNames | ForEach-Object { "(lDAPDisplayName=$_)" }) -join "") + ")"
+  $schemaFound = Read-AdSection "схема не прочитана" @{ SearchBase = $root.schemaNamingContext; LDAPFilter = $schemaFilter; Properties = @("lDAPDisplayName", "schemaIDGUID", "possSuperiors", "systemPossSuperiors") }
+  $inSchema = @{}
+  foreach ($e in $schemaFound) { $inSchema[[string]$e.lDAPDisplayName] = $e }
+  $lapsAttrs = @($lapsExpiry.Keys | Where-Object { $inSchema.ContainsKey($_) })
+  # Ключ есть — схема проверена; пустое значение — класса нет. Схема не прочитана — ключа нет.
+  $schemaClasses = @{}
+  if ($null -ne $schemaFound) {
+    $domainInfo["laps_legacy_schema"] = $inSchema.ContainsKey("ms-Mcs-AdmPwd")
+    $domainInfo["laps_schema"] = $inSchema.ContainsKey("msLAPS-Password")
+    $superiors = @{}
+    $storage = $inSchema["msExchStorageGroup"]
+    if ($storage) { $superiors["msExchStorageGroup"] = [string[]]@(@($storage.possSuperiors) + @($storage.systemPossSuperiors) | Where-Object { $_ }) }
+    $domainInfo["schema_poss_superiors"] = $superiors
+    $dmsa = $inSchema["msDS-DelegatedManagedServiceAccount"]
+    $schemaClasses["msDS-DelegatedManagedServiceAccount"] = $(if ($dmsa -and $dmsa.schemaIDGUID) { ([Guid]::new([byte[]]$dmsa.schemaIDGUID)).ToString() } else { "" })
+    # Атрибута нет в схеме (лес старше Server 2016) — ротация выключена.
+    if (-not $inSchema.ContainsKey($smartcardAttr)) { $domainInfo["smartcard_rotation"] = $false }
+  }
+  # Метаданные репликации — конструируемый атрибут: отдаётся только по явному запросу.
+  $metaProps = @("msDS-ReplAttributeMetaData")
+  if ($inSchema.ContainsKey($smartcardAttr)) { $metaProps += $smartcardAttr }
+  try {
+    $meta = Get-ADObject @ad -Identity $domain.DistinguishedName -Properties $metaProps
+    $values = [string[]]@($meta."msDS-ReplAttributeMetaData" | Where-Object { $_ })
+    $domainInfo["last_backup"] = Get-LastBackup $values
+    $domainInfo["backup_read"] = [bool]($values.Count -gt 0)
+    if ($inSchema.ContainsKey($smartcardAttr)) { $domainInfo["smartcard_rotation"] = [bool]$meta.$smartcardAttr }
+  } catch { Add-Warning ("метаданные репликации корня домена не прочитаны: {0}" -f $_.Exception.Message) }
 
   $objects = New-Object System.Collections.Generic.List[object]
 
@@ -282,8 +409,27 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
       supportedEncryptionTypes = AsInt $o."msDS-SupportedEncryptionTypes"
       adminCount = AsInt $o.adminCount
       altSecurityIdentities = AsList $o.altSecurityIdentities
+      primaryGroupID = AsInt $o.primaryGroupID
+      sIDHistory = SidList $o.sIDHistory
+      whenCreated = IsoTime $o.whenCreated
+      scriptPath = $(if ($o.scriptPath) { [string]$o.scriptPath } else { $null })
     }
+    if ($class -eq "user" -and $unixDns.Contains([string]$o.DistinguishedName)) { $rec["hasUnixPassword"] = $true }
     if ($class -eq "computer") {
+      # Атрибуты LAPS запрошены, только если они есть в схеме ($lapsAttrs).
+      foreach ($attr in $lapsExpiry.Keys) { $rec[$lapsExpiry[$attr]] = $(if ($lapsAttrs -contains $attr) { AsInt64 $o.$attr } else { $null }) }
+      $rec["creatorSid"] = AnySid $o."ms-DS-CreatorSID"
+      $rec["revealOnDemand"] = AsList $o."msDS-RevealOnDemandGroup"
+      $rec["neverReveal"] = AsList $o."msDS-NeverRevealGroup"
+      # Значение на каждый раскрытый секрет учётки — DN повторяются; порядок сохраняется.
+      $revealed = New-Object System.Collections.Generic.List[string]
+      $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+      foreach ($v in @($o."msDS-RevealedUsers" | Where-Object { $_ })) {
+        $dn = Get-DnBinaryDn ([string]$v)
+        if ($seen.Add($dn)) { $revealed.Add($dn) }
+      }
+      $rec["revealedUsers"] = $revealed.ToArray()
+      $rec["krbTgtLink"] = AsStr $o."msDS-KrbTgtLink"
       $rec["allowedToActOnBehalf"] = ToBase64Sd $o."msDS-AllowedToActOnBehalfOfOtherIdentity"
       if ($o."msDS-AllowedToActOnBehalfOfOtherIdentity") { Register-AceSids $o."msDS-AllowedToActOnBehalfOfOtherIdentity" }
       if ($withSd) { $rec["sd"] = ToBase64Sd $o.nTSecurityDescriptor; Register-AceSids $o.nTSecurityDescriptor }
@@ -297,13 +443,18 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
 
   Write-Step "Пользователи"
   $n0 = $objects.Count
-  $userProps = @("sAMAccountName","Name","objectSid","userAccountControl","lastLogonTimestamp","pwdLastSet","servicePrincipalName","msDS-AllowedToDelegateTo","msDS-SupportedEncryptionTypes","adminCount","altSecurityIdentities")
+  # Unix-пароли: только наличие — по фильтру с одним именем учётки; значения паролей не читаются.
+  $unixDns = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  $unix = Read-AdSection "Unix-пароли не проверены" @{ LDAPFilter = "(&(objectCategory=person)(objectClass=user)(|(userPassword=*)(unixUserPassword=*)))"; Properties = @("sAMAccountName") }
+  foreach ($u in $unix) { [void]$unixDns.Add([string]$u.DistinguishedName) }
+  $userProps = @("sAMAccountName","Name","objectSid","userAccountControl","lastLogonTimestamp","pwdLastSet","servicePrincipalName","msDS-AllowedToDelegateTo","msDS-SupportedEncryptionTypes","adminCount","altSecurityIdentities","primaryGroupID","sIDHistory","whenCreated","scriptPath")
   Get-ADObject @ad -LDAPFilter "(&(objectCategory=person)(objectClass=user))" -Properties $userProps | ForEach-Object { Add-Account $_ "user" $false }
-  Write-Step ("  пользователей: {0}" -f ($objects.Count - $n0))
+  Write-Step ("  пользователей: {0}, с Unix-паролем: {1}" -f ($objects.Count - $n0), $unixDns.Count)
 
   Write-Step "Компьютеры"
   $n0 = $objects.Count
-  $compProps = $userProps + @("msDS-AllowedToActOnBehalfOfOtherIdentity", "dNSHostName", "operatingSystem", "operatingSystemVersion")
+  $compProps = $userProps + @("msDS-AllowedToActOnBehalfOfOtherIdentity", "dNSHostName", "operatingSystem", "operatingSystemVersion",
+    "ms-DS-CreatorSID", "msDS-RevealOnDemandGroup", "msDS-NeverRevealGroup", "msDS-RevealedUsers", "msDS-KrbTgtLink") + $lapsAttrs
   if (-not $noComputerAcl) { $compProps += "nTSecurityDescriptor" }
   Get-ADObject @ad -LDAPFilter "(objectClass=computer)" -Properties $compProps | ForEach-Object { Add-Account $_ "computer" (-not $noComputerAcl) }
   Write-Step ("  компьютеров: {0}" -f ($objects.Count - $n0))
@@ -399,7 +550,7 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
 
   Write-Step "Доверенные домены"
   $n0 = $objects.Count
-  Get-AdOptional "доверенные домены" @{ SearchBase = "CN=System," + $domain.DistinguishedName; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=trustedDomain)"; Properties = @("flatName", "securityIdentifier", "trustAttributes") } | ForEach-Object {
+  Get-AdOptional "доверенные домены" @{ SearchBase = "CN=System," + $domain.DistinguishedName; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=trustedDomain)"; Properties = @("flatName", "securityIdentifier", "trustAttributes", "trustDirection", "trustType", "trustPartner", "whenChanged", "msDS-SupportedEncryptionTypes") } | ForEach-Object {
     $trustSid = $null
     if ($_.securityIdentifier) {
       try { $trustSid = SidFromBytes ([byte[]]$_.securityIdentifier) } catch { }
@@ -407,9 +558,56 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
     $objects.Add(@{
       dn = $_.DistinguishedName; class = "trustedDomain"; flatName = [string]$_.flatName; sid = $trustSid
       trustAttributes = AsInt $_.trustAttributes
+      trustDirection = AsInt $_.trustDirection; trustType = AsInt $_.trustType; trustPartner = AsStr $_.trustPartner
+      whenChanged = IsoTime $_.whenChanged; supportedEncryptionTypes = AsInt $_."msDS-SupportedEncryptionTypes"
     }) | Out-Null
   }
   Write-Step ("  доверенных доменов: {0}" -f ($objects.Count - $n0))
+
+  Write-Step "Политики паролей (PSO)"
+  $n0 = $objects.Count
+  $psos = Read-AdSection "PSO не прочитаны" @{ SearchBase = "CN=Password Settings Container,CN=System," + $domain.DistinguishedName; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=msDS-PasswordSettings)"; Properties = @("msDS-MinimumPasswordLength", "msDS-LockoutThreshold", "msDS-PasswordReversibleEncryptionEnabled", "msDS-PasswordComplexityEnabled", "msDS-PasswordSettingsPrecedence", "msDS-PSOAppliesTo") }
+  # Контейнер PSO по умолчанию читают только администраторы: пусто без ошибки — «не видно», а не «нет».
+  if ($null -ne $psos -and $psos.Count -eq 0) { Add-Warning "PSO не найдены: при сборе не администратором домена они не видны" }
+  foreach ($p in $psos) {
+    $objects.Add(@{
+      dn = $p.DistinguishedName; class = "msDS-PasswordSettings"; name = [string]$p.Name
+      psoMinLength = AsInt $p."msDS-MinimumPasswordLength"; psoLockoutThreshold = AsInt $p."msDS-LockoutThreshold"
+      psoReversible = AsBool $p."msDS-PasswordReversibleEncryptionEnabled"; psoComplexity = AsBool $p."msDS-PasswordComplexityEnabled"
+      psoPrecedence = AsInt $p."msDS-PasswordSettingsPrecedence"; psoAppliesTo = AsList $p."msDS-PSOAppliesTo"
+    }) | Out-Null
+  }
+  Write-Step ("  PSO: {0}" -f ($objects.Count - $n0))
+
+  Write-Step "Зоны DNS"
+  $n0 = $objects.Count
+  $forestDn = [string]$root.rootDomainNamingContext
+  # Зоны в System лежат в CN=MicrosoftDNS,CN=System; поиск от CN=System — его отсутствие не ошибка.
+  $zoneBases = [ordered]@{
+    DomainDnsZones = "DC=DomainDnsZones," + $domain.DistinguishedName
+    ForestDnsZones = "DC=ForestDnsZones," + $forestDn
+    System = "CN=System," + $domain.DistinguishedName
+  }
+  foreach ($partition in $zoneBases.Keys) {
+    $zones = Read-AdSection ("зоны DNS не прочитаны ({0})" -f $partition) @{ SearchBase = $zoneBases[$partition]; LDAPFilter = "(objectClass=dnsZone)"; Properties = @("dNSProperty", "nTSecurityDescriptor") }
+    foreach ($z in $zones) {
+      $objects.Add(@{
+        dn = $z.DistinguishedName; class = "dnsZone"; name = [string]$z.Name; partition = $partition
+        allowUpdate = Get-DnsAllowUpdate ([byte[][]]@($z.dNSProperty | Where-Object { $null -ne $_ }))
+        sd = ToBase64Sd $z.nTSecurityDescriptor
+      }) | Out-Null
+      Register-AceSids $z.nTSecurityDescriptor
+    }
+  }
+  Write-Step ("  зон DNS: {0}" -f ($objects.Count - $n0))
+
+  Write-Step "Сайты и подсети"
+  $n0 = $objects.Count
+  $sites = Read-AdSection "сайты не прочитаны" @{ SearchBase = "CN=Sites," + $root.configurationNamingContext; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=site)"; Properties = @("name") }
+  foreach ($s in $sites) { $objects.Add(@{ dn = $s.DistinguishedName; class = "site"; name = [string]$s.Name }) | Out-Null }
+  $subnets = Read-AdSection "подсети не прочитаны" @{ SearchBase = "CN=Subnets,CN=Sites," + $root.configurationNamingContext; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=subnet)"; Properties = @("siteObject") }
+  foreach ($s in $subnets) { $objects.Add(@{ dn = $s.DistinguishedName; class = "subnet"; name = [string]$s.Name; site = $(if ($s.siteObject) { [string]$s.siteObject } else { $null }) }) | Out-Null }
+  Write-Step ("  сайтов и подсетей: {0}" -f ($objects.Count - $n0))
 
   # Что не прочитано: анализатор показывает это в «не проверено». Отказ по центрам сертификации
   # мог прийти дважды (план и выгрузка) — повторы убираются.
@@ -422,7 +620,7 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
     collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     collector = @{ kind = "powershell"; version = $CollectorVersion; host = $env:COMPUTERNAME; account = ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME); notes = [string[]]$notes }
     domain = $domainInfo
-    guids = @{ extended_rights = $extRights; schema_attributes = $schemaAttrs }
+    guids = @{ extended_rights = $extRights; schema_attributes = $schemaAttrs; schema_classes = $schemaClasses }
     objects = $objects.ToArray()
     sysvol = $sysvol
     principals = $principals
@@ -711,7 +909,7 @@ try {
   if ($sel.Ad) {
     $what = "пользователи, компьютеры (" + $(if ($sel.SkipComputerAcl) { "без ACL" } else { "с ACL" }) + "), группы, OU, групповые политики"
     if (-not $sel.SkipSysvol) { $what += ", GptTmpl.inf из SYSVOL" }
-    Write-Host ("  Выгрузка AD: {0}, шаблоны сертификатов и объекты PKI, доверенные домены" -f $what)
+    Write-Host ("  Выгрузка AD: {0}, шаблоны сертификатов и объекты PKI, доверенные домены, настройки домена и леса, PSO, зоны DNS, сайты и подсети" -f $what)
   }
   if ($picked -contains "ca") {
     Write-Host "  Настройки и права ЦС (certutil, при отказе — удалённый реестр):"
