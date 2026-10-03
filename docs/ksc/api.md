@@ -70,6 +70,7 @@ KSC (`{"type": "datetime"|"long"|"binary", "value": …}`) снимает `unwra
 ```
 GET  /servers                          [{id, name, version, snapshots, last_snapshot_id, last_snapshot_at}]
 GET  /servers/{id}/overview            {server, snapshot|null, coverage|null, compared_to,
+                                        changes: {total|null, prev|null, compared, truncated, reason|null}|null,
                                         counted: {total, by_severity, statuses[]},
                                         summary: {by_status, overdue, risk_expiring, unassigned},
                                         checks: [{code, title, description, total, all, open, new, resolved,
@@ -294,6 +295,53 @@ grade_reason, findings}`. Список, привязка и счётчики —
 Задачи: плоский список всех задач выгрузки (не по дереву групп). `group` — путь группы из `PRTS_TASK_GROUPID`,
 пусто — задача для набора устройств; `failed=true` оставляет задачи с `failed > 0` (счётчики —
 как в `/policies`); `q` — подстрока имени, `type` — `TASK_NAME`. Порядок: по группе, затем по имени.
+
+## Исключения, сетевые правила, изменения
+
+```
+GET  /snapshots/{id}/exclusions?q=&policy_id=&profile=&kind=&enabled=true|false&dup=multi|single|covered&limit=200&offset=0
+                                        {total, items: [{id, policy_id, policy_name, profile, kind, value, components,
+                                                         enabled, comment, risks, key, policies, covered_by}],
+                                        facets: {policy: {id: n}, kind, enabled: {true, false}, dup: {multi, single, covered}}|null,
+                                        summary: [{policy_id, policy_name, hosts, total, by_kind}]|null,
+                                        undescribed: [код продукта]}
+GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&limit=200&offset=0
+                                        {total, items: [{id, policy_id, policy_name, profile, layer, position, name, action,
+                                                         direction, protocol, local_ports, remote_ports, addresses, enabled, key}],
+                                        facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта]}
+GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offset=0
+                                        {total, items: [{id, snapshot_id, collected_at, kind, action, policy_id, policy_name,
+                                                         profile, section, path, before, after}],
+                                        facets: {kind: {…}, action: {…}}|null,
+                                        snapshots: [{id, collected_at, prev, total|null, compared, truncated, reason|null}]}
+```
+
+`404` — снапшот или сервер не найдены; `422` — неизвестное значение `dup` или `limit` вне 1..1000.
+`facets` (и `summary` у исключений) приходят только при `offset=0`, иначе `null`.
+
+Исключения и правила берутся из таблиц снапшота, которые заполняет извлекатель продукта при импорте. `undescribed` —
+коды продуктов политик с содержимым, для которых извлекателя нет: у них список пуст потому, что продукт не описан,
+а не потому, что исключений нет (у `summary` такие политики не показываются). Поиск `q` — подстрока без регистра: у
+исключений в `value`, `comment` и имени политики, у правил в `name`, `addresses` и портах. Порядок: имя политики,
+сама политика раньше профилей (`profile` — пустая строка у самой политики; фильтр `profile=` с пустым значением
+оставляет только политику), затем значение (у правил — слой и позиция). Фасеты считаются по отфильтрованному набору.
+`summary` — без фильтров, по политикам с описанным продуктом и собранным содержимым: исключений по видам и `hosts`
+(хостов под политикой).
+
+Дубли и перекрытия считаются по всем исключениям снапшота, фильтры на них не влияют: `policies` — в скольких политиках
+встречается тот же `key` (вид и значение без регистра, профиль не учитывается); `dup=multi` — `policies > 1`, `single` —
+`policies == 1`. `covered_by` — значение более широкого включённого исключения-пути или маски в той же политике и
+профиле (каталог-префикс по границе разделителя, замыкающий разделитель не в счёт, или подходящая маска; равное
+значение перекрытием не считается), иначе `null`; `dup=covered` — `covered_by` не пуст. `risks` — коды рисков, на
+этапе 1 всегда `[]`.
+
+Изменения — записи `ksc_change` всех снапшотов сервера: порядок — снапшот по убыванию времени сбора, затем `id`;
+фасеты по отфильтрованному набору; `before` и `after` — как сохранены (JSON). `snapshots` — все снапшоты сервера,
+новые первыми, со сводом: `prev` — с чем сравнивали (`null` — сравнивать не с чем, `total` тогда `0`, `compared`
+пуст), `compared` — какие виды изменений сравнивались (`false` — «не сравнивалось», не «без изменений»: нет
+извлекателя продукта или у предыдущего снапшота не собрано), `truncated` — записей больше лимита сравнения,
+`reason` — причина несравнения. `total: null` — изменения у снапшота не считались (импортирован до журнала изменений),
+нужен пересчёт. Тот же свод последнего снапшота — `changes` в обзоре сервера (`null`, если снапшотов нет).
 
 ## Сервер KSC
 

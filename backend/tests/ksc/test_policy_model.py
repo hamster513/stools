@@ -48,6 +48,18 @@ def test_covered_by_cases(other: Exclusion, covered: bool) -> None:
     assert (covered_by(TARGET, [TARGET, other]) == other) is covered
 
 
+@pytest.mark.parametrize(("value", "other", "covered"), [
+    ("C:\\Tools\\", "C:\\Tools", False),          # тот же каталог с замыкающим разделителем — не шире
+    ("C:\\Tools", "C:\\Tools\\", False),
+    ("C:\\Tools/", "C:\\Tools\\", False),
+    ("C:\\Tools\\Sub\\", "C:\\Tools", True),     # подкаталог с замыкающим разделителем — покрыт
+    ("C:\\Tools\\Sub", "C:\\Tools\\", True),
+])
+def test_covered_by_trailing_separator(value: str, other: str, covered: bool) -> None:
+    e, o = Exclusion("path", value), Exclusion("path", other)
+    assert (covered_by(e, [e, o]) == o) is covered
+
+
 def test_covered_by_not_self_and_hash_not_by_mask() -> None:
     assert covered_by(TARGET, [TARGET]) is None
     assert covered_by(Exclusion("hash", "abc123"), [Exclusion("mask", "*")]) is None

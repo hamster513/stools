@@ -76,9 +76,10 @@ def net_rule_key(r: NetRule) -> str:
 
 
 def _wider(other: str, value: str) -> bool:
-    """`other` — каталог-префикс `value` (граница по разделителю) или маска, под которую `value` подходит."""
-    prefix = other.rstrip("\\/")
-    if prefix and len(value) > len(prefix) and value.startswith(prefix) and value[len(prefix)] in "\\/":
+    """`other` — каталог-префикс `value` (граница по разделителю) или маска, под которую `value` подходит.
+    Замыкающие разделители не в счёт: `C:\\Tools\\` и `C:\\Tools` — один каталог, шире он не бывает."""
+    prefix, bare = other.rstrip("\\/"), value.rstrip("\\/")
+    if prefix and len(bare) > len(prefix) and bare.startswith(prefix) and bare[len(prefix)] in "\\/":
         return True
     return ("*" in other or "?" in other) and fnmatch.fnmatchcase(value, other)
 

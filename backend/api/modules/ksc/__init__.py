@@ -12,6 +12,7 @@ from api.modules.ksc import models as models  # таблицы должны по
 from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ksc.models import KscJob
 from api.modules.ksc.routers import (
+    changes,
     collector,
     connections,
     findings,
@@ -19,6 +20,7 @@ from api.modules.ksc.routers import (
     policies,
     policy_contents,
     policy_list,
+    policy_objects,
     server,
     settings,
     snapshots,
@@ -28,6 +30,7 @@ from api.platform.findings.adapters import register_adapter
 router = APIRouter(prefix="/api/ksc")
 for sub in (
     snapshots.router, hosts.router, findings.router, policies.router, policy_contents.router, policy_list.router,
+    policy_objects.router, changes.router,
     server.router, settings.router, collector.router, connections.router, make_jobs_router(KscJob, "ksc"),
 ):
     router.include_router(sub)

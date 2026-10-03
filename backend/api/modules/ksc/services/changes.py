@@ -62,3 +62,12 @@ def recompute_changes(db: Session, snapshot: KscSnapshot, data_dir: Path) -> Non
     )
     insert_chunked(db, KscChange, rows, len(diff.changes), None, "изменений")
     set_summary(snapshot, {"prev": prev.id, "total": len(diff.changes), "compared": diff.compared, "truncated": diff.truncated})
+
+
+def summary_view(snapshot: KscSnapshot) -> dict[str, Any]:
+    """Свод изменений для ответов API; `total: None` — изменения у снапшота не считались (не «ноль изменений»)."""
+    s = changes_summary(snapshot)
+    if not s:
+        return {"total": None, "prev": None, "compared": {}, "truncated": False, "reason": "изменения не считались — пересчитайте снапшот"}
+    return {"total": s.get("total", 0), "prev": s.get("prev"), "compared": s.get("compared") or {}, "truncated": bool(s.get("truncated")),
+            "reason": s.get("reason")}

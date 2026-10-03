@@ -26,6 +26,7 @@ from api.modules.ksc.core.checks import CHECKS
 from api.modules.ksc.core.export import ExportFormatError
 from api.modules.ksc.core.findings import SEVERITIES
 from api.modules.ksc.models import KscFinding, KscJob, KscServer, KscSnapshot
+from api.modules.ksc.services.changes import summary_view
 from api.modules.ksc.services.settings import load_config
 from api.modules.ksc.services.snapshots import (
     MAX_UPLOAD,
@@ -113,7 +114,7 @@ def server_overview(server_id: int, db: Session = Depends(get_db), _user: AppUse
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="сервер не найден")
     snap = latest_snapshot(db, server_id)
     if snap is None:
-        return {"server": {"id": server.id, "name": server.name, "version": server.version}, "snapshot": None, "coverage": None, "checks": []}
+        return {"server": {"id": server.id, "name": server.name, "version": server.version}, "snapshot": None, "coverage": None, "checks": [], "changes": None}
     cmp_ = compare(db, snap)
     rows = db.execute(select(KscFinding.check, KscFinding.severity, KscFinding.key).where(KscFinding.snapshot_id == snap.id)).all()
     counts = severity_counts(db, snap.id)
@@ -125,6 +126,7 @@ def server_overview(server_id: int, db: Session = Depends(get_db), _user: AppUse
         },
         "compared_to": comparison_summary(cmp_),
         "coverage": stats(snap).get("coverage"),
+        "changes": summary_view(snap),
         **findings_overview(db, "ksc", server_id, rows, CHECKS, SEVERITIES, cmp_),
     }
 
