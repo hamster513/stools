@@ -91,6 +91,8 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
             "uac": 512 if cls == "user" else 4096,
             "lastLogonTimestamp": ft(3),
             "pwdLastSet": ft(30),
+            "whenCreated": (now - dt.timedelta(days=365)).isoformat(),
+            "primaryGroupID": 513 if cls == "user" else 515,
         }
         base.update(extra)
         return base
@@ -216,8 +218,29 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
             "msPKI-Cert-Template-OID": "1.3.6.1.4.1.311.21.8.1.1",
             "msDS-OIDToGroupLink": "",
         },
-        {"dn": f"CN=other.local,CN=System,{DN}", "class": "trustedDomain", "flatName": "OTHER", "sid": OTHER_SID, "trustAttributes": TRUST_WITHIN_FOREST},
+        {
+            "dn": f"CN=other.local,CN=System,{DN}",
+            "class": "trustedDomain",
+            "flatName": "OTHER",
+            "sid": OTHER_SID,
+            "trustAttributes": TRUST_WITHIN_FOREST,
+            "trustDirection": 3,
+            "trustType": 2,
+            "trustPartner": "other.local",
+            "whenChanged": (now - dt.timedelta(days=10)).isoformat(),
+            "supportedEncryptionTypes": 24,
+        },
         {"dn": f"CN=ext.local,CN=System,{DN}", "class": "trustedDomain", "flatName": "EXT", "sid": EXT_SID, "trustAttributes": TRUST_EXTERNAL},
+        {
+            "dn": f"DC=corp.local,CN=MicrosoftDNS,DC=DomainDnsZones,{DN}",
+            "class": "dnsZone",
+            "name": "corp.local",
+            "partition": "DomainDnsZones",
+            "allowUpdate": 2,  # только безопасные динамические обновления
+            "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL), sd.build_ace("S-1-5-11", sd.READ_PROPERTY)]),
+        },
+        {"dn": f"CN=Default-First-Site-Name,CN=Sites,{CONF_DN}", "class": "site", "name": "Default-First-Site-Name"},
+        {"dn": f"CN=10.0.0.0/24,CN=Subnets,CN=Sites,{CONF_DN}", "class": "subnet", "name": "10.0.0.0/24", "site": f"CN=Default-First-Site-Name,CN=Sites,{CONF_DN}"},
     ]
     principals = {rid(r): {"name": f"CORP\\{sam}", "class": cls} for sam, (r, cls) in ACCOUNTS.items()}
     return {
@@ -233,6 +256,19 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
             "schema_dn": f"CN=Schema,{CONF_DN}",
             "machine_account_quota": 10,
             "functional_level": "2016",
+            "forest_functional_level": "7",
+            "min_pwd_length": 12,
+            "lockout_threshold": 5,
+            "pwd_properties": 1,
+            "recycle_bin": True,
+            "ds_heuristics": "",
+            "smartcard_rotation": True,
+            "laps_legacy_schema": False,
+            "laps_schema": True,
+            "last_backup": (now - dt.timedelta(days=1)).isoformat(),
+            "backup_read": True,
+            "sysvol_replication": "dfsr",
+            "schema_poss_superiors": {},
         },
         "guids": {
             "extended_rights": {
@@ -243,6 +279,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
                 "AutoEnroll": GUID_AUTOENROLL,
             },
             "schema_attributes": {"msDS-KeyCredentialLink": GUID_KEYCRED},
+            "schema_classes": {"msDS-DelegatedManagedServiceAccount": ""},
         },
         "objects": objects,
         "sysvol": {

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import re
+import struct
 import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator
@@ -23,12 +25,13 @@ SmbReader = Callable[[str], bytes | None]
 USER_ATTRS = [
     "sAMAccountName", "name", "objectSid", "userAccountControl", "lastLogonTimestamp", "pwdLastSet",
     "servicePrincipalName", "msDS-AllowedToDelegateTo", "msDS-SupportedEncryptionTypes", "adminCount",
-    "altSecurityIdentities",
+    "altSecurityIdentities", "primaryGroupID", "sIDHistory", "whenCreated", "scriptPath",
 ]
 #: DNS-имя и ОС компьютера — по ним Assets сопоставляет его с хостами других источников.
 #: nTSecurityDescriptor последним: без ACL компьютеров список берётся без него.
 COMPUTER_ATTRS = [
     *USER_ATTRS, "msDS-AllowedToActOnBehalfOfOtherIdentity", "dNSHostName", "operatingSystem", "operatingSystemVersion",
+    "ms-DS-CreatorSID", "msDS-RevealOnDemandGroup", "msDS-NeverRevealGroup", "msDS-RevealedUsers", "msDS-KrbTgtLink",
     "nTSecurityDescriptor",
 ]
 GROUP_ATTRS = ["sAMAccountName", "name", "objectSid", "member", "adminCount"]
@@ -41,6 +44,22 @@ TEMPLATE_ATTRS = [
 CA_ATTRS = ["cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor"]
 OID_ATTRS = ["displayName", "msPKI-Cert-Template-OID", "msDS-OIDToGroupLink"]
 EXTENDED_RIGHTS = ["DS-Replication-Get-Changes", "DS-Replication-Get-Changes-All", "DS-Replication-Get-Changes-In-Filtered-Set", "Enroll", "AutoEnroll"]
+PSO_ATTRS = [
+    "name", "msDS-MinimumPasswordLength", "msDS-LockoutThreshold", "msDS-PasswordReversibleEncryptionEnabled",
+    "msDS-PasswordComplexityEnabled", "msDS-PasswordSettingsPrecedence", "msDS-PSOAppliesTo",
+]
+LAPS_LEGACY = "ms-Mcs-AdmPwd"
+LAPS = "msLAPS-Password"
+LAPS_EXPIRY = {"ms-Mcs-AdmPwdExpirationTime": "lapsExpiry", "msLAPS-PasswordExpirationTime": "lapsNewExpiry"}
+SMARTCARD_ROTATION = "msDS-ExpirePasswordsOnSmartCardOnlyAccounts"
+EXCHANGE_STORAGE_GROUP = "msExchStorageGroup"
+DMSA = "msDS-DelegatedManagedServiceAccount"
+#: Имена схемы, которых может не быть (LAPS, Server 2016, Exchange, dMSA). ldap3 со схемой
+#: отвергает запрос с неизвестным атрибутом целиком — такие атрибуты запрашиваются после проверки.
+SCHEMA_OPTIONAL = [LAPS_LEGACY, *LAPS_EXPIRY, LAPS, SMARTCARD_ROTATION, EXCHANGE_STORAGE_GROUP, DMSA]
+UNIX_PASSWORD_FILTER = "(&(objectCategory=person)(objectClass=user)(|(userPassword=*)(unixUserPassword=*)))"
+#: dNSProperty: Id свойства DSPROPERTY_ZONE_ALLOW_UPDATE (MS-DNSP 2.3.2.1.1).
+DNS_ZONE_ALLOW_UPDATE = 2
 GPT_TMPL = "\\MACHINE\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf"
 #: Код LDAP noSuchObject: базы поиска нет.
 NO_SUCH_OBJECT = 32
@@ -53,6 +72,8 @@ class LdapResultError(RuntimeError):
 
     def __init__(self, code: int, description: str, flt: str) -> None:
         self.code = code
+        #: Для записи в notes, когда отказ раздела не прерывает сбор.
+        self.reason = f"{description or 'ошибка'} ({code})"
         what = flt if len(flt) <= 60 else flt[:59] + "…"
         super().__init__(f"контроллер ответил {description or 'ошибкой'} ({code}) на поиске {what} — сбор прерван")
 
@@ -101,6 +122,98 @@ def _filetime(entry: Entry, attr: str) -> int | None:
             value = value.replace(tzinfo=dt.UTC)
         return max(datetime_to_filetime(value), 0)
     return _int(value)
+
+
+def _raw_list(entry: Entry, attr: str) -> list[bytes]:
+    value = (entry.get("raw_attributes") or {}).get(attr)
+    if value is None:
+        return []
+    return [bytes(v) for v in (value if isinstance(value, list) else [value])]
+
+
+def _bool(value: Any) -> bool | None:
+    """Boolean AD: со схемой ldap3 отдаёт bool, без неё — строку TRUE/FALSE."""
+    v = _first(value)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, bytes | str):
+        text = (v.decode("ascii", errors="replace") if isinstance(v, bytes) else v).upper()
+        return True if text == "TRUE" else False if text == "FALSE" else None
+    return None
+
+
+def _gentime(entry: Entry, attr: str) -> str | None:
+    """GeneralizedTime (whenCreated, whenChanged) → ISO UTC. Как и FILETIME, со схемой
+    ldap3 отдаёт дату, без неё — строку; исходные байты есть всегда."""
+    raw = _raw(entry, attr)
+    value: Any = raw.decode("ascii", errors="replace") if raw is not None else _first(entry["attributes"].get(attr))
+    if isinstance(value, dt.datetime):
+        moment = value if value.tzinfo is not None else value.replace(tzinfo=dt.UTC)
+    elif isinstance(value, str):
+        try:
+            moment = dt.datetime.strptime(value[:14], "%Y%m%d%H%M%S").replace(tzinfo=dt.UTC)
+        except ValueError:
+            return None
+    else:
+        return None
+    return moment.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _sids(entry: Entry, attr: str) -> list[str]:
+    raw = _raw_list(entry, attr)
+    if raw:
+        return [sd.sid_to_str(v) for v in raw]
+    return _list(entry["attributes"].get(attr))
+
+
+def _texts(entry: Entry, attr: str) -> list[str]:
+    """Строковые значения, которые ldap3 со схемой отдаёт байтами (DN-Binary)."""
+    raw = _raw_list(entry, attr)
+    if raw:
+        return [v.decode("utf-8", errors="replace") for v in raw]
+    value = entry["attributes"].get(attr)
+    values = value if isinstance(value, list) else [] if value is None else [value]
+    return [v.decode("utf-8", errors="replace") if isinstance(v, bytes) else str(v) for v in values]
+
+
+def _dn_binary(value: str) -> str:
+    """DN-Binary `B:<длина>:<hex>:<DN>` → DN; в самом DN двоеточие допустимо."""
+    parts = value.split(":", 3)
+    return parts[3] if len(parts) == 4 and parts[0].upper() == "B" else value
+
+
+_META_ITEM = re.compile(
+    r"<pszAttributeName>\s*([^<]*?)\s*</pszAttributeName>.*?<ftimeLastOriginatingChange>\s*([^<]*?)\s*</ftimeLastOriginatingChange>",
+    re.DOTALL,
+)
+
+
+def last_backup_from_metadata(values: list[str]) -> dt.datetime | None:
+    """Время последней резервной копии домена: резервное копирование меняет dSASignature
+    корня, время изменения берётся из msDS-ReplAttributeMetaData (XML на каждый атрибут)."""
+    for value in values or []:
+        m = _META_ITEM.search(value) if isinstance(value, str) else None
+        if m is None or m.group(1) != "dSASignature":
+            continue
+        try:
+            moment = dt.datetime.fromisoformat(m.group(2))
+        except ValueError:
+            return None
+        return moment if moment.tzinfo is not None else moment.replace(tzinfo=dt.UTC)
+    return None
+
+
+def dns_allow_update(properties: list[bytes]) -> int | None:
+    """Режим динамических обновлений зоны из dNSProperty: заголовок 20 байт
+    (DataLength, NameLength, Flag, Version, Id), затем данные; 0 — нет, 1 — любые, 2 — безопасные."""
+    for prop in properties or []:
+        if not isinstance(prop, bytes | bytearray) or len(prop) < 20:
+            continue
+        length, prop_id = struct.unpack_from("<I", prop, 0)[0], struct.unpack_from("<I", prop, 16)[0]
+        data = prop[20 : 20 + length]
+        if prop_id == DNS_ZONE_ALLOW_UPDATE and data:
+            return data[0]
+    return None
 
 
 def _b64(data: bytes | None) -> str | None:
@@ -154,6 +267,15 @@ class LdapCollector:
             if exc.code != NO_SUCH_OBJECT:
                 raise
 
+    def _read(self, failure: str, base: str, flt: str, attrs: list[str], scope: str) -> list[Entry] | None:
+        """Необязательный раздел: нет базы — пустой список; любой отказ контроллера —
+        запись «<failure>: <причина>» в notes и None («не прочитано»), сбор продолжается."""
+        try:
+            return list(self._search_optional(base, flt, attrs, scope))
+        except LdapResultError as exc:
+            self.notes.append(f"{failure}: {exc.reason}")
+            return None
+
     def _register(self, sid: str | None, name: str, cls: str) -> None:
         if sid and sid not in self.principals:
             self.principals[sid] = {"name": name, "class": cls}
@@ -175,7 +297,11 @@ class LdapCollector:
         config_nc = str(self.root.get("configurationNamingContext") or f"CN=Configuration,{default_nc}")
         schema_nc = str(self.root.get("schemaNamingContext") or f"CN=Schema,{config_nc}")
 
-        root_obj = self._one(default_nc, "(objectClass=*)", ["objectSid", "ms-DS-MachineAccountQuota", "nTSecurityDescriptor", "msDS-Behavior-Version"], "BASE", missing_ok=True)
+        root_attrs = [
+            "objectSid", "ms-DS-MachineAccountQuota", "nTSecurityDescriptor", "msDS-Behavior-Version",
+            "minPwdLength", "lockoutThreshold", "pwdProperties", "pwdHistoryLength",
+        ]
+        root_obj = self._one(default_nc, "(objectClass=*)", root_attrs, "BASE", missing_ok=True)
         if root_obj is None:
             raise ValueError("корень домена не прочитан — проверьте base DN и права")
         attrs = root_obj["attributes"]
@@ -194,7 +320,15 @@ class LdapCollector:
             "schema_dn": schema_nc,
             "machine_account_quota": _int(attrs.get("ms-DS-MachineAccountQuota")),
             "functional_level": str(_first(attrs.get("msDS-Behavior-Version")) or ""),
+            "min_pwd_length": _int(attrs.get("minPwdLength")),
+            "lockout_threshold": _int(attrs.get("lockoutThreshold")),
+            "pwd_properties": _int(attrs.get("pwdProperties")),
+            "pwd_history_length": _int(attrs.get("pwdHistoryLength")),
         }
+        schema_flt = "(|" + "".join(f"(lDAPDisplayName={n})" for n in SCHEMA_OPTIONAL) + ")"
+        schema = self._read("схема не прочитана", schema_nc, schema_flt, ["lDAPDisplayName", "schemaIDGUID", "possSuperiors", "systemPossSuperiors"], "SUBTREE")
+        in_schema = {str(_first(e["attributes"].get("lDAPDisplayName"))): e for e in schema or []}
+        domain.update(self._domain_settings(default_nc, config_nc, in_schema if schema is not None else None))
 
         ext: dict[str, str] = {}
         for name in EXTENDED_RIGHTS:
@@ -207,6 +341,11 @@ class LdapCollector:
             raw_guid = _raw(kc, "schemaIDGUID")
             if raw_guid:
                 schema_attrs["msDS-KeyCredentialLink"] = str(uuid.UUID(bytes_le=raw_guid))
+        # Ключ есть — схема проверена; пустое значение — класса нет. Схема не прочитана — ключа нет.
+        schema_classes: dict[str, str] = {}
+        if schema is not None:
+            dmsa_guid = _raw(in_schema[DMSA], "schemaIDGUID") if DMSA in in_schema else None
+            schema_classes[DMSA] = str(uuid.UUID(bytes_le=dmsa_guid)) if dmsa_guid else ""
 
         objects: list[dict[str, Any]] = []
         root_sd = _raw(root_obj, "nTSecurityDescriptor")
@@ -218,9 +357,16 @@ class LdapCollector:
             objects.append({"dn": holder["dn"], "class": "container", "sd": _b64(hsd)})
             self._note_sd(hsd)
 
-        for e in self.search(default_nc, "(&(objectCategory=person)(objectClass=user))", USER_ATTRS, "SUBTREE"):
-            objects.append(self._account(e, "user", netbios, with_sd=False))
-        comp_attrs = COMPUTER_ATTRS if self.include_computer_sd else COMPUTER_ATTRS[:-1]
+        users = [self._account(e, "user", netbios, with_sd=False) for e in self.search(default_nc, "(&(objectCategory=person)(objectClass=user))", USER_ATTRS, "SUBTREE")]
+        objects.extend(users)
+        # Только наличие пароля: значения userPassword/unixUserPassword не запрашиваются.
+        unix = self._read("Unix-пароли не проверены", default_nc, UNIX_PASSWORD_FILTER, ["sAMAccountName"], "SUBTREE")
+        unix_dns = {e["dn"].lower() for e in unix or []}
+        for u in users:
+            if u["dn"].lower() in unix_dns:
+                u["hasUnixPassword"] = True
+        laps_attrs = [a for a in LAPS_EXPIRY if a in in_schema]
+        comp_attrs = [*COMPUTER_ATTRS[:-1], *laps_attrs, *(COMPUTER_ATTRS[-1:] if self.include_computer_sd else [])]
         for e in self.search(default_nc, "(objectClass=computer)", comp_attrs, "SUBTREE"):
             objects.append(self._account(e, "computer", netbios, with_sd=self.include_computer_sd))
         for e in self.search(default_nc, "(objectClass=group)", GROUP_ATTRS, "SUBTREE"):
@@ -271,14 +417,18 @@ class LdapCollector:
             self._note_sd(tsd)
         objects.extend(self._pki_objects(pki))
         objects.extend(self._trusts(default_nc))
+        objects.extend(self._password_settings(default_nc))
+        forest_nc = str(self.root.get("rootDomainNamingContext") or default_nc)
+        objects.extend(self._dns_zones(default_nc, forest_nc))
+        objects.extend(self._sites(config_nc))
 
         self._resolve_pending(default_nc, netbios)
         return {
             "format": FORMAT,
             "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "collector": {"kind": "ldap", "version": "1.0", "host": self.host, "account": self.account, "notes": self.notes},
+            "collector": {"kind": "ldap", "version": "1.1", "host": self.host, "account": self.account, "notes": self.notes},
             "domain": domain,
-            "guids": {"extended_rights": ext, "schema_attributes": schema_attrs},
+            "guids": {"extended_rights": ext, "schema_attributes": schema_attrs, "schema_classes": schema_classes},
             "objects": objects,
             "sysvol": sysvol,
             "principals": self.principals,
@@ -322,17 +472,136 @@ class LdapCollector:
 
     def _trusts(self, default_nc: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
-        for e in self._search_optional(f"CN=System,{default_nc}", "(objectClass=trustedDomain)", ["flatName", "securityIdentifier", "trustAttributes"], "LEVEL"):
+        trust_attrs = [
+            "flatName", "securityIdentifier", "trustAttributes", "trustDirection", "trustType", "trustPartner", "whenChanged",
+            "msDS-SupportedEncryptionTypes",
+        ]
+        for e in self._search_optional(f"CN=System,{default_nc}", "(objectClass=trustedDomain)", trust_attrs, "LEVEL"):
+            a = e["attributes"]
             raw_sid = _raw(e, "securityIdentifier")
             out.append(
                 {
                     "dn": e["dn"],
                     "class": "trustedDomain",
-                    "flatName": str(_first(e["attributes"].get("flatName")) or ""),
+                    "flatName": str(_first(a.get("flatName")) or ""),
                     "sid": sd.sid_to_str(raw_sid) if raw_sid else None,
-                    "trustAttributes": _int(e["attributes"].get("trustAttributes")),
+                    "trustAttributes": _int(a.get("trustAttributes")),
+                    "trustDirection": _int(a.get("trustDirection")),
+                    "trustType": _int(a.get("trustType")),
+                    "trustPartner": _first(a.get("trustPartner")),
+                    "whenChanged": _gentime(e, "whenChanged"),
+                    "supportedEncryptionTypes": _int(a.get("msDS-SupportedEncryptionTypes")),
                 }
             )
+        return out
+
+    def _domain_settings(self, default_nc: str, config_nc: str, in_schema: dict[str, Entry] | None) -> dict[str, Any]:
+        """Настройки домена и леса вне корня домена. `in_schema` — найденные имена из
+        SCHEMA_OPTIONAL; None — схема не прочитана, зависящие от неё поля тоже None."""
+        ds = f"CN=Directory Service,CN=Windows NT,CN=Services,{config_nc}"
+        out: dict[str, Any] = {}
+
+        forest = self._read("функциональный уровень леса не прочитан", f"CN=Partitions,{config_nc}", "(objectClass=*)", ["msDS-Behavior-Version"], "BASE")
+        level = _first(forest[0]["attributes"].get("msDS-Behavior-Version")) if forest else None
+        out["forest_functional_level"] = str(level) if level is not None else None
+
+        rb = self._read("корзина AD не прочитана", f"CN=Recycle Bin Feature,CN=Optional Features,{ds}", "(objectClass=*)", ["msDS-EnabledFeatureBL"], "BASE")
+        if rb == []:
+            self.notes.append("корзина AD не прочитана: объекта Recycle Bin Feature нет (лес старше Server 2008 R2)")
+        out["recycle_bin"] = bool(_list(rb[0]["attributes"].get("msDS-EnabledFeatureBL"))) if rb else None
+
+        dsh = self._read("dSHeuristics не прочитан", ds, "(objectClass=*)", ["dSHeuristics"], "BASE")
+        out["ds_heuristics"] = str(_first(dsh[0]["attributes"].get("dSHeuristics")) or "") if dsh else None
+
+        dfsr = self._read("способ репликации SYSVOL не определён", f"CN=Domain System Volume,CN=DFSR-GlobalSettings,CN=System,{default_nc}", "(objectClass=*)", ["cn"], "BASE")
+        out["sysvol_replication"] = None if dfsr is None else "dfsr" if dfsr else "ntfrs"
+
+        # Метаданные репликации — конструируемый атрибут: отдаётся только по явному запросу.
+        meta_attrs = ["msDS-ReplAttributeMetaData"]
+        if in_schema is not None and SMARTCARD_ROTATION in in_schema:
+            meta_attrs.append(SMARTCARD_ROTATION)
+        meta = self._read("метаданные репликации корня домена не прочитаны", default_nc, "(objectClass=*)", meta_attrs, "BASE")
+        values = [v.decode("utf-8", errors="replace") for v in _raw_list(meta[0], "msDS-ReplAttributeMetaData")] if meta else []
+        if not values and meta:
+            values = _list(meta[0]["attributes"].get("msDS-ReplAttributeMetaData"))
+        backup = last_backup_from_metadata(values)
+        out["last_backup"] = backup.strftime("%Y-%m-%dT%H:%M:%SZ") if backup else None
+        out["backup_read"] = bool(values) if meta else None
+        # Атрибута нет в схеме (лес старше Server 2016) или он не задан — ротация выключена.
+        if in_schema is None:
+            out["smartcard_rotation"] = None
+        elif SMARTCARD_ROTATION not in in_schema:
+            out["smartcard_rotation"] = False
+        else:
+            out["smartcard_rotation"] = bool(_bool(meta[0]["attributes"].get(SMARTCARD_ROTATION))) if meta else None
+
+        if in_schema is None:
+            out.update(laps_legacy_schema=None, laps_schema=None, schema_poss_superiors=None)
+        else:
+            out["laps_legacy_schema"] = LAPS_LEGACY in in_schema
+            out["laps_schema"] = LAPS in in_schema
+            storage = in_schema.get(EXCHANGE_STORAGE_GROUP)
+            out["schema_poss_superiors"] = (
+                {EXCHANGE_STORAGE_GROUP: _list(storage["attributes"].get("possSuperiors")) + _list(storage["attributes"].get("systemPossSuperiors"))}
+                if storage is not None
+                else {}
+            )
+        return out
+
+    def _password_settings(self, default_nc: str) -> list[dict[str, Any]]:
+        found = self._read("PSO не прочитаны", f"CN=Password Settings Container,CN=System,{default_nc}", "(objectClass=msDS-PasswordSettings)", PSO_ATTRS, "LEVEL")
+        if found == []:
+            self.notes.append("PSO не найдены: при сборе не администратором домена они не видны")
+        out: list[dict[str, Any]] = []
+        for e in found or []:
+            a = e["attributes"]
+            out.append(
+                {
+                    "dn": e["dn"],
+                    "class": "msDS-PasswordSettings",
+                    "name": str(_first(a.get("name")) or ""),
+                    "psoMinLength": _int(a.get("msDS-MinimumPasswordLength")),
+                    "psoLockoutThreshold": _int(a.get("msDS-LockoutThreshold")),
+                    "psoReversible": _bool(a.get("msDS-PasswordReversibleEncryptionEnabled")),
+                    "psoComplexity": _bool(a.get("msDS-PasswordComplexityEnabled")),
+                    "psoPrecedence": _int(a.get("msDS-PasswordSettingsPrecedence")),
+                    "psoAppliesTo": _list(a.get("msDS-PSOAppliesTo")),
+                }
+            )
+        return out
+
+    def _dns_zones(self, default_nc: str, forest_nc: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        bases = {
+            "DomainDnsZones": f"DC=DomainDnsZones,{default_nc}",
+            "ForestDnsZones": f"DC=ForestDnsZones,{forest_nc}",
+            "System": f"CN=MicrosoftDNS,CN=System,{default_nc}",
+        }
+        for partition, base in bases.items():
+            found = self._read(f"зоны DNS не прочитаны ({partition})", base, "(objectClass=dnsZone)", ["name", "dNSProperty", "nTSecurityDescriptor"], "SUBTREE")
+            for e in found or []:
+                zsd = _raw(e, "nTSecurityDescriptor")
+                out.append(
+                    {
+                        "dn": e["dn"],
+                        "class": "dnsZone",
+                        "name": str(_first(e["attributes"].get("name")) or ""),
+                        "partition": partition,
+                        "allowUpdate": dns_allow_update(_raw_list(e, "dNSProperty")),
+                        "sd": _b64(zsd),
+                    }
+                )
+                self._note_sd(zsd)
+        return out
+
+    def _sites(self, config_nc: str) -> list[dict[str, Any]]:
+        sites = self._read("сайты не прочитаны", f"CN=Sites,{config_nc}", "(objectClass=site)", ["name"], "LEVEL")
+        subnets = self._read("подсети не прочитаны", f"CN=Subnets,CN=Sites,{config_nc}", "(objectClass=subnet)", ["name", "siteObject"], "LEVEL")
+        out: list[dict[str, Any]] = [{"dn": e["dn"], "class": "site", "name": str(_first(e["attributes"].get("name")) or "")} for e in sites or []]
+        for e in subnets or []:
+            a = e["attributes"]
+            site = _first(a.get("siteObject"))
+            out.append({"dn": e["dn"], "class": "subnet", "name": str(_first(a.get("name")) or ""), "site": str(site) if site else None})
         return out
 
     def _account(self, e: Entry, cls: str, netbios: str, *, with_sd: bool) -> dict[str, Any]:
@@ -356,8 +625,20 @@ class LdapCollector:
             "supportedEncryptionTypes": _int(a.get("msDS-SupportedEncryptionTypes")),
             "adminCount": _int(a.get("adminCount")),
             "altSecurityIdentities": _list(a.get("altSecurityIdentities")),
+            "primaryGroupID": _int(a.get("primaryGroupID")),
+            "sIDHistory": _sids(e, "sIDHistory"),
+            "whenCreated": _gentime(e, "whenCreated"),
+            "scriptPath": _first(a.get("scriptPath")) or None,
         }
         if cls == "computer":
+            for attr, field in LAPS_EXPIRY.items():
+                rec[field] = _filetime(e, attr)
+            rec["creatorSid"] = _sid_str(_raw(e, "ms-DS-CreatorSID") or a.get("ms-DS-CreatorSID"))
+            rec["revealOnDemand"] = _list(a.get("msDS-RevealOnDemandGroup"))
+            rec["neverReveal"] = _list(a.get("msDS-NeverRevealGroup"))
+            # Значение на каждый раскрытый секрет учётки — DN повторяются.
+            rec["revealedUsers"] = list(dict.fromkeys(_dn_binary(v) for v in _texts(e, "msDS-RevealedUsers")))
+            rec["krbTgtLink"] = _first(a.get("msDS-KrbTgtLink"))
             rbcd = _raw(e, "msDS-AllowedToActOnBehalfOfOtherIdentity")
             rec["allowedToActOnBehalf"] = _b64(rbcd)
             self._note_sd(rbcd)
@@ -447,6 +728,7 @@ def ldap3_searcher(
     Исключение из них прерывает сбор до следующего запроса.
     Ответ контроллера с кодом ошибки — `LdapResultError`."""
     from ldap3 import BASE, LEVEL, SUBTREE
+    from ldap3.core.exceptions import LDAPAttributeError, LDAPObjectClassError
     from ldap3.protocol.microsoft import security_descriptor_control
 
     scopes = {"BASE": BASE, "LEVEL": LEVEL, "SUBTREE": SUBTREE}
@@ -463,9 +745,14 @@ def ldap3_searcher(
         cookie: bytes | None = None
         while True:
             before_request()
-            connection.search(
-                base, flt, search_scope=scopes[scope], attributes=attrs, controls=controls, paged_size=page_size, paged_cookie=cookie,
-            )
+            try:
+                connection.search(
+                    base, flt, search_scope=scopes[scope], attributes=attrs, controls=controls, paged_size=page_size, paged_cookie=cookie,
+                )
+            except (LDAPAttributeError, LDAPObjectClassError) as exc:
+                # ldap3 со схемой отвергает до отправки имя, которого нет в схеме контроллера (старый лес):
+                # как ответ контроллера — необязательный раздел запишет note, а не прервёт сбор.
+                raise LdapResultError(17, "undefinedAttributeType", flt) from exc
             result = connection.result or {}
             if result.get("result", 0) != 0:
                 raise LdapResultError(int(result["result"]), str(result.get("description") or ""), flt)

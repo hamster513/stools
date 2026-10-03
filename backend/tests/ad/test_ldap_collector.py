@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
+import struct
 from typing import Any
 
 import pytest
@@ -9,7 +11,12 @@ from api.modules.ad.core import sd
 from api.modules.ad.core.checks import run_all
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex, load_export
-from api.modules.ad.core.ldap_collector import LdapCollector, LdapResultError
+from api.modules.ad.core.ldap_collector import (
+    LdapCollector,
+    LdapResultError,
+    dns_allow_update,
+    last_backup_from_metadata,
+)
 from tests.ad.fake_ldap import FakeLdap
 from tests.ad.synthetic import DN, EXT_SID, OTHER_SID, PKI, b64sd, export_bytes, rid, user_dn
 
@@ -260,3 +267,191 @@ def test_collector_notes_reach_the_coverage_reason() -> None:
     raw = LdapCollector(fake.search, fake.root_dse(), smb_reader=None, notes=["SYSVOL недоступен по SMB: ConnectionError"]).collect()
     gaps = coverage_gaps(load_export(json.dumps(raw).encode()))
     assert "ConnectionError" in gaps["UserRightsAssignment"]
+
+
+def collect_with(fake: FakeLdap) -> dict[str, Any]:
+    return LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb, host="dc01", account="CORP\\auditor").collect()
+
+
+def _prop(prop_id: int, data: bytes) -> bytes:
+    return struct.pack("<IIIII", len(data), 0, 0, 1, prop_id) + data + b"\x00"
+
+
+def test_dns_allow_update_reads_property_two() -> None:
+    assert dns_allow_update([_prop(1, struct.pack("<I", 1)), _prop(2, b"\x01")]) == 1
+    assert dns_allow_update([_prop(1, struct.pack("<I", 1))]) is None
+    assert dns_allow_update([b"\x00\x01"]) is None          # обрезанная запись не роняет сбор
+
+
+def test_last_backup_from_metadata() -> None:
+    item = ("<DS_REPL_ATTR_META_DATA><pszAttributeName>{}</pszAttributeName><dwVersion>3</dwVersion>"
+            "<ftimeLastOriginatingChange>{}</ftimeLastOriginatingChange></DS_REPL_ATTR_META_DATA>")
+    values = [item.format("whenCreated", "2024-01-01T00:00:00Z"), item.format("dSASignature", "2026-09-01T10:20:30Z")]
+    assert last_backup_from_metadata(values) == dt.datetime(2026, 9, 1, 10, 20, 30, tzinfo=dt.UTC)
+    assert last_backup_from_metadata(values[:1]) is None
+
+
+def test_collector_reads_hygiene_data() -> None:
+    out = collect_with(FakeLdap())             # существующий помощник теста сборщика
+    d = out["domain"]
+    assert out["collector"]["version"] == "1.1"
+    assert d["min_pwd_length"] == 12 and d["recycle_bin"] is True and d["sysvol_replication"] == "dfsr" and d["backup_read"] is True
+    assert out["guids"]["schema_classes"] == {"msDS-DelegatedManagedServiceAccount": ""}
+    by_class: dict[str, list[dict[str, Any]]] = {}
+    for o in out["objects"]:
+        by_class.setdefault(o["class"], []).append(o)
+    assert by_class["dnsZone"][0]["allowUpdate"] == 2 and by_class["subnet"][0]["name"] == "10.0.0.0/24"
+    assert by_class["trustedDomain"][0]["trustDirection"] == 3
+    users = {o["sam"]: o for o in by_class["user"]}
+    assert all(u.get("primaryGroupID") for u in users.values())
+    assert sum(1 for u in users.values() if u.get("hasUnixPassword")) == 1
+    assert not any("userPassword" in u for u in users.values())       # значения паролей не читаются
+
+
+def test_collector_survives_denied_sections() -> None:
+    out = collect_with(FakeLdap(deny=("CN=Password Settings Container", "DC=DomainDnsZones")))
+    assert any("PSO" in n for n in out["collector"]["notes"]) and any("DNS" in n for n in out["collector"]["notes"])
+
+
+def test_new_fields_reach_the_model() -> None:
+    """Учётки, RODC, LAPS, PSO, доверия и настройки домена: ключи сборщика совпадают с полями модели."""
+    fake = FakeLdap()
+    other = "S-1-5-21-777-888-999-1500"
+    by_sam = {o.get("sam"): o for o in fake.objects}
+    by_sam["helpdesk"].update(sIDHistory=[other], scriptPath="logon.bat")
+    by_sam["WS01$"].update(
+        creatorSid=rid(1108), lapsNewExpiry=133_000_000_000_000_000, revealedUsers=[user_dn("admin1"), "CN=a:b,CN=Users," + DN], revealOnDemand=[user_dn("Tier0")],
+    )
+    fake.objects.append(
+        {
+            "dn": f"CN=Admins PSO,CN=Password Settings Container,CN=System,{DN}", "class": "msDS-PasswordSettings", "name": "Admins PSO",
+            "psoMinLength": 15, "psoLockoutThreshold": 0, "psoReversible": False, "psoComplexity": True, "psoPrecedence": 10,
+            "psoAppliesTo": [user_dn("Domain Admins")],
+        }
+    )
+    raw = collect_with(fake)
+    exp = load_export(json.dumps(raw).encode())
+    objs = {o.dn: o for o in exp.objects}
+    helpdesk, ws01 = objs[user_dn("helpdesk")], objs[f"CN=WS01,CN=Computers,{DN}"]
+    assert helpdesk.sIDHistory == [other] and helpdesk.scriptPath == "logon.bat" and helpdesk.primaryGroupID == 513
+    assert helpdesk.whenCreated == dt.datetime(2025, 9, 9, 12, 0, tzinfo=dt.UTC)
+    assert ws01.creatorSid == rid(1108) and ws01.lapsNewExpiry == 133_000_000_000_000_000 and ws01.lapsExpiry is None
+    # Байты DN-Binary разобраны; по DN одна запись, двоеточие внутри DN сохраняется.
+    assert ws01.revealedUsers == [user_dn("admin1"), "CN=a:b,CN=Users," + DN] and ws01.revealOnDemand == [user_dn("Tier0")] and ws01.primaryGroupID == 515
+    pso = next(o for o in exp.objects if o.cls == "msDS-PasswordSettings")
+    assert (pso.psoMinLength, pso.psoLockoutThreshold, pso.psoReversible, pso.psoComplexity, pso.psoPrecedence) == (15, 0, False, True, 10)
+    assert pso.psoAppliesTo == [user_dn("Domain Admins")]
+    trust = next(o for o in exp.objects if o.flatName == "OTHER")
+    assert (trust.trustType, trust.trustPartner, trust.supportedEncryptionTypes) == (2, "other.local", 24)
+    assert trust.whenChanged == dt.datetime(2026, 8, 30, 12, 0, tzinfo=dt.UTC)
+    zone = next(o for o in exp.objects if o.cls == "dnsZone")
+    assert zone.partition == "DomainDnsZones" and zone.sd
+    assert next(o for o in exp.objects if o.cls == "subnet").site == f"CN=Default-First-Site-Name,CN=Sites,CN=Configuration,{DN}"
+    d = exp.domain
+    assert (d.forest_functional_level, d.lockout_threshold, d.pwd_properties, d.ds_heuristics) == ("7", 5, 1, "")
+    assert (d.smartcard_rotation, d.laps_legacy_schema, d.laps_schema, d.schema_poss_superiors) == (True, False, True, {})
+    assert d.last_backup == dt.datetime(2026, 9, 8, 12, 0, tzinfo=dt.UTC)
+    assert raw["collector"]["notes"] == []  # PSO есть — записи «PSO не найдены» нет
+
+
+def test_optional_schema_attributes_are_requested_only_when_present() -> None:
+    """ldap3 со схемой отвергает запрос с атрибутом, которого в схеме нет: LAPS и атрибут Server 2016
+    запрашиваются, только если они есть; без них поля — «нет в схеме», а не «не прочитано»."""
+    fake = FakeLdap()
+    for name in ("msLAPS-Password", "msLAPS-PasswordExpirationTime", "msDS-ExpirePasswordsOnSmartCardOnlyAccounts"):
+        del fake.schema[name]
+    fake.schema["msExchStorageGroup"] = {"possSuperiors": ["msExchInformationStore"], "systemPossSuperiors": ["computer"]}
+    fake.schema["msDS-DelegatedManagedServiceAccount"] = {"schemaIDGUID": [bytes(range(16))]}
+    asked: list[str] = []
+
+    def search(base: str, flt: str, attrs: list[str], scope: str) -> Any:
+        asked.extend(attrs)
+        return fake.search(base, flt, attrs, scope)
+
+    raw = LdapCollector(search, fake.root_dse(), smb_reader=fake.smb).collect()
+    assert not {"msLAPS-PasswordExpirationTime", "ms-Mcs-AdmPwdExpirationTime", "msDS-ExpirePasswordsOnSmartCardOnlyAccounts"} & set(asked)
+    assert "userPassword" not in asked and "unixUserPassword" not in asked
+    d = raw["domain"]
+    assert (d["laps_schema"], d["laps_legacy_schema"], d["smartcard_rotation"]) == (False, False, False)
+    assert d["schema_poss_superiors"] == {"msExchStorageGroup": ["msExchInformationStore", "computer"]}
+    assert raw["guids"]["schema_classes"] == {"msDS-DelegatedManagedServiceAccount": "03020100-0504-0706-0809-0a0b0c0d0e0f"}
+
+
+def test_unread_sections_are_none_with_a_note() -> None:
+    """Отказ схемы, корзины и метаданных — None («не прочитано») и запись в notes, а не False."""
+    fake = FakeLdap(deny=("CN=Recycle Bin Feature,", "CN=Sites,", "CN=Subnets,"))
+    del fake.base_entries[f"CN=Domain System Volume,CN=DFSR-GlobalSettings,CN=System,{DN}"]
+
+    def search(base: str, flt: str, attrs: list[str], scope: str) -> Any:
+        if base.startswith("CN=Schema,") and flt.startswith("(|"):  # проверка необязательных имён схемы
+            raise LdapResultError(50, "insufficientAccessRights", flt)
+        return fake.search(base, flt, attrs, scope)
+
+    raw = LdapCollector(search, fake.root_dse(), smb_reader=fake.smb).collect()
+    d, notes = raw["domain"], raw["collector"]["notes"]
+    assert d["recycle_bin"] is None and d["laps_schema"] is None and d["smartcard_rotation"] is None and d["schema_poss_superiors"] is None
+    assert "schema_classes" in raw["guids"] and raw["guids"]["schema_classes"] == {}
+    assert d["sysvol_replication"] == "ntfrs"
+    assert any(n.startswith("корзина AD не прочитана: insufficientAccessRights (50)") for n in notes)
+    assert any(n.startswith("схема не прочитана") for n in notes) and any(n.startswith("сайты не прочитаны") for n in notes)
+    assert any(n.startswith("подсети не прочитаны") for n in notes)
+    assert not [o for o in raw["objects"] if o["class"] in ("site", "subnet")]
+    load_export(json.dumps(raw).encode())
+
+
+def test_missing_recycle_bin_object_is_noted() -> None:
+    fake = FakeLdap()
+    del fake.base_entries[f"CN=Recycle Bin Feature,CN=Optional Features,CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration,{DN}"]
+    raw = collect_with(fake)
+    assert raw["domain"]["recycle_bin"] is None and any("Recycle Bin Feature" in n for n in raw["collector"]["notes"])
+
+
+def test_empty_pso_container_is_noted() -> None:
+    """Не администратор домена видит контейнер PSO пустым и без ошибки — отсутствие PSO не доказано."""
+    notes = collect_with(FakeLdap())["collector"]["notes"]
+    assert "PSO не найдены: при сборе не администратором домена они не видны" in notes
+
+
+def test_dns_zone_partitions_are_labelled() -> None:
+    fake = FakeLdap()
+    fake.objects.append({"dn": f"DC=legacy.local,CN=MicrosoftDNS,CN=System,{DN}", "class": "dnsZone", "name": "legacy.local", "allowUpdate": 0})
+    zones = {o["name"]: o["partition"] for o in collect_with(fake)["objects"] if o["class"] == "dnsZone"}
+    assert zones == {"corp.local": "DomainDnsZones", "legacy.local": "System"}
+
+
+def test_pure_parsers_tolerate_none() -> None:
+    assert dns_allow_update(None) is None  # type: ignore[arg-type]
+    assert last_backup_from_metadata(None) is None  # type: ignore[arg-type]
+
+
+class _Ldap3OverFake:
+    """Соединение ldap3 (режим SYNC) поверх FakeLdap; для баз с префиксом из `reject` ведёт себя
+    как ldap3 со схемой, в которой нет запрошенного имени: исключение до отправки запроса."""
+
+    def __init__(self, fake: FakeLdap, reject: str) -> None:
+        self.fake, self.reject = fake, reject.lower()
+        self.auto_referrals = True
+        self.response: list[dict[str, Any]] = []
+        self.result: dict[str, Any] = {}
+
+    def search(self, search_base: str, search_filter: str, search_scope: Any = None, attributes: Any = None, **_: Any) -> bool:
+        from ldap3 import BASE, LEVEL
+        from ldap3.core.exceptions import LDAPAttributeError
+
+        if search_base.lower().startswith(self.reject):
+            raise LDAPAttributeError("invalid attribute type msDS-EnabledFeatureBL")
+        scope = "BASE" if search_scope == BASE else "LEVEL" if search_scope == LEVEL else "SUBTREE"
+        self.response = [{"type": "searchResEntry", **e} for e in self.fake.search(search_base, search_filter, attributes, scope)]
+        self.result = {"result": 0, "controls": {}}
+        return True
+
+
+def test_attribute_unknown_to_schema_is_a_note_not_an_abort() -> None:
+    from api.modules.ad.core.ldap_collector import Pacer, ldap3_searcher
+
+    fake = FakeLdap()
+    search = ldap3_searcher(_Ldap3OverFake(fake, "CN=Recycle Bin Feature,"), pacer=Pacer(0))
+    raw = LdapCollector(search, fake.root_dse()).collect()
+    assert raw["domain"]["recycle_bin"] is None
+    assert any(n.startswith("корзина AD не прочитана: undefinedAttributeType (17)") for n in raw["collector"]["notes"])
+    assert [o for o in raw["objects"] if o["class"] == "user"] and raw["domain"]["min_pwd_length"] == 12

@@ -6,13 +6,18 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import re
+import struct
 from typing import Any
 
 from api.modules.ad.core import sd
+from api.modules.ad.core.ldap_collector import LdapResultError
 from tests.ad.synthetic import CONF_DN, DN, GUID_KEYCRED, PKI, b64sd, build_export, rid
 
 _SID_FILTER = re.compile(r"\(objectSid=(S-[0-9-]+)\)")
+_SCHEMA_FILTER = re.compile(r"\(lDAPDisplayName=([^)]+)\)")
+_DS = f"CN=Directory Service,CN=Windows NT,CN=Services,{CONF_DN}"
 
 
 def _uuid_bytes_le(text: str) -> bytes:
@@ -21,12 +26,51 @@ def _uuid_bytes_le(text: str) -> bytes:
     return uuid.UUID(text).bytes_le
 
 
+def _gentime(iso: str | None) -> list[bytes]:
+    """Время в формате LDAP GeneralizedTime, как его отдаёт контроллер."""
+    if not iso:
+        return []
+    return [dt.datetime.fromisoformat(iso).astimezone(dt.UTC).strftime("%Y%m%d%H%M%S.0Z").encode()]
+
+
+def _bool(value: bool | None) -> str | None:
+    return None if value is None else "TRUE" if value else "FALSE"
+
+
+def dns_property(prop_id: int, data: bytes) -> bytes:
+    """Запись dNSProperty (MS-DNSP 2.3.2.1): DataLength, NameLength, Flag, Version, Id, Data."""
+    return struct.pack("<IIIII", len(data), 0, 0, 1, prop_id) + data + b"\x00"
+
+
 class FakeLdap:
-    def __init__(self) -> None:
+    """`deny` — префиксы баз, поиск в которых отвергается кодом insufficientAccessRights."""
+
+    def __init__(self, *, deny: tuple[str, ...] = ()) -> None:
         self.raw = build_export()
         self.objects = self.raw["objects"]
+        self.deny = tuple(p.lower() for p in deny)
         # В настоящем AD сам контейнер CN=OID тоже класса msPKI-Enterprise-Oid.
         self.objects.append({"dn": f"CN=OID,{PKI}", "class": "msPKI-Enterprise-Oid", "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)])})
+        d = self.raw["domain"]
+        # Схема леса: LAPS только новый (Windows LAPS), атрибут смарт-карт Server 2016 есть, Exchange и dMSA нет.
+        self.schema: dict[str, dict[str, Any]] = {
+            "msDS-KeyCredentialLink": {"schemaIDGUID": [_uuid_bytes_le(GUID_KEYCRED)]},
+            "msLAPS-Password": {},
+            "msLAPS-PasswordExpirationTime": {},
+            "msDS-ExpirePasswordsOnSmartCardOnlyAccounts": {},
+        }
+        #: Учётки с userPassword/unixUserPassword: значения фальшивый каталог не хранит.
+        self.unix_password = {"user.noexpire"}
+        # Служебные объекты конфигурации, которые сборщик читает по BASE.
+        self.base_entries: dict[str, dict[str, Any]] = {
+            f"CN=Partitions,{CONF_DN}": {"msDS-Behavior-Version": int(d["forest_functional_level"])},
+            _DS: {"dSHeuristics": d["ds_heuristics"] or None},
+            f"CN=Recycle Bin Feature,CN=Optional Features,{_DS}": {
+                "msDS-EnabledFeatureBL": [f"CN=NTDS Settings,CN=DC01,CN=Servers,CN=Default-First-Site-Name,CN=Sites,{CONF_DN}"] if d["recycle_bin"] else [],
+            },
+        }
+        if d["sysvol_replication"] == "dfsr":
+            self.base_entries[f"CN=Domain System Volume,CN=DFSR-GlobalSettings,CN=System,{DN}"] = {"cn": "Domain System Volume"}
 
     def entry(self, o: dict[str, Any]) -> dict[str, Any]:
         attrs: dict[str, Any] = {
@@ -63,9 +107,59 @@ class FakeLdap:
             "trustAttributes": o.get("trustAttributes"),
             "altSecurityIdentities": o.get("altSecurityIdentities", []),
             "objectClass": ["top", o["class"]],
-            "ms-DS-MachineAccountQuota": self.raw["domain"]["machine_account_quota"] if o["class"] == "domainDNS" else None,
+            "primaryGroupID": o.get("primaryGroupID"),
+            "scriptPath": o.get("scriptPath"),
+            "ms-Mcs-AdmPwdExpirationTime": o.get("lapsExpiry"),
+            "msLAPS-PasswordExpirationTime": o.get("lapsNewExpiry"),
+            "msDS-RevealOnDemandGroup": o.get("revealOnDemand", []),
+            "msDS-NeverRevealGroup": o.get("neverReveal", []),
+            "msDS-KrbTgtLink": o.get("krbTgtLink"),
+            "trustDirection": o.get("trustDirection"),
+            "trustType": o.get("trustType"),
+            "trustPartner": o.get("trustPartner"),
+            "siteObject": o.get("site"),
+            "msDS-MinimumPasswordLength": o.get("psoMinLength"),
+            "msDS-LockoutThreshold": o.get("psoLockoutThreshold"),
+            "msDS-PasswordReversibleEncryptionEnabled": _bool(o.get("psoReversible")),
+            "msDS-PasswordComplexityEnabled": _bool(o.get("psoComplexity")),
+            "msDS-PasswordSettingsPrecedence": o.get("psoPrecedence"),
+            "msDS-PSOAppliesTo": o.get("psoAppliesTo", []),
         }
         raw: dict[str, Any] = {}
+        if o["class"] == "domainDNS":
+            d = self.raw["domain"]
+            attrs.update(
+                {
+                    "ms-DS-MachineAccountQuota": d["machine_account_quota"],
+                    "minPwdLength": d.get("min_pwd_length"),
+                    "lockoutThreshold": d.get("lockout_threshold"),
+                    "pwdProperties": d.get("pwd_properties"),
+                    "pwdHistoryLength": d.get("pwd_history_length"),
+                    "msDS-ExpirePasswordsOnSmartCardOnlyAccounts": _bool(d.get("smartcard_rotation")),
+                }
+            )
+            if d.get("last_backup"):
+                stamp = dt.datetime.fromisoformat(d["last_backup"]).strftime("%Y-%m-%dT%H:%M:%SZ")
+                raw["msDS-ReplAttributeMetaData"] = [
+                    f"<DS_REPL_ATTR_META_DATA><pszAttributeName>{name}</pszAttributeName><dwVersion>1</dwVersion>"
+                    f"<ftimeLastOriginatingChange>{when}</ftimeLastOriginatingChange></DS_REPL_ATTR_META_DATA>\x00".encode()
+                    for name, when in (("objectClass", "2020-01-01T00:00:00Z"), ("dSASignature", stamp))
+                ]
+        for name in ("whenCreated", "whenChanged"):
+            if o.get(name):
+                raw[name] = _gentime(o[name])
+        if o.get("revealedUsers"):
+            # DN-Binary: B:<число символов>:<hex>:<DN>, по значению на каждый раскрытый секрет.
+            # ldap3 со схемой отдаёт этот синтаксис байтами и в attributes.
+            revealed = [f"B:8:{n:08x}:{dn}".encode() for dn in o["revealedUsers"] for n in (1, 2)]
+            attrs["msDS-RevealedUsers"] = revealed
+            raw["msDS-RevealedUsers"] = revealed
+        if o.get("sIDHistory"):
+            raw["sIDHistory"] = [sd.str_to_sid(s) for s in o["sIDHistory"]]
+        if o.get("creatorSid"):
+            raw["ms-DS-CreatorSID"] = [sd.str_to_sid(o["creatorSid"])]
+        if o["class"] == "dnsZone" and o.get("allowUpdate") is not None:
+            raw["dNSProperty"] = [dns_property(1, struct.pack("<I", 1)), dns_property(2, bytes([o["allowUpdate"]]))]
         if o.get("sd"):
             raw["nTSecurityDescriptor"] = [base64.b64decode(o["sd"])]
         if o.get("allowedToActOnBehalf"):
@@ -76,10 +170,15 @@ class FakeLdap:
 
     def search(self, base: str, flt: str, attrs: list[str], scope: str) -> list[dict[str, Any]]:
         base_l = base.lower()
+        if self.deny and base_l.startswith(self.deny):
+            raise LdapResultError(50, "insufficientAccessRights", flt)
         if scope == "BASE":
             for o in self.objects:
                 if o["dn"].lower() == base_l:
                     return [self.entry(o)]
+            for dn, extra in self.base_entries.items():
+                if dn.lower() == base_l:
+                    return [{"dn": dn, "attributes": extra, "raw_attributes": {}}]
             return []
         if base_l.startswith("cn=partitions,"):
             return [{"dn": f"CN=CORP,{base}", "attributes": {"nETBIOSName": "CORP"}, "raw_attributes": {}}]
@@ -89,7 +188,17 @@ class FakeLdap:
             guid = self.raw["guids"]["extended_rights"].get(name)
             return [{"dn": f"CN={name},{base}", "attributes": {"rightsGuid": guid}, "raw_attributes": {}}] if guid else []
         if base_l.startswith("cn=schema,"):
-            return [{"dn": f"CN=ms-DS-Key-Credential-Link,{base}", "attributes": {}, "raw_attributes": {"schemaIDGUID": [_uuid_bytes_le(GUID_KEYCRED)]}}]
+            found = []
+            for name in _SCHEMA_FILTER.findall(flt):
+                if name in self.schema:
+                    # Двоичные значения (schemaIDGUID) — в raw_attributes, как у ldap3.
+                    rec = self.schema[name]
+                    attrs_ = {"lDAPDisplayName": name, **{k: v for k, v in rec.items() if k != "schemaIDGUID"}}
+                    raw_ = {k: v for k, v in rec.items() if k == "schemaIDGUID"}
+                    found.append({"dn": f"CN={name},{base}", "attributes": attrs_, "raw_attributes": raw_})
+            return found
+        if "(userPassword=*)" in flt:
+            return [{"dn": o["dn"], "attributes": {"sAMAccountName": o["sam"]}, "raw_attributes": {}} for o in self.objects if o.get("sam") in self.unix_password]
         sids = _SID_FILTER.findall(flt)
         if sids:
             return [self.entry(o) for o in self.objects if o.get("sid") in sids]
@@ -103,6 +212,10 @@ class FakeLdap:
             "(objectClass=pKIEnrollmentService)": "pKIEnrollmentService",
             "(objectClass=msPKI-Enterprise-Oid)": "msPKI-Enterprise-Oid",
             "(objectClass=trustedDomain)": "trustedDomain",
+            "(objectClass=msDS-PasswordSettings)": "msDS-PasswordSettings",
+            "(objectClass=dnsZone)": "dnsZone",
+            "(objectClass=site)": "site",
+            "(objectClass=subnet)": "subnet",
             "(objectClass=*)": "*",
         }.get(flt)
         if wanted is None:
@@ -116,7 +229,7 @@ class FakeLdap:
         return [self.entry(o) for o in self.objects if wanted in ("*", o["class"]) and in_scope(o["dn"])]
 
     def root_dse(self) -> dict[str, str]:
-        return {"defaultNamingContext": DN, "configurationNamingContext": CONF_DN, "schemaNamingContext": f"CN=Schema,{CONF_DN}"}
+        return {"defaultNamingContext": DN, "configurationNamingContext": CONF_DN, "schemaNamingContext": f"CN=Schema,{CONF_DN}", "rootDomainNamingContext": DN}
 
     def smb(self, path: str) -> bytes | None:
         for dn, files in self.raw["sysvol"].items():

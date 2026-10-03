@@ -82,3 +82,24 @@ def test_deeply_nested_json_is_a_format_error() -> None:
     deep = b'{"format": "stools-ad/1", "x": ' + b"[" * 200_000 + b"]" * 200_000 + b"}"
     with pytest.raises(ExportFormatError, match="JSON"):
         load_export(deep)
+
+
+def test_new_optional_fields_are_read_and_old_export_still_loads():
+    raw = build_export()
+    exp = load_export(json.dumps(raw).encode())
+    assert exp.domain.min_pwd_length == 12 and exp.domain.recycle_bin is True
+    assert exp.guids.schema_classes == {"msDS-DelegatedManagedServiceAccount": ""}
+    zone = next(o for o in exp.objects if o.cls == "dnsZone")
+    assert zone.allowUpdate == 2 and zone.name == "corp.local"
+    for key in ("forest_functional_level", "min_pwd_length", "lockout_threshold", "pwd_properties", "recycle_bin", "ds_heuristics",
+                "smartcard_rotation", "laps_legacy_schema", "laps_schema", "last_backup", "backup_read", "sysvol_replication", "schema_poss_superiors"):
+        raw["domain"].pop(key)
+    raw["guids"].pop("schema_classes")
+    old = load_export(json.dumps(raw).encode())
+    assert old.domain.min_pwd_length is None and old.domain.recycle_bin is None and old.guids.schema_classes == {}
+
+
+def test_naive_timestamps_are_utc():
+    raw = build_export()
+    raw["objects"][1]["whenCreated"] = "2025-01-02T03:04:05"
+    assert load_export(json.dumps(raw).encode()).objects[1].whenCreated.tzinfo is not None

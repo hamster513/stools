@@ -14,7 +14,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
 from api.export_files import GZIP_MAGIC
 from api.modules.ad.core.sd import SecurityDescriptor, parse_sd
@@ -100,6 +100,14 @@ def _as_text(value: Any) -> Any:
 Text = Annotated[str, BeforeValidator(_as_text)]
 
 
+def _utc_if_naive(value: dt.datetime) -> dt.datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=dt.UTC)
+
+
+#: Время без пояса — UTC.
+UtcTime = Annotated[dt.datetime, AfterValidator(_utc_if_naive)]
+
+
 class AdObject(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -141,6 +149,37 @@ class AdObject(BaseModel):
     trustAttributes: int | None = None
     altSecurityIdentities: StrList = Field(default_factory=list)
     sd: str | None = None
+    # Учётные записи.
+    primaryGroupID: int | None = None
+    sIDHistory: StrList = Field(default_factory=list)
+    whenCreated: UtcTime | None = None
+    scriptPath: str | None = None
+    hasUnixPassword: bool = False
+    # Компьютеры: срок пароля LAPS (FILETIME), создатель учётки; у RODC — списки кэширования паролей.
+    lapsExpiry: int | None = None
+    lapsNewExpiry: int | None = None
+    creatorSid: str | None = None
+    revealOnDemand: StrList = Field(default_factory=list)
+    neverReveal: StrList = Field(default_factory=list)
+    revealedUsers: StrList = Field(default_factory=list)
+    krbTgtLink: str | None = None
+    # Доверия.
+    trustDirection: int | None = None
+    trustType: int | None = None
+    trustPartner: str | None = None
+    whenChanged: UtcTime | None = None
+    # Зоны DNS.
+    partition: str | None = None
+    allowUpdate: int | None = None
+    # Подсети: DN сайта.
+    site: str | None = None
+    # PSO (msDS-PasswordSettings).
+    psoMinLength: int | None = None
+    psoLockoutThreshold: int | None = None
+    psoReversible: bool | None = None
+    psoComplexity: bool | None = None
+    psoPrecedence: int | None = None
+    psoAppliesTo: StrList = Field(default_factory=list)
 
     @property
     def enabled(self) -> bool:
@@ -182,6 +221,24 @@ class DomainInfo(BaseModel):
     schema_dn: str = ""
     machine_account_quota: int | None = None
     functional_level: str = ""
+    # Новые поля: None — «не прочитано» (выгрузка старого сборщика или отказ чтения раздела).
+    forest_functional_level: str | None = None
+    min_pwd_length: int | None = None
+    lockout_threshold: int | None = None
+    pwd_properties: int | None = None
+    pwd_history_length: int | None = None
+    recycle_bin: bool | None = None
+    #: Пустая строка — dSHeuristics не задан.
+    ds_heuristics: str | None = None
+    smartcard_rotation: bool | None = None
+    laps_legacy_schema: bool | None = None
+    laps_schema: bool | None = None
+    last_backup: UtcTime | None = None
+    #: Метаданные репликации корня прочитаны: с last_backup=None значит «бэкапа не было».
+    backup_read: bool | None = None
+    #: "dfsr" | "ntfrs".
+    sysvol_replication: str | None = None
+    schema_poss_superiors: dict[str, list[str]] | None = None
 
 
 class CollectorInfo(BaseModel):
@@ -196,6 +253,8 @@ class CollectorInfo(BaseModel):
 class Guids(BaseModel):
     extended_rights: dict[str, str] = Field(default_factory=dict)
     schema_attributes: dict[str, str] = Field(default_factory=dict)
+    #: Класс → GUID; пустая строка — класса в схеме нет; ключа нет — не проверялось.
+    schema_classes: dict[str, str] = Field(default_factory=dict)
 
 
 class Principal(BaseModel):
