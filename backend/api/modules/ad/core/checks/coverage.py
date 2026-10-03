@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from api.modules.ad.core.ca_data import CaAuthority, CaData, DcBinding
 from api.modules.ad.core.checks.adcs_ca import broken_security, unread
+from api.modules.ad.core.checks.domain import functional_level_value
 from api.modules.ad.core.export import AdExport, ExportIndex
 
 
@@ -43,6 +44,11 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
         gaps["DcCount"] = "в выгрузке нет контроллеров домена"
     if dcs and not dc_acl:
         gaps["DcOwner"] = "компьютеры собраны без ACL: владелец контроллеров не известен"
+    root = next((o for o in export.objects if o.dn.lower() == export.domain.dn.lower()), None)
+    if root is None or not root.sd:
+        gaps["DomainRootAcl"] = "дескриптор корня домена не собран"
+    if functional_level_value(export.domain.functional_level) is None:
+        gaps["FunctionalLevel"] = f"функциональный уровень домена не прочитан (значение «{export.domain.functional_level}»)"
     if gpos and not export.sysvol:
         note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")

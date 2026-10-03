@@ -230,7 +230,7 @@ GUIDANCE: dict[str, Guidance] = {
     ),
     "AzureSsoKeyAge": Guidance(
         "trust",
-        "Смените ключ Kerberos для Seamless SSO командой Update-AzureADSSOForest (модуль AzureADSSO в Microsoft Entra Connect) и повторяйте не реже раза в 30 дней. Меняйте ключ в каждом лесу, где включён Seamless SSO.",
+        "Смените ключ Kerberos для Seamless SSO командой Update-AzureADSSOForest (модуль AzureADSSO в Microsoft Entra Connect) в каждом лесу, где включён Seamless SSO. Microsoft рекомендует менять ключ каждые 30 дней; порог проверки задаётся в настройках.",
         (
             ("Microsoft: Seamless SSO в Microsoft Entra, вопросы и ответы", f"{_LEARN}/entra/identity/hybrid/connect/how-to-connect-sso-faq"),
             _attack("T1558", "Steal or Forge Kerberos Tickets"),
@@ -291,6 +291,35 @@ GUIDANCE: dict[str, Guidance] = {
         (
             ("Microsoft: защита контроллеров домена от атак", f"{_LEARN}/windows-server/identity/ad-ds/plan/security-best-practices/best-practices-for-securing-active-directory"),
             _attack("T1098", "Account Manipulation"),
+        ),
+    ),
+    "TooManyAdmins": Guidance(
+        "privileged",
+        "Сократите число администраторов домена: оставьте в группах Domain Admins, Enterprise Admins, Schema Admins и Administrators только тех, кому полный контроль нужен постоянно. Остальным выдайте делегированные права на конкретные OU и задачи; сервисные учётки уберите из этих групп. Порог задаётся в настройках.",
+        (LEAST_PRIVILEGE, PROTECTED_ACCOUNTS, _attack("T1078.002", "Valid Accounts: Domain Accounts")),
+    ),
+    "FunctionalLevel": Guidance(
+        "domain",
+        "Обновите или выведите из домена контроллеры со старыми версиями Windows Server и поднимите функциональный уровень домена (Set-ADDomainMode) до Windows Server 2016. Повышение уровня необратимо на практике: перед ним убедитесь, что все контроллеры работают на нужной версии.",
+        (
+            ("Microsoft: функциональные уровни AD DS", f"{_LEARN}/windows-server/identity/ad-ds/active-directory-functional-levels"),
+        ),
+    ),
+    "PreWin2000Access": Guidance(
+        "domain",
+        "Удалите из группы Pre-Windows 2000 Compatible Access участников Anonymous Logon и Everyone, затем Authenticated Users и прочих, если не используются приложения, которым нужен такой доступ (старые серверы RAS, NT 4.0). Проверяйте изменение на тестовой OU: некоторые старые приложения перестанут читать каталог.",
+        (
+            ("Microsoft: группы безопасности Active Directory", f"{_LEARN}/windows-server/identity/ad-ds/manage/understand-security-groups"),
+            _attack("T1087.002", "Account Discovery: Domain Account"),
+        ),
+    ),
+    "DomainRootAcl": Guidance(
+        "acl",
+        "Уберите у субъекта GenericAll, WriteDacl и WriteOwner на объекте домена (вкладка «Безопасность» → «Дополнительно» в «Пользователях и компьютерах» или dsacls) и верните владельцем Domain Admins. Такие права часто остаются после установки Exchange: обновите Exchange и выполните /PrepareAD с исправлением прав. Проверьте, не выдал ли себе субъект права репликации (находки DCSync).",
+        (
+            LEAST_PRIVILEGE,
+            ("Microsoft: право DS-Replication-Get-Changes-All", f"{_LEARN}/windows/win32/adschema/r-ds-replication-get-changes-all"),
+            _attack("T1222.001", "File and Directory Permissions Modification: Windows File and Directory Permissions Modification"),
         ),
     ),
 }

@@ -32,6 +32,22 @@ def test_full_export_has_no_gaps() -> None:
     assert _gaps(build_export()) == {}
 
 
+def test_root_without_sd_marks_domain_root_acl_unchecked() -> None:
+    raw = build_export()
+    root = next(o for o in raw["objects"] if o["class"] == "domainDNS")
+    root.pop("sd")
+    assert _gaps(raw) == {"DomainRootAcl": "дескриптор корня домена не собран"}
+    raw["objects"].remove(root)
+    assert "DomainRootAcl" in _gaps(raw)
+
+
+@pytest.mark.parametrize("value", ["", "WindowsThresholdDomain"])
+def test_unknown_functional_level_marks_unchecked(value: str) -> None:
+    raw = build_export()
+    raw["domain"]["functional_level"] = value
+    assert _gaps(raw) == {"FunctionalLevel": f"функциональный уровень домена не прочитан (значение «{value}»)"}
+
+
 def test_missing_sysvol_marks_user_rights_unchecked() -> None:
     raw = build_export()
     raw["sysvol"] = {}

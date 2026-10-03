@@ -41,7 +41,14 @@ from api.modules.ad.core.checks.computers import (
     check_inactive_computers,
     check_obsolete_os,
 )
-from api.modules.ad.core.checks.domain import check_krbtgt_password_age, check_machine_account_quota
+from api.modules.ad.core.checks.critical_acl import check_domain_root_acl
+from api.modules.ad.core.checks.domain import (
+    check_functional_level,
+    check_krbtgt_password_age,
+    check_machine_account_quota,
+    check_pre_win2000_access,
+    check_too_many_admins,
+)
 from api.modules.ad.core.checks.gpo import check_user_rights_assignment
 from api.modules.ad.core.checks.groups import (
     check_privileged_groups,
@@ -52,7 +59,7 @@ from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "2"
+ANALYZER_VERSION = "3"
 
 _CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -90,6 +97,10 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("DcCount", "Число контроллеров домена", "Один контроллер домена — единая точка отказа: при его потере домен недоступен, а восстановление затруднено.", check_dc_count, ()),
     CheckSpec("DcDelegation", "Делегация контроллеров домена", "Ограниченная делегация у контроллера (служб или protocol transition) позволяет от имени его учётки получать доступ к службам; контроллер — цель высшей ценности.", check_dc_delegation, ("T1558",)),
     CheckSpec("DcOwner", "Владелец объекта контроллера", "Владелец объекта контроллера домена может менять его права независимо от ACL; владельцем должны быть только администраторы.", check_dc_owner, ("T1098",)),
+    CheckSpec("TooManyAdmins", "Слишком много администраторов", "Чем больше администраторов домена, тем больше учётных записей, захват любой из которых даёт полный контроль над доменом.", check_too_many_admins, ("T1078.002",)),
+    CheckSpec("FunctionalLevel", "Функциональный уровень домена", "Низкий функциональный уровень домена не даёт включить защиту новых версий Windows Server: Protected Users, политики и силосы проверки подлинности, AES для Kerberos по умолчанию.", check_functional_level, ()),
+    CheckSpec("PreWin2000Access", "Группа Pre-Windows 2000 Compatible Access", "Участники группы читают атрибуты всех пользователей и групп домена; Anonymous Logon или Everyone в ней открывают каталог без входа.", check_pre_win2000_access, ("T1087.002",)),
+    CheckSpec("DomainRootAcl", "Опасные права на корень домена", "GenericAll, WriteDacl или WriteOwner на корне домена позволяют выдать себе права репликации (DCSync) и получить полный контроль над доменом.", check_domain_root_acl, ("T1222.001",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

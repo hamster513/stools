@@ -56,12 +56,22 @@ export interface AdConfig {
   user_rights: UserRight[]
   user_inactivity_days: number
   krbtgt_max_age_days: number
+  admins_max: number
+  admin_password_max_age_days: number
+  builtin_admin_recent_days: number
+  azure_sso_key_max_age_days: number
+  computer_inactivity_days: number
+  computer_password_max_age_days: number
+  /** Сборка Windows → дата окончания поддержки (ГГГГ-ММ-ДД). */
+  obsolete_os_builds: Record<string, string>
   low_priv_groups: string[]
   low_priv_sids: string[]
   low_priv_rids: number[]
   adcs_safe_sids: string[]
   adcs_safe_rids: number[]
   adcs_safe_principals: string[]
+  admin_rids: number[]
+  tier0_safe_rids: number[]
   sensitive_acl_scope: string
   sensitive_acl_search_base: string
   sensitive_acl_exclude_ous: string[]

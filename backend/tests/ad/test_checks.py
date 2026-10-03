@@ -26,8 +26,19 @@ def idents(fs: list[Finding]) -> set[str]:
     return {f.identity for f in fs}
 
 
-def test_registry_has_twenty_nine_checks() -> None:
-    assert len(CHECKS) == 35 and len({c.code for c in CHECKS}) == 35
+def test_registry_codes() -> None:
+    codes = [c.code for c in CHECKS]
+    assert len(codes) == len(set(codes))
+    assert set(codes) == {
+        "DCSync", "PrivilegedGroups", "Delegation", "ShadowAdmins", "RBCD", "ASREP", "Kerberoast", "AdminCount",
+        "GpoPermissions", "UserRightsAssignment", "PasswordNeverExpires", "InactiveUsers", "MachineAccountQuota",
+        "KeyCredentialLinkACL", "ProtectedUsersCoverage", "KrbtgtPasswordAge", "WeakEncryption", "SensitiveAcl",
+        "ADCS_ESC", "ADCS_CA", "ADCS_MAPPING",
+        "PasswordNotRequired", "ReversiblePassword", "AdminDelegable", "AdminPasswordAge", "BuiltinAdminUsed",
+        "GuestEnabled", "AzureSsoKeyAge", "DuplicateObjects",
+        "InactiveComputers", "ComputerPasswordAge", "ObsoleteOs", "DcCount", "DcDelegation", "DcOwner",
+        "TooManyAdmins", "FunctionalLevel", "PreWin2000Access", "DomainRootAcl",
+    }
 
 
 def test_dcsync(findings: list[Finding]) -> None:

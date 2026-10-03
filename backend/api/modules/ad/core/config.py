@@ -70,6 +70,8 @@ class AdConfig(BaseModel):
     )
     user_inactivity_days: int = Field(default=90, ge=1)
     krbtgt_max_age_days: int = Field(default=180, ge=1)
+    #: Больше стольких админов (§0 спеки гигиены) — находка TooManyAdmins.
+    admins_max: int = Field(default=20, ge=1)
     admin_password_max_age_days: int = Field(default=1095, ge=1)
     builtin_admin_recent_days: int = Field(default=35, ge=1)
     azure_sso_key_max_age_days: int = Field(default=90, ge=1)
