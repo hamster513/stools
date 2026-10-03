@@ -45,10 +45,10 @@ def _bases(h: KscHost, now: dt.datetime, old_days: int) -> str:
     return "old" if (now - h.bases_at).days > old_days else "fresh"
 
 
-def _component_state(status: Any) -> str:
-    if status == 4:
+def _component_state(code: Any) -> str:
+    if code == 4:
         return "on"
-    return "off" if status in COMPONENT_OFF_STATES else "other"
+    return "off" if code in COMPONENT_OFF_STATES else "other"
 
 
 def _components(h: KscHost) -> dict[str, str]:
@@ -143,7 +143,11 @@ def list_hosts(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     snap = _snapshot(db, snapshot_id)
-    for value, allowed in ((agent, AGENT), (protection, PROTECTION), (bases, BASES), (in_ad, ("both", "ksc_only")), (status_, ("ok", "warning", "critical")), (component_state, COMPONENT_STATES)):
+    checked = (
+        (agent, AGENT), (protection, PROTECTION), (bases, BASES), (in_ad, ("both", "ksc_only")),
+        (status_, ("ok", "warning", "critical")), (component_state, COMPONENT_STATES),
+    )
+    for value, allowed in checked:
         if value is not None and value not in allowed:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{value}»")
     if component_state and not component:
@@ -154,7 +158,10 @@ def list_hosts(
     tags_collected = _tags_collected(rows)
     tags = {h.id: _tags(h, tags_collected) for h in rows}
     comps = {h.id: _components(h) for h in rows}
-    policy_groups = {g for (g,) in db.execute(select(KscPolicyScope.group_id).where(KscPolicyScope.snapshot_id == snapshot_id, KscPolicyScope.policy_id == policy))} if policy is not None else set()
+    policy_groups: set[int] = set()
+    if policy is not None:
+        scope = select(KscPolicyScope.group_id).where(KscPolicyScope.snapshot_id == snapshot_id, KscPolicyScope.policy_id == policy)
+        policy_groups = set(db.scalars(scope))
     # Хостов у сервера тысячи: фасеты и фильтры считаются в памяти, как находки в AD.
     derived = {h.id: (_agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days)) for h in rows}
 
@@ -176,7 +183,8 @@ def list_hosts(
             return False
         if component:
             state = comps[h.id].get(component, "none")
-            if state != component_state if component_state else state == "none":  # без состояния — хосты, у которых компонент есть
+            # без состояния — хосты, у которых компонент есть
+            if state != component_state if component_state else state == "none":
                 return False
         if tag:
             own = tags[h.id]
@@ -192,7 +200,10 @@ def list_hosts(
         return True
 
     filtered = sorted((h for h in rows if keep(h)), key=lambda h: (h.group_path.lower(), h.name.lower()))
-    facets: dict[str, dict[str, Any]] = {"group": {}, "product": {}, "agent": dict.fromkeys(AGENT, 0), "protection": dict.fromkeys(PROTECTION, 0), "bases": dict.fromkeys(BASES, 0), "in_ad": {}, "status": {"ok": 0, "warning": 0, "critical": 0}, "component": {}}
+    facets: dict[str, dict[str, Any]] = {
+        "group": {}, "product": {}, "agent": dict.fromkeys(AGENT, 0), "protection": dict.fromkeys(PROTECTION, 0), "bases": dict.fromkeys(BASES, 0),
+        "in_ad": {}, "status": {"ok": 0, "warning": 0, "critical": 0}, "component": {},
+    }
     if tags_collected:
         facets["tag"] = {}
     for h in filtered:
@@ -232,6 +243,9 @@ def host_detail(snapshot_id: int, host_id: str, db: Session = Depends(get_db), _
                       "severity": f.severity, "status": status_, "status_title": STATUS_TITLES[status_], "details": json.loads(f.details_json or "{}")})
     # `findings` — все находки хоста со статусами; `findings_counted` — по тому же правилу, что счётчик в списке хостов.
     n_counted = sum(1 for i in items if i["status"] in counted)
-    tags_collected = _tags_collected(list(db.execute(select(KscHost).where(KscHost.snapshot_id == snapshot_id)).scalars()))
-    return {**_item(h, _agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days), n_counted, _tags(h, tags_collected)),
+    # Секция тегов была в выгрузке, если ключ `tags` есть хотя бы у одного хоста снапшота (поиск по тексту, без разбора JSON всех хостов).
+    has_tags = select(KscHost.id).where(KscHost.snapshot_id == snapshot_id, KscHost.extra_json.like('%"tags"%')).limit(1)
+    tags_collected = db.scalar(has_tags) is not None
+    agent, bases = _agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days)
+    return {**_item(h, agent, bases, n_counted, _tags(h, tags_collected)),
             "findings": items, "findings_counted": n_counted, "policies": _host_policies(db, snapshot_id, h)}
