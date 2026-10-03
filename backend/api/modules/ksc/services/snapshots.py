@@ -115,8 +115,6 @@ def import_export(
 ) -> KscSnapshot:
     """Как у AD: `path` — файл выгрузки в каталоге данных, становится файлом снапшота;
     `sha256` — отпечаток исходного текста, не задан — по байтам файла."""
-    from api.modules.ksc.services.changes import next_snapshot
-
     if handle:
         handle.stage("parsing", message=filename)
     export = load_export_path(path)
@@ -138,38 +136,46 @@ def import_export(
     db.commit()
     _recompute_changes(db, snapshot, data_dir)
     # Снапшот лёг в середину истории: следующий за ним теперь сравнивается с ним.
-    _recompute_changes(db, next_snapshot(db, snapshot), data_dir)
+    _recompute_changes(db, snapshot, data_dir, successor=True)
     FINDINGS_ADAPTER.reconcile(db, server.id, snapshot.id)
     _notify_assets(db)
     return snapshot
 
 
-def _recompute_changes(db: Session, snapshot: KscSnapshot | None, data_dir: Path) -> None:
-    """Журнал изменений снапшота. Его сбой не должен ронять импорт, пересчёт и удаление: остальное уже
-    зафиксировано, свод изменений получает причину. Импорт внутри функции — журнал сам берёт отсюда
-    предыдущий снапшот и путь файла."""
+def _recompute_changes(db: Session, snapshot: KscSnapshot | None, data_dir: Path, *, successor: bool = False) -> None:
+    """Журнал изменений снапшота; `successor` — следующего за ним (поиск следующего — тоже под защитой).
+    Сбой не должен ронять импорт, пересчёт и удаление: остальное уже зафиксировано, свод изменений получает
+    причину. Импорт внутри функции — журнал сам берёт отсюда предыдущий снапшот и путь файла."""
     from api.modules.ksc.core.changes import KINDS
-    from api.modules.ksc.services.changes import recompute_changes, set_summary
+    from api.modules.ksc.services.changes import next_snapshot, recompute_changes, set_summary
 
     if snapshot is None:
         return
-    snapshot_id = snapshot.id
+    base_id = snapshot.id
+    target: KscSnapshot | None = None
+    target_id = 0
     try:
-        recompute_changes(db, snapshot, data_dir)
+        target = next_snapshot(db, snapshot) if successor else snapshot
+        if target is None:
+            return
+        target_id = target.id
+        recompute_changes(db, target, data_dir)
         db.commit()
     except Exception as exc:
         db.rollback()
-        log.exception("изменения снапшота KSC #%s не посчитаны", snapshot_id)
+        log.exception("изменения снапшота KSC не посчитаны (снапшот #%s, следующий за ним: %s)", base_id, successor)
+        if target is None:
+            return
         try:
             # Старые строки другого предыдущего снапшота не должны остаться под новым сводом.
-            db.execute(delete(KscChange).where(KscChange.snapshot_id == snapshot_id))
-            prev = previous_snapshot(db, snapshot)
-            set_summary(snapshot, {"prev": prev.id if prev else None, "total": 0, "compared": dict.fromkeys(KINDS, False),
-                                   "truncated": False, "reason": f"изменения не посчитаны: {exc}"})
+            db.execute(delete(KscChange).where(KscChange.snapshot_id == target_id))
+            prev = previous_snapshot(db, target)
+            set_summary(target, {"prev": prev.id if prev else None, "total": 0, "compared": dict.fromkeys(KINDS, False),
+                                 "truncated": False, "reason": f"изменения не посчитаны: {exc}"})
             db.commit()
         except Exception:
             db.rollback()
-            log.exception("причина сбоя изменений снапшота KSC #%s не записана", snapshot_id)
+            log.exception("причина сбоя изменений снапшота KSC #%s не записана", target_id)
 
 
 def _notify_assets(db: Session) -> None:

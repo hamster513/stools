@@ -45,11 +45,15 @@ def _policy(raw: dict[str, Any], pid: int) -> dict[str, Any]:
 # --- чистое сравнение ---------------------------------------------------------------------------
 
 
+#: Сравнение на синтетике без извлекателя: исключения и сетевые правила не сравнивались — продукт не описан.
+UNDESCRIBED = {**dict.fromkeys(KINDS, True), "net_rule": False, "exclusion": False}
+
+
 def test_no_edits_no_changes_all_compared() -> None:
     raw = build_export()
     diff = _diff(raw, _copy(raw))
     assert diff.changes == [] and not diff.truncated
-    assert diff.compared == dict.fromkeys(KINDS, True)
+    assert diff.compared == UNDESCRIBED
 
 
 def test_policy_renamed_deactivated_added_removed() -> None:
@@ -162,6 +166,14 @@ def test_list_setting_items_added_and_removed() -> None:
     assert c.before == {"removed": ["C:\\Tools\\a.exe"]} and c.after == {"added": ["C:\\Tools\\b.exe", {"Path": "D:\\x"}]}
 
 
+def test_list_setting_reordered_is_not_a_change() -> None:
+    prev = build_export()
+    prev["policy_contents"]["1"]["sections"]["KLPRSS_Basic"]["Exclusions"] = _lock(["C:\\a.exe", "C:\\b.exe"], locked=False)
+    cur = _copy(prev)
+    cur["policy_contents"]["1"]["sections"]["KLPRSS_Basic"]["Exclusions"] = _lock(["C:\\b.exe", "C:\\a.exe"], locked=False)
+    assert _diff(prev, cur).changes == []
+
+
 def test_new_setting_in_profile() -> None:
     prev = build_export()
     cur = _copy(prev)
@@ -229,6 +241,7 @@ def test_extracted_exclusion_added_and_source_setting_skipped(monkeypatch: pytes
     c = diff.changes[0]
     assert c.path == exclusion_key(Exclusion("path", "C:\\Tools\\b.exe")) and c.after["value"] == "C:\\Tools\\b.exe" and c.before is None
     assert _of(diff, "setting") == []
+    assert diff.compared == dict.fromkeys(KINDS, True)
 
 
 def test_extracted_exclusion_changed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,8 +253,10 @@ def test_extracted_exclusion_changed(monkeypatch: pytest.MonkeyPatch) -> None:
     prev = build_export()
     cur = _copy(prev)
     cur["policy_contents"]["1"]["sections"]["KLPRSS_Basic"]["ReportsMaxSize"] = _lock(2048, locked=False)
-    excl = _of(_diff(prev, cur), "exclusion")
+    diff = _diff(prev, cur)
+    excl = _of(diff, "exclusion")
     assert [(c.action, c.policy_id, c.before["enabled"], c.after["enabled"]) for c in excl] == [("changed", 1, True, False)]
+    assert diff.compared["exclusion"] is True and diff.compared["net_rule"] is True
 
 
 def test_truncated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,7 +301,7 @@ def test_import_middle_delete_reanalyze(auth_client: TestClient, db_session: Ses
     first, last = ids["2026-09-14"], ids["2026-09-16"]
     assert _summary(db_session, first) == {"prev": None, "total": 0, "compared": {}, "truncated": False}
     s = _summary(db_session, last)
-    assert s["prev"] == first and s["total"] == 1 and s["compared"] == dict.fromkeys(KINDS, True) and not s["truncated"]
+    assert s["prev"] == first and s["total"] == 1 and s["compared"] == UNDESCRIBED and not s["truncated"]
     [row] = _rows(db_session, last)
     assert (row.kind, row.action, row.policy_id, row.path, row.prev_snapshot_id) == ("policy", "changed", 1, "name", first)
     assert (json.loads(row.before_json), json.loads(row.after_json), row.policy_name) == ("A", "B", "B")
@@ -335,3 +350,14 @@ def test_failure_does_not_break_import(auth_client: TestClient, db_session: Sess
     s = _summary(db_session, ids["2026-09-15"])
     assert s["reason"] == "изменения не посчитаны: сбой сравнения" and s["total"] == 0 and s["prev"] == ids["2026-09-14"]
     assert "checks" in json.loads(db_session.get(KscSnapshot, ids["2026-09-15"]).stats_json)  # type: ignore[union-attr]
+
+
+def test_successor_lookup_failure_does_not_break_import(auth_client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.modules.ksc.services import changes as service
+
+    def boom(db: Session, snapshot: KscSnapshot) -> KscSnapshot | None:
+        raise RuntimeError("сбой поиска следующего")
+
+    monkeypatch.setattr(service, "next_snapshot", boom)
+    assert upload(auth_client, _raw("2026-09-14T12:00:00Z", "A"))["status"] == "done"
+    assert _summary(db_session, _snapshot_ids(auth_client)["2026-09-14"])["prev"] is None

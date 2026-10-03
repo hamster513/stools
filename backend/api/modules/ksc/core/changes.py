@@ -147,6 +147,8 @@ def _settings(pid: int, name: str, old: dict[SettingKey, tuple[Any, bool | None]
         if isinstance(ov, list) and isinstance(nv, list):
             ok, nk = {_json(x) for x in ov}, {_json(x) for x in nv}
             before, after = {"removed": [x for x in ov if _json(x) not in nk]}, {"added": [x for x in nv if _json(x) not in ok]}
+            if not before["removed"] and not after["added"] and ol == nl:
+                continue  # те же элементы в другом порядке — не изменение
         else:
             before, after = {"value": ov}, {"value": nv}
         if ol != nl:
@@ -175,7 +177,7 @@ def diff_exports(prev: KscExport, cur: KscExport) -> Diff:
     names = {**{k: p.name for k, p in old_pol.items()}, **{k: p.name for k, p in new_pol.items()}}
     contents = bool(prev.policy_contents) and bool(cur.policy_contents)
     compared = {"policy": True, "scope": True, "profile": prev.policy_profiles is not None and cur.policy_profiles is not None,
-                "setting": contents, "net_rule": contents, "exclusion": contents}
+                "setting": contents, "net_rule": False, "exclusion": False}
 
     out: list[Change] = []
     _policies(old_pol, new_pol, out)
@@ -190,6 +192,8 @@ def diff_exports(prev: KscExport, cur: KscExport) -> Diff:
     settings: list[Change] = []
     net_rules: list[Change] = []
     exclusions: list[Change] = []
+    #: Хоть у одной политики продукт описан в обоих снапшотах: иначе записи извлекателя «не сравнивались», а не «без изменений».
+    described_any = False
     if contents:
         for pid in sorted(old_pol.keys() & new_pol.keys()):
             key = str(pid)
@@ -203,12 +207,14 @@ def diff_exports(prev: KscExport, cur: KscExport) -> Diff:
             new_map = _setting_map(new_sections, [p for (i, _), p in new_prof.items() if i == pid])
             _settings(pid, names[pid], old_map, new_map, old_objs.consumed | new_objs.consumed, settings)
             if old_described and new_described:
+                described_any = True
                 # Записи профилей — при том же условии, что настройки профилей.
                 with_profiles = pid in profiled
                 _records("net_rule", pid, names[pid], [r for r in old_objs.net_rules if with_profiles or not r.profile],
                          [r for r in new_objs.net_rules if with_profiles or not r.profile], net_rule_key, net_rules)
                 _records("exclusion", pid, names[pid], [e for e in old_objs.exclusions if with_profiles or not e.profile],
                          [e for e in new_objs.exclusions if with_profiles or not e.profile], exclusion_key, exclusions)
+    compared["net_rule"] = compared["exclusion"] = described_any
     out.extend(settings)
     out.extend(net_rules)
     out.extend(exclusions)
