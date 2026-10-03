@@ -50,9 +50,13 @@ class AdConfig(BaseModel):
             "Операторы учетных записей",
             "Операторы архива",
             "Операторы серверов",
+            "DnsAdmins",
         ]
     )
-    privileged_rids: list[int] = Field(default_factory=lambda: [512, 519, 518, 544, 548, 551, 549])
+    #: Domain Admins, Enterprise Admins, Schema Admins, Administrators, Account, Backup, Server, Print Operators,
+    #: Replicator, Cert Publishers, Group Policy Creator Owners, Key Admins, Enterprise Key Admins.
+    #: RID 544–582 — встроенные (S-1-5-32-<RID>), остальные — RID своего домена.
+    privileged_rids: list[int] = Field(default_factory=lambda: [512, 519, 518, 544, 548, 551, 549, 550, 552, 517, 520, 526, 527])
     user_rights: list[UserRight] = Field(
         default_factory=lambda: [
             UserRight(right="SeEnableDelegationPrivilege", severity="High"),

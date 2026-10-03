@@ -46,8 +46,8 @@ function overview(): Overview {
 const DEFAULTS: AdConfig = {
   allowlist_short: ['SYSTEM'],
   allowlist_full: ['NT AUTHORITY\\SYSTEM', 'BUILTIN\\ADMINISTRATORS'],
-  privileged_groups: ['Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators'],
-  privileged_rids: [512, 519, 518, 544, 548, 551, 549],
+  privileged_groups: ['Domain Admins', 'Enterprise Admins', 'Schema Admins', 'Administrators', 'DnsAdmins'],
+  privileged_rids: [512, 519, 518, 544, 548, 551, 549, 550, 552, 517, 520, 526, 527],
   user_rights: [{ right: 'SeEnableDelegationPrivilege', severity: 'High' }, { right: 'SeBackupPrivilege', severity: 'Medium' }],
   user_inactivity_days: 90,
   krbtgt_max_age_days: 180,

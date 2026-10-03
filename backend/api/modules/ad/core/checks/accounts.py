@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 
 from api.modules.ad.core import sd
+from api.modules.ad.core.checks import principals
 from api.modules.ad.core.checks.common import account_finding, days_between
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import (
@@ -16,25 +17,23 @@ from api.modules.ad.core.export import (
 )
 from api.modules.ad.core.findings import Finding, finalize
 
+UAC_USE_DES_KEY_ONLY = 0x200000
+
 
 def _enabled_users(idx: ExportIndex) -> list[AdObject]:
     return [u for u in idx.objects("user") if u.enabled]
 
 
-def _preauth_disabled(idx: ExportIndex, cfg: AdConfig, check: str, detail: str) -> list[Finding]:
-    return [
-        account_finding(idx, cfg, check, "High", u, details=detail)
-        for u in _enabled_users(idx)
-        if (u.uac or 0) & UAC_DONT_REQ_PREAUTH
-    ]
+def _severity(idx: ExportIndex, cfg: AdConfig, obj: AdObject, severity: str, admin_severity: str) -> str:
+    return principals.worst(severity, principals.is_admin(idx, cfg, obj), admin_severity)
 
 
 def check_asrep_roastable(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
-    return _preauth_disabled(idx, cfg, "ASREP", "Kerberos preauth отключена: AS-REP roast")
-
-
-def check_preauth_disabled(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
-    return _preauth_disabled(idx, cfg, "PreauthDisabled", "Kerberos preauth disabled")
+    return [
+        account_finding(idx, cfg, "ASREP", _severity(idx, cfg, u, "High", "Critical"), u, details="Kerberos preauth отключена: AS-REP roast")
+        for u in _enabled_users(idx)
+        if (u.uac or 0) & UAC_DONT_REQ_PREAUTH
+    ]
 
 
 def check_kerberoast(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
@@ -42,13 +41,13 @@ def check_kerberoast(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     for u in _enabled_users(idx):
         if not u.spn or (u.sam or "").lower() == "krbtgt" or u.rid == RID_KRBTGT:
             continue
-        out.append(account_finding(idx, cfg, "Kerberoast", "Medium", u, spn=list(u.spn), details="; ".join(u.spn)))
+        out.append(account_finding(idx, cfg, "Kerberoast", _severity(idx, cfg, u, "Medium", "High"), u, spn=list(u.spn), details="; ".join(u.spn)))
     return out
 
 
 def check_password_never_expires(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     return [
-        account_finding(idx, cfg, "PasswordNeverExpires", "Medium", u, details="PasswordNeverExpires")
+        account_finding(idx, cfg, "PasswordNeverExpires", _severity(idx, cfg, u, "Low", "High"), u, details="PasswordNeverExpires")
         for u in _enabled_users(idx)
         if (u.uac or 0) & UAC_DONT_EXPIRE_PASSWORD
     ]
@@ -63,7 +62,7 @@ def check_inactive_users(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
         if u.lastLogonTimestamp and u.lastLogonTimestamp <= cutoff:
             out.append(
                 account_finding(
-                    idx, cfg, "InactiveUsers", "Low", u,
+                    idx, cfg, "InactiveUsers", _severity(idx, cfg, u, "Low", "High"), u,
                     details=f"Нет входа больше {days} дн.",
                     idle_days=days_between(u.lastLogonTimestamp, now),
                 )
@@ -79,17 +78,21 @@ def decode_enc_types(value: int) -> str:
 def check_weak_encryption(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     out = []
     for obj in idx.objects("user") + idx.objects("computer"):
-        if obj.supportedEncryptionTypes is None:
+        des_only = bool((obj.uac or 0) & UAC_USE_DES_KEY_ONLY)
+        val = None if obj.supportedEncryptionTypes is None else int(obj.supportedEncryptionTypes)
+        rc4 = val is not None and bool(val & 4)
+        if not rc4 and not des_only:
             continue
-        val = int(obj.supportedEncryptionTypes)
-        if not val & 4:
-            continue
-        has_aes = bool(val & 8 or val & 16)
+        has_aes = val is not None and bool(val & 8 or val & 16)
+        parts = [] if val is None else [f"msDS-SupportedEncryptionTypes={val} ({decode_enc_types(val)})"]
+        if des_only:
+            parts.append("флаг «только DES» (USE_DES_KEY_ONLY)")
         out.append(
             account_finding(
-                idx, cfg, "WeakEncryption", "Medium" if has_aes else "High", obj,
-                details=f"msDS-SupportedEncryptionTypes={val} ({decode_enc_types(val)})",
-                rc4_only=not has_aes,
+                idx, cfg, "WeakEncryption", "Medium" if has_aes and not des_only else "High", obj,
+                details="; ".join(parts),
+                rc4_only=rc4 and not has_aes,
+                des_only=des_only,
             )
         )
     return out
@@ -97,8 +100,9 @@ def check_weak_encryption(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
 
 def check_admin_count(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     out = []
+    protected = principals.protected_dns(idx)
     for obj in idx.export.objects:
-        if obj.adminCount == 1 and obj.cls in ("user", "computer", "group"):
+        if obj.adminCount == 1 and obj.cls in ("user", "computer", "group") and obj.dn.lower() not in protected:
             out.append(account_finding(idx, cfg, "AdminCount", "Medium", obj))
     return out
 
@@ -106,6 +110,9 @@ def check_admin_count(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
 def check_delegation(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     out = []
     for obj in idx.objects("user") + idx.objects("computer"):
+        # Неограниченная делегация — штатный флаг контроллера; делегацию контроллеров разбирает DcDelegation.
+        if idx.is_dc(obj):
+            continue
         kinds = []
         if obj.unconstrained_delegation:
             kinds.append("Unconstrained")
@@ -130,6 +137,7 @@ def check_rbcd(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     for comp in idx.objects("computer"):
         if not comp.allowedToActOnBehalf:
             continue
+        severity = "Critical" if idx.is_dc(comp) else "High"
         try:
             desc = sd.parse_sd(base64.b64decode(comp.allowedToActOnBehalf))
             aces = desc.dacl
@@ -138,7 +146,7 @@ def check_rbcd(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
         if not aces:
             out.append(
                 finalize(
-                    Finding(check="RBCD", severity="High", target=comp.label, details={"details": "Дескриптор есть, но ACE не разобраны"}),
+                    Finding(check="RBCD", severity=severity, target=comp.label, details={"details": "Дескриптор есть, но ACE не разобраны"}),
                     cfg,
                 )
             )
@@ -149,7 +157,7 @@ def check_rbcd(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
                 finalize(
                     Finding(
                         check="RBCD",
-                        severity="High",
+                        severity=severity,
                         identity=identity,
                         identity_sid=ace.sid,
                         target=comp.label,

@@ -8,10 +8,10 @@ from api.modules.ad.core.findings import Finding, finalize
 
 
 def privileged_groups(idx: ExportIndex, cfg: AdConfig) -> list[AdObject]:
-    """По RID (не зависят от языка домена), затем по именам из настроек."""
+    """По RID (не зависят от языка домена; 544–582 — встроенные), затем по именам из настроек."""
     seen: dict[str, AdObject] = {}
     for rid in cfg.privileged_rids:
-        g = idx.group_by_rid(rid) if rid >= 1000 or rid in (512, 518, 519) else idx.by_sid.get(f"S-1-5-32-{rid}")
+        g = idx.group_for_rid(rid)
         if g is not None:
             seen[g.dn.lower()] = g
     for name in cfg.privileged_groups:

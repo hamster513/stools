@@ -78,11 +78,6 @@ GUIDANCE: dict[str, Guidance] = {
         "Включите предварительную аутентификацию Kerberos: снимите флаг «Не требовать предварительной проверки подлинности Kerberos» (DONT_REQ_PREAUTH) в свойствах учётки или командой Set-ADAccountControl <имя> -DoesNotRequirePreAuth $false. Если флаг нужен старому приложению — задайте учётке случайный пароль от 25 символов.",
         (SET_ACCOUNT_CONTROL, UAC_FLAGS, _attack("T1558.004", "Steal or Forge Kerberos Tickets: AS-REP Roasting")),
     ),
-    "PreauthDisabled": Guidance(
-        "kerberos",
-        "Снимите флаг DONT_REQ_PREAUTH (Set-ADAccountControl <имя> -DoesNotRequirePreAuth $false) и выясните, какому приложению он понадобился. Если оставить флаг нельзя — случайный пароль от 25 символов и наблюдение за событиями 4768 с типом предварительной проверки 0.",
-        (SET_ACCOUNT_CONTROL, UAC_FLAGS, _attack("T1558.004", "Steal or Forge Kerberos Tickets: AS-REP Roasting")),
-    ),
     "Kerberoast": Guidance(
         "kerberos",
         "Переведите службу на gMSA (пароль из 120 символов меняется автоматически) или задайте учётке случайный пароль от 25 символов и меняйте его регулярно. Уберите неиспользуемые SPN (Set-ADUser <имя> -ServicePrincipalNames @{Remove='<SPN>'}) и разрешите учётке только AES (msDS-SupportedEncryptionTypes = 24).",
@@ -157,7 +152,7 @@ GUIDANCE: dict[str, Guidance] = {
     ),
     "WeakEncryption": Guidance(
         "kerberos",
-        "Разрешите учётке только AES: msDS-SupportedEncryptionTypes = 24 (AES128 и AES256) или флажки AES в свойствах учётки, затем смените пароль, чтобы появились ключи AES. После проверки совместимости запретите DES и RC4 политикой «Сетевая безопасность: настройка типов шифрования, разрешённых Kerberos».",
+        "Разрешите учётке только AES: msDS-SupportedEncryptionTypes = 24 (AES128 и AES256) или флажки AES в свойствах учётки, затем смените пароль, чтобы появились ключи AES. Флаг «Использовать только типы шифрования DES» снимите (Set-ADAccountControl <имя> -UseDESKeyOnly $false). После проверки совместимости запретите DES и RC4 политикой «Сетевая безопасность: настройка типов шифрования, разрешённых Kerberos».",
         (
             ("Microsoft: типы шифрования, разрешённые Kerberos", f"{_PREV}/network-security-configure-encryption-types-allowed-for-kerberos"),
             _attack("T1558", "Steal or Forge Kerberos Tickets"),

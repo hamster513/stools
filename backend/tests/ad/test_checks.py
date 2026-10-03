@@ -1,4 +1,4 @@
-"""Двадцать две проверки на синтетическом домене CORP: известные ответы."""
+"""Двадцать одна проверка на синтетическом домене CORP: известные ответы."""
 from __future__ import annotations
 
 import json
@@ -26,8 +26,8 @@ def idents(fs: list[Finding]) -> set[str]:
     return {f.identity for f in fs}
 
 
-def test_registry_has_twenty_two_checks() -> None:
-    assert len(CHECKS) == 22 and len({c.code for c in CHECKS}) == 22
+def test_registry_has_twenty_one_checks() -> None:
+    assert len(CHECKS) == 21 and len({c.code for c in CHECKS}) == 21
 
 
 def test_dcsync(findings: list[Finding]) -> None:
@@ -59,15 +59,15 @@ def test_sensitive_acl_and_gpo(findings: list[Finding]) -> None:
 
 def test_accounts(findings: list[Finding]) -> None:
     assert idents(by(findings, "ASREP")) == {"CORP\\svc_old"}
-    assert idents(by(findings, "PreauthDisabled")) == {"CORP\\svc_old"}
     kerb = by(findings, "Kerberoast")
     assert idents(kerb) == {"CORP\\svc_sql"} and kerb[0].details["spn"] == ["MSSQLSvc/srv01.corp.local:1433"]
-    assert idents(by(findings, "PasswordNeverExpires")) == {"CORP\\user.noexpire"}
+    assert {f.identity: f.severity for f in by(findings, "PasswordNeverExpires")} == {"CORP\\user.noexpire": "Low"}
     inactive = by(findings, "InactiveUsers")
     assert idents(inactive) == {"CORP\\user.inactive"} and inactive[0].details["idle_days"] == 200
     weak = {f.identity: f.severity for f in by(findings, "WeakEncryption")}
     assert weak == {"CORP\\user.rc4": "High", "CORP\\user.rc4aes": "Medium"}
-    assert idents(by(findings, "AdminCount")) == {"CORP\\admin1", "CORP\\admin2", "CORP\\svc_old", "CORP\\Domain Admins", "CORP\\Enterprise Admins"}
+    # admin1, admin2, Domain Admins, Enterprise Admins — в защищённых группах: adminCount у них штатный.
+    assert idents(by(findings, "AdminCount")) == {"CORP\\svc_old"}
     deleg = {f.identity: (f.severity, f.details["delegation_type"]) for f in by(findings, "Delegation")}
     assert deleg == {"CORP\\delegate.user": ("High", "Unconstrained"), "CORP\\SRV01$": ("Medium", "Constrained (S4U); Constrained (Services)")}
     rbcd = by(findings, "RBCD")
