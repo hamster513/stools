@@ -86,7 +86,7 @@ export function UndescribedNote({ codes, what }: { codes: string[]; what: string
 
 /**
  * Пустой список: «не собрано» и «не описано» отличаются от «нет». В карточке политики решает сама политика
- * (`undescribed` снапшота относится ко всем продуктам), в разделе сервера — `undescribed` ответа.
+ * (`undescribed` снапшота относится ко всем продуктам), в разделе сервера — список политик и `undescribed` ответа.
  */
 export function ObjectsEmpty({ snapshotId, policyId, undescribed, hasFilters, what, none, nothing }: {
   snapshotId: number
@@ -101,14 +101,23 @@ export function ObjectsEmpty({ snapshotId, policyId, undescribed, hasFilters, wh
   nothing: string
 }) {
   const policy = usePolicy(policyId === undefined ? undefined : snapshotId, policyId)
+  // В разделе сервера `undescribed` не видит политик без содержимого: «не собрано» считается по списку политик (кэш общий с PolicyFacet).
+  const list = usePolicyList(policyId === undefined ? snapshotId : undefined, {})
+  const all = list.data?.items.length ?? 0
+  const collected = list.data?.items.filter((p) => p.has_contents).length ?? 0
+  const partial = policyId === undefined && collected > 0 && collected < all ? ` Содержимое собрано только у ${collected} из ${all} политик.` : ''
   let body: ReactNode
   if (hasFilters) body = <EmptyState icon={FilterX} title="Ничего не найдено" description={nothing} />
-  else if (policyId !== undefined && policy.data && !policy.data.has_contents) {
+  else if (policyId === undefined && all > 0 && collected === 0) {
+    body = (
+      <EmptyState icon={FileQuestion} title="Содержимое политик не собрано" description={`Без содержимого политик ${what} не извлекаются; это не значит, что их нет. Соберите выгрузку с содержимым политик — скрипт сбора без ключа -SkipPolicyContents.`} />
+    )
+  } else if (policyId !== undefined && policy.data && !policy.data.has_contents) {
     body = <EmptyState icon={FileQuestion} title="Содержимое политики не собрано" description={`Без содержимого политики ${what} не извлекаются. Соберите выгрузку с содержимым политик.`} />
   } else if (policyId !== undefined && policy.data && !policy.data.described) {
     body = <EmptyState icon={FileQuestion} title="Структура продукта не описана" description={`Продукт ${policy.data.product}: ${what} появятся после описания структуры продукта.`} />
   } else if (policyId === undefined && undescribed.length > 0) {
-    body = <EmptyState icon={FileQuestion} title="Структура продукта не описана" description={`Продукты: ${undescribed.join(', ')}. Их ${what} появятся после описания структуры продукта; это не значит, что их нет.`} />
-  } else body = <EmptyState icon={FilterX} title={none} description={`В собранном содержимом политик ${what} не найдены.`} />
+    body = <EmptyState icon={FileQuestion} title="Структура продукта не описана" description={`Продукты: ${undescribed.join(', ')}. Их ${what} появятся после описания структуры продукта; это не значит, что их нет.${partial}`} />
+  } else body = <EmptyState icon={FilterX} title={none} description={`В собранном содержимом политик ${what} не найдены.${partial}`} />
   return <div className="p-6">{body}</div>
 }

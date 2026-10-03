@@ -163,7 +163,7 @@ export function ChangesList({ serverId, policyId, snapshotId }: { serverId: numb
             {snapshotId === undefined && (
               <FacetSection title="Снапшот">
                 {snapshots.map((s) => (
-                  <FacetRow key={s.id} active={filters.snapshot === s.id} count={s.total ?? undefined} onClick={() => set('snapshot', filters.snapshot === s.id ? undefined : s.id)}>
+                  <FacetRow key={s.id} active={filters.snapshot === s.id} count={inPolicy ? undefined : (s.total ?? undefined)} onClick={() => set('snapshot', filters.snapshot === s.id ? undefined : s.id)}>
                     #{s.id} · {when(s.collected_at)}{s.total === null ? ' · не считались' : s.prev === null ? ' · первый' : ''}
                   </FacetRow>
                 ))}
