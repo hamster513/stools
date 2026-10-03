@@ -12,7 +12,11 @@
 
 Запуск (нужен только Python 3.8+, без библиотек):
 
-    python3 ksc_policy_skeleton.py <выгрузка.json | выгрузка.json.gz | каталог> [-o skeleton.txt]
+    python3 ksc_policy_skeleton.py <выгрузка.json | выгрузка.json.gz | каталог> [-o skeleton.txt] [--numbers]
+
+`--numbers` печатает у числовых ключей набор встреченных значений (не больше восьми разных,
+иначе только их число): без этого коды перечислений — действие, направление, уровень — не
+расшифровать. Строки и в этом режиме не печатаются.
 
 Из контейнера STools, по всем снапшотам сервера, не копируя скрипт внутрь:
 
@@ -30,6 +34,10 @@ from typing import Any
 
 FORMAT = "stools-ksc/1"
 MAX_DEPTH = 60
+#: `--numbers`: собирать значения числовых ключей.
+NUMBERS = False
+#: Больше стольких разных чисел у ключа — это не перечисление, печатается только их число.
+NUMBERS_MAX = 8
 HIDDEN = "<скрыто>"
 
 _GUID = re.compile(r"^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$")
@@ -108,6 +116,7 @@ class Node:
         self.types: set[str] = set()
         self.kinds: set[str] = set()
         self.sizes: set[str] = set()
+        self.numbers: set[int] = set()
         self.lock = False
 
     def lines(self, path: str) -> list[str]:
@@ -119,7 +128,10 @@ class Node:
             lock = ""
         if self.types:
             kinds = f" ({', '.join(sorted(self.kinds))})" if self.kinds else ""
-            out.append(f"{path} : {' | '.join(sorted(self.types))}{kinds}{lock}")
+            numbers = ""
+            if self.numbers:
+                numbers = f" {{различных: {len(self.numbers)}}}" if len(self.numbers) > NUMBERS_MAX else " {" + ", ".join(str(n) for n in sorted(self.numbers)) + "}"
+            out.append(f"{path} : {' | '.join(sorted(self.types))}{kinds}{numbers}{lock}")
         return out
 
 
@@ -142,6 +154,8 @@ def walk(value: Any, path: str, lock: bool, nodes: dict[str, Node], depth: int =
         node = nodes.setdefault(path or "<значение>", Node())
         node.types.add(kind if _NAME.match(kind) else "<тип>")
         node.lock = node.lock or lock
+        if NUMBERS and kind == "long" and isinstance(value["value"], int) and not isinstance(value["value"], bool):
+            node.numbers.add(value["value"])
         return
     if isinstance(value, dict):
         if "KLPRSS_Val" in value:
@@ -169,6 +183,8 @@ def walk(value: Any, path: str, lock: bool, nodes: dict[str, Node], depth: int =
         node.types.add("bool")
     elif isinstance(value, int):
         node.types.add("int")
+        if NUMBERS:
+            node.numbers.add(value)
     elif isinstance(value, float):
         node.types.add("float")
     else:
@@ -309,8 +325,12 @@ def _plain_params(value: Any) -> Any:
 
 
 def main(argv: list[str]) -> int:
+    global NUMBERS
     args = list(argv)
     target: Path | None = None
+    if "--numbers" in args:
+        NUMBERS = True
+        args.remove("--numbers")
     if "-o" in args:
         at = args.index("-o")
         if at + 1 >= len(args):

@@ -123,3 +123,27 @@ def test_skeleton_says_when_there_is_nothing(tmp_path: Path) -> None:
     out = _run(path)
     assert "содержимого политик в выгрузке нет" in out
     assert "компонентов хостов в выгрузке нет" in out
+
+
+def test_skeleton_numbers_flag_prints_distinct_values_of_numeric_keys(tmp_path: Path) -> None:
+    """`--numbers`: у числовых ключей печатается набор встреченных значений — коды перечислений
+    (действие, направление, уровень) иначе не расшифровать; строки по-прежнему не печатаются."""
+    export = _export()
+    sections = export["policy_contents"]["1"]["sections"]
+    sections["TrustedZone"]["Rules"]["KLPRSS_Val"] += [
+        {"type": "params", "value": {"Path": PLANTED[0], "Enabled": True, "Action": 2}},
+        {"type": "params", "value": {"Path": PLANTED[1], "Enabled": True, "Action": 0}},
+        {"type": "params", "value": {"Path": PLANTED[2], "Enabled": True, "Action": 2, "Size": {"type": "long", "value": 7}}},
+    ]
+    sections["TrustedZone"]["Many"] = _lock([{"type": "params", "value": {"Port": 1000 + n}} for n in range(12)], locked=False)
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(export, ensure_ascii=False), encoding="utf-8")
+    plain = _run(path)
+    assert "Rules[].Action : int" in {line.strip() for line in plain.splitlines()}
+    assert "{0, 2}" not in plain
+    out = _run(path, "--numbers")
+    lines = {line.strip() for line in out.splitlines()}
+    assert "Rules[].Action : int {0, 2}" in lines
+    assert "Rules[].Size : long {7}" in lines
+    assert "Many[].Port : int {различных: 12}" in lines
+    assert not [v for v in PLANTED if v in out]
