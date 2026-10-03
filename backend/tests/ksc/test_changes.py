@@ -213,6 +213,73 @@ def test_contents_not_collected_in_prev() -> None:
     assert _of(diff, "setting") == []
 
 
+def test_section_not_read_in_current_is_not_removed() -> None:
+    """Секция политики ушла в ошибки (больше лимита): её настройки не «удалены», остальные секции сравниваются."""
+    prev = build_export()
+    cur = _copy(prev)
+    content = cur["policy_contents"]["1"]
+    content["sections"].pop("KLPRSS_Basic")
+    content["errors"] = ["KLPRSS_Basic: секция больше лимита"]
+    content["sections"]["KLPRSS_Components"]["KLPRSS_Val"]["Firewall"]["KLPRSS_Val"]["Enabled"] = _lock(False, locked=False)
+    diff = _diff(prev, cur)
+    assert [(c.kind, c.action, c.profile, c.section) for c in diff.changes] == [("setting", "changed", "", "KLPRSS_Components")]
+    assert diff.compared["setting"] is True
+
+
+def test_policy_over_limit_not_compared() -> None:
+    prev = build_export()
+    cur = _copy(prev)
+    cur["policy_contents"]["1"] = {"product": "KES", "version": "12.0.0.0", "sections": {}, "errors": ["лимит политик"]}
+    cur["policy_profiles"]["1"] = {"profiles": [], "priorities": [], "errors": ["лимит политик"]}
+    assert _diff(prev, cur).changes == []
+
+
+def _profile_unread(raw: dict[str, Any], name: str) -> None:
+    """Профиль, у которого не прочитаны ни атрибуты, ни настройки."""
+    pr = next(p for p in raw["policy_profiles"]["1"]["profiles"] if p["name"] == name)
+    pr.update(attrs={}, sections={}, errors=["GetProfileSettings: boom"])
+
+
+def test_profile_unread_in_current_is_not_changed_or_removed() -> None:
+    prev = build_export()
+    cur = _copy(prev)
+    _profile_unread(cur, "Ноутбуки")
+    assert _diff(prev, cur).changes == []
+
+
+def test_profile_unread_in_previous_is_not_added() -> None:
+    prev = _copy(build_export())  # профили синтетики — общие словари модуля: правится только копия
+    _profile_unread(prev, "Ноутбуки")
+    assert _diff(prev, build_export()).changes == []
+
+
+def test_profile_section_not_read_is_not_removed() -> None:
+    prev = build_export()
+    cur = _copy(prev)
+    pr = cur["policy_profiles"]["1"]["profiles"][0]
+    pr["sections"].pop("KLPRSS_Components")
+    pr["errors"] = ["KLPRSS_Components: секция больше лимита"]
+    assert _diff(prev, cur).changes == []
+
+
+def test_priorities_not_read_is_not_a_priority_change() -> None:
+    """`GetPriorities` отказал: профили в порядке по имени — это не смена приоритетов."""
+    prev = build_export()
+    cur = _copy(prev)
+    cur["policy_profiles"]["1"].update(priorities=[], errors=["GetPriorities: boom"])
+    assert _diff(prev, cur).changes == []
+
+
+def test_records_of_unread_section_not_compared(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(EXTRACTORS, "KES", _exclusions_extractor)
+    prev = build_export()
+    cur = _copy(prev)
+    cur["policy_contents"]["1"]["sections"].pop("KLPRSS_Basic")
+    cur["policy_contents"]["1"]["errors"] = ["KLPRSS_Basic: секция больше лимита"]
+    diff = _diff(prev, cur)
+    assert diff.changes == [] and diff.compared["exclusion"] is True
+
+
 def test_hidden_values_not_compared() -> None:
     prev = build_export()
     cur = _copy(prev)
@@ -361,3 +428,22 @@ def test_successor_lookup_failure_does_not_break_import(auth_client: TestClient,
     monkeypatch.setattr(service, "next_snapshot", boom)
     assert upload(auth_client, _raw("2026-09-14T12:00:00Z", "A"))["status"] == "done"
     assert _summary(db_session, _snapshot_ids(auth_client)["2026-09-14"])["prev"] is None
+
+
+def test_import_does_not_reread_own_file(auth_client: TestClient, db_session: Session, app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Импорт сравнивает с предыдущим уже разобранную выгрузку: свой файл журнал изменений не перечитывает."""
+    from api.modules.ksc.services import changes as service
+
+    read: list[str] = []
+    real = service.load_export_path
+
+    def spy(path: Any) -> KscExport:
+        read.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(service, "load_export_path", spy)
+    assert upload(auth_client, _raw("2026-09-14T12:00:00Z", "A"))["status"] == "done"
+    assert upload(auth_client, _raw("2026-09-15T12:00:00Z", "B"))["status"] == "done"
+    ids = _snapshot_ids(auth_client)
+    assert read == [str(snapshot_path(app_settings.data_dir, ids["2026-09-14"]))]
+    assert _summary(db_session, ids["2026-09-15"])["total"] == 1

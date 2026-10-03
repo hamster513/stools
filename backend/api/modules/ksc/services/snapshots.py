@@ -134,7 +134,7 @@ def import_export(
     _store(db, snapshot, idx, findings, cfg, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
-    _recompute_changes(db, snapshot, data_dir)
+    _recompute_changes(db, snapshot, data_dir, current=export)
     # Снапшот лёг в середину истории: следующий за ним теперь сравнивается с ним.
     _recompute_changes(db, snapshot, data_dir, successor=True)
     FINDINGS_ADAPTER.reconcile(db, server.id, snapshot.id)
@@ -142,8 +142,11 @@ def import_export(
     return snapshot
 
 
-def _recompute_changes(db: Session, snapshot: KscSnapshot | None, data_dir: Path, *, successor: bool = False) -> None:
-    """Журнал изменений снапшота; `successor` — следующего за ним (поиск следующего — тоже под защитой).
+def _recompute_changes(
+    db: Session, snapshot: KscSnapshot | None, data_dir: Path, *, successor: bool = False, current: KscExport | None = None,
+) -> None:
+    """Журнал изменений снапшота; `successor` — следующего за ним (поиск следующего — тоже под защитой);
+    `current` — уже разобранная выгрузка самого снапшота (импорт), чтобы не читать файл второй раз.
     Сбой не должен ронять импорт, пересчёт и удаление: остальное уже зафиксировано, свод изменений получает
     причину. Импорт внутри функции — журнал сам берёт отсюда предыдущий снапшот и путь файла."""
     from api.modules.ksc.core.changes import KINDS
@@ -159,7 +162,7 @@ def _recompute_changes(db: Session, snapshot: KscSnapshot | None, data_dir: Path
         if target is None:
             return
         target_id = target.id
-        recompute_changes(db, target, data_dir)
+        recompute_changes(db, target, data_dir, current=None if successor else current)
         db.commit()
     except Exception as exc:
         db.rollback()

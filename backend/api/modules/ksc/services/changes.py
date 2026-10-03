@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from api.jobs import insert_chunked
 from api.modules.ksc.core.changes import KINDS, diff_exports
-from api.modules.ksc.core.export import load_export_path
+from api.modules.ksc.core.export import KscExport, load_export_path
 from api.modules.ksc.models import KscChange, KscSnapshot
 from api.modules.ksc.services.snapshots import previous_snapshot, snapshot_path, stats
 
@@ -40,9 +40,10 @@ def set_summary(snapshot: KscSnapshot, summary: dict[str, Any]) -> None:
     snapshot.stats_json = json.dumps(data, ensure_ascii=False)
 
 
-def recompute_changes(db: Session, snapshot: KscSnapshot, data_dir: Path) -> None:
+def recompute_changes(db: Session, snapshot: KscSnapshot, data_dir: Path, current: KscExport | None = None) -> None:
     """Изменения снапшота заново (без фиксации `db`). Нет предыдущего — сравнивать не с чем;
-    нет файла предыдущего — все виды «не сравнивались» с причиной."""
+    нет файла предыдущего — все виды «не сравнивались» с причиной. `current` — выгрузка самого снапшота,
+    уже разобранная (импорт); не задана — читается из файла."""
     db.execute(delete(KscChange).where(KscChange.snapshot_id == snapshot.id))
     prev = previous_snapshot(db, snapshot)
     if prev is None:
@@ -53,7 +54,9 @@ def recompute_changes(db: Session, snapshot: KscSnapshot, data_dir: Path) -> Non
         set_summary(snapshot, {"prev": prev.id, "total": 0, "compared": dict.fromkeys(KINDS, False), "truncated": False,
                                "reason": "файл предыдущего снапшота не найден"})
         return
-    diff = diff_exports(load_export_path(prev_path), load_export_path(snapshot_path(data_dir, snapshot.id)))
+    if current is None:
+        current = load_export_path(snapshot_path(data_dir, snapshot.id))
+    diff = diff_exports(load_export_path(prev_path), current)
     rows = (
         {"snapshot_id": snapshot.id, "prev_snapshot_id": prev.id, "kind": c.kind, "action": c.action, "policy_id": c.policy_id,
          "policy_name": c.policy_name[:255], "profile": c.profile[:255], "section": c.section[:255], "path": c.path,

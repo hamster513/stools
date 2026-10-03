@@ -2,14 +2,16 @@
 настройки, исключения и сетевые правила.
 
 Чистые функции над `KscExport`; запись в базу — `services/changes`. Сравнивается только то, что собрано
-в обеих выгрузках: `Diff.compared` отличает «сравнивать не с чем» от «изменений нет». Скрытые значения
-(`<скрыто>`) равны друг другу — смена секрета в журнал не попадает.
+в обеих выгрузках: `Diff.compared` отличает «сравнивать не с чем» от «изменений нет»; секция, не прочитанная
+хотя бы в одной (в `errors` политики или профиля), не сравнивается вовсе, как и атрибуты или настройки
+профиля, чтение которых отказало. Скрытые значения (`<скрыто>`) равны друг другу — смена секрета в журнал
+не попадает.
 """
 from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from api.modules.ksc.core.export import ExportIndex, KscExport, _int
@@ -17,18 +19,26 @@ from api.modules.ksc.core.policy_contents import walk_settings
 from api.modules.ksc.core.policy_index import (
     PolicyRow,
     ProfileRow,
-    policy_objects,
     policy_rows,
     profile_rows,
     scope_rows,
 )
-from api.modules.ksc.core.policy_model import Exclusion, NetRule, exclusion_key, net_rule_key
+from api.modules.ksc.core.policy_model import (
+    Exclusion,
+    NetRule,
+    PolicyObjects,
+    exclusion_key,
+    extract,
+    net_rule_key,
+)
 
 KINDS = ("policy", "scope", "profile", "setting", "net_rule", "exclusion")
 MAX_CHANGES = 20_000
 
 #: Признак включённости профиля в его атрибутах: сравнивается полем `enabled`, в условии не учитывается.
 _ENABLED = "KLSSPOL_PRF_ENABLED"
+#: Ошибка политики сверх лимита сборщика: ни содержимое, ни профили не читались.
+_LIMIT = "лимит политик"
 
 SettingKey = tuple[str, str, str]
 
@@ -95,6 +105,27 @@ def _profiles_read(export: KscExport) -> set[int]:
     return {_int(key) for key, entry in (export.policy_profiles or {}).items() if entry.get("profiles") or not entry.get("errors")}
 
 
+def _priorities_unread(export: KscExport) -> set[int]:
+    """Политики, у которых профили есть, а порядок не прочитан (`GetPriorities` отказал): профили встали по имени."""
+    return {_int(key) for key, entry in (export.policy_profiles or {}).items()
+            if entry.get("profiles") and entry.get("errors") and not entry.get("priorities")}
+
+
+def _failed_sections(errors: Iterable[Any]) -> set[str]:
+    """Секции, которые не прочитаны: ошибка секции — «имя: сообщение»."""
+    return {str(e).split(": ", 1)[0] for e in errors if ": " in str(e)}
+
+
+def _attrs_read(p: ProfileRow) -> bool:
+    """Атрибуты пусты и есть ошибка — `GetProfile` отказал: включённость и условие неизвестны."""
+    return bool(p.condition) or not p.errors
+
+
+def _sections_read(p: ProfileRow) -> bool:
+    """Настройки пусты и есть ошибка — `GetProfileSettings` отказал: настройки профиля неизвестны."""
+    return bool(p.sections) or not p.errors
+
+
 def _profile_view(p: ProfileRow) -> dict[str, Any]:
     return {"enabled": p.enabled, "priority": p.priority, "condition": _condition(p)}
 
@@ -103,7 +134,9 @@ def _condition(p: ProfileRow) -> dict[str, Any]:
     return {k: v for k, v in p.condition.items() if k != _ENABLED}
 
 
-def _profiles(old: dict[tuple[int, str], ProfileRow], new: dict[tuple[int, str], ProfileRow], names: dict[int, str], out: list[Change]) -> None:
+def _profiles(old: dict[tuple[int, str], ProfileRow], new: dict[tuple[int, str], ProfileRow], names: dict[int, str],
+              no_priority: set[int], out: list[Change]) -> None:
+    """`no_priority` — политики, у которых порядок профилей не прочитан хотя бы в одном снапшоте."""
     for key in sorted(old.keys() | new.keys()):
         a, b = old.get(key), new.get(key)
         pid, name = key
@@ -112,16 +145,56 @@ def _profiles(old: dict[tuple[int, str], ProfileRow], new: dict[tuple[int, str],
         elif b is None and a is not None:
             out.append(Change("profile", "removed", pid, names.get(pid, ""), profile=name, before=_profile_view(a)))
         elif a is not None and b is not None:
-            fields = (("enabled", a.enabled, b.enabled), ("priority", a.priority, b.priority), ("condition", _condition(a), _condition(b)))
+            attrs = _attrs_read(a) and _attrs_read(b)
+            fields = [(field, x, y) for field, x, y, known in (
+                ("enabled", a.enabled, b.enabled, attrs), ("priority", a.priority, b.priority, pid not in no_priority),
+                ("condition", _condition(a), _condition(b), attrs),
+            ) if known]
             out.extend(Change("profile", "changed", pid, names.get(pid, ""), profile=name, path=field, before=x, after=y)
                        for field, x, y in fields if _json(x) != _json(y))
 
 
-def _setting_map(sections: dict[str, Any], profiles: Iterable[ProfileRow]) -> dict[SettingKey, tuple[Any, bool | None]]:
+Owners = dict[str, dict[str, Any]]
+
+
+def _without(sections: dict[str, Any], skip: set[str]) -> dict[str, Any]:
+    return {name: value for name, value in sections.items() if name not in skip}
+
+
+def _comparable(old_content: dict[str, Any], new_content: dict[str, Any], old_profiles: dict[str, ProfileRow],
+                new_profiles: dict[str, ProfileRow]) -> tuple[Owners, Owners]:
+    """Секции по владельцу («» — сама политика, иначе имя профиля), прочитанные в обоих снапшотах: секция из
+    `errors` любого из них убирается с обеих сторон, профиль с отказавшим чтением настроек — целиком."""
+    skip = _failed_sections(old_content.get("errors") or []) | _failed_sections(new_content.get("errors") or [])
+    old: Owners = {"": _without(old_content.get("sections") or {}, skip)}
+    new: Owners = {"": _without(new_content.get("sections") or {}, skip)}
+    for name in old_profiles.keys() | new_profiles.keys():
+        a, b = old_profiles.get(name), new_profiles.get(name)
+        if (a is not None and not _sections_read(a)) or (b is not None and not _sections_read(b)):
+            continue
+        skip = _failed_sections(a.errors if a else []) | _failed_sections(b.errors if b else [])
+        if a is not None:
+            old[name] = _without(a.sections, skip)
+        if b is not None:
+            new[name] = _without(b.sections, skip)
+    return old, new
+
+
+def _setting_map(owners: Owners) -> dict[SettingKey, tuple[Any, bool | None]]:
     """(профиль, секция, путь) → (значение, замок); `profile=""` — сама политика."""
-    out = {("", s.section, s.path): (s.value, s.locked) for s in walk_settings(sections)}
-    for pr in profiles:
-        out.update({(pr.name, s.section, s.path): (s.value, s.locked) for s in walk_settings(pr.sections)})
+    return {(owner, s.section, s.path): (s.value, s.locked) for owner, sections in owners.items() for s in walk_settings(sections)}
+
+
+def _objects(product: str, owners: Owners) -> PolicyObjects | None:
+    """Записи извлекателя по тем же секциям, что и настройки; None — продукт не описан."""
+    out = PolicyObjects()
+    for owner, sections in owners.items():
+        found = extract(product, sections)
+        if found is None:
+            return None
+        out.exclusions.extend(replace(e, profile=owner) for e in found.exclusions)
+        out.net_rules.extend(replace(r, profile=owner) for r in found.net_rules)
+        out.consumed |= found.consumed
     return out
 
 
@@ -187,7 +260,7 @@ def diff_exports(prev: KscExport, cur: KscExport) -> Diff:
     profiled = _profiles_read(prev) & _profiles_read(cur) if compared["profile"] else set()
     old_prof = {(p.policy_id, p.name): p for p in profile_rows(prev) or [] if p.policy_id in profiled}
     new_prof = {(p.policy_id, p.name): p for p in profile_rows(cur) or [] if p.policy_id in profiled}
-    _profiles(old_prof, new_prof, names, out)
+    _profiles(old_prof, new_prof, names, _priorities_unread(prev) | _priorities_unread(cur), out)
 
     settings: list[Change] = []
     net_rules: list[Change] = []
@@ -197,23 +270,23 @@ def diff_exports(prev: KscExport, cur: KscExport) -> Diff:
     if contents:
         for pid in sorted(old_pol.keys() & new_pol.keys()):
             key = str(pid)
-            old_sections = (prev.policy_contents.get(key) or {}).get("sections") or {}
-            new_sections = (cur.policy_contents.get(key) or {}).get("sections") or {}
-            if not old_sections or not new_sections:
+            old_content = prev.policy_contents.get(key) or {}
+            new_content = cur.policy_contents.get(key) or {}
+            if not old_content.get("sections") or not new_content.get("sections"):
                 continue
-            old_objs, old_described = policy_objects(prev, key)
-            new_objs, new_described = policy_objects(cur, key)
-            old_map = _setting_map(old_sections, [p for (i, _), p in old_prof.items() if i == pid])
-            new_map = _setting_map(new_sections, [p for (i, _), p in new_prof.items() if i == pid])
-            _settings(pid, names[pid], old_map, new_map, old_objs.consumed | new_objs.consumed, settings)
-            if old_described and new_described:
+            if _LIMIT in (old_content.get("errors") or []) or _LIMIT in (new_content.get("errors") or []):
+                continue
+            # Профили — только прочитанные в обоих снапшотах (`profiled`): записи профилей — при том же условии, что настройки.
+            old_owners, new_owners = _comparable(old_content, new_content, {n: p for (i, n), p in old_prof.items() if i == pid},
+                                                 {n: p for (i, n), p in new_prof.items() if i == pid})
+            old_objs = _objects(old_pol[pid].product, old_owners)
+            new_objs = _objects(new_pol[pid].product, new_owners)
+            consumed = (old_objs.consumed if old_objs else set()) | (new_objs.consumed if new_objs else set())
+            _settings(pid, names[pid], _setting_map(old_owners), _setting_map(new_owners), consumed, settings)
+            if old_objs is not None and new_objs is not None:
                 described_any = True
-                # Записи профилей — при том же условии, что настройки профилей.
-                with_profiles = pid in profiled
-                _records("net_rule", pid, names[pid], [r for r in old_objs.net_rules if with_profiles or not r.profile],
-                         [r for r in new_objs.net_rules if with_profiles or not r.profile], net_rule_key, net_rules)
-                _records("exclusion", pid, names[pid], [e for e in old_objs.exclusions if with_profiles or not e.profile],
-                         [e for e in new_objs.exclusions if with_profiles or not e.profile], exclusion_key, exclusions)
+                _records("net_rule", pid, names[pid], old_objs.net_rules, new_objs.net_rules, net_rule_key, net_rules)
+                _records("exclusion", pid, names[pid], old_objs.exclusions, new_objs.exclusions, exclusion_key, exclusions)
     compared["net_rule"] = compared["exclusion"] = described_any
     out.extend(settings)
     out.extend(net_rules)
