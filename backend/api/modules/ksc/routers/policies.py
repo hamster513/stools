@@ -130,6 +130,22 @@ def _ancestors(idx: ExportIndex, group_id: int) -> set[int]:
     return out
 
 
+def task_fields(t: dict[str, Any], info: dict[str, Any]) -> dict[str, Any]:
+    """Общие поля задачи (имя, тип, расписание, итоги последнего запуска) — для задач группы и плоского списка задач."""
+    stats: dict[str, Any] = unwrap(t.get("statistics")) or {}
+    return {
+        "id": _str(t.get("TASK_UNIQUE_ID")),
+        "name": _str(info.get("DisplayName")) or _str(t.get("TASK_NAME")),
+        "type": _str(t.get("TASK_NAME")),
+        "product": _str(t.get("TASKID_PRODUCT_NAME")),
+        "schedule": _int(info.get("TASKSCH_TYPE")),
+        "last_run_at": _dt(t.get("TASK_LAST_EXEC_TIME")),
+        "ok": _int(stats.get("4")),
+        "warning": _int(stats.get("8")),
+        "failed": _int(stats.get("16")),
+    }
+
+
 def _group_tasks(idx: ExportIndex, group_id: int, ancestors: set[int]) -> list[TaskView]:
     out: list[TaskView] = []
     for t in idx.export.tasks:
@@ -145,21 +161,7 @@ def _group_tasks(idx: ExportIndex, group_id: int, ancestors: set[int]) -> list[T
             inherited = True
         else:
             continue
-        stats: dict[str, Any] = unwrap(t.get("statistics")) or {}
-        out.append(
-            TaskView(
-                id=_str(t.get("TASK_UNIQUE_ID")),
-                name=_str(info.get("DisplayName")) or _str(t.get("TASK_NAME")),
-                type=_str(t.get("TASK_NAME")),
-                product=_str(t.get("TASKID_PRODUCT_NAME")),
-                inherited=inherited,
-                schedule=_int(info.get("TASKSCH_TYPE")),
-                last_run_at=_dt(t.get("TASK_LAST_EXEC_TIME")),
-                ok=_int(stats.get("4")),
-                warning=_int(stats.get("8")),
-                failed=_int(stats.get("16")),
-            )
-        )
+        out.append(TaskView(**task_fields(t, info), inherited=inherited))
     return out
 
 

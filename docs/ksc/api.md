@@ -237,6 +237,64 @@ share: 0, with_lock_flag: 0}`, `errors` несёт причины из сбор�
 нет» на экране, поэтому за них отвечает справочная `POLICY_CONTENT_MISSING`
 (см. «Проверки»), не сама ручка.
 
+## Аналитика политик
+
+```
+GET  /snapshots/{id}/policy-list?q=&product=&active=true|false
+                                        {items: [PolicyItem], facets: {product: {код: n}, active: {true, false}},
+                                        profiles_collected}
+GET  /snapshots/{id}/policies/{pid}     PolicyItem + {settings_total, settings_known, errors: [str], changes}
+GET  /snapshots/{id}/policies/{pid}/scope
+                                        {groups: [{group_id, path, own, hosts}], hosts}
+GET  /snapshots/{id}/policies/{pid}/profiles
+                                        {collected, errors: [str],
+                                        profiles: [{name, enabled, priority, condition, settings, errors,
+                                                    diff: [{section, path, value, policy_value, locked}]}]}
+GET  /snapshots/{id}/tasks?q=&type=&failed=true
+                                        {items: [{id, name, type, product, group, schedule, last_run_at,
+                                                  ok, warning, failed}], facets: {type: {тип: n}}}
+```
+
+`PolicyItem` = `{id, name, product, version, group, active, accept_parent, modified_at, has_contents,
+described, groups, hosts, profiles, exclusions, net_rules, locks: {locked, with_lock_flag}|null, grade,
+grade_reason, findings}`. Список, привязка и счётчики — из таблиц снапшота (`ksc_policy`, `ksc_policy_scope`,
+`ksc_profile`); они заполняются при импорте и пересчёте, у снапшота, импортированного до их появления,
+списки пусты до «пересчитать». `404` — снапшот или политика не найдены; `404 «файл выгрузки не найден»` —
+файл снапшота удалён с диска (он нужен ради замков, отличий профилей, ошибок сбора и задач; список
+политик файл не открывает, пока ни у одной политики нет содержимого).
+
+Список: `q` — подстрока имени (без регистра), `product` — код продукта, `active` — признак активности;
+фасеты считаются по отфильтрованному набору. Порядок: активные первыми, затем по имени. `groups` и `hosts` — групп,
+где политика действует (своя группа и наследники), и хостов прямо в них (в каждой группе только прямые хосты, без подгрупп). `group` — группа, где политика создана.
+`locks` — свод замков содержимого (`null`, если содержимого нет); `findings` — находки снапшота `POLICY_*`,
+у которых `target` равен имени политики (политики с одинаковым именем получают общий счёт).
+
+Не собрано и пусто: `profiles: null` — профили политики не собраны (выгрузка без секции `policy_profiles`,
+политика агента/сервера, отказ чтения списка профилей без единого профиля), `0` — собраны, профилей нет.
+`profiles_collected` — хотя бы у одной политики снапшота `profiles` не `null` (по таблице, без чтения файла);
+`false` значит, что профили в выгрузке не собирались вовсе.
+
+`grade` на этапе 1 всегда `null`, причина — `grade_reason`: «содержимое не собрано» (нет содержимого),
+иначе «политика неактивна», иначе «структура продукта не описана» (`described` пока всегда `false`).
+
+Карточка: `settings_total` — настроек в содержимом политики, `settings_known` — описанных словарём (этап 2, пока
+`0`), `errors` — ошибки сбора: содержимого (`policy_contents[…].errors`) и чтения профилей
+(`policy_profiles[…].errors`), `changes` — записей журнала изменений этого снапшота по политике.
+
+Привязка: строки по пути группы; `own` — политика создана в этой группе, `hosts` — хостов в ней
+прямо; верхний `hosts` — сумма по группам.
+
+Профили: `collected` — как `profiles != null` у политики; `errors` — ошибки чтения профилей политики целиком;
+порядок профилей — по приоритету. `condition` — атрибуты профиля как пришли (включённость, условие
+активации `EXPRESSION`), секреты скрыты при загрузке выгрузки. `diff` — каждая настройка профиля (`walk_settings`
+по его секциям): `value` — её значение, `policy_value` — значение той же пары `(section, path)` в политике
+(`null` — в политике такой настройки нет или содержимого политики нет в выгрузке), `locked` — признак замка
+настройки профиля (`null` — признака нет); значения — JSON-текст, длиннее 200 знаков обрезаются (`truncate_value`).
+
+Задачи: плоский список всех задач выгрузки (не по дереву групп). `group` — путь группы из `PRTS_TASK_GROUPID`,
+пусто — задача для набора устройств; `failed=true` оставляет задачи с `failed > 0` (счётчики —
+как в `/policies`); `q` — подстрока имени, `type` — `TASK_NAME`. Порядок: по группе, затем по имени.
+
 ## Сервер KSC
 
 ```
