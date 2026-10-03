@@ -45,6 +45,8 @@ export interface Overview extends OverviewBase {
   server: { id: number; name: string; version: string }
   snapshot: (NonNullable<OverviewBase['snapshot']> & { hosts: number }) | null
   coverage: Coverage | null
+  /** Свод изменений последнего снапшота; null — снапшотов нет. */
+  changes: ChangesSummary | null
 }
 
 export interface Finding extends FindingBase {
@@ -398,6 +400,194 @@ export interface TasksQuery {
 export interface TasksResponse {
   items: TaskListItem[]
   facets: Record<string, Record<string, number>>
+}
+
+/** Исключение политики или профиля (`profile` — пустая строка у самой политики). */
+export interface ExclusionItem {
+  id: number
+  policy_id: number
+  policy_name: string
+  profile: string
+  kind: string
+  value: string
+  components: string[]
+  enabled: boolean
+  comment: string
+  /** Коды рисков; на этапе 1 всегда пусто. */
+  risks: string[]
+  key: string
+  /** В скольких политиках встречается тот же ключ (по всему снапшоту, без учёта фильтров). */
+  policies: number
+  /** Значение более широкого исключения той же политики и профиля; null — не перекрыто. */
+  covered_by: string | null
+}
+
+export type ExclusionDup = 'multi' | 'single' | 'covered'
+
+export const EXCLUSION_DUP_LABELS: Record<ExclusionDup, string> = {
+  multi: 'в нескольких политиках',
+  single: 'только в одной политике',
+  covered: 'перекрытые',
+}
+
+/** Подписи известных кодов; неизвестный код показывается как есть. */
+export const EXCLUSION_KIND_LABELS: Record<string, string> = { path: 'путь', mask: 'маска', hash: 'хеш' }
+export const NET_ACTION_LABELS: Record<string, string> = { allow: 'разрешить', block: 'запретить' }
+export const NET_DIRECTION_LABELS: Record<string, string> = { in: 'входящее', out: 'исходящее' }
+
+export interface ExclusionsQuery {
+  q?: string
+  policy_id?: number
+  kind?: string
+  enabled?: boolean
+  dup?: ExclusionDup
+  limit?: number
+  offset?: number
+}
+
+export interface ExclusionSummaryItem {
+  policy_id: number
+  policy_name: string
+  hosts: number
+  total: number
+  by_kind: Record<string, number>
+}
+
+export interface ExclusionsResponse {
+  total: number
+  items: ExclusionItem[]
+  /** Только при offset=0, иначе null. */
+  facets: {
+    policy: Record<string, number>
+    kind: Record<string, number>
+    enabled: Record<'true' | 'false', number>
+    dup: Record<ExclusionDup, number>
+  } | null
+  /** Без фильтров, по политикам с описанным продуктом и собранным содержимым; только при offset=0. */
+  summary: ExclusionSummaryItem[] | null
+  /** Продукты политик с содержимым, для которых нет извлекателя: пустой список значит «не описан», а не «нет». */
+  undescribed: string[]
+}
+
+export interface NetRuleItem {
+  id: number
+  policy_id: number
+  policy_name: string
+  profile: string
+  layer: string
+  position: number
+  name: string
+  action: string
+  direction: string
+  protocol: string
+  local_ports: string
+  remote_ports: string
+  addresses: string
+  enabled: boolean
+  key: string
+}
+
+export interface NetRulesQuery {
+  q?: string
+  policy_id?: number
+  action?: string
+  direction?: string
+  enabled?: boolean
+  limit?: number
+  offset?: number
+}
+
+export interface NetRulesResponse {
+  total: number
+  items: NetRuleItem[]
+  /** Только при offset=0, иначе null. */
+  facets: {
+    policy: Record<string, number>
+    action: Record<string, number>
+    direction: Record<string, number>
+    layer: Record<string, number>
+    enabled: Record<'true' | 'false', number>
+  } | null
+  undescribed: string[]
+}
+
+export type ChangeKind = 'policy' | 'scope' | 'profile' | 'setting' | 'net_rule' | 'exclusion'
+export type ChangeAction = 'added' | 'removed' | 'changed'
+
+export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
+  policy: 'политика',
+  scope: 'привязка к группе',
+  profile: 'профиль',
+  setting: 'настройка',
+  net_rule: 'сетевое правило',
+  exclusion: 'исключение',
+}
+
+/** Во множественном числе — для «не сравнивались: …». */
+export const CHANGE_KIND_PLURAL: Record<ChangeKind, string> = {
+  policy: 'политики',
+  scope: 'привязки к группам',
+  profile: 'профили',
+  setting: 'настройки',
+  net_rule: 'сетевые правила',
+  exclusion: 'исключения',
+}
+
+export const CHANGE_ACTION_LABELS: Record<ChangeAction, string> = {
+  added: 'добавлено',
+  removed: 'удалено',
+  changed: 'изменено',
+}
+
+export interface ChangeItem {
+  id: number
+  snapshot_id: number
+  collected_at: string
+  kind: ChangeKind
+  action: ChangeAction
+  policy_id: number | null
+  policy_name: string
+  profile: string
+  section: string
+  path: string
+  /** Как сохранены (JSON); у настройки — `{value?, locked?, removed?, added?}`. */
+  before: unknown
+  after: unknown
+}
+
+/** Свод изменений снапшота (`summary_view`). */
+export interface ChangesSummary {
+  /** С каким снапшотом сравнивали; null — сравнивать не с чем. */
+  prev: number | null
+  /** null — изменения у снапшота не считались (нужен пересчёт). */
+  total: number | null
+  /** Вид → сравнивался ли; false — «не сравнивалось», а не «без изменений». */
+  compared: Partial<Record<ChangeKind, boolean>>
+  truncated: boolean
+  reason: string | null
+}
+
+export interface ChangesSnapshot extends ChangesSummary {
+  id: number
+  collected_at: string
+}
+
+export interface ChangesQuery {
+  kind?: ChangeKind
+  action?: ChangeAction
+  policy_id?: number
+  snapshot_id?: number
+  limit?: number
+  offset?: number
+}
+
+export interface ChangesResponse {
+  total: number
+  items: ChangeItem[]
+  /** Только при offset=0, иначе null. */
+  facets: { kind: Partial<Record<ChangeKind, number>>; action: Partial<Record<ChangeAction, number>> } | null
+  /** Все снапшоты сервера, новые первыми, со сводом изменений. */
+  snapshots: ChangesSnapshot[]
 }
 
 export interface ServerAdmin {

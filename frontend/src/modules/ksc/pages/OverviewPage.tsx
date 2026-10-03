@@ -1,5 +1,5 @@
 import { useOverview } from '@/modules/ksc/api/queries'
-import type { Coverage } from '@/modules/ksc/api/types'
+import { CHANGE_KIND_PLURAL, type ChangeKind, type ChangesSummary, type Coverage } from '@/modules/ksc/api/types'
 import { Link } from '@/lib/router'
 import { CollectorOverviewPage } from '@/platform/collector/OverviewPage'
 
@@ -49,6 +49,30 @@ function CoverageSection({ serverId, coverage }: { serverId: number; coverage: C
   )
 }
 
+/** Изменения последнего снапшота: «не считались» и «сравнивать не с чем» — не ноль. */
+function ChangesSection({ serverId, changes }: { serverId: number; changes: ChangesSummary | null }) {
+  const notCompared = changes ? (Object.entries(changes.compared) as [ChangeKind, boolean][]).filter(([, v]) => !v).map(([k]) => CHANGE_KIND_PLURAL[k] ?? k) : []
+  let value: React.ReactNode = '—'
+  let hint: string | undefined
+  if (changes?.total === null) {
+    value = 'не считались'
+    hint = changes.reason ?? 'пересчитайте снапшот'
+  } else if (changes && changes.prev === null) hint = 'первый снапшот — сравнивать не с чем'
+  else if (changes) {
+    value = changes.total
+    const notes = [changes.reason, notCompared.length ? `не сравнивались: ${notCompared.join(', ')}` : null, changes.truncated ? 'список обрезан' : null]
+    hint = notes.filter(Boolean).join('; ') || undefined
+  }
+  return (
+    <div className="mb-5">
+      <div className="mb-2 text-xs font-semibold tracking-wide text-text-secondary uppercase">Изменения</div>
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        <CoverageCard title="Изменений с прошлого сбора" value={value} hint={hint} to={`/ksc/servers/${serverId}/changes`} />
+      </div>
+    </div>
+  )
+}
+
 export function OverviewPage({ serverId }: { serverId: number }) {
   const overview = useOverview(serverId)
   return (
@@ -61,7 +85,12 @@ export function OverviewPage({ serverId }: { serverId: number }) {
       source={(snap) => (snap.source === 'online' ? 'сбор из KSC' : 'выгрузка скрипта')}
       count={(snap) => `хостов ${snap.hosts.toLocaleString('ru-RU')}`}
       firstNote=" Это первый снапшот сервера."
-      extra={(o) => o.coverage && <CoverageSection serverId={serverId} coverage={o.coverage} />}
+      extra={(o) => (
+        <>
+          {o.coverage && <CoverageSection serverId={serverId} coverage={o.coverage} />}
+          <ChangesSection serverId={serverId} changes={o.changes} />
+        </>
+      )}
     />
   )
 }

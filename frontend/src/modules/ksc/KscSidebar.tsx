@@ -1,4 +1,4 @@
-import { Camera, FileCog, LayoutDashboard, ListChecks, Monitor, ServerCog, Settings2, ShieldAlert } from 'lucide-react'
+import { Camera, FileCog, History, LayoutDashboard, ListChecks, ListX, Monitor, Network, ServerCog, Settings2, ShieldAlert } from 'lucide-react'
 import type { Server } from '@/modules/ksc/api/types'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -16,6 +16,9 @@ export function KscSidebar({ servers, serverId }: { servers: Server[]; serverId:
         { to: `${base}/hosts`, label: 'Хосты', icon: Monitor, exact: false },
         { to: `${base}/findings`, label: 'Находки', icon: ShieldAlert, exact: false },
         { to: `${base}/policies`, label: 'Политики и задачи', icon: FileCog, exact: false },
+        { to: `${base}/exclusions`, label: 'Исключения', icon: ListX, exact: false },
+        { to: `${base}/netrules`, label: 'Сетевые правила', icon: Network, exact: false },
+        { to: `${base}/changes`, label: 'Изменения', icon: History, exact: false },
         { to: `${base}/server`, label: 'Сервер KSC', icon: ServerCog, exact: false },
         { to: `${base}/snapshots`, label: 'Снапшоты', icon: Camera, exact: false },
       ]

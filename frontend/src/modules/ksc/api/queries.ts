@@ -3,8 +3,12 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
 import type {
+  ChangesQuery,
+  ChangesResponse,
   Connection,
   ConnectionIn,
+  ExclusionsQuery,
+  ExclusionsResponse,
   FindingDetail,
   FindingsQuery,
   FindingsResponse,
@@ -13,6 +17,8 @@ import type {
   HostsResponse,
   Job,
   KscConfig,
+  NetRulesQuery,
+  NetRulesResponse,
   Overview,
   PoliciesResponse,
   PolicyCard,
@@ -31,10 +37,11 @@ import type {
 
 export const FINDINGS_PAGE_SIZE = 200
 export const HOSTS_PAGE_SIZE = 200
+export const OBJECTS_PAGE_SIZE = 200
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
   for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-policy-list', 'ksc-policy',
-    'ksc-policy-scope', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs']) {
+    'ksc-policy-scope', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs', 'ksc-exclusions', 'ksc-net-rules', 'ksc-changes']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -196,6 +203,42 @@ export function useTasks(snapshotId: number | undefined, query: TasksQuery) {
     queryKey: ['ksc-tasks', snapshotId, query],
     queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/tasks${buildQuery({ ...query })}`),
     enabled: snapshotId !== undefined,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useExclusions(snapshotId: number | undefined, query: Omit<ExclusionsQuery, 'limit' | 'offset'>) {
+  return useInfiniteQuery<ExclusionsResponse, ApiRequestError>({
+    queryKey: ['ksc-exclusions', snapshotId, query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/ksc/snapshots/${snapshotId}/exclusions${buildQuery({ ...query, limit: OBJECTS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
+    enabled: snapshotId !== undefined,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useNetRules(snapshotId: number | undefined, query: Omit<NetRulesQuery, 'limit' | 'offset'>) {
+  return useInfiniteQuery<NetRulesResponse, ApiRequestError>({
+    queryKey: ['ksc-net-rules', snapshotId, query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/ksc/snapshots/${snapshotId}/net-rules${buildQuery({ ...query, limit: OBJECTS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
+    enabled: snapshotId !== undefined,
+    placeholderData: (prev) => prev,
+  })
+}
+
+/** Журнал изменений сервера по всем снапшотам; `facets` и `snapshots` — со страницы offset=0. */
+export function useChanges(serverId: number, query: Omit<ChangesQuery, 'limit' | 'offset'>) {
+  return useInfiniteQuery<ChangesResponse, ApiRequestError>({
+    queryKey: ['ksc-changes', serverId, query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/ksc/servers/${serverId}/changes${buildQuery({ ...query, limit: OBJECTS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
     placeholderData: (prev) => prev,
   })
 }

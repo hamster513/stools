@@ -11,12 +11,21 @@ import { TabBar, type TabDef } from './policies/TabBar'
 import { ProfilesTab } from './policy/ProfilesTab'
 import { RawTab } from './policy/RawTab'
 import { ScopeTab } from './policy/ScopeTab'
+import { ExclusionsTable } from './ExclusionsPage'
+import { NetRulesTable } from './NetRulesPage'
+import { ChangesList } from './ChangesPage'
 
 const TABS: TabDef[] = [
   { key: 'scope', label: 'Где действует' },
   { key: 'profiles', label: 'Профили' },
+  { key: 'exclusions', label: 'Исключения' },
+  { key: 'netrules', label: 'Сетевые правила' },
+  { key: 'changes', label: 'Изменения' },
   { key: 'raw', label: 'Все поля' },
 ]
+
+/** Вкладки со своей панелью фильтров и прокруткой: без отступов вокруг. */
+const FULL_TABS = new Set(['exclusions', 'netrules', 'changes'])
 
 /** Счётчик, которому нечего показать без содержимого или описания продукта: «—» с причиной, а не «0». */
 function objectsCount(p: PolicyCard, n: number): string {
@@ -47,7 +56,7 @@ function Counters({ p, serverId }: { p: PolicyCard; serverId: number }) {
   )
 }
 
-/** Карточка политики снапшота: шапка со сводом и вкладки `?tab=` — где действует, профили, все поля. */
+/** Карточка политики снапшота: шапка со сводом и вкладки `?tab=` — где действует, профили, исключения, сетевые правила, изменения, все поля. */
 export function PolicyPage({ serverId, policyId }: { serverId: number; policyId: number }) {
   const params = useSearchParams()
   const servers = useServers()
@@ -93,9 +102,12 @@ export function PolicyPage({ serverId, policyId }: { serverId: number; policyId:
           <TabBar tabs={TABS} current={tab.key} label="Карточка политики" />
         </div>
       </header>
-      <div role="tabpanel" aria-label={tab.label} className="min-h-0 flex-1 overflow-y-auto p-6">
+      <div role="tabpanel" aria-label={tab.label} className={FULL_TABS.has(tab.key) ? 'min-h-0 flex-1' : 'min-h-0 flex-1 overflow-y-auto p-6'}>
         {tab.key === 'scope' && <ScopeTab serverId={serverId} snapshotId={snapshotId} policyId={policyId} />}
         {tab.key === 'profiles' && <ProfilesTab snapshotId={snapshotId} policyId={policyId} />}
+        {tab.key === 'exclusions' && <ExclusionsTable snapshotId={snapshotId} serverId={serverId} policyId={policyId} />}
+        {tab.key === 'netrules' && <NetRulesTable snapshotId={snapshotId} serverId={serverId} policyId={policyId} />}
+        {tab.key === 'changes' && <ChangesList serverId={serverId} policyId={policyId} />}
         {tab.key === 'raw' && <RawTab snapshotId={snapshotId} policyId={policyId} />}
       </div>
     </div>

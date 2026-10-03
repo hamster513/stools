@@ -13,6 +13,9 @@ import { ServerPage } from './pages/ServerPage'
 import { SnapshotsPage } from './pages/SnapshotsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { JobsPage } from './pages/JobsPage'
+import { ExclusionsPage } from './pages/ExclusionsPage'
+import { NetRulesPage } from './pages/NetRulesPage'
+import { ChangesPage } from './pages/ChangesPage'
 
 /** Маршруты модуля KSC — всё под /ksc. Сервер — в адресе, как домен у AD. */
 export function KscModule() {
@@ -36,6 +39,9 @@ export function KscModule() {
   else if (serverId !== null && section === 'hosts') page = <HostsPage serverId={serverId} />
   else if (serverId !== null && section === 'findings') page = <FindingsPage serverId={serverId} />
   else if (serverId !== null && section === 'policies') page = <PoliciesPage serverId={serverId} />
+  else if (serverId !== null && section === 'exclusions') page = <ExclusionsPage serverId={serverId} />
+  else if (serverId !== null && section === 'netrules') page = <NetRulesPage serverId={serverId} />
+  else if (serverId !== null && section === 'changes') page = <ChangesPage serverId={serverId} />
   else if (serverId !== null && section === 'server') page = <ServerPage serverId={serverId} />
   else if (serverId !== null && section === 'snapshots') page = <SnapshotsPage serverId={serverId} />
   else return <Redirect to="/ksc" />
