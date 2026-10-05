@@ -67,13 +67,15 @@ def check_no_fullscan(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
 def check_component_off(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
     out = []
     for h in idx.hosts:
+        seen: set[str] = set()  # английское и русское название одного компонента (или две версии продукта) — одна находка
         for name, status in h.components:
             if status not in COMPONENT_OFF_STATES:
                 continue
             lowered = name.lower()
             code = next((c for c, patterns in cfg.key_components.items() if any(p.lower() in lowered for p in patterns)), None)
-            if code is None:
+            if code is None or code in seen:
                 continue
+            seen.add(code)
             out.append(host_finding(cfg, "COMPONENT_OFF", "Medium", h, key_extra=code, component=name, status=COMPONENT_STATUS_TEXT.get(status, str(status)), code=code))
     return out
 

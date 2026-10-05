@@ -14,6 +14,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.checks.hosts import COMPONENT_OFF_STATES
+from api.modules.ksc.core.dictionary.components import component_title
 from api.modules.ksc.models import KscFinding, KscHost, KscPolicy, KscPolicyScope, KscSnapshot
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.settings import load_config
@@ -54,13 +55,18 @@ def _component_state(code: Any) -> str:
 
 
 def _components(h: KscHost) -> dict[str, str]:
-    """Состояние каждого компонента защиты хоста: on | off | other."""
-    out: dict[str, str] = {}
+    """Состояние каждого компонента защиты хоста: on | off | other; ключ — единое (русское) название, английское сведено к нему."""
+    return {name: _component_state(code) for name, code in _component_rows(h)}
+
+
+def _component_rows(h: KscHost) -> list[tuple[str, int]]:
+    """Компоненты хоста под единым названием, одна строка на компонент; при повторе остаётся строка с худшим состоянием."""
+    worst: dict[str, tuple[str, int]] = {}
     for name, code in json.loads(h.components_json or "[]"):
-        state = _component_state(code)
-        if name not in out or _COMPONENT_RANK[state] > _COMPONENT_RANK[out[name]]:
-            out[name] = state
-    return out
+        title = component_title(name)
+        if title not in worst or _COMPONENT_RANK[_component_state(code)] > _COMPONENT_RANK[_component_state(worst[title][1])]:
+            worst[title] = (title, code)
+    return list(worst.values())
 
 
 def _tags(h: KscHost, collected: bool) -> list[str] | None:
@@ -83,7 +89,7 @@ def _item(h: KscHost, agent: str, bases: str, findings: int, tags: list[str] | N
         "bases_at": h.bases_at.isoformat() if h.bases_at else None, "bases": bases,
         "last_fullscan_at": h.last_fullscan_at.isoformat() if h.last_fullscan_at else None,
         "status": h.status, "threats": h.threats, "unassigned": h.unassigned, "in_ad": h.in_ad,
-        "components": json.loads(h.components_json or "[]"), "extra": json.loads(h.extra_json or "{}"), "tags": tags, "findings": findings,
+        "components": _component_rows(h), "extra": json.loads(h.extra_json or "{}"), "tags": tags, "findings": findings,
     }
 
 
@@ -187,7 +193,7 @@ def list_hosts(
         if status_ and h.status != status_:
             return False
         if component:
-            state = comps[h.id].get(component, "none")
+            state = comps[h.id].get(component_title(component), "none")
             # без состояния — хосты, у которых компонент есть
             if state != component_state if component_state else state == "none":
                 return False

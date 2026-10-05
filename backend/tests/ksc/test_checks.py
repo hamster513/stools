@@ -359,3 +359,17 @@ def test_parse_cert_returns_none_on_garbage() -> None:
     assert parse_cert({"type": "binary", "value": "not base64!!!"}) is None
     assert parse_cert(12345) is None
     assert parse_cert({}) is None
+
+
+def test_component_off_is_one_finding_per_component_in_any_spelling() -> None:
+    en = [f for f in _findings() if f.check == "COMPONENT_OFF"]
+    raw = build_export()
+    for rows in raw["host_components"]["h-ws11"].values():
+        for r in rows:
+            if r["KLHST_PRCST_COMPONENT_DN"] == "Firewall":
+                r["KLHST_PRCST_COMPONENT_DN"] = "Сетевой экран"
+                rows.append(dict(r, KLHST_PRCST_COMPONENT_DN="Firewall"))  # оба написания у одного хоста
+                break
+    ru = [f for f in _findings(raw) if f.check == "COMPONENT_OFF"]
+    # английское название даёт прежний ключ; русское и оба сразу — тот же ключ, одна находка на хост и компонент
+    assert [f.key for f in ru] == [f.key for f in en] and len(ru) == 1 and ru[0].details["code"] == "firewall"

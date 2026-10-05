@@ -31,7 +31,7 @@ def test_host_detail_has_findings_and_components(auth_client: TestClient) -> Non
     assert upload(auth_client, build_export())["status"] == "done"
     snap = auth_client.get("/api/ksc/snapshots").json()[0]
     detail = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws11").json()
-    assert detail["name"] == "WS11" and ["Firewall", 1] in detail["components"]
+    assert detail["name"] == "WS11" and ["Сетевой экран", 1] in detail["components"]
     assert [f["check"] for f in detail["findings"]] == ["COMPONENT_OFF"] and detail["findings"][0]["status"] == "new"
     assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/nope").status_code == 404
 
@@ -95,7 +95,7 @@ def test_hosts_filter_by_component_state(auth_client: TestClient) -> None:
     snap = auth_client.get("/api/ksc/snapshots").json()[0]
     assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts?component_state=off").status_code == 422
     assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts?component=Firewall&component_state=bad").status_code == 422
-    firewall = _hosts(auth_client)["facets"]["component"]["Firewall"]
+    firewall = _hosts(auth_client)["facets"]["component"]["Сетевой экран"]
     assert firewall == {"on": 9, "off": 1, "other": 0}
 
 
@@ -108,7 +108,44 @@ def test_hosts_component_worst_state_wins_over_duplicates_and_other_state(auth_c
     web = _hosts(auth_client, "?component=Web Control&component_state=other")
     assert [h["name"] for h in web["items"]] == ["WS01"]
     assert _hosts(auth_client, "?component=Web Control&component_state=on")["total"] == 9
-    assert _hosts(auth_client)["facets"]["component"]["Web Control"] == {"on": 9, "off": 0, "other": 1}
+    assert _hosts(auth_client)["facets"]["component"]["Веб-Контроль"] == {"on": 9, "off": 0, "other": 1}
+
+
+def _rename_components(raw: dict, host_id: str, names: dict[str, str]) -> None:
+    for rows in raw["host_components"][host_id].values():
+        for r in rows:
+            r["KLHST_PRCST_COMPONENT_DN"] = names.get(r["KLHST_PRCST_COMPONENT_DN"], r["KLHST_PRCST_COMPONENT_DN"])
+
+
+def test_hosts_component_spellings_are_one_facet_item_and_filter(auth_client: TestClient) -> None:
+    raw = build_export()
+    # WS01 — консоль на русском; WS11 (Firewall выключен) остаётся с английскими названиями
+    _rename_components(raw, "h-ws01", {"Firewall": "Сетевой экран", "Web Control": "Веб-Контроль"})
+    assert upload(auth_client, raw)["status"] == "done"
+    facet = _hosts(auth_client)["facets"]["component"]
+    assert facet["Сетевой экран"] == {"on": 9, "off": 1, "other": 0} and "Firewall" not in facet and "Web Control" not in facet
+    assert facet["Веб-Контроль"] == {"on": 10, "off": 0, "other": 0}
+    for spelling in ("Firewall", "firewall ", "Сетевой экран"):
+        both = _hosts(auth_client, f"?component={spelling}")
+        assert both["total"] == 10 and {"WS01", "WS11"} <= {h["name"] for h in both["items"]}
+        off = _hosts(auth_client, f"?component={spelling}&component_state=off")
+        assert [h["name"] for h in off["items"]] == ["WS11"]
+    assert _hosts(auth_client, "?component=Web Control&component_state=on")["total"] == 10
+    ws01 = next(h for h in _hosts(auth_client, "?q=ws01")["items"] if h["name"] == "WS01")
+    assert ["Сетевой экран", 4] in ws01["components"] and all(name != "Firewall" for name, _ in ws01["components"])
+
+
+def test_host_with_both_spellings_merges_by_worst_state(auth_client: TestClient) -> None:
+    raw = build_export()
+    rows = next(iter(raw["host_components"]["h-ws01"].values()))
+    # тот же компонент под двумя написаниями: «работает» и «остановлен» — хост считается с выключенным, карточка показывает одну строку
+    rows.append(dict(next(r for r in rows if r["KLHST_PRCST_COMPONENT_DN"] == "Firewall"), KLHST_PRCST_COMPONENT_DN="Сетевой экран", KLHST_PRCST_COMPONENT_STATUS=1))
+    assert upload(auth_client, raw)["status"] == "done"
+    assert {h["name"] for h in _hosts(auth_client, "?component=Firewall&component_state=off")["items"]} == {"WS01", "WS11"}
+    assert _hosts(auth_client)["facets"]["component"]["Сетевой экран"] == {"on": 8, "off": 2, "other": 0}
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    detail = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws01").json()
+    assert [c for c in detail["components"] if c[0] == "Сетевой экран"] == [["Сетевой экран", 1]]
 
 
 def test_hosts_filter_by_tag_and_tags_in_items(auth_client: TestClient) -> None:
