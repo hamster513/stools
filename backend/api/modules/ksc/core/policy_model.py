@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 #: Виды исключений, которые сравниваются как пути: каталог или маска покрывает файл.
 PATH_KINDS = {"path", "mask"}
@@ -59,9 +62,16 @@ EXTRACTORS: dict[str, Extractor] = {}
 
 
 def extract(product: str, sections: dict[str, Any]) -> PolicyObjects | None:
-    """Записи из секций; None — для продукта нет извлекателя (продукт не описан)."""
+    """Записи из секций; None — для продукта нет извлекателя (продукт не описан). Сбой извлекателя импорт снапшота не
+    роняет: в журнал приложения, записей нет, продукт по-прежнему описан."""
     extractor = EXTRACTORS.get(product)
-    return extractor(sections) if extractor is not None else None
+    if extractor is None:
+        return None
+    try:
+        return extractor(sections)
+    except Exception:
+        log.exception("извлекатель записей продукта %s упал — записей нет", product)
+        return PolicyObjects()
 
 
 def _digest(text: str) -> str:

@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
+from api.modules.ksc.core.policy_model import EXTRACTORS
 from tests.ksc.synthetic import build_export
 from tests.ksc.test_api import upload
 
@@ -91,6 +93,13 @@ def test_changes_snapshots_summary(auth_client: TestClient) -> None:
     assert last["reason"] is None
     # Первый снапшот: сравнивать не с чем — это не «0 изменений».
     assert base["prev"] is None and base["total"] == 0 and base["compared"] == {}
+
+
+def test_changes_undescribed_product_records_not_compared(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(EXTRACTORS, "KES")  # реестр без KES: исключения и сетевые правила не сравнивались — «не описано»
+    server, _ = _setup(auth_client)
+    last = _changes(auth_client, server)["snapshots"][0]
+    assert last["compared"] == {"policy": True, "scope": True, "profile": True, "setting": True, "net_rule": False, "exclusion": False}
 
 
 def test_changes_snapshot_not_computed(auth_client: TestClient, db_session: Any) -> None:

@@ -232,15 +232,29 @@ def _settings(pid: int, name: str, old: dict[SettingKey, tuple[Any, bool | None]
 
 def _records(kind: str, pid: int, name: str, old: Iterable[Exclusion | NetRule], new: Iterable[Exclusion | NetRule],
              key: Callable[[Any], str], out: list[Change]) -> None:
-    """Записи извлекателя по (профиль, ключ); `path` — ключ записи (как `key` в таблице)."""
-    a = {(r.profile, key(r)): asdict(r) for r in old}
-    b = {(r.profile, key(r)): asdict(r) for r in new}
+    """Записи извлекателя по (профиль, ключ) как мультимножества: ключ у разных записей может совпасть (тот же путь с разными
+    именами объекта, одноимённые правила программ). По одной записи с каждой стороны и они различаются — `changed`; иначе
+    записи, которых нет на другой стороне (с учётом кратности), — `removed` / `added`. `path` — ключ записи (как `key` в таблице)."""
+    a: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    b: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for records, groups in ((old, a), (new, b)):
+        for r in records:
+            groups.setdefault((r.profile, key(r)), []).append(asdict(r))
     for k in sorted(a.keys() | b.keys()):
-        x, y = a.get(k), b.get(k)
-        if x == y:
+        before, after = a.get(k, []), b.get(k, [])
+        if len(before) == 1 and len(after) == 1:
+            if before != after:
+                out.append(Change(kind, "changed", pid, name, profile=k[0], path=k[1], before=before[0], after=after[0]))
             continue
-        action = "added" if x is None else "removed" if y is None else "changed"
-        out.append(Change(kind, action, pid, name, profile=k[0], path=k[1], before=x, after=y))
+        added = list(after)
+        removed = []
+        for x in before:
+            if x in added:
+                added.remove(x)
+            else:
+                removed.append(x)
+        out.extend(Change(kind, "removed", pid, name, profile=k[0], path=k[1], before=x) for x in removed)
+        out.extend(Change(kind, "added", pid, name, profile=k[0], path=k[1], after=y) for y in added)
 
 
 def diff_exports(prev: KscExport, cur: KscExport) -> Diff:

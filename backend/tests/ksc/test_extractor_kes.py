@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.modules.ksc.core.changes import Change, diff_exports
 from api.modules.ksc.core.export import load_export
 from api.modules.ksc.core.extractors.kes_windows import extract_kes
 from api.modules.ksc.core.policy_contents import flat_settings
@@ -18,6 +19,7 @@ from api.modules.ksc.core.policy_model import EXTRACTORS, Exclusion, NetRule, Po
 from api.modules.ksc.models import KscChange, KscExclusion, KscNetRule, KscPolicy
 from tests.ksc.kes11 import (
     ICMP,
+    ICMPV6,
     TCP,
     UDP,
     exclusion,
@@ -40,7 +42,6 @@ CONSUMED = {
     ("852d0287", "scanExclusionsAndTrustedZone.trustedApplications"),
     ("852d0287", "scanExclusionsAndTrustedZone.trustedApplications_merging_crutch"),
     ("cf9370d5", "firewall.networkPacketRules"),
-    ("cf9370d5", "hips.appGroups"),
 }
 
 
@@ -50,6 +51,15 @@ def _objects(**over: Any) -> PolicyObjects:
 
 def _rule(**kwargs: Any) -> NetRule:
     [rule] = _objects(**{PACKET: [packet_rule("Правило", **kwargs)], GROUPS: []}).net_rules
+    return rule
+
+
+def _packet(name: str = "Правило", **kwargs: Any) -> dict[str, Any]:
+    return packet_rule(name, **{"action": 0, "direction": 0, **kwargs})
+
+
+def _one(item: dict[str, Any]) -> NetRule:
+    [rule] = _objects(**{PACKET: [item], GROUPS: []}).net_rules
     return rule
 
 
@@ -64,6 +74,15 @@ def test_registered_for_kes_only() -> None:
     assert EXTRACTORS["KES"] is extract_kes
     assert extract("KES", {}) == PolicyObjects(consumed=CONSUMED)
     assert extract("kesl", kes11_sections()) is None
+
+
+def test_failing_extractor_does_not_break_extract(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    def broken(sections: dict[str, Any]) -> PolicyObjects:
+        raise RuntimeError("boom")
+
+    monkeypatch.setitem(EXTRACTORS, "KES", broken)
+    assert extract("KES", kes11_sections()) == PolicyObjects()
+    assert "boom" in caplog.text
 
 
 # --- исключения --------------------------------------------------------------------------------
@@ -115,6 +134,29 @@ def test_trusted_app_encrypted_traffic_only_and_order() -> None:
     assert plain.components == ()
 
 
+def test_trusted_app_net_hosts_and_ports() -> None:
+    app = trusted_app("C:\\Tools\\b.exe", excludeNet=True)
+    app["excludeNet"].update(hosts=["updates.example.test", "192.0.2.1"], ports=[80, 443])
+    off = trusted_app("C:\\Tools\\c.exe")
+    off["excludeNet"].update(hosts=["updates.example.test"], ports=[80])  # проверка трафика не отключена — узлы не в счёт
+    odd = trusted_app("C:\\Tools\\d.exe", excludeNet=True)
+    odd["excludeNet"].update(hosts=[{"name": "x"}], ports="80")  # не список скаляров — не показывается
+    [e, e_off, e_odd] = _objects(**{EXCLUSIONS: [], TRUSTED: [app, off, odd]}).exclusions
+    assert e.components == ("не проверять сетевой трафик", "узлы: updates.example.test, 192.0.2.1", "порты: 80, 443")
+    assert e_off.components == () and e_odd.components == ("не проверять сетевой трафик",)
+
+
+def test_enabled_only_explicit_false_disables() -> None:
+    hidden = {**exclusion("C:\\a"), "enabled": "<скрыто>"}
+    missing = {k: v for k, v in exclusion("C:\\b").items() if k != "enabled"}
+    app = {k: v for k, v in trusted_app("C:\\c.exe").items() if k != "enabled"}
+    assert [e.enabled for e in _objects(**{EXCLUSIONS: [hidden, missing, exclusion("C:\\d", enabled=False)], TRUSTED: [app]}).exclusions] == [
+        True, True, False, True]
+    rule = {k: v for k, v in _packet().items() if k != "enabled"}
+    assert _one(rule).enabled is True and _one({**_packet(), "enabled": "<скрыто>"}).enabled is True
+    assert _one(_packet(enabled=False)).enabled is False
+
+
 def test_fixture_exclusions() -> None:
     assert _objects().exclusions == [
         Exclusion("path", "C:\\Tools\\a.exe", comment="Тестовое исключение"),
@@ -163,16 +205,28 @@ def test_ports_ranges_and_codes() -> None:
     assert _rule(action=0, direction=0, protocol=ICMP).protocol == "ICMP"
     assert _rule(action=0, direction=0, networks=0).addresses == "доверенные сети"
     assert _rule(action=0, direction=0, networks=1).addresses == "локальные сети"
+    # «(вид N)» — только у ICMP и ICMPv6.
+    assert _rule(action=0, direction=0, protocol=ICMPV6, icmp_type=3).protocol == "ICMPv6 (вид 3)"
+    assert _rule(action=0, direction=0, protocol=TCP, icmp_type=3).protocol == "TCP"
+    assert _rule(action=0, direction=0, protocol=12345, icmp_type=3).protocol == "код 12345"
+    null_proto = _packet(protocol=TCP)
+    null_proto["protocol"]["unique_id"] = None
+    assert _one(null_proto).protocol == "любой"
+    null_networks = _packet(remote=[_address("192.0.2.1", 32)], networks=0)
+    null_networks["scope"]["networks"] = None
+    assert _one(null_networks).addresses == "192.0.2.1/32"
 
 
 def test_addresses_ipv4_ipv6_mask_hidden_and_local() -> None:
     hidden = {"hostName": "", "hostNameIPs": [], "mask": 32, "octets": "<скрыто>", "unique_id": 1143071574, "zoneIPv6": ""}
     odd = {**hidden, "octets": base64.b64encode(b"\x01\x02\x03").decode()}
+    non_ascii = {**hidden, "octets": "адрес"}
     resolved = {"hostName": "", "hostNameIPs": [{"octets": octets("192.0.2.7"), "zoneIPv6": ""}], "unique_id": 1253756384}
     rule = _rule(action=1, direction=2, protocol=TCP, networks=2,
-                 remote=[_address("192.0.2.0", 24), _address("2001:db8::", 32), hidden, odd, resolved],
+                 remote=[_address("192.0.2.0", 24), _address("2001:db8::", 32), hidden, odd, non_ascii, resolved],
                  local=[_address("198.51.100.1", 32), {"hostName": "srv.example.test", "hostNameIPs": [], "unique_id": 1253756384}])
-    assert rule.addresses == ("публичные сети; 192.0.2.0/24; 2001:db8::/32; адрес скрыт (сборщик до 1.3); адрес не разобран; 192.0.2.7; "
+    assert rule.addresses == ("публичные сети; 192.0.2.0/24; 2001:db8::/32; адрес скрыт (сборщик до 1.3); адрес не разобран; "
+                              "адрес не разобран; 192.0.2.7; "
                               "локальный: 198.51.100.1/32; локальный: srv.example.test")
 
 
@@ -197,11 +251,11 @@ def test_junk_items_are_skipped() -> None:
     objs = _objects(**{
         EXCLUSIONS: [None, "C:\\x", 5, {}, {"objectMask": "C:\\x"}, exclusion("C:\\ok")],
         TRUSTED: [[], {"filePath": 1}, {"comment": "без пути"}, trusted_app("C:\\ok.exe")],
-        PACKET: [None, "правило", {}, {"name": "без действия"}, {"name": 5, "action": 0}, packet_rule("ОК", action=0, direction=0, remote=[None, 3])],
+        PACKET: [None, "правило", {}, {"name": "без действия"}, {"name": 5, "action": 0}, packet_rule("ОК", action=0, direction=0, remote=[None, 3, {"octets": "ä", "mask": 1}])],
         GROUPS: [None, {"name": "Г", "applications": [None, {"name": "П", "networkPacketRules": "x"}], "networkPacketRules": [7]}],
     })
     assert [e.value for e in objs.exclusions] == ["C:\\ok", "C:\\ok.exe"]
-    assert [(r.name, r.addresses) for r in objs.net_rules] == [("ОК", "")]
+    assert [(r.name, r.addresses) for r in objs.net_rules] == [("ОК", "адрес не разобран")]
     assert _objects(**{EXCLUSIONS: "не список", PACKET: {"a": 1}, GROUPS: 3}).net_rules == []
     assert extract_kes({"852d0287": "мусор", "cf9370d5": [1, 2]}) == PolicyObjects(consumed=CONSUMED)
 
@@ -260,6 +314,17 @@ def test_import_stores_records_and_api_returns_them(auth_client: TestClient, db_
     assert (rdp["action"], rdp["direction"], rdp["protocol"], rdp["addresses"]) == ("запретить", "входящий (поток)", "TCP", "публичные сети")
 
 
+def test_failing_extractor_does_not_break_import(auth_client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(sections: dict[str, Any]) -> PolicyObjects:
+        raise ValueError("boom")
+
+    monkeypatch.setitem(EXTRACTORS, "KES", broken)
+    assert upload(auth_client, kes11_export())["status"] == "done"
+    db_session.expire_all()
+    p1 = db_session.execute(select(KscPolicy).where(KscPolicy.snapshot_id == _sid(auth_client), KscPolicy.policy_id == 1)).scalar_one()
+    assert p1.described is True and p1.exclusions == 0 and p1.net_rules == 0
+
+
 def test_two_imports_journal_records_not_settings(auth_client: TestClient, db_session: Session) -> None:
     first = kes11_export()
     second = kes11_export(**{EXCLUSIONS: [
@@ -279,3 +344,37 @@ def test_two_imports_journal_records_not_settings(auth_client: TestClient, db_se
     before, after = json.loads(changed.before_json), json.loads(changed.after_json)
     assert (changed.policy_id, before["comment"], after["comment"]) == (1, "Тестовое исключение", "Поправленный комментарий")
     assert not [c for c in rows if c.kind == "setting" and (c.section, c.path) in CONSUMED]
+
+
+# --- журнал изменений --------------------------------------------------------------------------
+
+
+def _journal(prev: dict[str, Any], cur: dict[str, Any]) -> list[Change]:
+    """Как при импорте: обёртки сняты, секреты скрыты."""
+    return diff_exports(load_export(json.dumps(prev).encode()), load_export(json.dumps(cur).encode())).changes
+
+
+def test_journal_keeps_hips_and_firewall_settings() -> None:
+    """`hips.appGroups` не поглощается извлекателем: правки правил доступа к сети в группах видны как настройка, как и
+    выключение сетевого экрана."""
+    groups = kes11_sections("section")["cf9370d5"]["KLPRSS_Val"]["hips"]["appGroups"]
+    groups[0]["networkAccessRules"][0]["allow"] = False
+    for edit, path in ((({"cf9370d5/firewall.enabled": False}), "firewall.enabled"), ({GROUPS: groups}, "hips.appGroups")):
+        rows = _journal(kes11_export(), kes11_export(**edit))
+        assert [(c.kind, c.action, c.section, c.path) for c in rows] == [("setting", "changed", "cf9370d5", path)]
+
+
+def _pair(comment: str = "первое") -> list[dict[str, Any]]:
+    return [exclusion("C:\\Tools\\", name="Test.Win32.A", comment=comment), exclusion("C:\\Tools\\", name="Test.Win32.B")]
+
+
+def test_journal_records_with_equal_keys_compared_as_multisets() -> None:
+    """Два исключения с одним путём и разными именами объекта — один ключ: правка одного не теряется."""
+    base = kes11_export(**{EXCLUSIONS: _pair()})
+    assert _journal(base, kes11_export(**{EXCLUSIONS: _pair()})) == []
+    edited = _journal(base, kes11_export(**{EXCLUSIONS: _pair("поправлено")}))
+    assert [(c.kind, c.action, (c.before or c.after)["comment"]) for c in edited] == [
+        ("exclusion", "removed", "первое"), ("exclusion", "added", "поправлено")]
+    assert {(c.before or c.after)["components"] for c in edited} == {("объект: Test.Win32.A",)}
+    [gone] = _journal(base, kes11_export(**{EXCLUSIONS: _pair()[1:]}))
+    assert (gone.kind, gone.action, gone.before["components"], gone.after) == ("exclusion", "removed", ("объект: Test.Win32.A",), None)

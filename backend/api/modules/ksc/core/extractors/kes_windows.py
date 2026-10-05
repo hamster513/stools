@@ -2,12 +2,15 @@
 
 Секции читаются в «голом» виде (`bare_sections`): уровень контейнеров `KLPRSS_Val` в выгрузке не важен. Элемент списка
 неожиданной формы (не словарь, нет нужного ключа) пропускается. Коды перечислений — только подтверждённые калибровкой,
-неизвестный код показывается «код N».
+неизвестный код показывается «код N». Запись выключена только явным `enabled: false` (нет ключа или скрыто — включена).
+
+`position` правила — сквозной номер среди оставленных (не пропущенных) правил своего слоя: `packet` — по списку
+`firewall.networkPacketRules`, `app` — по всем группам доверия (сначала правила группы, затем её программ). `log` и
+`networkAdapters` пакетных правил в записи не переносятся.
 """
 from __future__ import annotations
 
 import base64
-import binascii
 import ipaddress
 from typing import Any
 
@@ -19,14 +22,14 @@ TRUSTED_ZONE = "852d0287"
 HIPS = "cf9370d5"
 _ZONE = "scanExclusionsAndTrustedZone"
 
-#: Листья (`flat_settings`), из которых получены записи: журнал изменений не считает их настройками.
+#: Листья (`flat_settings`), из которых получены записи: журнал изменений не считает их настройками. `hips.appGroups` сюда не
+#: входит: в нём же правила доступа к сети, привилегии, ресурсы и пути программ — их правки журнал должен видеть.
 CONSUMED = frozenset({
     (TRUSTED_ZONE, f"{_ZONE}.scanExclusions"),
     (TRUSTED_ZONE, f"{_ZONE}.scanExclusions_merging_crutch"),
     (TRUSTED_ZONE, f"{_ZONE}.trustedApplications"),
     (TRUSTED_ZONE, f"{_ZONE}.trustedApplications_merging_crutch"),
     (HIPS, "firewall.networkPacketRules"),
-    (HIPS, "hips.appGroups"),
 })
 
 #: Флаги доверенной программы → подпись; `excludeNet` — вложенный словарь, разбирается отдельно (на своём месте в порядке).
@@ -72,6 +75,17 @@ def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _enabled(item: dict[str, Any]) -> bool:
+    return item.get("enabled") is not False
+
+
+def _scalars(value: Any) -> str:
+    """Непустой список скаляров через запятую, иначе ""."""
+    if not isinstance(value, list) or not value or not all(isinstance(v, str | int | float) for v in value):
+        return ""
+    return ", ".join(str(v) for v in value)
+
+
 def _code(labels: dict[int, str], value: Any) -> str:
     if value is None:
         return ""
@@ -97,7 +111,7 @@ def _scan_exclusion(item: dict[str, Any]) -> Exclusion | None:
         components.append(f"объект: {name}")
     if mask.get("recursive") is True:
         components.append("рекурсивно")
-    return Exclusion(kind, value, tuple(components), bool(item.get("enabled", True)), _text(item.get("comment")))
+    return Exclusion(kind, value, tuple(components), _enabled(item), _text(item.get("comment")))
 
 
 def _trusted_app(item: dict[str, Any]) -> Exclusion | None:
@@ -111,9 +125,12 @@ def _trusted_app(item: dict[str, Any]) -> Exclusion | None:
             if net.get("enabled") is True:
                 only_encrypted = net.get("encryptedTrafficOnly") is True
                 components.append("не проверять сетевой трафик (только зашифрованный)" if only_encrypted else "не проверять сетевой трафик")
+                for title, values in (("узлы", net.get("hosts")), ("порты", net.get("ports"))):
+                    if listed := _scalars(values):
+                        components.append(f"{title}: {listed}")
         elif item.get(key) is True:
             components.append(label)
-    return Exclusion("trusted_app", path, tuple(components), bool(item.get("enabled", True)), _text(item.get("comment")))
+    return Exclusion("trusted_app", path, tuple(components), _enabled(item), _text(item.get("comment")))
 
 
 def _ports(value: Any) -> str:
@@ -130,7 +147,7 @@ def _ip(octets: Any, mask: Any = None) -> str:
         return "адрес скрыт (сборщик до 1.3)"
     try:
         packed = base64.b64decode(octets, validate=True) if isinstance(octets, str) else b""
-    except binascii.Error:
+    except ValueError:  # binascii.Error и не-ASCII строка
         packed = b""
     if len(packed) not in (4, 16):
         return "адрес не разобран"
@@ -148,18 +165,20 @@ def _address(item: dict[str, Any]) -> str:
 
 
 def _addresses(scope: dict[str, Any]) -> str:
-    parts = [_code(_NETWORKS, scope["networks"])] if "networks" in scope else []
+    parts = [_code(_NETWORKS, scope["networks"])] if scope.get("networks") is not None else []
     parts += [a for a in map(_address, _items(scope.get("remoteAddresses"))) if a]
     parts += [f"локальный: {a}" for a in map(_address, _items(scope.get("localAddresses"))) if a]
     return "; ".join(parts)
 
 
 def _protocol(proto: dict[str, Any]) -> str:
-    if "unique_id" not in proto:
+    uid = proto.get("unique_id")
+    if uid is None:
         return "любой"
-    label = _code(_PROTOCOLS, proto["unique_id"])
+    label = _code(_PROTOCOLS, uid)
     kind = _dict(proto.get("type")).get("value")
-    return f"{label} (вид {kind})" if isinstance(kind, int) and not isinstance(kind, bool) else label
+    icmp = label in ("ICMP", "ICMPv6")
+    return f"{label} (вид {kind})" if icmp and isinstance(kind, int) and not isinstance(kind, bool) else label
 
 
 def _net_rule(item: dict[str, Any], layer: str, position: int, owner: str = "") -> NetRule | None:
@@ -170,7 +189,7 @@ def _net_rule(item: dict[str, Any], layer: str, position: int, owner: str = "") 
     return NetRule(
         layer=layer, position=position, name=f"{owner}: {name}" if owner else name, action=_code(_ACTIONS, item["action"]),
         direction=_code(_DIRECTIONS, item.get("packetDirection")), protocol=_protocol(proto), local_ports=_ports(proto.get("localPorts")),
-        remote_ports=_ports(proto.get("remotePorts")), addresses=_addresses(scope), enabled=bool(item.get("enabled", True)),
+        remote_ports=_ports(proto.get("remotePorts")), addresses=_addresses(scope), enabled=_enabled(item),
     )
 
 
