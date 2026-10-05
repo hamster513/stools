@@ -84,3 +84,16 @@ def test_settings_known_stored(auth_client: TestClient, db_session: Session, sid
     rows = {p.policy_id: p for p in db_session.execute(select(KscPolicy).where(KscPolicy.snapshot_id == sid)).scalars()}
     assert rows[1].settings_known > 0 and rows[1].settings_known < rows[1].settings_total
     assert rows[3].settings_known == 0 and rows[2].settings_known == 0
+
+
+def test_settings_same_for_top_level_containers(auth_client: TestClient, sid: int) -> None:
+    """Контейнеры `KLPRSS_Val` на ключах верхнего уровня (скелет такую форму не отличает): ответ тот же, что при
+    контейнерах на листьях, и тот же счётчик распознанных в карточке."""
+    leaf = _settings(auth_client, sid, 1)
+    assert upload(auth_client, kes11_export("top"))["status"] == "done"
+    top_sid = max(int(s["id"]) for s in auth_client.get("/api/ksc/snapshots").json())
+    assert top_sid != sid
+    assert _settings(auth_client, top_sid, 1) == leaf
+    card = auth_client.get(f"/api/ksc/snapshots/{top_sid}/policies/1").json()
+    assert (card["settings_known"], card["settings_total"]) == (leaf["known"], leaf["total"])
+

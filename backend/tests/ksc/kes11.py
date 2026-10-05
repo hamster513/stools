@@ -2,18 +2,22 @@
 выгрузки владельца, значения — свои (пути вроде `C:\\Tools\\a.exe`, имена «Тестовое правило», адреса из
 документационных сетей 192.0.2.0/24 и 2001:db8::/32).
 
-Форма. `_SECTIONS` — секция → {путь контейнера: значение}. Путь `a.b.c` раскладывается в обычные вложенные словари,
-на последнем уровне — контейнер `{"KLPRSS_Val": значение, "KLPRSS_Mnd": замок}` (там, где в скелете стоит «замок»);
-`walk_settings` отдаёт ровно эти пути. Список под контейнером — одна настройка, значение — весь список. Почти всё
-замкнуто, незамкнутые — `_UNLOCKED`. По умолчанию политика «чистая»: компоненты включены и замкнуты, «только
-уведомлять» выключено, самозащита включена, все типы угроз обнаруживаются, локальные исключения запрещены, пароль
-задан (после загрузки — «<скрыто>»). Двоичные адреса (`octets`) — в обёртке `binary`, `quarantineLimitMB` — в
+Форма. `_SECTIONS` — секция → {путь листа: значение}; `flat_settings` отдаёт ровно эти пути при любом `container`:
+- `"leaf"` (по умолчанию) — путь `a.b.c` раскладывается в обычные вложенные словари, на последнем уровне — контейнер
+  `{"KLPRSS_Val": значение, "KLPRSS_Mnd": замок}` (там, где в скелете стоит «замок»; `walk_settings` даёт те же пути);
+- `"top"` — контейнер на каждом ключе верхнего уровня секции (`a`), в `KLPRSS_Val` — обычный словарь `{b: {c: …}}`;
+- `"section"` — один контейнер на всю секцию.
+Скелет эти формы не различает (признак замка он переносит вниз по обычным словарям), поэтому словарь и журнал читают
+политику по листьям. Список — одна настройка, значение — весь список. Замок задаётся на секцию целиком, чтобы у листа
+он был одинаков во всех трёх формах: незамкнуты секции `_UNLOCKED` (BadUSB и `f8e8efda`), остальные замкнуты.
+По умолчанию политика «чистая»: ключевые компоненты включены и замкнуты, «только уведомлять» выключено, самозащита
+включена, все типы угроз обнаруживаются, локальные исключения запрещены, пароль задан (после загрузки — «<скрыто>»). Двоичные адреса (`octets`) — в обёртке `binary`, `quarantineLimitMB` — в
 обёртке `long`, как приходят от KSC.
 
 Помимо секций словаря: `f8e8efda` — секция KES без компонента, `notifications.*` и шаблоны сообщений — то, что
 словарь не описывает (раздел «Прочее»), 4-уровневые пути FDE и `*_merging_crutch` — тоже «Прочее».
 
-Замены `kes11_sections(**over)`: ключ — `"<секция>/<путь контейнера>"`, значение — новый `KLPRSS_Val`, например
+Замены `kes11_sections(**over)`: ключ — `"<секция>/<путь листа>"`, значение — новое значение листа, например
 `kes11_sections(**{"4b741d57/enabled": False})` или
 `kes11_sections(**{"852d0287/scanExclusionsAndTrustedZone.scanExclusions": [exclusion("C:\\\\")]})`.
 Путь, которого нет в синтетике, — `KeyError` (опечатка в тесте не должна молча ничего не менять).
@@ -344,37 +348,52 @@ _SECTIONS: dict[str, dict[str, Any]] = {
 }
 
 #: Незамкнутые настройки (`KLPRSS_Mnd: false`); остальные замкнуты.
-_UNLOCKED = {
-    ("1d3e35bd", "performance.enableGamingMode"), ("1d3e35bd", "reports.limitMaxStorePeriod.period"),
-    ("1d3e35bd", "userInteraction.useSimplifiedInterface"), ("4b741d57", "sleepMode.schedule.enabled"),
-    ("da3d6211", "trustedUrlSettings.urlList"), ("f8e8efda", "mode"),
-}
+_UNLOCKED = {"caf9927", "f8e8efda"}
 
 
-def _tree(section: str, flat: dict[str, Any]) -> dict[str, Any]:
+def _nested(flat: dict[str, Any], wrap: Any) -> dict[str, Any]:
+    """`{"a.b.c": v}` → `{"a": {"b": {"c": wrap(v)}}}`."""
     root: dict[str, Any] = {}
     for path, value in flat.items():
         *parents, leaf = path.split(".")
         node = root
         for key in parents:
             node = node.setdefault(key, {})
-        node[leaf] = {"KLPRSS_Val": copy.deepcopy(value), "KLPRSS_Mnd": (section, path) not in _UNLOCKED}
+        node[leaf] = wrap(copy.deepcopy(value))
     return root
 
 
-def kes11_sections(**over: Any) -> dict[str, Any]:
-    """Секции политики KES 11 (см. докстринг модуля); `over` — `{"<секция>/<путь контейнера>": новый KLPRSS_Val}`."""
+def _tree(section: str, flat: dict[str, Any], container: str) -> dict[str, Any]:
+    locked = section not in _UNLOCKED
+
+    def lock(value: Any) -> dict[str, Any]:
+        return {"KLPRSS_Val": value, "KLPRSS_Mnd": locked}
+
+    if container == "leaf":
+        return _nested(flat, lock)
+    tree = _nested(flat, lambda value: value)
+    if container == "top":
+        return {key: lock(value) for key, value in tree.items()}
+    if container == "section":
+        return lock(tree)
+    raise ValueError(f"неизвестная форма контейнеров {container!r}")
+
+
+def kes11_sections(container: str = "leaf", **over: Any) -> dict[str, Any]:
+    """Секции политики KES 11 (см. докстринг модуля): `container` — уровень контейнеров `KLPRSS_Val` (leaf | top | section),
+    `over` — `{"<секция>/<путь листа>": новое значение}`."""
     flat = {name: dict(values) for name, values in _SECTIONS.items()}
     for key, value in over.items():
         section, _, path = key.partition("/")
         if path not in flat.get(section, {}):
             raise KeyError(f"в синтетике KES 11 нет настройки {key!r}")
         flat[section][path] = value
-    return {name: _tree(name, values) for name, values in flat.items()}
+    return {name: _tree(name, values, container) for name, values in flat.items()}
 
 
-def kes11_export(**over: Any) -> dict[str, Any]:
-    """`synthetic.build_export()`, где у политики 1 (продукт `KES`) секции — `kes11_sections(**over)`; политика 3 не меняется."""
+def kes11_export(container: str = "leaf", **over: Any) -> dict[str, Any]:
+    """`synthetic.build_export()`, где у политики 1 (продукт `KES`) секции — `kes11_sections(container, **over)`;
+    политика 3 не меняется."""
     export = build_export()
-    export["policy_contents"]["1"]["sections"] = kes11_sections(**over)
+    export["policy_contents"]["1"]["sections"] = kes11_sections(container, **over)
     return export

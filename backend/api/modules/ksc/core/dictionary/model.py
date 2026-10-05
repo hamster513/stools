@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Entry:
-    #: Путь настройки внутри секции, как у `walk_settings` (`firewall.enabled`).
+    #: Полный путь листа внутри секции, как у `flat_settings` (`firewall.enabled`).
     path: str
     title: str
     #: bool | enum | number | text | list

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from api.modules.ksc.core.dictionary import describe
 from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_export_path
-from api.modules.ksc.core.policy_contents import walk_settings
+from api.modules.ksc.core.policy_contents import flat_settings
 from api.modules.ksc.core.policy_index import policy_objects, policy_rows, profile_rows, scope_rows
 from api.modules.ksc.core.policy_model import exclusion_key, net_rule_key
 from api.modules.ksc.models import (
@@ -81,7 +81,7 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex) -> None
             "modified_at": p.modified_at, "has_contents": p.has_contents, "described": described,
             "groups": groups[p.policy_id], "hosts": hosts[p.policy_id],
             "profiles": _profiles_count(entry), "exclusions": len(objs.exclusions), "net_rules": len(objs.net_rules),
-            "settings_total": len(walk_settings(sections)), "settings_known": len(described_settings[0]) if described_settings else 0,
+            "settings_total": len(flat_settings(sections)), "settings_known": len(described_settings[0]) if described_settings else 0,
         })
         exclusions.extend(
             {"snapshot_id": sid, "policy_id": p.policy_id, "profile": e.profile[:255], "kind": e.kind[:32], "value": e.value,

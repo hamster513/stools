@@ -17,6 +17,7 @@ from api.modules.ksc.core.policy_model import EXTRACTORS, Exclusion, PolicyObjec
 from api.modules.ksc.models import KscChange, KscSnapshot
 from api.modules.ksc.services.changes import changes_summary
 from api.modules.ksc.services.snapshots import snapshot_path
+from tests.ksc.kes11 import exclusion, kes11_export
 from tests.ksc.synthetic import _lock, build_export, without_new_sections
 from tests.ksc.test_api import upload
 
@@ -164,6 +165,23 @@ def test_list_setting_items_added_and_removed() -> None:
     [c] = _diff(prev, cur).changes
     assert (c.kind, c.action, c.path) == ("setting", "changed", "Exclusions")
     assert c.before == {"removed": ["C:\\Tools\\a.exe"]} and c.after == {"added": ["C:\\Tools\\b.exe", {"Path": "D:\\x"}]}
+
+
+@pytest.mark.parametrize("container", ["top", "section"])
+def test_setting_change_does_not_depend_on_container_level(container: str) -> None:
+    """Одна и та же правка видна одинаково — тем же путём листа — при контейнерах `KLPRSS_Val` на листьях, на ключах
+    верхнего уровня и на всю секцию."""
+    edits = {"4b741d57/heuristicLevel": 3, "1d3e35bd/passwordProtection.areas.exportSettings": True,
+             "852d0287/scanExclusionsAndTrustedZone.scanExclusions": [exclusion("C:\\Tools\\b.exe")]}
+
+    def changes(shape: str) -> list[tuple[Any, ...]]:
+        diff = _diff(kes11_export(shape), kes11_export(shape, **edits))
+        return [(c.kind, c.action, c.policy_id, c.profile, c.section, c.path, c.before, c.after) for c in diff.changes]
+
+    leaf = changes("leaf")
+    assert [c[5] for c in leaf] == ["passwordProtection.areas.exportSettings", "heuristicLevel", "scanExclusionsAndTrustedZone.scanExclusions"]
+    assert leaf[1][6:] == ({"value": 2}, {"value": 3})
+    assert changes(container) == leaf
 
 
 def test_list_setting_reordered_is_not_a_change() -> None:

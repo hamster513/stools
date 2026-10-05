@@ -14,7 +14,7 @@ from api.modules.ksc.core.dictionary import (
     display_value,
 )
 from api.modules.ksc.core.dictionary.model import Entry
-from api.modules.ksc.core.policy_contents import walk_settings
+from api.modules.ksc.core.policy_contents import flat_settings, walk_settings
 from tests.ksc.kes11 import kes11_export, kes11_sections
 from tests.ksc.synthetic import build_export
 
@@ -54,7 +54,7 @@ def test_describe_known_settings() -> None:
     assert d[("1d3e35bd", "proxy.serverPort")].value == "3128"
     assert d[("1d3e35bd", "quarantineStorage.quarantineLimitMB")].value == "200 МБ"  # обёртка long снята
     assert d[("1d3e35bd", "proxy.userAccount")].value == "—"
-    assert d[("1d3e35bd", "reports.limitMaxStorePeriod.period")].locked is False
+    assert d[("caf9927", "enabled")].locked is False
 
 
 def test_unrecognized_go_to_other() -> None:
@@ -72,7 +72,7 @@ def test_unrecognized_go_to_other() -> None:
     assert ("a9084f82", "messageTemplates.messageDeny") in keys and ("63e770b7", "denyMessageTemplate") in keys
     assert ("895edee6", "kasperskyFdeFixedDisksSettings.accountsGenerationSettings.allLocalProfiles.include") in keys
     assert ("852d0287", "scanExclusionsAndTrustedZone.scanExclusions_merging_crutch") in keys
-    assert len(known) + len(other) == len(walk_settings(sections))
+    assert len(known) + len(other) == len(flat_settings(sections))
     assert not keys & {(d.section, d.path) for d in known}
 
 
@@ -154,10 +154,32 @@ def test_dictionary_structure() -> None:
 
 
 def test_every_dictionary_path_is_walked() -> None:
-    """Каждый путь словаря — настройка, которую `walk_settings` отдаёт на синтетике формы KES 11 (ловит опечатки)."""
-    walked = {(s.section, s.path) for s in walk_settings(kes11_sections())}
+    """Каждый путь словаря — лист, который `flat_settings` отдаёт на синтетике формы KES 11 (ловит опечатки); при
+    контейнерах на уровне листа это и пути контейнеров `walk_settings`."""
     declared = {(name, e.path) for name, section in DICTIONARIES["KES"].sections.items() for e in section.entries}
-    assert sorted(declared - walked) == []
+    assert sorted(declared - {(s.section, s.path) for s in walk_settings(kes11_sections())}) == []
+    assert sorted(declared - {(s.section, s.path) for s in flat_settings(kes11_sections())}) == []
+
+
+@pytest.mark.parametrize("container", ["top", "section"])
+def test_describe_does_not_depend_on_container_level(container: str) -> None:
+    """Те же настройки с контейнерами `KLPRSS_Val` на ключах верхнего уровня или на всю секцию читаются так же, как
+    с контейнерами на листьях: скелет эти формы не различает."""
+    def view(sections: dict[str, Any]) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
+        result = describe("KES", sections)
+        assert result is not None
+        known = [(d.section, d.path, d.component, d.title, d.value, d.raw, d.locked, d.verified) for d in result[0]]
+        return known, sorted((s.section, s.path, s.locked) for s in result[1])
+
+    leaf, other = view(kes11_sections())
+    assert view(kes11_sections(container)) == (leaf, other)
+    assert len(leaf) == 424 and {k[6] for k in leaf} == {True, False}
+    assert len(walk_settings(kes11_sections(container))) < len(walk_settings(kes11_sections()))  # контейнеров и правда меньше
+    for component in DICTIONARIES["KES"].components:
+        assert component_enabled("KES", kes11_sections(container), component) == component_enabled("KES", kes11_sections(), component)
+    assert component_enabled("KES", kes11_sections(container, **{"4b741d57/enabled": False}), "file_threat") is False
+    with pytest.raises(ValueError):
+        kes11_sections("leaves")
 
 
 def test_kes11_overrides_and_export() -> None:

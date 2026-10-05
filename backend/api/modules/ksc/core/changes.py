@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from api.modules.ksc.core.export import ExportIndex, KscExport, _int
-from api.modules.ksc.core.policy_contents import walk_settings
+from api.modules.ksc.core.policy_contents import flat_settings
 from api.modules.ksc.core.policy_index import (
     PolicyRow,
     ProfileRow,
@@ -181,8 +181,9 @@ def _comparable(old_content: dict[str, Any], new_content: dict[str, Any], old_pr
 
 
 def _setting_map(owners: Owners) -> dict[SettingKey, tuple[Any, bool | None]]:
-    """(профиль, секция, путь) → (значение, замок); `profile=""` — сама политика."""
-    return {(owner, s.section, s.path): (s.value, s.locked) for owner, sections in owners.items() for s in walk_settings(sections)}
+    """(профиль, секция, путь листа) → (значение, замок); `profile=""` — сама политика. Листья (`flat_settings`) —
+    чтобы журнал не зависел от уровня контейнеров `KLPRSS_Val` в выгрузке."""
+    return {(owner, s.section, s.path): (s.value, s.locked) for owner, sections in owners.items() for s in flat_settings(sections)}
 
 
 def _objects(product: str, owners: Owners) -> PolicyObjects | None:

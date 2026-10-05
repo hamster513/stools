@@ -1,6 +1,7 @@
 """Словари продуктов: настройки политики («секция, путь = значение») → человеческие названия по компонентам защиты.
 
-Секция сопоставляется по точному имени, настройка — по точному пути `Setting.path`; всё, чего нет в словаре,
+Секция сопоставляется по точному имени, настройка — по точному пути листа `flat_settings` (не зависит от того, на каком
+уровне в выгрузке стоят контейнеры `KLPRSS_Val`); всё, чего нет в словаре,
 остаётся нераспознанным (раздел «Прочее»), догадок нет. Неизвестный код перечисления показывается «код N».
 """
 from __future__ import annotations
@@ -9,7 +10,7 @@ from typing import Any
 
 from api.modules.ksc.core.dictionary.kes_windows import KES_WINDOWS
 from api.modules.ksc.core.dictionary.model import Described, Entry, ProductDict, SectionDef
-from api.modules.ksc.core.policy_contents import Setting, truncate_value, walk_settings
+from api.modules.ksc.core.policy_contents import Setting, flat_settings, truncate_value
 
 DICTIONARIES: dict[str, ProductDict] = {KES_WINDOWS.product: KES_WINDOWS}
 
@@ -61,7 +62,7 @@ def describe(product: str, sections: dict[str, Any]) -> tuple[list[Described], l
         return None
     known: list[tuple[tuple[int, int], Described]] = []
     other: list[Setting] = []
-    for s in walk_settings(sections):
+    for s in flat_settings(sections):
         hit = index.get((s.section, s.path))
         if hit is None:
             other.append(s)
@@ -84,5 +85,5 @@ def component_enabled(product: str, sections: dict[str, Any], component: str) ->
     name, path = d.enabled_paths[component]
     if name not in sections:
         return None
-    value = next((s.value for s in walk_settings({name: sections[name]}) if s.path == path), None)
+    value = next((s.value for s in flat_settings({name: sections[name]}) if s.path == path), None)
     return value if isinstance(value, bool) else None

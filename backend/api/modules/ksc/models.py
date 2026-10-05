@@ -145,7 +145,7 @@ class KscPolicy(Base):
     exclusions: Mapped[int] = mapped_column(Integer, default=0)
     net_rules: Mapped[int] = mapped_column(Integer, default=0)
     settings_total: Mapped[int] = mapped_column(Integer, default=0)
-    #: Настроек, описанных словарём (этап 2); на этапе 1 — 0.
+    #: Настроек (листьев `flat_settings`), распознанных словарём продукта; 0 — словаря нет.
     settings_known: Mapped[int] = mapped_column(Integer, default=0)
 
 

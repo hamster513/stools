@@ -13,7 +13,12 @@ from api.modules.ksc.core.checks.policy_contents import (
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, load_export
 from api.modules.ksc.core.findings import Finding
-from api.modules.ksc.core.policy_contents import lock_summary, truncate_value, walk_settings
+from api.modules.ksc.core.policy_contents import (
+    flat_settings,
+    lock_summary,
+    truncate_value,
+    walk_settings,
+)
 from tests.ksc.synthetic import build_export, expected_policy_contents
 
 
@@ -300,3 +305,21 @@ def test_registry_has_three_policy_content_checks() -> None:
         assert spec.title and spec.description
         f = spec.func(_idx(), KscConfig(policy_lock_share=0.99))
         assert all(x.severity == severity for x in f) or not f
+
+
+def test_flat_settings_descends_into_dict_values() -> None:
+    """Значение-словарь контейнера раскрывается до листьев с полным путём и замком контейнера; списки и пустые словари —
+    листья; `walk_settings` по-прежнему отдаёт контейнеры."""
+    container = {"KLPRSS_Val": {"a": {"b": 1, "c": [{"x": 1}], "d": {}}, "e": "s"}, "KLPRSS_Mnd": True,
+                 "KLPRSS_ValLck": True, "KLPRSS_ValLckPolicy": "root", "KLPRSS_ValLckGroup": "g"}
+    sections = {"S": {"top": container, "plain": {"leaf": {"KLPRSS_Val": False, "KLPRSS_Mnd": False}}}, "W": container}
+    assert [(s.section, s.path) for s in walk_settings(sections)] == [("S", "top"), ("S", "plain.leaf"), ("W", "")]
+    flat = flat_settings(sections)
+    assert [(s.section, s.path, s.value) for s in flat] == [
+        ("S", "top.a.b", 1), ("S", "top.a.c", [{"x": 1}]), ("S", "top.a.d", {}), ("S", "top.e", "s"), ("S", "plain.leaf", False),
+        ("W", "a.b", 1), ("W", "a.c", [{"x": 1}]), ("W", "a.d", {}), ("W", "e", "s"),
+    ]
+    top_b = flat[0]
+    assert (top_b.locked, top_b.inherited_lock, top_b.lock_from) == (True, True, "root (g)")
+    assert flat[4].locked is False
+

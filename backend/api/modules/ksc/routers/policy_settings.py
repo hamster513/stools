@@ -10,7 +10,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.dictionary import component_enabled, describe, dictionary_for
-from api.modules.ksc.core.policy_contents import Setting, truncate_value, walk_settings
+from api.modules.ksc.core.policy_contents import Setting, flat_settings, truncate_value
 from api.modules.ksc.routers.policy_list import _index, _policy, _snapshot
 from api.settings import Settings, get_settings
 
@@ -72,7 +72,7 @@ def get_policy_settings(
     result = describe(p.product, sections)
     d = dictionary_for(p.product)
     if result is None or d is None:
-        other = walk_settings(sections)
+        other = flat_settings(sections)
         return PolicySettingsResponse(described=False, known=0, total=len(other), groups=[], other=_other(other))
     known, rest = result
     groups = []
