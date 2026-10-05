@@ -7,6 +7,7 @@ import gzip
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -147,3 +148,18 @@ def test_skeleton_numbers_flag_prints_distinct_values_of_numeric_keys(tmp_path: 
     assert "Rules[].Size : long {7}" in lines
     assert "Many[].Port : int {различных: 12}" in lines
     assert not [v for v in PLANTED if v in out]
+
+
+def test_skeleton_reads_zip_archive(tmp_path: Path) -> None:
+    """Выгрузку передают архивом: читается каждая выгрузка внутри zip, чужие файлы пропускаются."""
+    path = tmp_path / "export.zip"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("ksc/export.json", json.dumps(_export(), ensure_ascii=False))
+        archive.writestr("readme.txt", "не выгрузка")
+    out = _run(path, "--numbers")
+    assert "файлов выгрузки: 1" in out and "Rules[].Path : str (маска, переменная, путь)" in out
+    assert not [v for v in PLANTED if v in out]
+    broken = tmp_path / "broken.zip"
+    broken.write_bytes(b"PK\x03\x04 not a zip")
+    done = subprocess.run([sys.executable, str(SCRIPT), str(broken)], capture_output=True, text=True, encoding="utf-8")
+    assert done.returncode == 1 and "ни одной выгрузки KSC не найдено" in done.stderr

@@ -12,7 +12,7 @@
 
 Запуск (нужен только Python 3.8+, без библиотек):
 
-    python3 ksc_policy_skeleton.py <выгрузка.json | выгрузка.json.gz | каталог> [-o skeleton.txt] [--numbers]
+    python3 ksc_policy_skeleton.py <выгрузка.json | .json.gz | .zip | каталог> [-o skeleton.txt] [--numbers]
 
 `--numbers` печатает у числовых ключей набор встреченных значений (не больше восьми разных,
 иначе только их число): без этого коды перечислений — действие, направление, уровень — не
@@ -26,9 +26,11 @@
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import re
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -207,8 +209,7 @@ def _label(text: Any) -> str:
     return str(text) if _LABEL.match(str(text)) else "<…>"
 
 
-def load(path: Path) -> dict[str, Any] | None:
-    data = path.read_bytes()
+def _parse(data: bytes) -> dict[str, Any] | None:
     try:
         if data[:2] == b"\x1f\x8b":
             data = gzip.decompress(data)
@@ -218,6 +219,20 @@ def load(path: Path) -> dict[str, Any] | None:
     if not isinstance(raw, dict) or raw.get("format") != FORMAT:
         return None
     return raw
+
+
+def load(path: Path) -> list[dict[str, Any]]:
+    """Выгрузки из файла: одна из `.json` / `.json.gz`, из архива zip — каждая лежащая в нём."""
+    data = path.read_bytes()
+    if data[:4] != b"PK\x03\x04":
+        export = _parse(data)
+        return [export] if export is not None else []
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = [archive.read(n) for n in archive.namelist() if n.endswith((".json", ".json.gz"))]
+    except (zipfile.BadZipFile, RuntimeError, OSError):  # RuntimeError — архив под паролем
+        return []
+    return [export for export in map(_parse, members) if export is not None]
 
 
 class Skeleton:
@@ -346,16 +361,16 @@ def main(argv: list[str]) -> int:
         print(f"нет такого файла или каталога: {source}", file=sys.stderr)
         return 1
     if source.is_dir():
-        files = sorted(p for p in source.iterdir() if p.is_file() and (p.name.endswith(".json") or p.name.endswith(".json.gz")))
+        files = sorted(p for p in source.iterdir() if p.is_file() and (p.name.endswith((".json", ".json.gz", ".zip"))))
     else:
         files = [source]
     skeleton = Skeleton()
     for path in files:
-        export = load(path)
-        if export is None:
+        exports = load(path)
+        if not exports:
             print(f"пропущен: {path.name} (не выгрузка {FORMAT})", file=sys.stderr)
-            continue
-        skeleton.add(export)
+        for export in exports:
+            skeleton.add(export)
     if skeleton.files == 0:
         print("ни одной выгрузки KSC не найдено", file=sys.stderr)
         return 1
