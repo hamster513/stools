@@ -34,7 +34,7 @@ def test_policy_list_items_facets_sort(auth_client: TestClient) -> None:
     kes = _item(body, 1)
     assert kes == {
         "id": 1, "name": "KES workstations", "product": "KES", "version": "12.0.0.0", "group": "Managed devices", "active": True,
-        "accept_parent": True, "modified_at": kes["modified_at"], "has_contents": True, "described": False, "groups": 2, "hosts": 11,
+        "accept_parent": True, "modified_at": kes["modified_at"], "has_contents": True, "described": True, "groups": 2, "hosts": 11,
         "profiles": 2, "exclusions": kes["exclusions"], "net_rules": kes["net_rules"], "locks": kes["locks"], "grade": None,
         "grade_reason": "структура продукта не описана", "findings": kes["findings"],
     }

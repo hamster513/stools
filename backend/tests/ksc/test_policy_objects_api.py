@@ -163,7 +163,8 @@ def test_net_rules_list_filters_facets(auth_client: TestClient, sid: int) -> Non
     assert [i["name"] for i in page["items"]] == ["VPN"] and page["facets"] is None and page["total"] == 4
 
 
-def test_undescribed_product_has_no_objects(auth_client: TestClient) -> None:
+def test_undescribed_product_has_no_objects(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(EXTRACTORS, "KES")  # реестр без KES: продукт политик синтетики не описан
     assert upload(auth_client, build_export())["status"] == "done"
     sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
     for body in (_exclusions(auth_client, sid), _net_rules(auth_client, sid)):

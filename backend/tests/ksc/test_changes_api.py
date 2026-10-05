@@ -86,8 +86,8 @@ def test_changes_snapshots_summary(auth_client: TestClient) -> None:
     last, mid, base = snaps
     assert last["collected_at"].startswith("2026-09-16") and last["prev"] == ids["2026-09-15"] and last["total"] == 1 and last["truncated"] is False
     assert mid["prev"] == ids["2026-09-14"] and mid["total"] == 3
-    # Без извлекателя исключения и сетевые правила не сравнивались; остальное сравнивалось.
-    assert last["compared"] == {"policy": True, "scope": True, "profile": True, "setting": True, "net_rule": False, "exclusion": False}
+    # Продукт KES описан извлекателем: сравнивалось всё, включая исключения и сетевые правила.
+    assert last["compared"] == {"policy": True, "scope": True, "profile": True, "setting": True, "net_rule": True, "exclusion": True}
     assert last["reason"] is None
     # Первый снапшот: сравнивать не с чем — это не «0 изменений».
     assert base["prev"] is None and base["total"] == 0 and base["compared"] == {}
@@ -111,7 +111,7 @@ def test_overview_carries_changes_of_latest(auth_client: TestClient) -> None:
     changes = auth_client.get(f"/api/ksc/servers/{server}/overview").json()["changes"]
     assert changes == {
         "total": 1, "prev": ids["2026-09-15"], "truncated": False, "reason": None,
-        "compared": {"policy": True, "scope": True, "profile": True, "setting": True, "net_rule": False, "exclusion": False},
+        "compared": {"policy": True, "scope": True, "profile": True, "setting": True, "net_rule": True, "exclusion": True},
     }
 
 

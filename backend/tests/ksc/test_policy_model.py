@@ -69,6 +69,8 @@ def test_covered_by_not_self_and_hash_not_by_mask() -> None:
 
 
 def test_extract_registry(monkeypatch: Any) -> None:
+    assert extract("kesl", {}) is None
+    monkeypatch.delitem(EXTRACTORS, "KES")  # реестр без KES: продукт не описан
     assert extract("KES", {}) is None
     objs = PolicyObjects(exclusions=[Exclusion("path", "C:\\Tools")], consumed={("S", "a.b")})
     seen: list[dict[str, Any]] = []

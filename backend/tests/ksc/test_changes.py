@@ -46,15 +46,18 @@ def _policy(raw: dict[str, Any], pid: int) -> dict[str, Any]:
 # --- чистое сравнение ---------------------------------------------------------------------------
 
 
-#: Сравнение на синтетике без извлекателя: исключения и сетевые правила не сравнивались — продукт не описан.
+#: Сравнение без извлекателя: исключения и сетевые правила не сравнивались — продукт не описан.
 UNDESCRIBED = {**dict.fromkeys(KINDS, True), "net_rule": False, "exclusion": False}
 
 
-def test_no_edits_no_changes_all_compared() -> None:
+def test_no_edits_no_changes_all_compared(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = build_export()
+    # Политики синтетики — продукт KES: извлекатель есть, записи сравнивались (в выдуманных секциях их просто нет).
     diff = _diff(raw, _copy(raw))
     assert diff.changes == [] and not diff.truncated
-    assert diff.compared == UNDESCRIBED
+    assert diff.compared == dict.fromkeys(KINDS, True)
+    monkeypatch.delitem(EXTRACTORS, "KES")
+    assert _diff(raw, _copy(raw)).compared == UNDESCRIBED
 
 
 def test_policy_renamed_deactivated_added_removed() -> None:
@@ -181,8 +184,10 @@ def test_setting_change_does_not_depend_on_container_level(container: str) -> No
         return [(c.kind, c.action, c.policy_id, c.profile, c.section, c.path, c.before, c.after) for c in diff.changes]
 
     leaf = changes("leaf")
-    assert [c[5] for c in leaf] == ["passwordProtection.areas.exportSettings", "compoundFilesSettings.officeArchivesScanMode",
-                                    "heuristicLevel", "scanExclusionsAndTrustedZone.scanExclusions"]
+    # Список исключений разбирает извлекатель KES: вместо настройки-списка — записи исключений (3 убраны, 1 добавлена).
+    assert [c[5] for c in leaf if c[0] == "setting"] == ["passwordProtection.areas.exportSettings", "compoundFilesSettings.officeArchivesScanMode",
+                                                         "heuristicLevel"]
+    assert sorted((c[0], c[1]) for c in leaf if c[0] != "setting") == [("exclusion", "added")] + [("exclusion", "removed")] * 3
     assert leaf[2][6:] == ({"value": 2}, {"value": 3})
     assert changes(container) == leaf
 
@@ -389,7 +394,7 @@ def test_import_middle_delete_reanalyze(auth_client: TestClient, db_session: Ses
     first, last = ids["2026-09-14"], ids["2026-09-16"]
     assert _summary(db_session, first) == {"prev": None, "total": 0, "compared": {}, "truncated": False}
     s = _summary(db_session, last)
-    assert s["prev"] == first and s["total"] == 1 and s["compared"] == UNDESCRIBED and not s["truncated"]
+    assert s["prev"] == first and s["total"] == 1 and s["compared"] == dict.fromkeys(KINDS, True) and not s["truncated"]
     [row] = _rows(db_session, last)
     assert (row.kind, row.action, row.policy_id, row.path, row.prev_snapshot_id) == ("policy", "changed", 1, "name", first)
     assert (json.loads(row.before_json), json.loads(row.after_json), row.policy_name) == ("A", "B", "B")

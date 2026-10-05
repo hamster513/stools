@@ -9,6 +9,7 @@ from fastapi import APIRouter
 
 from api.jobs import make_jobs_router
 from api.modules.ksc import models as models  # таблицы должны попасть в metadata
+from api.modules.ksc.core import extractors as extractors  # регистрирует извлекатели
 from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ksc.models import KscJob
 from api.modules.ksc.routers import (

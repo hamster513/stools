@@ -52,9 +52,9 @@ def test_policies_scope_profiles_stored(auth_client: TestClient, db_session: Ses
     assert set(pols) == {1, 2, 3}
     p1 = pols[1]
     assert p1.name == "KES workstations" and p1.product == "KES" and p1.group_id == 0 and p1.group_path == "Managed devices"
-    assert p1.has_contents and p1.profiles == 2 and p1.settings_total > 0 and p1.settings_known == 0 and p1.described is False
+    assert p1.has_contents and p1.profiles == 2 and p1.settings_total > 0 and p1.settings_known == 0 and p1.described is True
     assert p1.active and p1.accept_parent and p1.modified_at is not None
-    assert p1.exclusions == 0 and p1.net_rules == 0
+    assert p1.exclusions == 0 and p1.net_rules == 0  # извлекатель KES есть, в выдуманных секциях синтетики записей нет
     assert not pols[2].has_contents and pols[2].settings_total == 0 and pols[3].profiles == 0
     # groups/hosts — по effective_policies синтетики и хостам в каждой группе.
     hosts_in = {g["id"]: sum(1 for h in raw["hosts"] if h["KLHST_WKS_GROUPID"] == g["id"]) for g in raw["groups"]}

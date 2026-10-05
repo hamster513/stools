@@ -111,6 +111,23 @@ def flat_settings(sections: dict[str, Any]) -> list[Setting]:
     return out
 
 
+def _bare(node: Any) -> Any:
+    if _is_container(node):
+        return _bare(node.get("KLPRSS_Val"))
+    if isinstance(node, dict):
+        return {key: _bare(child) for key, child in node.items()}
+    if isinstance(node, list):
+        return [_bare(child) for child in node]
+    return node
+
+
+def bare_sections(sections: dict[str, Any]) -> dict[str, Any]:
+    """«Голый» вид секций: контейнеры `KLPRSS_Val` на любом уровне заменены своими значениями (замки отброшены), обёртки
+    типов сняты (`unwrap`). Значения читаются обычными путями по словарям — независимо от уровня контейнеров в выгрузке;
+    так их читает извлекатель записей."""
+    return {name: _bare(unwrap(raw)) for name, raw in sections.items()}
+
+
 def lock_summary(settings: list[Setting]) -> LockSummary:
     """Свод по замкам. Доля считается только по настройкам с признаком замка (`KLPRSS_Mnd`):
     настройка без признака — неизвестно, замкнута ли она, в знаменатель не идёт."""
