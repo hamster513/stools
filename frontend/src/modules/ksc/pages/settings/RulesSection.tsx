@@ -100,8 +100,9 @@ function ReadOnlyView({ config }: { config: KscConfig }) {
       <div className="sm:col-span-2">
         <dt className="text-text-secondary">Ключевые компоненты политик KES</dt>
         <dd className="text-text">{config.policy_key_components.length ? config.policy_key_components.map((c) => POLICY_COMPONENT_LABELS[c] ?? c).join(', ') : '—'}</dd>
+        {/* Подсказка — вторым `dd` последней группы: `p` прямым потомком `dl` быть не может. */}
+        <dd className="mt-2 text-text-secondary">{LISTS_HINT}</dd>
       </div>
-      <p className="text-text-secondary sm:col-span-2">{LISTS_HINT}</p>
       <div className="sm:col-span-2">
         <dt className="mb-1 text-text-secondary">Ключевые компоненты</dt>
         <dd>

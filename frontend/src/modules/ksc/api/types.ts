@@ -325,6 +325,8 @@ export interface PolicyListItem {
   accept_parent: boolean
   modified_at: string | null
   has_contents: boolean
+  /** Содержимое собрано не полностью (часть секций не прочиталась): списки записей и настроек могут быть неполными. */
+  contents_partial: boolean
   /** Для продукта есть извлекатель исключений и сетевых правил. */
   described: boolean
   /** Групп, где политика действует, и хостов прямо в них. */
@@ -534,8 +536,9 @@ export const EXCLUSION_RISKS: Record<string, { label: string; severity: Severity
   broad_trust: { label: 'широкое доверие', severity: 'Medium' },
   threat_any: { label: 'любая угроза', severity: 'High' },
 }
-export const NET_ACTION_LABELS: Record<string, string> = { allow: 'разрешить', block: 'запретить' }
-export const NET_DIRECTION_LABELS: Record<string, string> = { in: 'входящее', out: 'исходящее' }
+
+/** Слой сетевого правила (код) → подпись. */
+export const NET_LAYER_LABELS: Record<string, string> = { packet: 'пакетное', app: 'программы' }
 
 export interface ExclusionsQuery {
   q?: string
@@ -555,6 +558,10 @@ export interface ExclusionSummaryItem {
   hosts: number
   total: number
   by_kind: Record<string, number>
+  /** Исключений с рисками. */
+  risky: number
+  /** Содержимое политики собрано не полностью — список может быть неполным. */
+  partial: boolean
 }
 
 export interface ExclusionsResponse {
@@ -614,6 +621,8 @@ export interface NetRulesResponse {
     enabled: Record<'true' | 'false', number>
   } | null
   undescribed: string[]
+  /** Политики описанного продукта, содержимое которых собрано не полностью: их правила могут быть неполными. */
+  partial: number[]
 }
 
 export type ChangeKind = 'policy' | 'scope' | 'profile' | 'setting' | 'net_rule' | 'exclusion'

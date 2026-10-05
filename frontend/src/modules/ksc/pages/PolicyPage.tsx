@@ -117,8 +117,8 @@ export function PolicyPage({ serverId, policyId }: { serverId: number; policyId:
         {tab.key === 'settings' && <SettingsTab serverId={serverId} snapshotId={snapshotId} policy={p} />}
         {tab.key === 'scope' && <ScopeTab serverId={serverId} snapshotId={snapshotId} policyId={policyId} />}
         {tab.key === 'profiles' && <ProfilesTab snapshotId={snapshotId} policyId={policyId} />}
-        {tab.key === 'exclusions' && <ExclusionsTable snapshotId={snapshotId} serverId={serverId} policyId={policyId} />}
-        {tab.key === 'netrules' && <NetRulesTable snapshotId={snapshotId} serverId={serverId} policyId={policyId} />}
+        {tab.key === 'exclusions' && <ExclusionsTable snapshotId={snapshotId} serverId={serverId} policyId={policyId} partial={p.contents_partial} />}
+        {tab.key === 'netrules' && <NetRulesTable snapshotId={snapshotId} serverId={serverId} policyId={policyId} partial={p.contents_partial} />}
         {tab.key === 'changes' && <ChangesList serverId={serverId} policyId={policyId} />}
         {tab.key === 'raw' && <RawTab snapshotId={snapshotId} policyId={policyId} />}
       </div>

@@ -10,6 +10,7 @@ import { SeverityBadge } from '@/platform/collector/SeverityBadge'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import { PartialNote } from '../objects/ObjectsParts'
 import { GradeBadge } from '../policies/GradeBadge'
 
 /** Ключи деталей, которые уже видны в карточке (политика, продукт, группа) и в строке находки не повторяются. */
@@ -115,10 +116,13 @@ export function GradeTab({ serverId, snapshotId, policy }: { serverId: number; s
   const findings = usePolicyFindings(snapshotId, policy.id)
 
   const header = (
-    <div className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <GradeBadge grade={policy.grade} reason={policy.grade_reason} large />
-      <span className="text-xs text-text-secondary">{policy.grade_reason}</span>
-    </div>
+    <>
+      <div className="mb-4 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <GradeBadge grade={policy.grade} reason={policy.grade_reason} large />
+        <span className="text-xs text-text-secondary">{policy.grade_reason}</span>
+      </div>
+      {policy.contents_partial && <PartialNote />}
+    </>
   )
 
   if (findings.isLoading) return <>{header}<FullPageSpinner /></>

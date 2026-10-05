@@ -15,7 +15,7 @@ import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
-import { LoadMore, ObjectsEmpty, PolicyCell, PolicyFacet, RiskChips, SnapshotSection, UndescribedNote } from './objects/ObjectsParts'
+import { LoadMore, ObjectsEmpty, PartialNote, PolicyCell, PolicyFacet, RiskChips, SnapshotSection, UndescribedNote } from './objects/ObjectsParts'
 
 interface Filters {
   policy?: { id: number; name: string }
@@ -27,7 +27,7 @@ interface Filters {
 
 const kindLabel = (k: string) => EXCLUSION_KIND_LABELS[k] ?? k
 
-/** Сводка по политикам — без фильтров; имя политики ставит фильтр по ней. */
+/** Сводка по политикам — без фильтров; имя политики ставит фильтр по ней. Неполное содержимое помечено у имени. */
 function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p: { id: number; name: string }) => void }) {
   const kinds = [...new Set(items.flatMap((s) => Object.keys(s.by_kind)))].sort()
   return (
@@ -42,6 +42,7 @@ function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p:
               <th className="py-1 pr-3 text-left">Политика</th>
               <th className="py-1 pr-3 text-right">Хостов</th>
               <th className="py-1 pr-3 text-right">Всего</th>
+              <th className="py-1 pr-3 text-right">Опасных</th>
               {kinds.map((k) => <th key={k} className="py-1 pr-3 text-right">{kindLabel(k)}</th>)}
             </tr>
           </thead>
@@ -50,9 +51,11 @@ function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p:
               <tr key={s.policy_id} className="border-t border-grid">
                 <td className="py-1.5 pr-3">
                   <button type="button" onClick={() => onPick({ id: s.policy_id, name: s.policy_name })} className="text-left text-text hover:text-primary">{s.policy_name}</button>
+                  {s.partial && <span className="ml-2 whitespace-nowrap text-risk-medium" title="содержимое политики собрано не полностью — список может быть неполным">собрано не полностью</span>}
                 </td>
                 <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{s.hosts}</td>
                 <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text">{s.total}</td>
+                <td className={s.risky > 0 ? 'py-1.5 pr-3 text-right font-mono tabular-nums text-risk-high' : 'py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary'}>{s.risky}</td>
                 {kinds.map((k) => <td key={k} className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{s.by_kind[k] ?? 0}</td>)}
               </tr>
             ))}
@@ -94,8 +97,11 @@ function Rows({ items, inPolicy }: { items: ExclusionItem[]; inPolicy: boolean }
   )
 }
 
-/** Исключения снапшота: поиск, фильтры чипами, сводка, таблица. С `policyId` — по одной политике, без фильтра политики и сводки. */
-export function ExclusionsTable({ snapshotId, policyId }: { snapshotId: number; serverId: number; policyId?: number }) {
+/**
+ * Исключения снапшота: поиск, фильтры чипами, сводка, таблица. С `policyId` — по одной политике, без фильтра политики и сводки;
+ * `partial` — её содержимое собрано не полностью.
+ */
+export function ExclusionsTable({ snapshotId, policyId, partial = false }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean }) {
   const inPolicy = policyId !== undefined
   const [filters, setFilters] = useState<Filters>({})
   const [searchInput, setSearchInput] = useState('')
@@ -167,6 +173,7 @@ export function ExclusionsTable({ snapshotId, policyId }: { snapshotId: number; 
           {!query.isLoading && !errorMessage && (
             <>
               {!inPolicy && items.length > 0 && <UndescribedNote codes={undescribed} what="исключения" />}
+              {inPolicy ? partial && <PartialNote bar /> : <PartialNote bar names={(first?.summary ?? []).filter((s) => s.partial).map((s) => s.policy_name)} />}
               {!inPolicy && first?.summary && first.summary.length > 0 && <Summary items={first.summary} onPick={(p) => set('policy', p)} />}
               {items.length === 0 ? (
                 <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="исключения" none="Исключений нет" nothing="Ни одно исключение не подходит под фильтры." />

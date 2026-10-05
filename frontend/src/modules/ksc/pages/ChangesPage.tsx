@@ -6,6 +6,7 @@ import {
   CHANGE_ACTION_LABELS,
   CHANGE_KIND_LABELS,
   CHANGE_KIND_PLURAL,
+  EXCLUSION_KIND_LABELS,
   type ChangeAction,
   type ChangeItem,
   type ChangeKind,
@@ -42,7 +43,18 @@ function when(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+/** Запись извлекателя (исключение, сетевое правило) — сама запись, а не её ключ: `<вид>: <значение>` или имя правила. */
+function isRecord(c: ChangeItem): boolean {
+  return c.kind === 'exclusion' || c.kind === 'net_rule'
+}
+
 function where(c: ChangeItem): string {
+  const record = c.after ?? c.before
+  if (isRecord(c) && typeof record === 'object' && record !== null) {
+    const r = record as Record<string, unknown>
+    const text = c.kind === 'exclusion' ? `${EXCLUSION_KIND_LABELS[String(r.kind)] ?? String(r.kind)}: ${String(r.value ?? '')}` : String(r.name ?? '')
+    return text || '—'
+  }
   const path = c.kind === 'policy' || c.kind === 'profile' ? (FIELD_LABELS[c.path] ?? c.path) : c.path
   return [c.section, path].filter(Boolean).join(' · ') || '—'
 }
@@ -85,7 +97,7 @@ function Rows({ items, inPolicy }: { items: ChangeItem[]; inPolicy: boolean }) {
           <div className="w-36 shrink-0 px-2 text-text">{CHANGE_KIND_LABELS[c.kind] ?? c.kind}</div>
           <div className="w-24 shrink-0 px-2 text-text-secondary">{CHANGE_ACTION_LABELS[c.action] ?? c.action}</div>
           <div className="w-56 shrink-0 px-2"><PolicyCell policyName={c.policy_name} profile={c.profile} inPolicy={inPolicy} /></div>
-          <div className="w-72 shrink-0 px-2 font-mono break-all text-text-secondary">{where(c)}</div>
+          <div className="w-72 shrink-0 px-2 font-mono break-all text-text-secondary" title={isRecord(c) ? `ключ ${c.path}` : undefined}>{where(c)}</div>
           <div className="min-w-[280px] flex-1 px-2"><ChangeValue kind={c.kind} before={c.before} after={c.after} /></div>
         </div>
       ))}

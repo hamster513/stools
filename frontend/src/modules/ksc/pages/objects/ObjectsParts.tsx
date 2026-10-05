@@ -111,6 +111,26 @@ export function UndescribedNote({ codes, what }: { codes: string[]; what: string
 }
 
 /**
+ * «Не собрано ≠ пусто»: содержимое политики собрано не полностью (часть секций не прочиталась). Без `names` — про одну
+ * политику (карточка), с `names` — про перечисленные политики раздела сервера; `bar` — строкой над списком во всю ширину.
+ */
+export function PartialNote({ names, bar = false }: { names?: string[]; bar?: boolean }) {
+  if (names && names.length === 0) return null
+  return (
+    <div className={bar ? 'border-b border-grid bg-surface px-4 py-2 text-xs text-risk-medium' : 'mb-3 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-xs text-text'}>
+      {names ? <>Содержимое политик собрано не полностью: <span className="text-text">{names.join(', ')}</span> — список может быть неполным.</> : 'Содержимое политики собрано не полностью — список может быть неполным.'}
+    </div>
+  )
+}
+
+/** `PartialNote` раздела сервера по id политик: имена — из списка политик снапшота (кэш общий с PolicyFacet). */
+export function PartialPoliciesNote({ snapshotId, ids }: { snapshotId: number; ids: number[] }) {
+  const list = usePolicyList(ids.length > 0 ? snapshotId : undefined, {})
+  const names = new Map((list.data?.items ?? []).map((p) => [p.id, p.name]))
+  return <PartialNote bar names={ids.map((id) => names.get(id) ?? `#${id}`)} />
+}
+
+/**
  * Пустой список: «не собрано» и «не описано» отличаются от «нет». В карточке политики решает сама политика
  * (`undescribed` снапшота относится ко всем продуктам), в разделе сервера — список политик и `undescribed` ответа.
  */

@@ -8,6 +8,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { Link } from '@/lib/router'
+import { PartialNote } from '../objects/ObjectsParts'
 import { LockMark } from './RawTab'
 
 function SettingRow({ s }: { s: DescribedSetting }) {
@@ -91,7 +92,8 @@ export function SettingsTab({ serverId, snapshotId, policy }: { serverId: number
   const filtered = useMemo(() => {
     if (!settings.data) return { groups: [], other: [] }
     const keep = (s: { path: string; value: string; locked: boolean | null }, title = '') =>
-      (!onlyUnlocked || s.locked !== true) && (!q || title.toLowerCase().includes(q) || s.path.toLowerCase().includes(q) || s.value.toLowerCase().includes(q))
+      // «Незамкнутые» — замок явно снят (`false`); `null` — признак замка не пришёл, это не «без замка».
+      (!onlyUnlocked || s.locked === false) && (!q || title.toLowerCase().includes(q) || s.path.toLowerCase().includes(q) || s.value.toLowerCase().includes(q))
     return {
       groups: settings.data.groups.map((g) => ({ ...g, settings: g.settings.filter((s) => keep(s, s.title)) })).filter((g) => g.settings.length > 0),
       other: settings.data.other.filter((s) => keep(s)),
@@ -122,6 +124,7 @@ export function SettingsTab({ serverId, snapshotId, policy }: { serverId: number
   const nothing = filtered.groups.length === 0 && filtered.other.length === 0
   return (
     <>
+      {policy.contents_partial && <PartialNote />}
       <p className="mb-3 text-xs text-text-secondary">
         Распознано словарём <span className="font-mono tabular-nums text-text">{data.known}</span> из <span className="font-mono tabular-nums text-text">{data.total}</span> настроек;
         остальные — в «Прочее». Технический путь — во всплывающей подсказке названия, значение как есть — у значения.

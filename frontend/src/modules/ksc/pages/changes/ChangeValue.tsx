@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ChangeKind } from '@/modules/ksc/api/types'
+import { EXCLUSION_KIND_LABELS, NET_LAYER_LABELS, type ChangeKind } from '@/modules/ksc/api/types'
 
 const LIMIT = 400
 
@@ -81,10 +81,68 @@ function SettingValue({ before, after }: { before: SettingSide | null; after: Se
   )
 }
 
-/** Значение записи журнала изменений по виду: у настройки — человеческий вид, у остальных — значения или JSON. */
+/** Поля записи извлекателя в порядке показа и их подписи; `profile` — в колонке «Политика / профиль». */
+const RECORD_FIELDS: Record<'exclusion' | 'net_rule', string[]> = {
+  exclusion: ['kind', 'value', 'components', 'enabled', 'comment'],
+  net_rule: ['layer', 'position', 'name', 'action', 'direction', 'protocol', 'local_ports', 'remote_ports', 'addresses', 'enabled'],
+}
+/** Поля, которые уже видны в колонке «Где», — у добавленной и убранной записи не повторяются. */
+const WHERE_FIELDS = new Set(['kind', 'value', 'name'])
+const FIELD_LABELS: Record<string, string> = {
+  kind: 'вид', value: 'значение', components: 'компоненты', enabled: 'включено', comment: 'комментарий', layer: 'слой', position: '№',
+  name: 'название', action: 'действие', direction: 'направление', protocol: 'протокол', local_ports: 'локальные порты',
+  remote_ports: 'удалённые порты', addresses: 'адреса',
+}
+
+function fieldText(field: string, v: unknown): string {
+  if (Array.isArray(v)) return v.map(String).join(', ')
+  if (typeof v === 'boolean') return v ? 'да' : 'нет'
+  if (field === 'kind') return EXCLUSION_KIND_LABELS[String(v)] ?? String(v)
+  if (field === 'layer') return NET_LAYER_LABELS[String(v)] ?? String(v)
+  return v === null || v === undefined ? '' : String(v)
+}
+
+function FieldText({ field, v }: { field: string; v: unknown }) {
+  const text = fieldText(field, v)
+  return text ? <span className="font-mono break-all text-text">{text}</span> : <span className="text-text-secondary">пусто</span>
+}
+
+/**
+ * Исключение или сетевое правило: у изменённой записи — только отличающиеся поля «поле: было → стало», у добавленной и
+ * убранной — непустые поля списком (без того, что уже в «Где»).
+ */
+function RecordValue({ kind, before, after }: { kind: 'exclusion' | 'net_rule'; before: Record<string, unknown> | null; after: Record<string, unknown> | null }) {
+  const fields = RECORD_FIELDS[kind]
+  if (before && after) {
+    const changed = fields.filter((f) => JSON.stringify(before[f]) !== JSON.stringify(after[f]))
+    if (changed.length === 0) return <span className="text-text-secondary">—</span>
+    return (
+      <ul className="flex flex-col gap-0.5">
+        {changed.map((f) => (
+          <li key={f} className="flex flex-wrap items-start gap-1.5">
+            <span className="text-text-secondary">{FIELD_LABELS[f]}:</span> <FieldText field={f} v={before[f]} /> <span className="text-text-secondary">→</span> <FieldText field={f} v={after[f]} />
+          </li>
+        ))}
+      </ul>
+    )
+  }
+  const record = after ?? before
+  if (!record) return <span className="text-text-secondary">—</span>
+  const shown = fields.filter((f) => !WHERE_FIELDS.has(f) && fieldText(f, record[f]) !== '')
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {shown.map((f) => <li key={f}><span className="text-text-secondary">{FIELD_LABELS[f]}:</span> <FieldText field={f} v={record[f]} /></li>)}
+    </ul>
+  )
+}
+
+/** Значение записи журнала изменений по виду: у настройки и записей извлекателя — человеческий вид, у остальных — значения или JSON. */
 export function ChangeValue({ kind, before, after }: { kind: ChangeKind; before: unknown; after: unknown }) {
   if (kind === 'setting') {
     return <SettingValue before={isObject(before) ? (before as SettingSide) : null} after={isObject(after) ? (after as SettingSide) : null} />
+  }
+  if (kind === 'exclusion' || kind === 'net_rule') {
+    return <RecordValue kind={kind} before={isObject(before) ? before : null} after={isObject(after) ? after : null} />
   }
   if (before == null && after == null) return <span className="text-text-secondary">—</span>
   if (!isObject(before) && !isObject(after) && before != null && after != null) {
