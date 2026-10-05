@@ -13,7 +13,7 @@ from typing import Any
 
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.dictionary import component_enabled, dictionary_for
-from api.modules.ksc.core.dictionary.model import ProductDict
+from api.modules.ksc.core.dictionary.model import Entry, ProductDict
 from api.modules.ksc.core.export import ExportIndex, _int, _str, unwrap
 from api.modules.ksc.core.findings import Finding, finalize
 from api.modules.ksc.core.policy_contents import Setting, find_setting
@@ -24,8 +24,8 @@ COMPONENT_HIGH = frozenset({"file_threat", "behavior", "exploit", "network_threa
 NOTIFY_ONLY = {"firewall": "firewall.notifyOnly", "hips": "hips.notifyOnly", "network_threat": "notifyOnly"}
 SELF_DEFENSE = "selfDefense.enableSelfDefence"
 PASSWORD_LOGIN, PASSWORD_HASH = "passwordProtection.login", "passwordProtection.passwordHash"
-#: Типы угроз (`threats.<тип>`, секция доверенной зоны) в порядке показа; выключенное обнаружение первых трёх — High.
-THREAT_TYPES = ("virusesAndWorms", "trojans", "maliciousTools", "adware", "autoDialers", "other", "stalkerware", "packedFiles", "multiPackedFiles")
+#: Типы угроз — настройки словаря `threats.<тип>` в секции доверенной зоны; выключенное обнаружение этих — High, остальных — Medium.
+THREATS = "threats."
 THREAT_HIGH = frozenset({"virusesAndWorms", "trojans", "maliciousTools"})
 LOCAL_EXCLUSIONS = ("allowUseLocalScanExclusions", "allowUseLocalTrustedApps")
 _TZ = "scanExclusionsAndTrustedZone"
@@ -49,9 +49,13 @@ class _Policy:
         s = self.setting(component, path)
         return s.value if s is not None else None
 
-    def title(self, component: str, path: str) -> str:
+    def entries(self, component: str, prefix: str) -> list[Entry]:
+        """Настройки словаря в секции компонента, путь которых начинается с `prefix`, в порядке словаря."""
         section = self.d.sections.get(self.section(component))
-        return next((e.title for e in section.entries if e.path == path), path) if section else path
+        return [e for e in section.entries if e.path.startswith(prefix)] if section else []
+
+    def title(self, component: str, path: str) -> str:
+        return next((e.title for e in self.entries(component, path) if e.path == path), path)
 
 
 def _graded(idx: ExportIndex) -> list[_Policy]:
@@ -117,10 +121,11 @@ def check_policy_threat_types_off(idx: ExportIndex, cfg: KscConfig) -> list[Find
     вредоносные утилиты."""
     out = []
     for p in _graded(idx):
-        off = [t for t in THREAT_TYPES if p.value("trusted_zone", f"threats.{t}") is False]
+        off = [e for e in p.entries("trusted_zone", THREATS) if p.value("trusted_zone", e.path) is False]
         if off:
-            severity = "High" if THREAT_HIGH & set(off) else "Medium"
-            out.append(_finding(cfg, "POLICY_THREAT_TYPES_OFF", severity, p, types=off, titles=[p.title("trusted_zone", f"threats.{t}") for t in off]))
+            types = [e.path.removeprefix(THREATS) for e in off]
+            severity = "High" if THREAT_HIGH & set(types) else "Medium"
+            out.append(_finding(cfg, "POLICY_THREAT_TYPES_OFF", severity, p, types=types, titles=[e.title for e in off]))
     return out
 
 

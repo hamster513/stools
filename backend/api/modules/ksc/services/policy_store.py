@@ -82,7 +82,8 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex, cfg: Ks
         policies.append({
             "snapshot_id": sid, "policy_id": p.policy_id, "name": p.name[:255], "product": p.product[:64], "version": p.version[:64],
             "group_id": p.group_id, "group_path": p.group_path[:1024], "active": p.active, "accept_parent": p.accept_parent,
-            "modified_at": p.modified_at, "has_contents": p.has_contents, "described": described,
+            "modified_at": p.modified_at, "has_contents": p.has_contents, "contents_partial": p.contents_partial,
+            "described": described,
             "groups": groups[p.policy_id], "hosts": hosts[p.policy_id],
             "profiles": _profiles_count(entry), "exclusions": len(objs.exclusions), "net_rules": len(objs.net_rules),
             "settings_total": len(flat_settings(sections)), "settings_known": len(described_settings[0]) if described_settings else 0,

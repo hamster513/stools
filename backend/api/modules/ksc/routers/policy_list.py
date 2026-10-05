@@ -30,7 +30,7 @@ from api.modules.ksc.models import (
     KscSnapshot,
 )
 from api.modules.ksc.routers.policies import task_fields
-from api.modules.ksc.services.grade import GRADES, policy_findings, policy_grades
+from api.modules.ksc.services.grade import GRADES, Grade, policy_findings, policy_grades
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.snapshots import snapshot_path
 from api.platform.findings.core import STATUS_TITLES
@@ -68,7 +68,7 @@ class PolicyItem(BaseModel):
     #: None — содержимого нет в выгрузке.
     locks: PolicyLocksView | None = None
     #: Оценка по считаемым находкам оценки: bad | ok | good; None — оценки нет, почему — в `grade_reason`.
-    grade: str | None = None
+    grade: Grade | None = None
     grade_reason: str
     #: Считаемые находки оценки этой политики (`details.policy_id`, проверки `GRADE_CHECKS`).
     findings: int
@@ -195,7 +195,7 @@ def _locks(idx: ExportIndex | None, p: KscPolicy) -> PolicyLocksView | None:
     return PolicyLocksView(locked=summary.locked, with_lock_flag=summary.with_lock_flag)
 
 
-def _item(p: KscPolicy, idx: ExportIndex | None, grade: tuple[str | None, str, int]) -> PolicyItem:
+def _item(p: KscPolicy, idx: ExportIndex | None, grade: tuple[Grade | None, str, int]) -> PolicyItem:
     return PolicyItem(
         id=p.policy_id, name=p.name, product=p.product, version=p.version, group=p.group_path, active=p.active, accept_parent=p.accept_parent,
         modified_at=p.modified_at, has_contents=p.has_contents, described=p.described, groups=p.groups, hosts=p.hosts, profiles=p.profiles,

@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 
 from api.collector_findings import SnapshotFindingAdapter
-from api.modules.ksc.core.checks import CHECK_BY_CODE
+from api.modules.ksc.core.checks import CHECK_BY_CODE, GRADE_CHECKS
 from api.modules.ksc.models import KscFinding, KscServer, KscSnapshot
-from api.modules.ksc.services.grade import GRADE_CHECKS
 
 
 def _title(f: KscFinding) -> str:
@@ -21,12 +20,13 @@ _AD_COVERAGE = frozenset({"COVER_AD_MISSING", "COVER_KSC_ONLY"})
 
 def _unchecked(snapshot: KscSnapshot) -> set[str]:
     """Сверка с AD без снапшота AD; проверки по содержимому политик (`GRADE_CHECKS`), если у какой-то активной политики защиты
-    содержимое не собрано («не собрано» ≠ «пусто»; грубо — по проверке, а не по политике). `POLICY_CONTENT_MISSING` сюда не
-    входит: она сама и есть признак несобранного."""
+    содержимое не собрано или собрано не полностью («не собрано» ≠ «пусто»; грубо — по проверке, а не по политике).
+    `POLICY_CONTENT_MISSING` сюда не входит: она сама и есть признак несобранного."""
     stats = json.loads(snapshot.stats_json or "{}")
     coverage = stats.get("coverage") or {}
     out = set(_AD_COVERAGE) if coverage.get("ad_total") is None else set()
-    if (stats.get("policies") or {}).get("without_contents"):
+    policies = stats.get("policies") or {}
+    if policies.get("without_contents") or policies.get("partial"):
         out |= GRADE_CHECKS
     return out
 

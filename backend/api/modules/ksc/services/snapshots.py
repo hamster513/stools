@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from api.export_files import file_sha256, store_gz
 from api.jobs import JobHandle, insert_chunked
 from api.modules.ksc.core.checks import ANALYZER_VERSION, run_all
-from api.modules.ksc.core.checks.policy_contents import _protection_policies
+from api.modules.ksc.core.checks.policy_contents import protection_policies
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, KscExport, _str, load_export_path
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding
@@ -72,12 +72,14 @@ def _coverage_stats(idx: ExportIndex, cfg: KscConfig) -> dict[str, Any]:
 
 
 def _policy_stats(idx: ExportIndex) -> dict[str, int]:
-    """Активные политики продуктов защиты и сколько из них без собранного содержимого (сбой сбора или предел политик):
-    по нему сверка статусов не считает пропавшие находки по содержимому политик устранёнными (`findings_adapter`)."""
-    active = _protection_policies(idx)
-    contents = idx.export.policy_contents
-    without = sum(1 for p in active if not (contents.get(_str(p.get("KLPOL_ID"))) or {}).get("sections"))
-    return {"active_protection": len(active), "without_contents": without}
+    """Активные политики продуктов защиты, сколько из них без собранного содержимого (сбой сбора или предел политик) и
+    собранных не полностью (часть секций — в `errors`): по ним сверка статусов не считает пропавшие находки по содержимому
+    политик устранёнными (`findings_adapter`)."""
+    active = protection_policies(idx)
+    contents = [idx.export.policy_contents.get(_str(p.get("KLPOL_ID"))) or {} for p in active]
+    without = sum(1 for c in contents if not c.get("sections"))
+    partial = sum(1 for c in contents if c.get("sections") and c.get("errors"))
+    return {"active_protection": len(active), "without_contents": without, "partial": partial}
 
 
 def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[Finding], cfg: KscConfig, handle: JobHandle | None = None) -> None:

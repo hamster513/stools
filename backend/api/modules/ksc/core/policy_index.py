@@ -25,6 +25,8 @@ class PolicyRow:
     accept_parent: bool
     modified_at: dt.datetime | None
     has_contents: bool
+    #: Содержимое есть, но часть секций не прочиталась (`errors` записи не пуст).
+    contents_partial: bool
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,7 @@ def policy_rows(idx: ExportIndex) -> list[PolicyRow]:
             group_id=group_id, group_path=idx.group_path(group_id), active=bool(unwrap(p.get("KLPOL_ACTIVE"))),
             accept_parent=bool(unwrap(p.get("KLPOL_ACCEPT_PARENT"))), modified_at=_dt(p.get("KLPOL_MODIFIED")),
             has_contents=content is not None and bool(content.get("sections")),
+            contents_partial=content is not None and bool(content.get("sections")) and bool(content.get("errors")),
         ))
     return out
 

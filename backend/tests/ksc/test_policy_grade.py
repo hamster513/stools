@@ -8,8 +8,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from api.modules.ksc.core.checks import GRADE_CHECKS
 from api.modules.ksc.models import KscSnapshot
-from api.modules.ksc.services.grade import GRADE_CHECKS
 from tests.ksc.kes11 import kes11_export
 from tests.ksc.synthetic import NOW, build_export
 from tests.ksc.test_api import upload
@@ -163,7 +163,7 @@ def test_not_collected_contents_do_not_resolve_policy_findings(auth_client: Test
     assert snap2 != snap1
     row = db_session.get(KscSnapshot, snap2)
     assert row is not None
-    assert json.loads(row.stats_json)["policies"] == {"active_protection": 2, "without_contents": 1}
+    assert json.loads(row.stats_json)["policies"] == {"active_protection": 2, "without_contents": 1, "partial": 0}
     for key in keys:
         assert _state(auth_client, server_id, key)["status"] != "resolved"
 
@@ -178,3 +178,44 @@ def test_collected_contents_resolve_fixed_policy_findings(auth_client: TestClien
     fixed["server"]["collected_at"] = (NOW + dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     _imported(auth_client, fixed)
     assert _state(auth_client, server_id, key)["status"] == "resolved"
+
+
+def _partial(raw: dict[str, Any], section: str = "cf9370d5") -> dict[str, Any]:
+    """Политика 1 собрана не полностью: секция `section` не прочиталась (ушла в `errors`), остальные есть."""
+    content = raw["policy_contents"]["1"]
+    del content["sections"][section]
+    content["errors"] = [f"{section}: секция больше лимита"]
+    return raw
+
+
+def test_partial_contents_without_high_has_no_grade(auth_client: TestClient, db_session: Session) -> None:
+    snap = _imported(auth_client, _partial(kes11_export(**{"852d0287/scanExclusionsAndTrustedZone.allowUseLocalTrustedApps": True})))
+    item = _by_id(_list(auth_client, snap))[1]
+    # Medium-находка есть, но «нормальная» или «хорошая» по неполным данным не ставится.
+    assert (item["grade"], item["grade_reason"], item["findings"]) == (None, "содержимое собрано не полностью", 1)
+    row = db_session.get(KscSnapshot, snap)
+    assert row is not None
+    assert json.loads(row.stats_json)["policies"] == {"active_protection": 2, "without_contents": 0, "partial": 1}
+
+
+def test_partial_contents_without_findings_has_no_grade(auth_client: TestClient) -> None:
+    item = _by_id(_list(auth_client, _imported(auth_client, _partial(kes11_export()))))[1]
+    assert (item["grade"], item["grade_reason"], item["findings"]) == (None, "содержимое собрано не полностью", 0)
+
+
+def test_partial_contents_with_high_is_bad(auth_client: TestClient) -> None:
+    snap = _imported(auth_client, _partial(kes11_export(**{"1d3e35bd/selfDefense.enableSelfDefence": False})))
+    item = _by_id(_list(auth_client, snap))[1]
+    assert (item["grade"], item["findings"]) == ("bad", 1)
+
+
+def test_partial_contents_do_not_resolve_policy_findings(auth_client: TestClient) -> None:
+    """Секция сетевого экрана не прочиталась во втором снапшоте — находка «только уведомлять» по ней не «устранена»."""
+    raw = kes11_export(**{"cf9370d5/firewall.notifyOnly": True})
+    snap1 = _imported(auth_client, raw)
+    found = _policy_findings(auth_client, snap1, 1)
+    assert [f["check"] for f in found] == ["POLICY_NOTIFY_ONLY"]
+    server_id = int(auth_client.get("/api/ksc/snapshots").json()[0]["server_id"])
+    raw["server"]["collected_at"] = (NOW + dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _imported(auth_client, _partial(raw))
+    assert _state(auth_client, server_id, found[0]["key"])["status"] != "resolved"

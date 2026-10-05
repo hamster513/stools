@@ -96,6 +96,12 @@ CHECKS: list[CheckSpec] = [
 
 CHECK_BY_CODE: dict[str, CheckSpec] = {c.code: c for c in CHECKS}
 
+#: Проверки по содержимому политик, находки которых портят оценку политики (`services/grade.py`): все `POLICY_*`, кроме
+#: проверок групп и справочной «не собрано».
+GRADE_CHECKS: frozenset[str] = frozenset(
+    c.code for c in CHECKS if c.code.startswith("POLICY_") and c.code not in {"POLICY_NONE", "POLICY_INHERIT_BROKEN", "POLICY_CONTENT_MISSING"}
+)
+
 
 def run_all(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
     out: list[Finding] = []

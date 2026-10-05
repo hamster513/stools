@@ -20,7 +20,7 @@ def _policies_by_id(idx: ExportIndex) -> dict[str, dict[str, Any]]:
     return {_str(p.get("KLPOL_ID")): p for p in idx.export.policies}
 
 
-def _protection_policies(idx: ExportIndex) -> list[dict[str, Any]]:
+def protection_policies(idx: ExportIndex) -> list[dict[str, Any]]:
     """Активные политики продуктов защиты (не агент, не сервер) — те же, что собирает сборщик."""
     return [
         p for p in idx.export.policies
@@ -88,7 +88,7 @@ def check_policy_content_missing(idx: ExportIndex, cfg: KscConfig) -> list[Findi
         errors = [str(e) for e in (content.get("errors") or [])]
         details.update(case="empty", reason="; ".join(errors[:3]))
         out.append(finalize(Finding(check="POLICY_CONTENT_MISSING", severity="Info", target=target, details=details, key_extra=policy_id), cfg))
-    for policy in _protection_policies(idx):
+    for policy in protection_policies(idx):
         policy_id = _str(policy.get("KLPOL_ID"))
         if policy_id in contents:
             continue

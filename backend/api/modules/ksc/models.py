@@ -135,6 +135,9 @@ class KscPolicy(Base):
     modified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     #: Содержимое (секции настроек) есть в выгрузке.
     has_contents: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Содержимое есть, но часть секций не прочиталась (`errors` записи содержимого не пуст): оценка не бывает «нормальной»
+    #: или «хорошей». У строк, записанных до появления признака, — False до пересчёта снапшота.
+    contents_partial: Mapped[bool] = mapped_column(Boolean, default=False)
     #: Для продукта есть извлекатель исключений и сетевых правил (core/policy_model.EXTRACTORS).
     described: Mapped[bool] = mapped_column(Boolean, default=False)
     #: Групп, где действует (своя и наследники), и хостов прямо в них — из ksc_policy_scope.
