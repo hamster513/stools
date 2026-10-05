@@ -1,18 +1,26 @@
 """Опасные исключения в активных политиках: находка на каждое исключение с рисками (`core/exclusion_risks`)."""
 from __future__ import annotations
 
+from typing import Any
+
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.exclusion_risks import RISKS, exclusion_risks
 from api.modules.ksc.core.export import ExportIndex, _int, _str, unwrap
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding, finalize
 from api.modules.ksc.core.policy_index import policy_objects
-from api.modules.ksc.core.policy_model import exclusion_key
+from api.modules.ksc.core.policy_model import Exclusion, exclusion_key
+
+
+def _disabled_profiles(idx: ExportIndex, policy_id: str) -> set[str]:
+    """Имена выключенных профилей политики (`KLSSPOL_PRF_ENABLED`, как в `policy_index.profile_rows`)."""
+    entry = (idx.export.policy_profiles or {}).get(policy_id) or {}
+    return {_str(pr.get("name")) for pr in entry.get("profiles") or [] if not bool(unwrap((pr.get("attrs") or {}).get("KLSSPOL_PRF_ENABLED", True)))}
 
 
 def check_policy_exclusion_risky(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
-    """Исключения и доверенные программы активной политики и её профилей, у которых есть риски. Серьёзность — старшая
-    из кодов; ключ — политика, профиль и `exclusion_key`. Повтор того же исключения в той же политике и профиле
-    (тот же ключ) второй находкой не становится."""
+    """Исключения и доверенные программы активной политики и её включённых профилей, у которых есть риски. Ключ — политика,
+    профиль и `exclusion_key`; записи с одним ключом (тот же вид и значение) — одна находка с объединением кодов,
+    серьёзность — старшая из кодов. Копия в профиле исключения самой политики своей находки не даёт."""
     out: list[Finding] = []
     contents = idx.export.policy_contents
     for policy in idx.export.policies:
@@ -20,16 +28,23 @@ def check_policy_exclusion_risky(idx: ExportIndex, cfg: KscConfig) -> list[Findi
         if not bool(unwrap(policy.get("KLPOL_ACTIVE"))) or policy_id not in contents:
             continue
         objs, _ = policy_objects(idx.export, policy_id)
+        disabled = _disabled_profiles(idx, policy_id)
         target = _str(policy.get("KLPOL_DN")) or policy_id
-        seen: set[str] = set()
+        # Записи самой политики идут первыми (`policy_objects`), поэтому её ключи известны до профилей.
+        own: set[str] = set()
+        found: dict[str, tuple[Exclusion, set[str]]] = {}
         for e in objs.exclusions:
             risks = exclusion_risks(e, cfg)
-            key_extra = f"{policy_id}|{e.profile}|{exclusion_key(e)}"
-            if not risks or key_extra in seen:
+            key = exclusion_key(e)
+            if not risks or e.profile in disabled or (e.profile and key in own):
                 continue
-            seen.add(key_extra)
+            if not e.profile:
+                own.add(key)
+            found.setdefault(f"{policy_id}|{e.profile}|{key}", (e, set()))[1].update(risks)
+        for key_extra, (e, codes) in found.items():
+            risks = [code for code in RISKS if code in codes]
             severity = min((RISKS[code][0] for code in risks), key=SEVERITY_RANK.__getitem__)
-            details = {"policy_id": _int(policy.get("KLPOL_ID")), "profile": e.profile, "kind": e.kind, "value": e.value, "risks": risks,
-                       "why": [RISKS[code][1] for code in risks], "comment": e.comment}
+            details: dict[str, Any] = {"policy_id": _int(policy.get("KLPOL_ID")), "profile": e.profile, "kind": e.kind, "value": e.value,
+                                       "risks": risks, "why": [RISKS[code][1] for code in risks], "comment": e.comment}
             out.append(finalize(Finding(check="POLICY_EXCLUSION_RISKY", severity=severity, target=target, details=details, key_extra=key_extra), cfg))
     return out

@@ -1,11 +1,14 @@
 """Опасные исключения: правила по виду и значению исключения, списки — из настроек модуля (`KscConfig`).
 
 Пути сравниваются без регистра, `/` и `\\` не различаются, переменные окружения — как текст (`%temp%`). Правила пути
-действуют на исключения-пути, маски и доверенные программы; выключенное исключение рисков не имеет.
+действуют на исключения-пути, маски и доверенные программы; исключение с именем объекта (кроме `*`) касается одной угрозы
+в этом пути, поэтому правила ширины к нему не применяются, а `interpreter` — применяется. Выключенное исключение рисков
+не имеет.
 """
 from __future__ import annotations
 
 import fnmatch
+import re
 
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.extractors.kes_windows import (
@@ -14,6 +17,7 @@ from api.modules.ksc.core.extractors.kes_windows import (
     CHILDREN_RECURSIVE,
     NET,
     NET_ENCRYPTED,
+    OBJECT,
     OPEN_FILES,
 )
 from api.modules.ksc.core.policy_model import Exclusion
@@ -34,28 +38,47 @@ _PATH_KINDS = {"path", "mask", "trusted_app"}
 #: Флаги доверенной программы для `broad_trust`; варианты одного флага — одна группа.
 _BROAD_TRUST = (frozenset({OPEN_FILES}), frozenset({BEHAVIOR}), frozenset({NET, NET_ENCRYPTED}), frozenset({CHILDREN, CHILDREN_RECURSIVE}))
 _BROAD_TRUST_MIN = 3
+#: Префикс длинного пути Windows: `\\?\C:\` — тот же `C:\`.
+_LONG_PATH = "\\\\?\\"
+_ENV_VAR = re.compile(r"%[^%\\]+%")
 
 
 def _norm(text: str) -> str:
     return text.strip().lower().replace("/", "\\")
 
 
-def _path_risks(path: str, cfg: KscConfig) -> set[str]:
-    """`path` — нормализованный (`_norm`)."""
+def _is_drive(text: str) -> bool:
+    """`c:`, `?:` или `%systemdrive%` — корень диска."""
+    return text == "%systemdrive%" or (len(text) == 2 and (text[0].isalpha() or text[0] == "?") and text[1] == ":")
+
+
+def _restricted(e: Exclusion) -> bool:
+    """Исключение сужено именем объекта (`объект: <маска>`, кроме `*`)."""
+    return any(c.startswith(OBJECT) and c[len(OBJECT):].strip() != "*" for c in e.components)
+
+
+def _path_risks(path: str, cfg: KscConfig, broad: bool) -> set[str]:
+    """`path` — нормализованный (`_norm`); `broad` — проверять правила ширины (иначе только `interpreter`)."""
+    path = path.removeprefix(_LONG_PATH)
+    head, _, name = path.rpartition("\\")
+    out = {"interpreter"} if name in {_norm(i) for i in cfg.exclusion_interpreters} else set()
+    if not broad:
+        return out
     drive = path.rstrip("\\*")
-    if drive in ("", "%systemdrive%") or (len(drive) == 2 and drive[0].isalpha() and drive[1] == ":"):
+    if drive == "" or _is_drive(drive):
         return {"whole_drive"}
-    out: set[str] = set()
     # Замыкающий разделитель: каталог `C:\Temp` совпадает с `\temp\` так же, как `C:\Temp\a.exe`.
     padded = path if path.endswith("\\") else path + "\\"
-    if any(p and p in padded for p in map(_norm, cfg.exclusion_user_writable)):
+    if any(p in padded for p in map(_norm, cfg.exclusion_user_writable)):
         out.add("user_writable")
-    head, _, name = path.rpartition("\\")
-    if not head.strip("\\*"):  # без каталога: только имя или `*\имя`
-        # Маска имени покрывает маску исполняемого (`*.exe`, `*.ex?`), иначе это имя или маска имени без пути.
-        out.add("ext_mask" if any(fnmatch.fnmatchcase(_norm(m), name) for m in cfg.exclusion_exec_extensions) else "name_only")
-    if name in {_norm(i) for i in cfg.exclusion_interpreters}:
-        out.add("interpreter")
+    if _ENV_VAR.fullmatch(name):  # `%TEMP%` — каталог, а не имя файла
+        return out
+    folder = head.strip("\\*")
+    # Маска имени покрывает маску исполняемого (`*.exe`, `*.ex?`) в любом каталоге или прямо от корня диска (`C:\**\*.exe`).
+    if (not folder or _is_drive(folder)) and any(fnmatch.fnmatchcase(_norm(m), name) for m in cfg.exclusion_exec_extensions):
+        out.add("ext_mask")
+    elif not folder and "*" not in name and "?" not in name:  # имя файла без каталога: `tool.exe`, `*\tool.exe`
+        out.add("name_only")
     return out
 
 
@@ -65,7 +88,7 @@ def exclusion_risks(e: Exclusion, cfg: KscConfig) -> list[str]:
         return []
     found: set[str] = set()
     if e.kind in _PATH_KINDS:
-        found |= _path_risks(_norm(e.value), cfg)
+        found |= _path_risks(_norm(e.value), cfg, broad=not _restricted(e))
     if e.kind == "trusted_app" and sum(1 for group in _BROAD_TRUST if group & set(e.components)) >= _BROAD_TRUST_MIN:
         found.add("broad_trust")
     if e.kind == "threat" and e.value.strip() == "*":

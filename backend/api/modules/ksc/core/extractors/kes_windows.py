@@ -39,6 +39,8 @@ CHILDREN = "не контролировать дочерние процессы"
 CHILDREN_RECURSIVE = "не контролировать дочерние процессы рекурсивно"
 NET = "не проверять сетевой трафик"
 NET_ENCRYPTED = "не проверять сетевой трафик (только зашифрованный)"
+#: Префикс компонента исключения с путём или хешем и именем объекта: «объект: <маска>».
+OBJECT = "объект: "
 
 #: Флаги доверенной программы → подпись; `excludeNet` — вложенный словарь, разбирается отдельно (на своём месте в порядке).
 _TRUSTED_FLAGS = (
@@ -116,7 +118,7 @@ def _scan_exclusion(item: dict[str, Any]) -> Exclusion | None:
     else:
         return None
     if name and kind != "threat":
-        components.append(f"объект: {name}")
+        components.append(f"{OBJECT}{name}")
     if mask.get("recursive") is True:
         components.append("рекурсивно")
     return Exclusion(kind, value, tuple(components), _enabled(item), _text(item.get("comment")))

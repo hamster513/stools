@@ -1,7 +1,7 @@
 """Пороги и списки проверок модуля KSC (`app_setting['ksc']`)."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def _default_admin_role_patterns() -> list[str]:
@@ -24,7 +24,7 @@ def _default_components() -> dict[str, list[str]]:
 
 def _default_user_writable() -> list[str]:
     return ["\\temp\\", "\\tmp\\", "%temp%", "%tmp%", "\\downloads\\", "\\appdata\\", "%appdata%", "%localappdata%", "%userprofile%",
-            "\\users\\public\\", "\\programdata\\", "%programdata%", "\\windows\\temp\\"]
+            "\\users\\public\\", "\\windows\\temp\\"]
 
 
 def _default_exec_extensions() -> list[str]:
@@ -66,6 +66,12 @@ class KscConfig(BaseModel):
     exclusion_exec_extensions: list[str] = Field(default_factory=_default_exec_extensions)
     #: Имена файлов интерпретаторов и системных загрузчиков — риск `interpreter`.
     exclusion_interpreters: list[str] = Field(default_factory=_default_interpreters)
+
+    @field_validator("exclusion_user_writable", "exclusion_exec_extensions", "exclusion_interpreters")
+    @classmethod
+    def _strip_items(cls, items: list[str]) -> list[str]:
+        """Пустой элемент совпал бы с любым путём."""
+        return [s.strip() for s in items if s.strip()]
 
 
 DEFAULT_CONFIG = KscConfig()
