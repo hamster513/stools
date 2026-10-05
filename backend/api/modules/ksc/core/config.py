@@ -36,6 +36,10 @@ def _default_interpreters() -> list[str]:
             "python.exe", "java.exe", "javaw.exe", "msbuild.exe", "installutil.exe", "certutil.exe", "bitsadmin.exe", "wmic.exe"]
 
 
+def _default_policy_key_components() -> list[str]:
+    return ["file_threat", "behavior", "exploit", "network_threat", "remediation", "web_threat", "mail_threat", "amsi", "firewall", "hips"]
+
+
 class KscConfig(BaseModel):
     agent_silent_days: int = Field(default=7, ge=1)
     bases_old_days: int = Field(default=3, ge=1)
@@ -66,6 +70,9 @@ class KscConfig(BaseModel):
     exclusion_exec_extensions: list[str] = Field(default_factory=_default_exec_extensions)
     #: Имена файлов интерпретаторов и системных загрузчиков — риск `interpreter`.
     exclusion_interpreters: list[str] = Field(default_factory=_default_interpreters)
+    #: Коды компонентов словаря продукта, выключение которых в политике — POLICY_COMPONENT_OFF, а признак «включён» без
+    #: замка — POLICY_KEY_UNLOCKED.
+    policy_key_components: list[str] = Field(default_factory=_default_policy_key_components)
 
     @field_validator("exclusion_user_writable", "exclusion_exec_extensions", "exclusion_interpreters")
     @classmethod

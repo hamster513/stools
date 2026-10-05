@@ -33,7 +33,7 @@ def _target_details(idx: ExportIndex, policy_id: str, policies: dict[str, dict[s
     target = _str(policy.get("KLPOL_DN")) or policy_id
     product = _str(policy.get("KLPOL_PRODUCT")) or str(content.get("product") or "")
     group = idx.group_path(_int(policy.get("KLPOL_GROUP_ID"))) if policy else ""
-    return target, {"product": product, "group": group}
+    return target, {"policy_id": _int(policy_id), "product": product, "group": group}
 
 
 def _summary_details(idx: ExportIndex, policy_id: str, policies: dict[str, dict[str, Any]], content: dict[str, Any], summary: LockSummary) -> tuple[str, dict[str, Any]]:

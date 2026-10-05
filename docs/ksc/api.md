@@ -188,6 +188,13 @@ GET  /snapshots/{id}/findings/{key}    элемент списка + description
 не считаются и «устранена» не ставится: ключи находок разных версий не
 сравнимы (в журнал — предупреждение).
 
+Не собрано ≠ пусто: пропажа находок проверок, которые в последнем снапшоте не проверялись, — не устранение (их статусы
+сверка не трогает). Это `COVER_AD_MISSING` и `COVER_KSC_ONLY` без снапшота AD и проверки оценки политик (`GRADE_CHECKS`,
+см. «Оценка политики»), если хотя бы у одной активной политики продукта защиты содержимое не собрано (сбой сбора, отказ
+чтения или предел `policy_contents_max_policies`) — грубо, по проверке целиком, а не по политике. Счётчик — в
+`stats_json` снапшота: `policies = {active_protection, without_contents}` (пишется при импорте и пересчёте; у снапшота,
+посчитанного раньше, его нет — правило не действует до пересчёта).
+
 Находки про хост несут `host`, находки про группу, политику, задачу или
 лицензию — только `target` (путь группы, имя политики/задачи/ключа), `host` пуст.
 Находки про сервер (`KSC_2FA_OFF`, `KSC_INTERNAL_ADMIN`, `KSC_ADMINS`,
@@ -265,10 +272,14 @@ share: 0, with_lock_flag: 0}`, `errors` несёт причины из сбор�
 ## Аналитика политик
 
 ```
-GET  /snapshots/{id}/policy-list?q=&product=&active=true|false
-                                        {items: [PolicyItem], facets: {product: {код: n}, active: {true, false}},
+GET  /snapshots/{id}/policy-list?q=&product=&active=true|false&grade=bad|ok|good|none
+                                        {items: [PolicyItem], facets: {product: {код: n}, active: {true, false},
+                                                 grade: {bad, ok, good, none}},
                                         profiles_collected}
 GET  /snapshots/{id}/policies/{pid}     PolicyItem + {settings_total, settings_known, errors: [str], changes}
+GET  /snapshots/{id}/policies/{pid}/findings
+                                        {items: [{key, check, check_title, severity, status, status_title,
+                                                  counted: bool, details}]}
 GET  /snapshots/{id}/policies/{pid}/scope
                                         {groups: [{group_id, path, own, hosts}], hosts}
 GET  /snapshots/{id}/policies/{pid}/profiles
@@ -298,17 +309,33 @@ grade_reason, findings}`. Список, привязка и счётчики —
 Список: `q` — подстрока имени (без регистра), `product` — код продукта, `active` — признак активности;
 фасеты считаются по отфильтрованному набору. Порядок: активные первыми, затем по имени. `groups` и `hosts` — групп,
 где политика действует (своя группа и наследники), и хостов прямо в них (в каждой группе только прямые хосты, без подгрупп). `group` — группа, где политика создана.
-`locks` — свод замков содержимого (`null`, если содержимого нет); `findings` — находки снапшота `POLICY_*`,
-у которых `target` равен имени политики (политики с одинаковым именем получают общий счёт).
+`locks` — свод замков содержимого (`null`, если содержимого нет); `findings` — считаемые находки оценки политики
+(см. «Оценка политики» ниже; по `details.policy_id`, одноимённые политики счёт не делят).
 
 Не собрано и пусто: `profiles: null` — профили политики не собраны (выгрузка без секции `policy_profiles`,
 политика агента/сервера, отказ чтения списка профилей без единого профиля), `0` — собраны, профилей нет.
 `profiles_collected` — хотя бы у одной политики снапшота `profiles` не `null` (по таблице, без чтения файла);
 `false` значит, что профили в выгрузке не собирались вовсе.
 
-`grade` на этапе 1 всегда `null`, причина — `grade_reason`: «содержимое не собрано» (нет содержимого),
-иначе «политика неактивна», иначе «структура продукта не описана». `described` — для продукта есть извлекатель
-исключений и сетевых правил (`core/policy_model.EXTRACTORS`).
+`described` — для продукта есть извлекатель исключений и сетевых правил (`core/policy_model.EXTRACTORS`).
+
+Оценка политики (`services/grade.py`). Находки оценки — находки снапшота проверок `GRADE_CHECKS` (все `POLICY_*`, кроме
+`POLICY_NONE`, `POLICY_INHERIT_BROKEN` и справочной `POLICY_CONTENT_MISSING`: `POLICY_NO_LOCKS`, `POLICY_WEAK_LOCKS`,
+`POLICY_EXCLUSION_RISKY` и правила оценки из «Проверок»), отнесённые к политике по `details.policy_id`. Считается
+находка, если её статус платформы входит в учитываемые (настройка `counted`, то же правило, что счётчик находок хоста):
+по умолчанию «принят риск», «ложное срабатывание» и «устранена» оценку не портят. `grade`: `bad` — среди считаемых есть
+Critical или High, `ok` — только Medium или Low, `good` — ни одной из них (Info оценку не меняет); `grade_reason` —
+пояснение. `grade: null` с причиной: «содержимое не собрано» (нет содержимого), иначе «политика неактивна», иначе
+«структура продукта не описана» (для продукта нет словаря, сейчас описан только `KES`), иначе для снапшота, посчитанного
+другой версией анализатора, — «пересчитайте снапшот: оценка считается с версии анализатора 2» (у находок прежних версий
+нет `policy_id`). `findings` считается и для политик без оценки. Фильтр `grade` — оценка или `none` (без оценки),
+другое значение — `422`; фасет `grade` — по отфильтрованному набору, как остальные. Оценка считается при каждом запросе:
+смена статуса находки меняет её сразу, без пересчёта снапшота.
+
+Находки политики (`/policies/{pid}/findings`): все находки оценки этой политики — и считаемые, и нет (`counted`), со
+статусом платформы (`status`, `status_title`); порядок — считаемые первыми, затем по серьёзности. `404` — снапшот или
+политика не найдены. Ключ находки по политике строится из имени политики (`target`) и `key_extra`: переименование
+политики меняет ключи её находок — прежние уходят «устранёнными», новые появляются (существующее соглашение ключей).
 
 Карточка: `settings_total` — настроек (листьев, см. «Настройки») в содержимом политики, `settings_known` — распознанных словарём продукта
 (считается при импорте и пересчёте; `0`, если словаря нет), `errors` — ошибки сбора: содержимого (`policy_contents[…].errors`) и чтения профилей
@@ -530,7 +557,10 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 много), `exclusion_exec_extensions` (маски исполняемых: `*.exe`,
 `*.dll`, `*.ps1`, `*.bat`, `*.cmd`, `*.js`, `*.vbs`, `*.scr`, `*.msi`, `*.jar`), `exclusion_interpreters` (`powershell.exe`,
 `pwsh.exe`, `cmd.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `python.exe`, `java.exe`,
-`javaw.exe`, `msbuild.exe`, `installutil.exe`, `certutil.exe`, `bitsadmin.exe`, `wmic.exe`) — см. «Исключения».
+`javaw.exe`, `msbuild.exe`, `installutil.exe`, `certutil.exe`, `bitsadmin.exe`, `wmic.exe`) — см. «Исключения»,
+`policy_key_components` (коды компонентов словаря, выключение которых — `POLICY_COMPONENT_OFF`, а незамкнутый признак
+«включён» — `POLICY_KEY_UNLOCKED`; по умолчанию все десять: `file_threat`, `behavior`, `exploit`, `network_threat`,
+`remediation`, `web_threat`, `mail_threat`, `amsi`, `firewall`, `hips`).
 
 Границы порогов: `cert_days` — находка есть, когда дней до истечения
 **меньше или равно** порогу (60 дней → находка); `reboot_pending_days`,
@@ -545,7 +575,7 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 
 ## Проверки
 
-30 проверок, коды латиницей:
+37 проверок, коды латиницей:
 
 ```
 COVER_AD_MISSING        Есть в AD, нет в KSC
@@ -578,12 +608,38 @@ POLICY_NO_LOCKS         В политике нет ни одного замка
 POLICY_WEAK_LOCKS       Мало замкнутых настроек в политике
 POLICY_CONTENT_MISSING  Содержимое политики не собрано
 POLICY_EXCLUSION_RISKY  Опасное исключение в политике
+POLICY_COMPONENT_OFF    Ключевой компонент выключен в политике
+POLICY_NOTIFY_ONLY      Компонент только уведомляет
+POLICY_SELFDEFENSE_OFF  Самозащита выключена
+POLICY_PASSWORD_OFF     Нет защиты паролем
+POLICY_THREAT_TYPES_OFF Выключено обнаружение типов угроз
+POLICY_LOCAL_EXCLUSIONS Разрешены локальные исключения
+POLICY_KEY_UNLOCKED     Ключевой признак не под замком
 ```
 
 Восемь проверок начиная с `TASK_FAILED` — блок 1 расширения (результаты
 задач, сервер KSC); три проверки начиная с `POLICY_NO_LOCKS` — блок 2 этап A
-(содержимое политик и замки); `POLICY_EXCLUSION_RISKY` — этап 2b; их коды и описания — те же строки, что в
-`backend/api/modules/ksc/core/checks/__init__.py`.
+(содержимое политик и замки); `POLICY_EXCLUSION_RISKY` и семь правил оценки начиная с `POLICY_COMPONENT_OFF` — этап 2b;
+их коды и описания — те же строки, что в `backend/api/modules/ksc/core/checks/__init__.py`.
+
+Правила оценки (`core/checks/policy_rules.py`) проверяют активные политики продукта со словарём (`core/dictionary`, сейчас
+`KES` — KES для Windows) и собранным содержимым. Значения читаются по листьям `flat_settings` (`find_setting`), от уровня
+контейнеров `KLPRSS_Val` в выгрузке не зависят; нет настройки или значение не того вида — неизвестно, находки нет. У всех
+`target` — имя политики, `details` — `{policy_id, product, …}`, `key_extra` начинается с id политики:
+
+| Код | Серьёзность | Когда | Ключ (`key_extra`), детали |
+|---|---|---|---|
+| `POLICY_COMPONENT_OFF` | High: `file_threat`, `behavior`, `exploit`, `network_threat`, `remediation`; Medium: остальные | признак «включён» компонента из `policy_key_components` равен `false` | `{id}\|{компонент}`; `component`, `title` |
+| `POLICY_NOTIFY_ONLY` | High | `firewall.notifyOnly`, `hips.notifyOnly`, `notifyOnly` защиты от сетевых угроз равно `true`, а компонент включён | `{id}\|{компонент}`; `component`, `title` |
+| `POLICY_SELFDEFENSE_OFF` | High | `selfDefense.enableSelfDefence` равно `false` | `{id}` |
+| `POLICY_PASSWORD_OFF` | Medium | `passwordProtection.login` и `passwordProtection.passwordHash` оба `""` (сборщик 1.3+); `"<скрыто>"` хотя бы у одного (пароль задан или сборщик до 1.3 скрыл и пустое) или ключа нет — неизвестно, находки нет | `{id}` |
+| `POLICY_THREAT_TYPES_OFF` | High, если выключены `virusesAndWorms`, `trojans` или `maliciousTools`; иначе Medium | выключено обнаружение типов `threats.*` (девять типов словаря) | `{id}`; `types`, `titles` |
+| `POLICY_LOCAL_EXCLUSIONS` | Medium | `allowUseLocalScanExclusions` или `allowUseLocalTrustedApps` равно `true` | `{id}`; `allowed`, `titles` |
+| `POLICY_KEY_UNLOCKED` | Medium | признак «включён» компонента из `policy_key_components` или `selfDefense.enableSelfDefence` не под замком (`locked` `false`; без признака замка — молчит) | `{id}`; `unlocked` (`self_defense` — самозащита), `titles` |
+
+Состав списков в деталях (`types`, `allowed`, `unlocked`) в ключ не входит: находка на политику одна, её статус переживает
+правку списка. `POLICY_NO_LOCKS`, `POLICY_WEAK_LOCKS`, `POLICY_CONTENT_MISSING` несут `details.policy_id` тоже, ключи у
+них прежние. Правила «только уведомлять» для файловой и почтовой защиты нет: коды `scanAction` не расшифрованы.
 
 `POLICY_EXCLUSION_RISKY` — находка на каждое исключение или доверенную программу с рисками (коды и правила — в
 «Исключения») у активной политики с собранным содержимым и у её включённых профилей (`KLSSPOL_PRF_ENABLED`;
@@ -669,7 +725,7 @@ POLICY_EXCLUSION_RISKY  Опасное исключение в политике
   конкретных настроек — `walk_settings` (`core/policy_contents.py`) не
   знает, какая секция и ключ что означают в KES, поэтому находки `POLICY_*`
   этапа A говорят только о доле замков, а не о том, что именно замкнуто
-  или не замкнуто.
+  или не замкнуто. Этап 2b добавил словарь KES для Windows и правила оценки по нему (см. «Проверки»).
 - **`policy_contents == {}` неотличимо от отсутствия секции в старом
   файле.** Поле разбирается как `dict[str, ...] = Field(default_factory=dict)`
   (`core/export.py`) — и «ключа `policy_contents` не было в JSON вовсе»

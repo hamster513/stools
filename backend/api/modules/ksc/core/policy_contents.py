@@ -111,6 +111,13 @@ def flat_settings(sections: dict[str, Any]) -> list[Setting]:
     return out
 
 
+def find_setting(sections: dict[str, Any], section: str, path: str) -> Setting | None:
+    """Лист `flat_settings` секции `section` с полным путём `path`; None — секции или такой настройки в политике нет."""
+    if section not in sections:
+        return None
+    return next((s for s in flat_settings({section: sections[section]}) if s.path == path), None)
+
+
 def _bare(node: Any) -> Any:
     if _is_container(node):
         return _bare(node.get("KLPRSS_Val"))

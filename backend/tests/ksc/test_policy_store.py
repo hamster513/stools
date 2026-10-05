@@ -177,7 +177,8 @@ def test_old_snapshot_without_file_stays_empty(auth_client: TestClient, db_sessi
     _drop_policy_tables(db_session, sid)
     snapshot_path(app_settings.data_dir, sid).unlink()
     body = auth_client.get(f"/api/ksc/snapshots/{sid}/policy-list").json()
-    assert body == {"items": [], "facets": {"product": {}, "active": {"true": 0, "false": 0}}, "profiles_collected": False}
+    assert body == {"items": [], "facets": {"product": {}, "active": {"true": 0, "false": 0}, "grade": {"bad": 0, "ok": 0, "good": 0, "none": 0}},
+                    "profiles_collected": False}
     assert auth_client.get(f"/api/ksc/snapshots/{sid}/hosts/h-ws01").json()["policies"] == []
     assert auth_client.get(f"/api/ksc/snapshots/{sid}/exclusions").json()["total"] == 0
     db_session.expire_all()

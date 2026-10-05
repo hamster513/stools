@@ -1,6 +1,7 @@
 """Список политик, карточка, привязка, профили и плоский список задач: ручки `policy_list`."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -29,14 +30,14 @@ def test_policy_list_items_facets_sort(auth_client: TestClient) -> None:
 
     assert [i["id"] for i in body["items"]] == [2, 3, 1]  # все активны — по имени: Agent, KES lab, KES workstations
     assert body["profiles_collected"] is True
-    assert body["facets"] == {"product": {"KES": 2, "1103": 1}, "active": {"true": 3, "false": 0}}
+    assert body["facets"] == {"product": {"KES": 2, "1103": 1}, "active": {"true": 3, "false": 0}, "grade": {"bad": 1, "ok": 0, "good": 1, "none": 1}}
 
     kes = _item(body, 1)
     assert kes == {
         "id": 1, "name": "KES workstations", "product": "KES", "version": "12.0.0.0", "group": "Managed devices", "active": True,
         "accept_parent": True, "modified_at": kes["modified_at"], "has_contents": True, "described": True, "groups": 2, "hosts": 11,
-        "profiles": 2, "exclusions": kes["exclusions"], "net_rules": kes["net_rules"], "locks": kes["locks"], "grade": None,
-        "grade_reason": "структура продукта не описана", "findings": kes["findings"],
+        "profiles": 2, "exclusions": kes["exclusions"], "net_rules": kes["net_rules"], "locks": kes["locks"], "grade": "good",
+        "grade_reason": kes["grade_reason"], "findings": 0,
     }
     assert kes["modified_at"] is not None
     assert kes["locks"] == {"locked": 7, "with_lock_flag": 12}
@@ -46,21 +47,20 @@ def test_policy_list_items_facets_sort(auth_client: TestClient) -> None:
     assert agent["grade"] is None and agent["grade_reason"] == "содержимое не собрано"
     assert (agent["groups"], agent["hosts"]) == (4, 13)
 
-    lab = _item(body, 3)
+    lab = _item(body, 3)  # без единого замка — POLICY_NO_LOCKS (High)
     assert lab["profiles"] == 0 and lab["locks"] == {"locked": 0, "with_lock_flag": 12}
+    assert (lab["grade"], lab["findings"]) == ("bad", 1)
 
 
-def test_policy_list_findings_counted_by_policy_name(auth_client: TestClient, db_session: Session) -> None:
-    snap = _imported(auth_client)
-    rows = db_session.execute(select(KscFinding).where(KscFinding.snapshot_id == snap, KscFinding.check.like("POLICY\\_%"))).scalars().all()
-    by_target: dict[str, int] = {}
-    for f in rows:
-        by_target[f.target] = by_target.get(f.target, 0) + 1
+def test_policy_list_findings_counted_by_policy_id(auth_client: TestClient, db_session: Session) -> None:
+    """`findings` — по `details.policy_id`, а не по имени: одноимённые политики не делят счёт."""
+    raw = build_export()
+    raw["policies"][0]["KLPOL_DN"] = "KES lab"  # у политик 1 и 3 одно имя
+    snap = _imported(auth_client, raw)
+    rows = db_session.execute(select(KscFinding).where(KscFinding.snapshot_id == snap, KscFinding.check == "POLICY_NO_LOCKS")).scalars().all()
+    assert [(f.target, json.loads(f.details_json)["policy_id"]) for f in rows] == [("KES lab", 3)]
     body = auth_client.get(f"/api/ksc/snapshots/{snap}/policy-list").json()
-    assert {i["name"]: i["findings"] for i in body["items"]} == {
-        "Agent": by_target.get("Agent", 0), "KES lab": by_target.get("KES lab", 0), "KES workstations": by_target.get("KES workstations", 0),
-    }
-    assert sum(by_target.get(i["name"], 0) for i in body["items"]) > 0  # синтетика даёт хотя бы одну POLICY_* по политике
+    assert {i["id"]: i["findings"] for i in body["items"]} == {1: 0, 2: 0, 3: 1}
 
 
 def test_policy_list_filters_and_inactive_grade_reason(auth_client: TestClient) -> None:

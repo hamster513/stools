@@ -1,5 +1,5 @@
-"""Аналитика политик: список с привязкой к группам и хостам, карточка, привязка, профили с отличиями от политики,
-плоский список задач выгрузки.
+"""Аналитика политик: список с привязкой к группам и хостам и оценкой, карточка, находки оценки политики, привязка, профили с
+отличиями от политики, плоский список задач выгрузки.
 
 Список, привязка и счётчики — из таблиц `ksc_*` снапшота; замки политик и отличия профилей читаются из сохранённого
 файла выгрузки (как у `/policies`).
@@ -18,19 +18,22 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.export import ExportIndex, _str, load_export_path, unwrap
+from api.modules.ksc.core.findings import SEVERITY_RANK
 from api.modules.ksc.core.policy_contents import lock_summary, truncate_value, walk_settings
 from api.modules.ksc.models import (
     KscChange,
-    KscFinding,
     KscPolicy,
     KscPolicyScope,
     KscProfile,
     KscSnapshot,
 )
 from api.modules.ksc.routers.policies import task_fields
+from api.modules.ksc.services.grade import GRADES, policy_findings, policy_grades
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.snapshots import snapshot_path
+from api.platform.findings.core import STATUS_TITLES
 from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ksc"])
@@ -64,11 +67,26 @@ class PolicyItem(BaseModel):
     net_rules: int
     #: None — содержимого нет в выгрузке.
     locks: PolicyLocksView | None = None
-    #: Оценка защиты — этап 2; на этапе 1 всегда None, причина — в `grade_reason`.
-    grade: None = None
+    #: Оценка по считаемым находкам оценки: bad | ok | good; None — оценки нет, почему — в `grade_reason`.
+    grade: str | None = None
     grade_reason: str
-    #: Находки снапшота `POLICY_*` с именем этой политики в `target`.
+    #: Считаемые находки оценки этой политики (`details.policy_id`, проверки `GRADE_CHECKS`).
     findings: int
+
+
+class PolicyFinding(BaseModel):
+    key: str
+    check: str
+    check_title: str
+    severity: str
+    status: str
+    status_title: str
+    counted: bool
+    details: dict[str, Any]
+
+
+class PolicyFindingsResponse(BaseModel):
+    items: list[PolicyFinding]
 
 
 class PolicyCard(PolicyItem):
@@ -169,14 +187,6 @@ def _index(snap: KscSnapshot, settings: Settings) -> ExportIndex:
     return ExportIndex(export.model_copy(update={"hosts": []}))
 
 
-def _grade_reason(p: KscPolicy) -> str:
-    if not p.has_contents:
-        return "содержимое не собрано"
-    if not p.active:
-        return "политика неактивна"
-    return "структура продукта не описана"
-
-
 def _locks(idx: ExportIndex | None, p: KscPolicy) -> PolicyLocksView | None:
     content = idx.export.policy_contents.get(str(p.policy_id)) if idx is not None else None
     if not p.has_contents or content is None:
@@ -185,19 +195,12 @@ def _locks(idx: ExportIndex | None, p: KscPolicy) -> PolicyLocksView | None:
     return PolicyLocksView(locked=summary.locked, with_lock_flag=summary.with_lock_flag)
 
 
-def _item(p: KscPolicy, idx: ExportIndex | None, findings: int) -> PolicyItem:
+def _item(p: KscPolicy, idx: ExportIndex | None, grade: tuple[str | None, str, int]) -> PolicyItem:
     return PolicyItem(
         id=p.policy_id, name=p.name, product=p.product, version=p.version, group=p.group_path, active=p.active, accept_parent=p.accept_parent,
         modified_at=p.modified_at, has_contents=p.has_contents, described=p.described, groups=p.groups, hosts=p.hosts, profiles=p.profiles,
-        exclusions=p.exclusions, net_rules=p.net_rules, locks=_locks(idx, p), grade_reason=_grade_reason(p), findings=findings,
+        exclusions=p.exclusions, net_rules=p.net_rules, locks=_locks(idx, p), grade=grade[0], grade_reason=grade[1], findings=grade[2],
     )
-
-
-def _findings_by_policy(db: Session, snapshot_id: int) -> dict[str, int]:
-    rows = db.execute(
-        select(KscFinding.target, func.count()).where(KscFinding.snapshot_id == snapshot_id, KscFinding.check.like("POLICY\\_%", escape="\\")).group_by(KscFinding.target)
-    ).all()
-    return {target: n for target, n in rows}
 
 
 @router.get("/snapshots/{snapshot_id}/policy-list", response_model=PolicyListResponse)
@@ -206,30 +209,35 @@ def get_policy_list(
     q: str = "",
     product: str = "",
     active: bool | None = None,
+    grade: str = "",
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> PolicyListResponse:
+    if grade and grade not in (*GRADES, "none"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{grade}»")
     snap = _snapshot(db, snapshot_id, settings)
     rows = list(db.execute(select(KscPolicy).where(KscPolicy.snapshot_id == snapshot_id)).scalars())
     # Файл выгрузки нужен только ради замков; без содержимого у политик его не открываем.
     idx = _index(snap, settings) if any(p.has_contents for p in rows) else None
+    grades = policy_grades(db, snap)
     needle = q.strip().lower()
     kept = [
         p for p in rows
         if (not needle or needle in p.name.lower())
         and (not product or p.product == product)
         and (active is None or p.active == active)
+        and (not grade or (grades[p.policy_id][0] or "none") == grade)
     ]
     kept.sort(key=lambda p: (not p.active, p.name.lower(), p.policy_id))
-    counts = _findings_by_policy(db, snapshot_id)
-    facets: dict[str, dict[str, int]] = {"product": {}, "active": {"true": 0, "false": 0}}
+    facets: dict[str, dict[str, int]] = {"product": {}, "active": {"true": 0, "false": 0}, "grade": dict.fromkeys((*GRADES, "none"), 0)}
     for p in kept:
         facets["product"][p.product] = facets["product"].get(p.product, 0) + 1
         facets["active"]["true" if p.active else "false"] += 1
+        facets["grade"][grades[p.policy_id][0] or "none"] += 1
     # Профили собраны, если хотя бы у одной политики снапшота они не NULL (по таблице, без чтения файла).
     collected = any(p.profiles is not None for p in rows)
-    return PolicyListResponse(items=[_item(p, idx, counts.get(p.name, 0)) for p in kept], facets=facets, profiles_collected=collected)
+    return PolicyListResponse(items=[_item(p, idx, grades[p.policy_id]) for p in kept], facets=facets, profiles_collected=collected)
 
 
 def _policy_errors(idx: ExportIndex, policy_id: int) -> list[str]:
@@ -250,12 +258,35 @@ def get_policy_card(
     snap = _snapshot(db, snapshot_id, settings)
     p = _policy(db, snapshot_id, policy_id)
     idx = _index(snap, settings)
-    findings = _findings_by_policy(db, snapshot_id).get(p.name, 0)
     changes = db.scalar(select(func.count()).select_from(KscChange).where(KscChange.snapshot_id == snapshot_id, KscChange.policy_id == policy_id)) or 0
     return PolicyCard(
-        **_item(p, idx, findings).model_dump(), settings_total=p.settings_total, settings_known=p.settings_known,
+        **_item(p, idx, policy_grades(db, snap)[policy_id]).model_dump(), settings_total=p.settings_total, settings_known=p.settings_known,
         errors=_policy_errors(idx, policy_id), changes=changes,
     )
+
+
+@router.get("/snapshots/{snapshot_id}/policies/{policy_id}/findings", response_model=PolicyFindingsResponse)
+def get_policy_findings(
+    snapshot_id: int,
+    policy_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> PolicyFindingsResponse:
+    """Все находки оценки политики: считаемые первыми, затем по серьёзности."""
+    snap = _snapshot(db, snapshot_id, settings)
+    _policy(db, snapshot_id, policy_id)
+    found = sorted(
+        policy_findings(db, snap).get(policy_id, []),
+        key=lambda g: (not g.counted, SEVERITY_RANK.get(g.finding.severity, 9), g.finding.check, g.finding.key),
+    )
+    return PolicyFindingsResponse(items=[
+        PolicyFinding(
+            key=g.finding.key, check=g.finding.check, check_title=CHECK_BY_CODE[g.finding.check].title if g.finding.check in CHECK_BY_CODE else g.finding.check,
+            severity=g.finding.severity, status=g.status, status_title=STATUS_TITLES[g.status], counted=g.counted, details=g.details,
+        )
+        for g in found
+    ])
 
 
 @router.get("/snapshots/{snapshot_id}/policies/{policy_id}/scope", response_model=ScopeResponse)
