@@ -12,11 +12,16 @@
 
 Запуск (нужен только Python 3.8+, без библиотек):
 
-    python3 ksc_policy_skeleton.py <выгрузка.json | .json.gz | .zip | каталог> [-o skeleton.txt] [--numbers]
+    python3 ksc_policy_skeleton.py <выгрузка.json | .json.gz | .zip | каталог> [-o skeleton.txt] [--numbers | --calibrate]
 
 `--numbers` печатает у числовых ключей набор встреченных значений (не больше восьми разных,
 иначе только их число): без этого коды перечислений — действие, направление, уровень — не
 расшифровать. Строки и в этом режиме не печатаются.
+
+`--calibrate` — то же и ещё два набора чисел для расшифровки кодов: у перечислений — сколько раз
+встретилось каждое значение (`{0×31, 1×3}`: самое частое обычно значение по умолчанию), а у
+пакетных правил сетевого экрана — сочетания «действие, направление, протокол, порты» без названий
+и адресов (по стандартным правилам с известными портами коды читаются однозначно).
 
 Из контейнера STools, по всем снапшотам сервера, не копируя скрипт внутрь:
 
@@ -25,6 +30,7 @@
 Перед тем как передавать файл дальше, просмотрите его: это обычный текст."""
 from __future__ import annotations
 
+import collections
 import gzip
 import io
 import json
@@ -40,6 +46,10 @@ MAX_DEPTH = 60
 NUMBERS = False
 #: Больше стольких разных чисел у ключа — это не перечисление, печатается только их число.
 NUMBERS_MAX = 8
+#: `--calibrate`: частоты значений перечислений и числовые сочетания пакетных правил сетевого экрана.
+CALIBRATE = False
+#: Столько самых частых сочетаний пакетных правил печатается на продукт.
+RULES_MAX = 80
 HIDDEN = "<скрыто>"
 
 _GUID = re.compile(r"^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$")
@@ -118,7 +128,7 @@ class Node:
         self.types: set[str] = set()
         self.kinds: set[str] = set()
         self.sizes: set[str] = set()
-        self.numbers: set[int] = set()
+        self.numbers: collections.Counter[int] = collections.Counter()
         self.lock = False
 
     def lines(self, path: str) -> list[str]:
@@ -132,7 +142,12 @@ class Node:
             kinds = f" ({', '.join(sorted(self.kinds))})" if self.kinds else ""
             numbers = ""
             if self.numbers:
-                numbers = f" {{различных: {len(self.numbers)}}}" if len(self.numbers) > NUMBERS_MAX else " {" + ", ".join(str(n) for n in sorted(self.numbers)) + "}"
+                if len(self.numbers) > NUMBERS_MAX:
+                    numbers = f" {{различных: {len(self.numbers)}}}"
+                elif CALIBRATE:
+                    numbers = " {" + ", ".join(f"{n}×{self.numbers[n]}" for n in sorted(self.numbers)) + "}"
+                else:
+                    numbers = " {" + ", ".join(str(n) for n in sorted(self.numbers)) + "}"
             out.append(f"{path} : {' | '.join(sorted(self.types))}{kinds}{numbers}{lock}")
         return out
 
@@ -157,7 +172,7 @@ def walk(value: Any, path: str, lock: bool, nodes: dict[str, Node], depth: int =
         node.types.add(kind if _NAME.match(kind) else "<тип>")
         node.lock = node.lock or lock
         if NUMBERS and kind == "long" and isinstance(value["value"], int) and not isinstance(value["value"], bool):
-            node.numbers.add(value["value"])
+            node.numbers[value["value"]] += 1
         return
     if isinstance(value, dict):
         if "KLPRSS_Val" in value:
@@ -186,7 +201,7 @@ def walk(value: Any, path: str, lock: bool, nodes: dict[str, Node], depth: int =
     elif isinstance(value, int):
         node.types.add("int")
         if NUMBERS:
-            node.numbers.add(value)
+            node.numbers[value] += 1
     elif isinstance(value, float):
         node.types.add("float")
     else:
@@ -203,6 +218,56 @@ def _plain(value: Any) -> Any:
     if isinstance(value, list):
         return [_plain(v) for v in value]
     return value
+
+
+def _bare(value: Any) -> Any:
+    """Значение без обёрток типов и контейнеров настроек — для чтения полей правил."""
+    if _typed(value) is not None:
+        return _bare(value["value"])
+    if isinstance(value, dict):
+        if "KLPRSS_Val" in value:
+            return _bare(value["KLPRSS_Val"])
+        return {k: _bare(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_bare(v) for v in value]
+    return value
+
+
+def _ports(ranges: Any) -> str:
+    out = []
+    for r in ranges if isinstance(ranges, list) else []:
+        if isinstance(r, dict) and isinstance(r.get("begin"), int) and isinstance(r.get("end"), int):
+            out.append(str(r["begin"]) if r["begin"] == r["end"] else f"{r['begin']}-{r['end']}")
+    return "[" + ",".join(out) + "]"
+
+
+def _num(value: Any) -> str:
+    return str(value) if isinstance(value, (int, bool)) else "-"
+
+
+def packet_rules(node: Any, found: collections.Counter[str], depth: int = 0) -> None:
+    """Числовые сочетания пакетных правил (`networkPacketRules`) на любой глубине: без названий и адресов."""
+    if depth > MAX_DEPTH:
+        return
+    if isinstance(node, dict):
+        for key, child in node.items():
+            if key == "networkPacketRules" and isinstance(child, list):
+                for rule in child:
+                    if not isinstance(rule, dict):
+                        continue
+                    proto = rule.get("protocol") if isinstance(rule.get("protocol"), dict) else {}
+                    kind = proto.get("type") if isinstance(proto.get("type"), dict) else {}
+                    scope = rule.get("scope") if isinstance(rule.get("scope"), dict) else {}
+                    found[
+                        f"action={_num(rule.get('action'))} dir={_num(rule.get('packetDirection'))} proto={_num(proto.get('unique_id'))}"
+                        f" type={_num(kind.get('value'))} local={_ports(proto.get('localPorts'))} remote={_ports(proto.get('remotePorts'))}"
+                        f" networks={_num(scope.get('networks'))} enabled={_num(rule.get('enabled'))}"
+                    ] += 1
+            else:
+                packet_rules(child, found, depth + 1)
+    elif isinstance(node, list):
+        for child in node:
+            packet_rules(child, found, depth + 1)
 
 
 def _label(text: Any) -> str:
@@ -257,13 +322,15 @@ class Skeleton:
 
     def _policy(self, content: dict[str, Any]) -> None:
         title = f"{_label(content.get('product'))} {_label(content.get('version'))}"
-        product = self.products.setdefault(title, {"policies": 0, "sections": {}, "failed": set()})
+        product = self.products.setdefault(title, {"policies": 0, "sections": {}, "failed": set(), "rules": collections.Counter()})
         product["policies"] += 1
         sections = _plain_params(content.get("sections")) or {}
         for name, raw in sections.items():
             section = product["sections"].setdefault(safe_key(name), {"seen": 0, "nodes": {}})
             section["seen"] += 1
             walk(raw, "", False, section["nodes"])
+            if CALIBRATE:
+                packet_rules(_bare(raw), product["rules"])
         for error in content.get("errors") or []:
             product["failed"].add(safe_key(str(error).split(":", 1)[0].strip()))
 
@@ -311,6 +378,12 @@ class Skeleton:
                     out.append("    <пусто>")
                 for path in sorted(nodes):
                     out.extend(f"    {line}" for line in nodes[path].lines(path))
+            if product["rules"]:
+                out.append("  ПАКЕТНЫЕ ПРАВИЛА СЕТЕВОГО ЭКРАНА (числа, без названий и адресов; сочетание × сколько раз)")
+                for line, n in product["rules"].most_common(RULES_MAX):
+                    out.append(f"    {line} ×{n}")
+                if len(product["rules"]) > RULES_MAX:
+                    out.append(f"    … и ещё сочетаний: {len(product['rules']) - RULES_MAX}")
             out.append("")
         if not self.components:
             out.append("компонентов хостов в выгрузке нет (сбор шёл с -SkipProducts)")
@@ -340,12 +413,15 @@ def _plain_params(value: Any) -> Any:
 
 
 def main(argv: list[str]) -> int:
-    global NUMBERS
+    global NUMBERS, CALIBRATE
     args = list(argv)
     target: Path | None = None
     if "--numbers" in args:
         NUMBERS = True
         args.remove("--numbers")
+    if "--calibrate" in args:
+        NUMBERS = CALIBRATE = True
+        args.remove("--calibrate")
     if "-o" in args:
         at = args.index("-o")
         if at + 1 >= len(args):

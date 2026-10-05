@@ -163,3 +163,23 @@ def test_skeleton_reads_zip_archive(tmp_path: Path) -> None:
     broken.write_bytes(b"PK\x03\x04 not a zip")
     done = subprocess.run([sys.executable, str(SCRIPT), str(broken)], capture_output=True, text=True, encoding="utf-8", check=False)
     assert done.returncode == 1 and "ни одной выгрузки KSC не найдено" in done.stderr
+
+
+def test_skeleton_calibrate_prints_value_counts_and_packet_rule_numbers(tmp_path: Path) -> None:
+    """`--calibrate`: частоты значений перечислений и числовые сочетания пакетных правил сетевого
+    экрана — названия правил и адреса не печатаются."""
+    export = _export()
+    rule = {"name": "note-for-admins", "action": 1, "packetDirection": 3, "enabled": True,
+            "protocol": {"unique_id": 77, "localPorts": [], "remotePorts": [{"begin": 53, "end": 53}, {"begin": 1024, "end": 2048}]},
+            "scope": {"networks": 0, "remoteAddresses": [{"hostName": PLANTED[4], "mask": 32}]}}
+    icmp = {"name": PLANTED[6], "action": 0, "packetDirection": 2, "enabled": False, "protocol": {"unique_id": 78, "type": {"unique_id": 5, "value": 8}}, "scope": {"networks": 2}}
+    export["policy_contents"]["1"]["sections"]["fw"] = {"firewall": {"networkPacketRules": _lock([{"type": "params", "value": rule}, rule, icmp], locked=True)}}
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(export, ensure_ascii=False), encoding="utf-8")
+    out = _run(path, "--calibrate")
+    lines = {line.strip() for line in out.splitlines()}
+    assert "action=1 dir=3 proto=77 type=- local=[] remote=[53,1024-2048] networks=0 enabled=True ×2" in lines
+    assert "action=0 dir=2 proto=78 type=8 local=[] remote=[] networks=2 enabled=False ×1" in lines
+    assert "firewall.networkPacketRules[].action : int {0×1, 1×2}" in lines
+    assert not [v for v in PLANTED if v in out]
+    assert "ПАКЕТНЫЕ ПРАВИЛА" not in _run(path, "--numbers")
