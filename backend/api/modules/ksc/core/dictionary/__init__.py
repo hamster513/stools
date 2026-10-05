@@ -41,12 +41,17 @@ def _shown(value: Any) -> str:
     return truncate_value(value)
 
 
+def _labelled(entry: Entry, value: Any) -> bool:
+    """У кода перечисления есть подпись в словаре (иначе он показан «код N» или как есть)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value in (entry.enum or {})
+
+
 def display_value(entry: Entry, value: Any) -> str:
     """Значение настройки человеческим языком по виду из словаря; значение не того вида — без толкования."""
     if entry.kind == "bool" and isinstance(value, bool):
         return "включено" if value else "выключено"
     if entry.kind == "enum" and isinstance(value, int) and not isinstance(value, bool):
-        return (entry.enum or {}).get(value) or f"код {value}"
+        return (entry.enum or {})[value] if _labelled(entry, value) else f"код {value}"
     if entry.kind == "number" and isinstance(value, int | float) and not isinstance(value, bool):
         return f"{value} {entry.unit}".strip()
     if entry.kind == "list" and isinstance(value, list | dict):
@@ -70,7 +75,9 @@ def describe(product: str, sections: dict[str, Any]) -> tuple[list[Described], l
         pos, section, entry = hit
         known.append((pos, Described(
             section=s.section, path=s.path, component=entry.component or section.component, title=entry.title,
-            value=display_value(entry, s.value), raw=truncate_value(s.value), locked=s.locked, verified=entry.verified,
+            value=display_value(entry, s.value), raw=truncate_value(s.value), locked=s.locked,
+            # Код без подписи не подтверждён, даже если остальные подписи этой настройки подтверждены.
+            verified=entry.verified and (entry.kind != "enum" or _labelled(entry, s.value)),
         )))
     known.sort(key=lambda item: item[0])
     return [d for _, d in known], other

@@ -84,6 +84,22 @@ def test_describe_order_follows_dictionary() -> None:
     assert ranks == sorted(ranks)
 
 
+def test_scalar_beside_nested_container_is_not_lost() -> None:
+    """Контейнер на всю секцию: `enabled` — обычное значение рядом с вложенным контейнером `heuristicLevel`."""
+    sections = {"4b741d57": {"KLPRSS_Val": {"enabled": True, "heuristicLevel": {"KLPRSS_Val": 2, "KLPRSS_Mnd": False}}, "KLPRSS_Mnd": True}}
+    d = _described(sections)
+    assert (d[("4b741d57", "enabled")].value, d[("4b741d57", "enabled")].locked) == ("включено", True)
+    assert (d[("4b741d57", "heuristicLevel")].value, d[("4b741d57", "heuristicLevel")].locked) == ("средний", False)
+    assert component_enabled("KES", sections, "file_threat") is True
+
+
+def test_unlabelled_code_is_not_verified() -> None:
+    """Код без подписи у настройки с подтверждёнными подписями — «код N» и `verified=False`."""
+    d = _described(kes11_sections(**{"4b741d57/heuristicLevel": 4}))
+    assert (d[("4b741d57", "heuristicLevel")].value, d[("4b741d57", "heuristicLevel")].verified) == ("код 4", False)
+    assert d[("4b741d57", "heuristicOnlyLevel")].verified is True
+
+
 def test_no_dictionary() -> None:
     assert describe("kesl", kes11_sections()) is None
     assert dictionary_for("kesl") is None and dictionary_for("KES") is DICTIONARIES["KES"]
@@ -161,10 +177,10 @@ def test_every_dictionary_path_is_walked() -> None:
     assert sorted(declared - {(s.section, s.path) for s in flat_settings(kes11_sections())}) == []
 
 
-@pytest.mark.parametrize("container", ["top", "section"])
+@pytest.mark.parametrize("container", ["top", "section", "mixed"])
 def test_describe_does_not_depend_on_container_level(container: str) -> None:
-    """Те же настройки с контейнерами `KLPRSS_Val` на ключах верхнего уровня или на всю секцию читаются так же, как
-    с контейнерами на листьях: скелет эти формы не различает."""
+    """Те же настройки с контейнерами `KLPRSS_Val` на ключах верхнего уровня, на всю секцию или вперемешку (значения
+    рядом с вложенными контейнерами) читаются так же, как с контейнерами на листьях: скелет эти формы не различает."""
     def view(sections: dict[str, Any]) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
         result = describe("KES", sections)
         assert result is not None

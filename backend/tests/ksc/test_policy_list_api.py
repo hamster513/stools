@@ -106,8 +106,9 @@ def test_policy_card(auth_client: TestClient, db_session: Session) -> None:
     body = r.json()
     listed = _item(auth_client.get(f"/api/ksc/snapshots/{snap}/policy-list").json(), 1)
     assert {k: v for k, v in body.items() if k not in ("settings_total", "settings_known", "errors", "changes")} == listed
-    # Листья `flat_settings`: 13 контейнеров, у двух (`PasswordProtection`, `KLPRSS_Passwords.Exit`) значение — словарь из 3 ключей.
-    assert body["settings_total"] == 17 and body["settings_known"] == 0
+    # Листья `flat_settings`: 13 контейнеров, у двух (`PasswordProtection`, `KLPRSS_Passwords.Exit`) значение — словарь из 3 ключей
+    # (+4), и 3 значения вне контейнеров (`KLPRSS_Password.PASSWORD_HASH`, `KLPRSS_Secret`, лист `KLPRSS_Deep`).
+    assert body["settings_total"] == 20 and body["settings_known"] == 0
     assert body["errors"] == []
     assert body["changes"] == 2
     assert auth_client.get(f"/api/ksc/snapshots/{snap}/policies/3").json()["changes"] == 1

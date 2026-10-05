@@ -6,10 +6,12 @@
 - `"leaf"` (по умолчанию) — путь `a.b.c` раскладывается в обычные вложенные словари, на последнем уровне — контейнер
   `{"KLPRSS_Val": значение, "KLPRSS_Mnd": замок}` (там, где в скелете стоит «замок»; `walk_settings` даёт те же пути);
 - `"top"` — контейнер на каждом ключе верхнего уровня секции (`a`), в `KLPRSS_Val` — обычный словарь `{b: {c: …}}`;
-- `"section"` — один контейнер на всю секцию.
+- `"section"` — один контейнер на всю секцию;
+- `"mixed"` — контейнер на каждом ключе верхнего уровня, а внутри через один лист — свой контейнер, остальные —
+  обычные значения рядом с контейнерами (`walk_settings` такие соседние значения не видит, `flat_settings` — видит).
 Скелет эти формы не различает (признак замка он переносит вниз по обычным словарям), поэтому словарь и журнал читают
 политику по листьям. Список — одна настройка, значение — весь список. Замок задаётся на секцию целиком, чтобы у листа
-он был одинаков во всех трёх формах: незамкнуты секции `_UNLOCKED` (BadUSB и `f8e8efda`), остальные замкнуты.
+он был одинаков во всех формах: незамкнуты секции `_UNLOCKED` (BadUSB и `f8e8efda`), остальные замкнуты.
 По умолчанию политика «чистая»: ключевые компоненты включены и замкнуты, «только уведомлять» выключено, самозащита
 включена, все типы угроз обнаруживаются, локальные исключения запрещены, пароль задан (после загрузки — «<скрыто>»). Двоичные адреса (`octets`) — в обёртке `binary`, `quarantineLimitMB` — в
 обёртке `long`, как приходят от KSC.
@@ -28,6 +30,7 @@ import base64
 import copy
 import hashlib
 import ipaddress
+import itertools
 from typing import Any
 
 from tests.ksc.synthetic import build_export
@@ -376,11 +379,15 @@ def _tree(section: str, flat: dict[str, Any], container: str) -> dict[str, Any]:
         return {key: lock(value) for key, value in tree.items()}
     if container == "section":
         return lock(tree)
+    if container == "mixed":
+        every_other = itertools.cycle((True, False))
+        inner = _nested(flat, lambda value: lock(value) if next(every_other) else value)
+        return {key: value if isinstance(value, dict) and "KLPRSS_Val" in value else lock(value) for key, value in inner.items()}
     raise ValueError(f"неизвестная форма контейнеров {container!r}")
 
 
 def kes11_sections(container: str = "leaf", **over: Any) -> dict[str, Any]:
-    """Секции политики KES 11 (см. докстринг модуля): `container` — уровень контейнеров `KLPRSS_Val` (leaf | top | section),
+    """Секции политики KES 11 (см. докстринг модуля): `container` — уровень контейнеров `KLPRSS_Val` (leaf | top | section | mixed),
     `over` — `{"<секция>/<путь листа>": новое значение}`."""
     flat = {name: dict(values) for name, values in _SECTIONS.items()}
     for key, value in over.items():

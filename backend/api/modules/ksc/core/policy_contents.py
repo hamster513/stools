@@ -72,22 +72,42 @@ def walk_settings(sections: dict[str, Any]) -> list[Setting]:
     return out
 
 
-def _leaves(setting: Setting, path: str, value: Any, out: list[Setting]) -> None:
-    if isinstance(value, dict) and value:
-        for key, child in value.items():
-            _leaves(setting, f"{path}.{key}" if path else str(key), child, out)
+#: Замок листа: (`locked`, `inherited_lock`, `lock_from`) ближайшего контейнера сверху; вне контейнеров — «признака нет».
+_Lock = tuple[bool | None, bool, str]
+_NO_LOCK: _Lock = (None, False, "")
+
+
+def _lock_of(container: dict[str, Any]) -> _Lock:
+    lock_policy = str(container.get("KLPRSS_ValLckPolicy") or "")
+    lock_group = str(container.get("KLPRSS_ValLckGroup") or "")
+    return (
+        None if "KLPRSS_Mnd" not in container else bool(container.get("KLPRSS_Mnd")),
+        bool(container.get("KLPRSS_ValLck")),
+        f"{lock_policy} ({lock_group})" if lock_group else lock_policy,
+    )
+
+
+def _flat(section: str, path: str, node: Any, lock: _Lock, out: list[Setting]) -> None:
+    if _is_container(node):
+        lock = _lock_of(node)
+        node = node.get("KLPRSS_Val")
+    if isinstance(node, dict) and node:
+        for key, child in node.items():
+            _flat(section, f"{path}.{key}" if path else str(key), child, lock, out)
         return
-    out.append(Setting(setting.section, path, value, setting.locked, setting.inherited_lock, setting.lock_from))
+    out.append(Setting(section, path, node, *lock))
 
 
 def flat_settings(sections: dict[str, Any]) -> list[Setting]:
-    """Настройки до листьев: значение-словарь контейнера раскрывается рекурсивно (`путь.ключ`; у контейнера на всю
-    секцию — просто `ключ`), листья — не словари и пустой словарь; списки остаются целыми. Замок листа — замок его
-    контейнера. Не зависит от того, на каком уровне в выгрузке стоят контейнеры `KLPRSS_Val`: словарь, журнал
-    изменений и счётчики настроек читают политику так; замки и «Все поля» — по контейнерам (`walk_settings`)."""
+    """Настройки до листьев: обход секции насквозь через контейнеры `KLPRSS_Val` и обычные словари; лист — не словарь
+    (скаляр, список целиком) или пустой словарь, путь полный (`a.b.c`; у значения на всю секцию — пустой). Замок листа —
+    замок ближайшего контейнера сверху (вложенный контейнер перекрывает внешний), вне контейнеров — `None`. Скаляры рядом
+    с вложенными контейнерами не теряются. Так чтение не зависит от того, на каком уровне в выгрузке стоят контейнеры:
+    словарь, журнал изменений и счётчики настроек читают политику так; замки и «Все поля» — по контейнерам
+    (`walk_settings`)."""
     out: list[Setting] = []
-    for s in walk_settings(sections):
-        _leaves(s, s.path, s.value, out)
+    for section_name, raw in sections.items():
+        _flat(section_name, "", unwrap(raw), _NO_LOCK, out)
     return out
 
 

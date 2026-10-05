@@ -86,11 +86,12 @@ def test_settings_known_stored(auth_client: TestClient, db_session: Session, sid
     assert rows[3].settings_known == 0 and rows[2].settings_known == 0
 
 
-def test_settings_same_for_top_level_containers(auth_client: TestClient, sid: int) -> None:
-    """Контейнеры `KLPRSS_Val` на ключах верхнего уровня (скелет такую форму не отличает): ответ тот же, что при
-    контейнерах на листьях, и тот же счётчик распознанных в карточке."""
+@pytest.mark.parametrize("container", ["top", "mixed"])
+def test_settings_same_for_other_container_levels(auth_client: TestClient, sid: int, container: str) -> None:
+    """Контейнеры `KLPRSS_Val` на ключах верхнего уровня или вперемешку (скелет такие формы не отличает): ответ тот же,
+    что при контейнерах на листьях, и те же счётчики в карточке."""
     leaf = _settings(auth_client, sid, 1)
-    assert upload(auth_client, kes11_export("top"))["status"] == "done"
+    assert upload(auth_client, kes11_export(container))["status"] == "done"
     top_sid = max(int(s["id"]) for s in auth_client.get("/api/ksc/snapshots").json())
     assert top_sid != sid
     assert _settings(auth_client, top_sid, 1) == leaf

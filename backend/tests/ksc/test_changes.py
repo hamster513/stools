@@ -167,11 +167,13 @@ def test_list_setting_items_added_and_removed() -> None:
     assert c.before == {"removed": ["C:\\Tools\\a.exe"]} and c.after == {"added": ["C:\\Tools\\b.exe", {"Path": "D:\\x"}]}
 
 
-@pytest.mark.parametrize("container", ["top", "section"])
+@pytest.mark.parametrize("container", ["top", "section", "mixed"])
 def test_setting_change_does_not_depend_on_container_level(container: str) -> None:
     """Одна и та же правка видна одинаково — тем же путём листа — при контейнерах `KLPRSS_Val` на листьях, на ключах
-    верхнего уровня и на всю секцию."""
-    edits = {"4b741d57/heuristicLevel": 3, "1d3e35bd/passwordProtection.areas.exportSettings": True,
+    верхнего уровня, на всю секцию и вперемешку."""
+    # `officeArchivesScanMode` в форме «вперемешку» — обычное значение рядом с вложенными контейнерами.
+    edits = {"4b741d57/heuristicLevel": 3, "4b741d57/compoundFilesSettings.officeArchivesScanMode": 0,
+             "1d3e35bd/passwordProtection.areas.exportSettings": True,
              "852d0287/scanExclusionsAndTrustedZone.scanExclusions": [exclusion("C:\\Tools\\b.exe")]}
 
     def changes(shape: str) -> list[tuple[Any, ...]]:
@@ -179,8 +181,9 @@ def test_setting_change_does_not_depend_on_container_level(container: str) -> No
         return [(c.kind, c.action, c.policy_id, c.profile, c.section, c.path, c.before, c.after) for c in diff.changes]
 
     leaf = changes("leaf")
-    assert [c[5] for c in leaf] == ["passwordProtection.areas.exportSettings", "heuristicLevel", "scanExclusionsAndTrustedZone.scanExclusions"]
-    assert leaf[1][6:] == ({"value": 2}, {"value": 3})
+    assert [c[5] for c in leaf] == ["passwordProtection.areas.exportSettings", "compoundFilesSettings.officeArchivesScanMode",
+                                    "heuristicLevel", "scanExclusionsAndTrustedZone.scanExclusions"]
+    assert leaf[2][6:] == ({"value": 2}, {"value": 3})
     assert changes(container) == leaf
 
 

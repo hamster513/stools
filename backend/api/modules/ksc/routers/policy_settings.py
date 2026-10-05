@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
-from api.modules.ksc.core.dictionary import component_enabled, describe, dictionary_for
+from api.modules.ksc.core.dictionary import DICTIONARIES, component_enabled, describe
 from api.modules.ksc.core.policy_contents import Setting, flat_settings, truncate_value
 from api.modules.ksc.routers.policy_list import _index, _policy, _snapshot
 from api.settings import Settings, get_settings
@@ -70,13 +70,12 @@ def get_policy_settings(
     content = _index(snap, settings).export.policy_contents.get(str(policy_id)) or {}
     sections = content.get("sections") or {}
     result = describe(p.product, sections)
-    d = dictionary_for(p.product)
-    if result is None or d is None:
+    if result is None:
         other = flat_settings(sections)
         return PolicySettingsResponse(described=False, known=0, total=len(other), groups=[], other=_other(other))
     known, rest = result
     groups = []
-    for component, title in d.components.items():
+    for component, title in DICTIONARIES[p.product].components.items():
         items = [
             DescribedSetting(section=k.section, path=k.path, title=k.title, value=k.value, raw=k.raw, locked=k.locked, verified=k.verified)
             for k in known if k.component == component
