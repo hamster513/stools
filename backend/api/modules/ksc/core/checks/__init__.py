@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from api.modules.ksc.core.checks.common import CheckSpec
 from api.modules.ksc.core.checks.coverage import check_cover_ad_missing, check_cover_ksc_only
+from api.modules.ksc.core.checks.exclusions import check_policy_exclusion_risky
 from api.modules.ksc.core.checks.hosts import (
     check_agent_silent,
     check_bases_old,
@@ -42,7 +43,7 @@ from api.modules.ksc.core.export import ExportIndex
 from api.modules.ksc.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "1"
+ANALYZER_VERSION = "2"
 
 CHECKS: list[CheckSpec] = [
     CheckSpec("COVER_AD_MISSING", "Есть в AD, нет в KSC", "Включённая учётная запись компьютера в домене, которой нет среди устройств KSC: машина без управления и, скорее всего, без защиты. Проверяется при наличии снапшота модуля AD.", check_cover_ad_missing),
@@ -74,6 +75,7 @@ CHECKS: list[CheckSpec] = [
     CheckSpec("POLICY_NO_LOCKS", "В политике нет ни одного замка", "Активная политика продукта защиты, в которой ни одна настройка не замкнута: любую из них можно переопределить локально на устройстве. Консоль KSC: политика → раздел настроек → значок замка.", check_policy_no_locks),
     CheckSpec("POLICY_WEAK_LOCKS", "Мало замкнутых настроек в политике", "Доля замкнутых настроек политики ниже порога `policy_lock_share`: большая часть защиты не защищена от локального переопределения. Консоль KSC: политика → раздел настроек → значок замка.", check_policy_weak_locks),
     CheckSpec("POLICY_CONTENT_MISSING", "Содержимое политики не собрано", "Политика активна и относится к продукту защиты, но её содержимого нет в выгрузке или ни одна секция не прочиталась (нет прав или ошибка сбора) — справочная находка, чтобы отсутствие данных не выглядело как отсутствие проблем с замками.", check_policy_content_missing),
+    CheckSpec("POLICY_EXCLUSION_RISKY", "Опасное исключение в политике", "Исключение или доверенная программа активной политики (или её профиля) слишком широки: диск целиком, каталог с правом записи пользователя, маска исполняемых файлов без каталога, имя файла без пути, интерпретатор, доверенная программа без контроля сразу по нескольким видам, объект «*». Находка на каждое исключение, серьёзность — старшая из найденных рисков; списки каталогов, расширений и интерпретаторов — в настройках модуля. Консоль KSC: политика → Общие настройки → Исключения (доверенная зона).", check_policy_exclusion_risky),
 ]
 
 CHECK_BY_CODE: dict[str, CheckSpec] = {c.code: c for c in CHECKS}

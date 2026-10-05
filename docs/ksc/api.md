@@ -349,10 +349,11 @@ JSON-текст, как у профилей). `described: false` — слова�
 ## Исключения, сетевые правила, изменения
 
 ```
-GET  /snapshots/{id}/exclusions?q=&policy_id=&profile=&kind=&enabled=true|false&dup=multi|single|covered&limit=200&offset=0
+GET  /snapshots/{id}/exclusions?q=&policy_id=&profile=&kind=&enabled=true|false&dup=multi|single|covered&risky=true|false&limit=200&offset=0
                                         {total, items: [{id, policy_id, policy_name, profile, kind, value, components,
-                                                         enabled, comment, risks, key, policies, covered_by}],
-                                        facets: {policy: {id: n}, kind, enabled: {true, false}, dup: {multi, single, covered}}|null,
+                                                         enabled, comment, risks, risk_titles, key, policies, covered_by}],
+                                        facets: {policy: {id: n}, kind, enabled: {true, false}, dup: {multi, single, covered},
+                                                 risky: {true, false}}|null,
                                         summary: [{policy_id, policy_name, hosts, total, by_kind}]|null,
                                         undescribed: [код продукта]}
 GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&limit=200&offset=0
@@ -412,8 +413,23 @@ GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offse
 встречается тот же `key` (вид и значение без регистра, профиль не учитывается); `dup=multi` — `policies > 1`, `single` —
 `policies == 1`. `covered_by` — значение более широкого включённого исключения-пути или маски в той же политике и
 профиле (каталог-префикс по границе разделителя, замыкающий разделитель не в счёт, или подходящая маска; равное
-значение перекрытием не считается), иначе `null`; `dup=covered` — `covered_by` не пуст. `risks` — коды рисков, на
-этапе 1 всегда `[]`.
+значение перекрытием не считается), иначе `null`; `dup=covered` — `covered_by` не пуст.
+
+`risks` — коды рисков исключения (`core/exclusion_risks.py`), `risk_titles` — их объяснения в том же порядке (код, которого
+в правилах уже нет, показывается как есть); `risky=true` — `risks` не пуст, `false` — пуст. Коды считаются при импорте
+и пересчёте по спискам настроек модуля на тот момент: после правки списков нужен пересчёт снапшота. Выключенное
+исключение рисков не имеет. Пути сравниваются без регистра, `/` и `\` не различаются, переменные окружения — как
+текст; правила пути действуют на виды `path`, `mask` и `trusted_app`.
+
+| Код | Серьёзность | Когда |
+|---|---|---|
+| `whole_drive` | High | Диск целиком или его корень: `C:\`, `C:\*`, `*`, `\\*`, `%SystemDrive%\` (замыкающие `\` и `*` отбрасываются, остаток пуст, `X:` или `%systemdrive%`); остальные правила пути тогда не проверяются |
+| `user_writable` | High | Путь содержит подстроку из `exclusion_user_writable`; к пути добавляется замыкающий `\`, так что каталог `C:\Temp` совпадает с `\temp\` |
+| `ext_mask` | High | Нет каталога (только имя или `*\имя`), и маска имени покрывает маску из `exclusion_exec_extensions` (`*.exe`, `*.ex?`) |
+| `name_only` | Medium | Нет каталога, и это не `ext_mask`: `tool.exe`, `*\tool.exe`, `*.log` |
+| `interpreter` | High | Имя файла — из `exclusion_interpreters` (`powershell.exe`, `cmd.exe`, …) |
+| `broad_trust` | Medium | Доверенная программа, у которой сняты три и больше из: проверка открываемых файлов, контроль активности, проверка сетевого трафика (в том числе только зашифрованного), контроль дочерних процессов (в том числе рекурсивно) |
+| `threat_any` | High | Исключение по имени объекта (`kind=threat`) равно `*` |
 
 Изменения — записи `ksc_change` всех снапшотов сервера (у настроек, `kind=setting`, `path` — путь листа, как у
 «Настроек» политики): порядок — снапшот по убыванию времени сбора, затем `id`;
@@ -501,7 +517,13 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 политики с признаком замка, ниже которой срабатывает `POLICY_WEAK_LOCKS`;
 `0` не в счёт — это `POLICY_NO_LOCKS`), `policy_contents_max_policies` (200 — сколько активных
 политик продуктов защиты собирает онлайн-сбор; PowerShell-сборщик несёт
-тот же предел своей константой независимо от `KscConfig`).
+тот же предел своей константой независимо от `KscConfig`), списки правил рисков исключений:
+`exclusion_user_writable` (подстроки пути каталогов с правом записи пользователя: `\temp\`, `\tmp\`, `%temp%`,
+`%tmp%`, `\downloads\`, `\appdata\`, `%appdata%`, `%localappdata%`, `%userprofile%`, `\users\public\`,
+`\programdata\`, `%programdata%`, `\windows\temp\`), `exclusion_exec_extensions` (маски исполняемых: `*.exe`,
+`*.dll`, `*.ps1`, `*.bat`, `*.cmd`, `*.js`, `*.vbs`, `*.scr`, `*.msi`, `*.jar`), `exclusion_interpreters` (`powershell.exe`,
+`pwsh.exe`, `cmd.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `python.exe`, `java.exe`,
+`javaw.exe`, `msbuild.exe`, `installutil.exe`, `certutil.exe`, `bitsadmin.exe`, `wmic.exe`) — см. «Исключения».
 
 Границы порогов: `cert_days` — находка есть, когда дней до истечения
 **меньше или равно** порогу (60 дней → находка); `reboot_pending_days`,
@@ -516,7 +538,7 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 
 ## Проверки
 
-29 проверок, коды латиницей:
+30 проверок, коды латиницей:
 
 ```
 COVER_AD_MISSING        Есть в AD, нет в KSC
@@ -548,12 +570,22 @@ SECONDARY_SERVER_STALE  Подчинённый сервер молчит
 POLICY_NO_LOCKS         В политике нет ни одного замка
 POLICY_WEAK_LOCKS       Мало замкнутых настроек в политике
 POLICY_CONTENT_MISSING  Содержимое политики не собрано
+POLICY_EXCLUSION_RISKY  Опасное исключение в политике
 ```
 
 Восемь проверок начиная с `TASK_FAILED` — блок 1 расширения (результаты
 задач, сервер KSC); три проверки начиная с `POLICY_NO_LOCKS` — блок 2 этап A
-(содержимое политик и замки); их коды и описания — те же строки, что в
+(содержимое политик и замки); `POLICY_EXCLUSION_RISKY` — этап 2b; их коды и описания — те же строки, что в
 `backend/api/modules/ksc/core/checks/__init__.py`.
+
+`POLICY_EXCLUSION_RISKY` — находка на каждое исключение или доверенную программу с рисками (коды и правила — в
+«Исключения») у активной политики с собранным содержимым и у её профилей. Серьёзность — старшая из кодов;
+`target` — имя политики; `details = {policy_id, profile, kind, value, risks, why, comment}` (`why` — объяснения
+кодов); ключ — `f"{policy_id}|{profile}|{exclusion_key}"`: правка комментария находку не меняет, то же исключение в
+профиле — отдельная находка, повтор того же исключения в той же политике и профиле второй находкой не становится.
+Проверка считает по выгрузке, а не по таблице исключений; списки — из настроек на момент анализа.
+С появлением проверки `ANALYZER_VERSION` модуля — `2`: первый снапшот новой версии после снапшота версии `1` статусы
+находок не сверяет (см. «Находки»).
 
 `POLICY_NO_LOCKS`, `POLICY_WEAK_LOCKS` разбирают только секцию
 `policy_contents` и молчат на файле без неё (старый сборщик или

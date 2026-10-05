@@ -157,7 +157,7 @@ def test_license_checks() -> None:
 
 
 def test_full_registry_count() -> None:
-    assert len(CHECKS) == 29  # 18 (блок 0) + 8 (блок 1) + 3 (блок 2, этап A: замки содержимого политик)
+    assert len(CHECKS) == 30  # 18 (блок 0) + 8 (блок 1) + 3 (блок 2, этап A: замки содержимого политик) + 1 (этап 2b: опасные исключения)
 
 
 def test_group_and_task_ids_tolerate_garbage_values() -> None:

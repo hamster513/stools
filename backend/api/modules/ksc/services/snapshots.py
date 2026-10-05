@@ -98,7 +98,7 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
         for f in findings
     )
     insert_chunked(db, KscFinding, rows, len(findings), handle, "находок")
-    store_policies(db, snapshot, idx)
+    store_policies(db, snapshot, idx, cfg)
     checks: dict[str, dict[str, int]] = {}
     for f in findings:
         checks.setdefault(f.check, {})

@@ -32,12 +32,20 @@ CONSUMED = frozenset({
     (HIPS, "firewall.networkPacketRules"),
 })
 
+#: Подписи флагов доверенной программы, на которые опираются правила рисков (`core/exclusion_risks`).
+OPEN_FILES = "не проверять открываемые файлы"
+BEHAVIOR = "не контролировать активность"
+CHILDREN = "не контролировать дочерние процессы"
+CHILDREN_RECURSIVE = "не контролировать дочерние процессы рекурсивно"
+NET = "не проверять сетевой трафик"
+NET_ENCRYPTED = "не проверять сетевой трафик (только зашифрованный)"
+
 #: Флаги доверенной программы → подпись; `excludeNet` — вложенный словарь, разбирается отдельно (на своём месте в порядке).
 _TRUSTED_FLAGS = (
-    ("excludeOpenFiles", "не проверять открываемые файлы"),
-    ("excludeBehavior", "не контролировать активность"),
-    ("excludeChildsBehavior", "не контролировать дочерние процессы"),
-    ("excludeChildsBehaviorRecursive", "не контролировать дочерние процессы рекурсивно"),
+    ("excludeOpenFiles", OPEN_FILES),
+    ("excludeBehavior", BEHAVIOR),
+    ("excludeChildsBehavior", CHILDREN),
+    ("excludeChildsBehaviorRecursive", CHILDREN_RECURSIVE),
     ("excludeHipsNoInherit", "не наследовать ограничения родителя"),
     ("excludeNet", ""),
     ("excludeSelfProt", "разрешить взаимодействие с интерфейсом программы"),
@@ -124,7 +132,7 @@ def _trusted_app(item: dict[str, Any]) -> Exclusion | None:
             net = _dict(item.get(key))
             if net.get("enabled") is True:
                 only_encrypted = net.get("encryptedTrafficOnly") is True
-                components.append("не проверять сетевой трафик (только зашифрованный)" if only_encrypted else "не проверять сетевой трафик")
+                components.append(NET_ENCRYPTED if only_encrypted else NET)
                 for title, values in (("узлы", net.get("hosts")), ("порты", net.get("ports"))):
                     if listed := _scalars(values):
                         components.append(f"{title}: {listed}")

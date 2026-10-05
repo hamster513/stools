@@ -22,6 +22,20 @@ def _default_components() -> dict[str, list[str]]:
     }
 
 
+def _default_user_writable() -> list[str]:
+    return ["\\temp\\", "\\tmp\\", "%temp%", "%tmp%", "\\downloads\\", "\\appdata\\", "%appdata%", "%localappdata%", "%userprofile%",
+            "\\users\\public\\", "\\programdata\\", "%programdata%", "\\windows\\temp\\"]
+
+
+def _default_exec_extensions() -> list[str]:
+    return ["*.exe", "*.dll", "*.ps1", "*.bat", "*.cmd", "*.js", "*.vbs", "*.scr", "*.msi", "*.jar"]
+
+
+def _default_interpreters() -> list[str]:
+    return ["powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe",
+            "python.exe", "java.exe", "javaw.exe", "msbuild.exe", "installutil.exe", "certutil.exe", "bitsadmin.exe", "wmic.exe"]
+
+
 class KscConfig(BaseModel):
     agent_silent_days: int = Field(default=7, ge=1)
     bases_old_days: int = Field(default=3, ge=1)
@@ -46,6 +60,12 @@ class KscConfig(BaseModel):
     #: Не больше стольки политик собирает онлайн-сборщик за один сбор (справочно для API/UI;
     #: сам предел применяется в core.collector.collect через этот же параметр).
     policy_contents_max_policies: int = Field(default=200, ge=1)
+    #: Подстроки пути (без регистра, `/` = `\`) каталогов с правом записи пользователя — риск `user_writable`.
+    exclusion_user_writable: list[str] = Field(default_factory=_default_user_writable)
+    #: Маски расширений исполняемых файлов — риск `ext_mask` (маска без каталога).
+    exclusion_exec_extensions: list[str] = Field(default_factory=_default_exec_extensions)
+    #: Имена файлов интерпретаторов и системных загрузчиков — риск `interpreter`.
+    exclusion_interpreters: list[str] = Field(default_factory=_default_interpreters)
 
 
 DEFAULT_CONFIG = KscConfig()

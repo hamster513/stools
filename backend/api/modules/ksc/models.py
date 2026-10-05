@@ -194,7 +194,7 @@ class KscExclusion(Base):
     components_json: Mapped[str] = mapped_column(Text, default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     comment: Mapped[str] = mapped_column(Text, default="")
-    #: Коды рисков (этап 2); на этапе 1 — "[]".
+    #: Коды рисков (core/exclusion_risks) по спискам настроек на момент импорта или пересчёта.
     risks_json: Mapped[str] = mapped_column(Text, default="[]")
     #: core/policy_model.exclusion_key — без политики и профиля, для поиска дублей.
     key: Mapped[str] = mapped_column(String(64), index=True)

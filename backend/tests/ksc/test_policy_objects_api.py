@@ -115,6 +115,7 @@ def test_exclusions_facets_summary_and_paging(auth_client: TestClient, db_sessio
     assert first["total"] == 5 and len(first["items"]) == 2
     assert first["facets"] == {
         "policy": {"1": 4, "3": 1}, "kind": {"path": 4, "hash": 1}, "enabled": {"true": 4, "false": 1}, "dup": {"multi": 2, "single": 3, "covered": 1},
+        "risky": {"true": 0, "false": 5},
     }
     hosts = {p.policy_id: p.hosts for p in db_session.execute(select(KscPolicy).where(KscPolicy.snapshot_id == sid)).scalars()}
     assert first["summary"] == [

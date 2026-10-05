@@ -15,7 +15,9 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.dictionary import describe
+from api.modules.ksc.core.exclusion_risks import exclusion_risks
 from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_export_path
 from api.modules.ksc.core.policy_contents import flat_settings
 from api.modules.ksc.core.policy_index import policy_objects, policy_rows, profile_rows, scope_rows
@@ -29,6 +31,7 @@ from api.modules.ksc.models import (
     KscProfile,
     KscSnapshot,
 )
+from api.modules.ksc.services.settings import load_config
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +45,8 @@ def _insert(db: Session, model: type[Any], rows: list[dict[str, Any]]) -> None:
         db.execute(model.__table__.insert(), rows)
 
 
-def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex) -> None:
+def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex, cfg: KscConfig) -> None:
+    """`cfg` — списки правил рисков исключений (`risks_json`)."""
     for model in TABLES:
         db.execute(delete(model).where(model.snapshot_id == snapshot.id))
     export, sid = idx.export, snapshot.id
@@ -86,7 +90,7 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex) -> None
         exclusions.extend(
             {"snapshot_id": sid, "policy_id": p.policy_id, "profile": e.profile[:255], "kind": e.kind[:32], "value": e.value,
              "components_json": json.dumps(list(e.components), ensure_ascii=False), "enabled": e.enabled, "comment": e.comment,
-             "risks_json": "[]", "key": exclusion_key(e)}
+             "risks_json": json.dumps(exclusion_risks(e, cfg)), "key": exclusion_key(e)}
             for e in objs.exclusions
         )
         net_rules.extend(
@@ -135,7 +139,7 @@ def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> 
         return False
     try:
         idx = ExportIndex(load_export_path(path))
-        store_policies(db, snapshot, idx)
+        store_policies(db, snapshot, idx, load_config(db))
         groups: dict[int, list[str]] = {}
         for h in idx.hosts:
             groups.setdefault(h.group_id, []).append(h.host_id[:64])

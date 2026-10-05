@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.modules.ksc.core.exclusion_risks import RISKS
 from api.modules.ksc.core.policy_model import Exclusion, covered_by
 from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy, KscSnapshot
 from api.modules.ksc.services.policy_store import ensure_policy_tables
@@ -72,11 +73,17 @@ def _covered(rows: list[KscExclusion]) -> dict[int, str | None]:
     return out
 
 
+def _risks(r: KscExclusion) -> list[str]:
+    return list(json.loads(r.risks_json or "[]"))
+
+
 def _exclusion_item(r: KscExclusion, name: str, policies: int, covered: str | None) -> dict[str, Any]:
+    risks = _risks(r)
     return {
         "id": r.id, "policy_id": r.policy_id, "policy_name": name, "profile": r.profile, "kind": r.kind, "value": r.value,
-        "components": json.loads(r.components_json or "[]"), "enabled": r.enabled, "comment": r.comment, "risks": json.loads(r.risks_json or "[]"),
-        "key": r.key, "policies": policies, "covered_by": covered,
+        "components": json.loads(r.components_json or "[]"), "enabled": r.enabled, "comment": r.comment, "risks": risks,
+        # Код, которого уже нет в правилах (снапшот посчитан прежней версией), показывается как есть.
+        "risk_titles": [RISKS[c][1] if c in RISKS else c for c in risks], "key": r.key, "policies": policies, "covered_by": covered,
     }
 
 
@@ -89,6 +96,7 @@ def list_exclusions(
     kind: str = "",
     enabled: bool | None = None,
     dup: str = "",
+    risky: bool | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -116,6 +124,8 @@ def list_exclusions(
             return False
         if enabled is not None and r.enabled != enabled:
             return False
+        if risky is not None and bool(_risks(r)) != risky:
+            return False
         n = len(owners[r.key])
         if (dup == "multi" and n < 2) or (dup == "single" and n != 1) or (dup == "covered" and covered[r.id] is None):
             return False
@@ -125,11 +135,12 @@ def list_exclusions(
     facets: dict[str, dict[str, int]] | None = None
     summary: list[dict[str, Any]] | None = None
     if offset == 0:
-        facets = {"policy": {}, "kind": {}, "enabled": {"true": 0, "false": 0}, "dup": dict.fromkeys(DUP, 0)}
+        facets = {"policy": {}, "kind": {}, "enabled": {"true": 0, "false": 0}, "dup": dict.fromkeys(DUP, 0), "risky": {"true": 0, "false": 0}}
         for r in kept:
             _count(facets["policy"], str(r.policy_id))
             _count(facets["kind"], r.kind)
             facets["enabled"]["true" if r.enabled else "false"] += 1
+            facets["risky"]["true" if _risks(r) else "false"] += 1
             facets["dup"]["multi" if len(owners[r.key]) > 1 else "single"] += 1
             if covered[r.id] is not None:
                 facets["dup"]["covered"] += 1
