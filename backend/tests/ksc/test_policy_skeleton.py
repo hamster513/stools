@@ -161,5 +161,5 @@ def test_skeleton_reads_zip_archive(tmp_path: Path) -> None:
     assert not [v for v in PLANTED if v in out]
     broken = tmp_path / "broken.zip"
     broken.write_bytes(b"PK\x03\x04 not a zip")
-    done = subprocess.run([sys.executable, str(SCRIPT), str(broken)], capture_output=True, text=True, encoding="utf-8")
+    done = subprocess.run([sys.executable, str(SCRIPT), str(broken)], capture_output=True, text=True, encoding="utf-8", check=False)
     assert done.returncode == 1 and "ни одной выгрузки KSC не найдено" in done.stderr
