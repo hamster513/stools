@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ChevronRight, FilterX, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { usePolicyList } from '@/modules/ksc/api/queries'
-import type { PolicyListItem, PolicyListQuery } from '@/modules/ksc/api/types'
+import { GRADE_LABELS, type PolicyGrade, type PolicyListItem, type PolicyListQuery } from '@/modules/ksc/api/types'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -15,7 +15,10 @@ import { cn } from '@/lib/cn'
 import { FacetPanel, FacetRow, FacetSection } from './Facets'
 import { GradeBadge } from './GradeBadge'
 
-type PolicyFilters = Pick<PolicyListQuery, 'product' | 'active'>
+type PolicyFilters = Pick<PolicyListQuery, 'product' | 'active' | 'grade'>
+
+const GRADE_FILTERS: (PolicyGrade | 'none')[] = ['bad', 'ok', 'good', 'none']
+const gradeLabel = (g: PolicyGrade | 'none') => (g === 'none' ? 'нет оценки' : GRADE_LABELS[g])
 
 function LocksCell({ p }: { p: PolicyListItem }) {
   if (!p.locks) return <span className="text-text-secondary" title="содержимое не собрано">—</span>
@@ -92,6 +95,7 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
   const chips: FilterChip[] = []
   if (filters.product) chips.push({ label: `продукт ${filters.product}`, clear: () => toggle('product', undefined) })
   if (filters.active !== undefined) chips.push({ label: filters.active ? 'активные' : 'неактивные', clear: () => toggle('active', undefined) })
+  if (filters.grade) chips.push({ label: `оценка: ${gradeLabel(filters.grade)}`, clear: () => toggle('grade', undefined) })
 
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить политики' : null
@@ -113,6 +117,11 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && (
           <FacetPanel total={items.length} noun="Политик">
+            <FacetSection title="Оценка">
+              {GRADE_FILTERS.map((g) => (
+                <FacetRow key={g} active={filters.grade === g} count={facets?.grade?.[g] ?? 0} onClick={() => toggle('grade', filters.grade === g ? undefined : g)}>{gradeLabel(g)}</FacetRow>
+              ))}
+            </FacetSection>
             <FacetSection title="Активность">
               {([true, false] as const).map((a) => (
                 <FacetRow key={String(a)} active={filters.active === a} count={facets?.active?.[String(a)]} onClick={() => toggle('active', filters.active === a ? undefined : a)}>{a ? 'активные' : 'неактивные'}</FacetRow>

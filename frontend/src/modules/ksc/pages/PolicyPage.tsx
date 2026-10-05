@@ -8,21 +8,30 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link, useSearchParams } from '@/lib/router'
 import { GradeBadge } from './policies/GradeBadge'
 import { TabBar, type TabDef } from './policies/TabBar'
+import { GradeTab } from './policy/GradeTab'
 import { ProfilesTab } from './policy/ProfilesTab'
 import { RawTab } from './policy/RawTab'
 import { ScopeTab } from './policy/ScopeTab'
+import { SettingsTab } from './policy/SettingsTab'
 import { ExclusionsTable } from './ExclusionsPage'
 import { NetRulesTable } from './NetRulesPage'
 import { ChangesList } from './ChangesPage'
 
 const TABS: TabDef[] = [
-  { key: 'scope', label: 'Где действует' },
+  { key: 'grade', label: 'Оценка' },
+  { key: 'settings', label: 'Настройки' },
   { key: 'profiles', label: 'Профили' },
   { key: 'exclusions', label: 'Исключения' },
   { key: 'netrules', label: 'Сетевые правила' },
+  { key: 'scope', label: 'Где действует' },
   { key: 'changes', label: 'Изменения' },
   { key: 'raw', label: 'Все поля' },
 ]
+
+/** Вкладка без `?tab=`: «Оценка», если оценка есть или есть считаемые находки, иначе «Где действует». */
+function defaultTab(p: PolicyCard): TabDef {
+  return TABS.find((t) => t.key === (p.grade !== null || p.findings > 0 ? 'grade' : 'scope')) ?? TABS[0]
+}
 
 /** Вкладки со своей панелью фильтров и прокруткой: без отступов вокруг. */
 const FULL_TABS = new Set(['exclusions', 'netrules', 'changes'])
@@ -56,14 +65,14 @@ function Counters({ p, serverId }: { p: PolicyCard; serverId: number }) {
   )
 }
 
-/** Карточка политики снапшота: шапка со сводом и вкладки `?tab=` — где действует, профили, исключения, сетевые правила, изменения, все поля. */
+/** Карточка политики снапшота: шапка со сводом и вкладки `?tab=` — оценка, настройки, профили, исключения, сетевые правила, где действует, изменения, все поля. */
 export function PolicyPage({ serverId, policyId }: { serverId: number; policyId: number }) {
   const params = useSearchParams()
   const servers = useServers()
   const server = servers.data?.find((s) => s.id === serverId)
   const snapshotId = server?.last_snapshot_id ?? undefined
   const policy = usePolicy(snapshotId, policyId)
-  const tab = TABS.find((t) => t.key === params.get('tab')) ?? TABS[0]
+  const requested = TABS.find((t) => t.key === params.get('tab'))
 
   if (servers.isLoading) return <FullPageSpinner />
   if (snapshotId === undefined) {
@@ -75,6 +84,7 @@ export function PolicyPage({ serverId, policyId }: { serverId: number; policyId:
     return <div className="p-6"><ErrorState message={msg} onRetry={() => policy.refetch()} /></div>
   }
   const p = policy.data
+  const tab = requested ?? defaultTab(p)
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -103,6 +113,8 @@ export function PolicyPage({ serverId, policyId }: { serverId: number; policyId:
         </div>
       </header>
       <div role="tabpanel" aria-label={tab.label} className={FULL_TABS.has(tab.key) ? 'min-h-0 flex-1' : 'min-h-0 flex-1 overflow-y-auto p-6'}>
+        {tab.key === 'grade' && <GradeTab serverId={serverId} snapshotId={snapshotId} policy={p} />}
+        {tab.key === 'settings' && <SettingsTab serverId={serverId} snapshotId={snapshotId} policy={p} />}
         {tab.key === 'scope' && <ScopeTab serverId={serverId} snapshotId={snapshotId} policyId={policyId} />}
         {tab.key === 'profiles' && <ProfilesTab snapshotId={snapshotId} policyId={policyId} />}
         {tab.key === 'exclusions' && <ExclusionsTable snapshotId={snapshotId} serverId={serverId} policyId={policyId} />}

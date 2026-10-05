@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react'
 import { FileQuestion, FilterX, ShieldQuestion } from 'lucide-react'
 import { usePolicy, usePolicyList, useServers } from '@/modules/ksc/api/queries'
+import { EXCLUSION_RISKS, type Severity } from '@/modules/ksc/api/types'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
+import { cn } from '@/lib/cn'
 import { FacetRow, FacetSection } from '../policies/Facets'
 
 /** Раздел сервера, которому нужен последний снапшот: заголовок с номером снапшота и содержимое. */
@@ -57,6 +59,30 @@ export function PolicyCell({ policyName, profile, inPolicy }: { policyName: stri
       {!inPolicy && <div className="truncate text-text" title={policyName}>{policyName || '—'}</div>}
       <div className="truncate text-text-secondary" title={profile}>{profile ? `профиль ${profile}` : 'сама политика'}</div>
     </>
+  )
+}
+
+const RISK_CLASSES: Partial<Record<Severity, string>> = {
+  Critical: 'border-risk-critical/60 bg-risk-critical/15 text-risk-critical',
+  High: 'border-risk-high/60 bg-risk-high/15 text-risk-high',
+  Medium: 'border-risk-medium/60 bg-risk-medium/15 text-risk-medium',
+}
+const SEVERITY_ORDER: Severity[] = ['Critical', 'High', 'Medium', 'Low', 'Info']
+
+/**
+ * Риски исключения короткими подписями; цвет строки — по старшей серьёзности её кодов, объяснения — во всплывающей подсказке.
+ * Код, которого нет в подписях, показывается как есть (без цвета серьёзности).
+ */
+export function RiskChips({ risks, titles }: { risks: string[]; titles: string[] }) {
+  if (risks.length === 0) return <span className="text-text-secondary">—</span>
+  const top = SEVERITY_ORDER.find((sev) => risks.some((c) => EXCLUSION_RISKS[c]?.severity === sev))
+  const classes = (top && RISK_CLASSES[top]) || 'border-grid text-text-secondary'
+  return (
+    <div className="flex flex-wrap gap-1" title={titles.join('\n')}>
+      {risks.map((c) => (
+        <span key={c} className={cn('inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap', classes)}>{EXCLUSION_RISKS[c]?.label ?? c}</span>
+      ))}
+    </div>
   )
 }
 

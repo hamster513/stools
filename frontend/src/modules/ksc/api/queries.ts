@@ -23,10 +23,12 @@ import type {
   PoliciesResponse,
   PolicyCard,
   PolicyContents,
+  PolicyGradeFindings,
   PolicyListQuery,
   PolicyListResponse,
   PolicyProfiles,
   PolicyScope,
+  PolicySettings,
   Server,
   ServerData,
   SettingsView,
@@ -41,7 +43,8 @@ export const OBJECTS_PAGE_SIZE = 200
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
   for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-policy-list', 'ksc-policy',
-    'ksc-policy-scope', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs', 'ksc-exclusions', 'ksc-net-rules', 'ksc-changes']) {
+    'ksc-policy-scope', 'ksc-policy-settings', 'ksc-policy-findings', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs',
+    'ksc-exclusions', 'ksc-net-rules', 'ksc-changes']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -113,11 +116,13 @@ export function useFindingDetail(snapshotId: number | undefined, key: string | u
   })
 }
 
-/** После смены статусов находок: списки, карточки и обзор модуля читают их заново. */
+/** После смены статусов находок: списки, карточки, обзор модуля и оценки политик читают их заново. */
 export function useFindingsChanged() {
   const qc = useQueryClient()
   return () => {
-    for (const key of ['ksc-findings', 'ksc-finding', 'ksc-overview', 'ksc-hosts', 'ksc-host']) qc.invalidateQueries({ queryKey: [key] })
+    for (const key of ['ksc-findings', 'ksc-finding', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-policy-list', 'ksc-policy', 'ksc-policy-findings']) {
+      qc.invalidateQueries({ queryKey: [key] })
+    }
   }
 }
 
@@ -179,6 +184,24 @@ export function usePolicy(snapshotId: number | undefined, policyId: number | und
     queryKey: ['ksc-policy', snapshotId, policyId],
     queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}`),
     enabled: snapshotId !== undefined && policyId !== undefined,
+  })
+}
+
+/** Находки оценки политики: считаемые первыми, затем по серьёзности. */
+export function usePolicyFindings(snapshotId: number | undefined, policyId: number | undefined) {
+  return useQuery<PolicyGradeFindings, ApiRequestError>({
+    queryKey: ['ksc-policy-findings', snapshotId, policyId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}/findings`),
+    enabled: snapshotId !== undefined && policyId !== undefined,
+  })
+}
+
+/** Настройки политики по компонентам защиты; `enabled=false` — не запрашивать (содержимое не собрано). */
+export function usePolicySettings(snapshotId: number | undefined, policyId: number | undefined, enabled = true) {
+  return useQuery<PolicySettings, ApiRequestError>({
+    queryKey: ['ksc-policy-settings', snapshotId, policyId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/policies/${policyId}/settings`),
+    enabled: enabled && snapshotId !== undefined && policyId !== undefined,
   })
 }
 

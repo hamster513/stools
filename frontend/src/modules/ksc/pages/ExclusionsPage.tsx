@@ -15,13 +15,14 @@ import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
-import { LoadMore, ObjectsEmpty, PolicyCell, PolicyFacet, SnapshotSection, UndescribedNote } from './objects/ObjectsParts'
+import { LoadMore, ObjectsEmpty, PolicyCell, PolicyFacet, RiskChips, SnapshotSection, UndescribedNote } from './objects/ObjectsParts'
 
 interface Filters {
   policy?: { id: number; name: string }
   kind?: string
   enabled?: boolean
   dup?: ExclusionDup
+  risky?: boolean
 }
 
 const kindLabel = (k: string) => EXCLUSION_KIND_LABELS[k] ?? k
@@ -64,9 +65,10 @@ function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p:
 
 function Rows({ items, inPolicy }: { items: ExclusionItem[]; inPolicy: boolean }) {
   return (
-    <div className="min-w-[1360px]">
+    <div className="min-w-[1536px]">
       <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
         <div className="min-w-[240px] flex-1 px-2 py-2">Значение</div>
+        <div className="w-44 shrink-0 px-2 py-2">Риск</div>
         <div className="w-24 shrink-0 px-2 py-2">Вид</div>
         <div className="w-56 shrink-0 px-2 py-2">{inPolicy ? 'Профиль' : 'Политика / профиль'}</div>
         <div className="w-48 shrink-0 px-2 py-2">Компоненты</div>
@@ -78,6 +80,7 @@ function Rows({ items, inPolicy }: { items: ExclusionItem[]; inPolicy: boolean }
       {items.map((e) => (
         <div key={e.id} className="flex items-start border-b border-grid py-2 text-xs">
           <div className="min-w-[240px] flex-1 px-2 font-mono break-all text-text">{e.value}</div>
+          <div className="w-44 shrink-0 px-2"><RiskChips risks={e.risks} titles={e.risk_titles} /></div>
           <div className="w-24 shrink-0 px-2 text-text-secondary">{kindLabel(e.kind)}</div>
           <div className="w-56 shrink-0 px-2"><PolicyCell policyName={e.policy_name} profile={e.profile} inPolicy={inPolicy} /></div>
           <div className="w-48 shrink-0 px-2 text-text-secondary">{e.components.length ? e.components.join(', ') : '—'}</div>
@@ -99,7 +102,7 @@ export function ExclusionsTable({ snapshotId, policyId }: { snapshotId: number; 
   const q = useDebouncedValue(searchInput, 250)
   const filtersPanel = useFiltersPanel('ksc-exclusions')
   const args = useMemo(
-    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, kind: filters.kind, enabled: filters.enabled, dup: filters.dup }),
+    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, kind: filters.kind, enabled: filters.enabled, dup: filters.dup, risky: filters.risky }),
     [q, policyId, filters],
   )
   const query = useExclusions(snapshotId, args)
@@ -115,6 +118,7 @@ export function ExclusionsTable({ snapshotId, policyId }: { snapshotId: number; 
   if (filters.kind) chips.push({ label: `вид ${kindLabel(filters.kind)}`, clear: () => set('kind', undefined) })
   if (filters.enabled !== undefined) chips.push({ label: filters.enabled ? 'включённые' : 'выключенные', clear: () => set('enabled', undefined) })
   if (filters.dup) chips.push({ label: EXCLUSION_DUP_LABELS[filters.dup], clear: () => set('dup', undefined) })
+  if (filters.risky !== undefined) chips.push({ label: filters.risky ? 'опасные' : 'без риска', clear: () => set('risky', undefined) })
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить исключения' : null
   const undescribed = first?.undescribed ?? []
@@ -135,6 +139,11 @@ export function ExclusionsTable({ snapshotId, policyId }: { snapshotId: number; 
         {filtersPanel.open && (
           <FacetPanel total={first?.total ?? 0} noun="Исключений">
             {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={facets?.policy} selected={filters.policy?.id} onSelect={(p) => set('policy', p)} />}
+            <FacetSection title="Риск">
+              {([true, false] as const).map((v) => (
+                <FacetRow key={String(v)} active={filters.risky === v} count={facets?.risky?.[v ? 'true' : 'false']} onClick={() => set('risky', filters.risky === v ? undefined : v)}>{v ? 'опасные' : 'без риска'}</FacetRow>
+              ))}
+            </FacetSection>
             <FacetSection title="Вид">
               {Object.entries(facets?.kind ?? {}).map(([k, n]) => (
                 <FacetRow key={k} active={filters.kind === k} count={n} onClick={() => set('kind', filters.kind === k ? undefined : k)}>{kindLabel(k)}</FacetRow>

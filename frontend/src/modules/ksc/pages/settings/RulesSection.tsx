@@ -25,6 +25,51 @@ const COMPONENT_LABELS: Record<string, string> = {
   device_control: 'Контроль устройств',
 }
 
+/** Компоненты словаря KES с признаком «включён» (KscConfig.policy_key_components) → название как в словаре. */
+const POLICY_COMPONENT_LABELS: Record<string, string> = {
+  file_threat: 'Защита от файловых угроз',
+  behavior: 'Анализ поведения',
+  exploit: 'Защита от эксплойтов',
+  network_threat: 'Защита от сетевых угроз',
+  remediation: 'Откат вредоносных действий',
+  web_threat: 'Защита от веб-угроз',
+  mail_threat: 'Защита от почтовых угроз',
+  amsi: 'AMSI-защита',
+  firewall: 'Сетевой экран',
+  hips: 'Предотвращение вторжений',
+  app_control: 'Контроль приложений',
+  device_control: 'Контроль устройств',
+  web_control: 'Веб-Контроль',
+  log_inspection: 'Анализ журналов',
+  badusb: 'Защита от атак BadUSB',
+}
+
+/** Списки рисков исключений: поле настроек → подпись и подсказка. */
+const EXCLUSION_LISTS = [
+  { key: 'exclusion_user_writable', label: 'Каталоги с правом записи пользователя', hint: 'Подстроки пути, по одной на строку: \\temp\\, %appdata% — риск «каталог пользователя»' },
+  { key: 'exclusion_exec_extensions', label: 'Расширения исполняемых файлов', hint: 'Маски, по одной на строку: *.exe, *.ps1 — риск «маска исполняемых»' },
+  { key: 'exclusion_interpreters', label: 'Интерпретаторы и системные загрузчики', hint: 'Имена файлов, по одному на строку: powershell.exe — риск «интерпретатор»' },
+] as const
+
+const LISTS_HINT = 'Списки и ключевые компоненты политик применяются к новым загрузкам и после «Пересчитать» снапшота на экране «Снапшоты».'
+
+/** Список «по одному на строку»: текст поля хранится как набран (пустая строка в конце не съедается), в настройки уходят непустые строки. */
+function LinesArea({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(lines(value))
+  // Значение сменилось снаружи (сохранение, «сбросить к умолчаниям») — показать его.
+  useEffect(() => { setText((t) => (lines(parseLines(t)) === lines(value) ? t : lines(value))) }, [value])
+  return <textarea className={AREA} value={text} onChange={(e) => { setText(e.target.value); onChange(parseLines(e.target.value)) }} />
+}
+
+/** Известные компоненты и коды из настроек, которых нет в подписях (не теряются при сохранении). */
+function policyComponents(selected: string[]): string[] {
+  return [...Object.keys(POLICY_COMPONENT_LABELS), ...selected.filter((c) => !(c in POLICY_COMPONENT_LABELS))]
+}
+
+function toggleCode(selected: string[], code: string, on: boolean): string[] {
+  return on ? [...selected.filter((c) => c !== code), code] : selected.filter((c) => c !== code)
+}
+
 function ReadOnlyView({ config }: { config: KscConfig }) {
   return (
     <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
@@ -46,6 +91,17 @@ function ReadOnlyView({ config }: { config: KscConfig }) {
         <dt className="text-text-secondary">Административные роли KSC</dt>
         <dd className="font-mono text-text">{config.admin_role_patterns.length ? config.admin_role_patterns.join(', ') : '—'}</dd>
       </div>
+      {EXCLUSION_LISTS.map((l) => (
+        <div key={l.key} className="sm:col-span-2">
+          <dt className="text-text-secondary">{l.label}</dt>
+          <dd className="font-mono text-text">{config[l.key].length ? config[l.key].join(', ') : '—'}</dd>
+        </div>
+      ))}
+      <div className="sm:col-span-2">
+        <dt className="text-text-secondary">Ключевые компоненты политик KES</dt>
+        <dd className="text-text">{config.policy_key_components.length ? config.policy_key_components.map((c) => POLICY_COMPONENT_LABELS[c] ?? c).join(', ') : '—'}</dd>
+      </div>
+      <p className="text-text-secondary sm:col-span-2">{LISTS_HINT}</p>
       <div className="sm:col-span-2">
         <dt className="mb-1 text-text-secondary">Ключевые компоненты</dt>
         <dd>
@@ -96,6 +152,24 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
             <Field label="Административные роли KSC" hint="Имена ролей (wstrRoleName/wstrRoleDisplayName), которые считаются административными — по одному на строку">
               <textarea className={AREA} value={lines(cfg.admin_role_patterns)} onChange={(e) => patch({ admin_role_patterns: parseLines(e.target.value) })} />
             </Field>
+            {EXCLUSION_LISTS.map((l) => (
+              <Field key={l.key} label={l.label} hint={l.hint}>
+                <LinesArea value={cfg[l.key]} onChange={(v) => patch({ [l.key]: v })} />
+              </Field>
+            ))}
+            <div>
+              <div className="mb-1 text-xs font-medium text-text">Ключевые компоненты политик KES</div>
+              <div className="grid gap-x-3 gap-y-1 sm:grid-cols-2">
+                {policyComponents(cfg.policy_key_components).map((code) => (
+                  <label key={code} className="flex items-center gap-1.5 text-xs text-text">
+                    <input type="checkbox" className="accent-primary" checked={cfg.policy_key_components.includes(code)} onChange={(e) => patch({ policy_key_components: toggleCode(cfg.policy_key_components, code, e.target.checked) })} />
+                    <span>{POLICY_COMPONENT_LABELS[code] ?? code}</span>
+                  </label>
+                ))}
+              </div>
+              <span className="mt-1 block text-xs text-text-secondary">Выключен в политике — «Ключевой компонент выключен в политике»; признак «включён» не под замком — «Ключевой признак не под замком».</span>
+            </div>
+            <p className="text-xs text-text-secondary sm:col-span-2">{LISTS_HINT}</p>
             <div className="sm:col-span-2">
               <div className="mb-1 text-xs font-medium text-text">Ключевые компоненты</div>
               <div className="grid gap-3 sm:grid-cols-2">

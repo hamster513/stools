@@ -336,11 +336,70 @@ export interface PolicyListItem {
   net_rules: number
   /** null — содержимого нет в выгрузке. */
   locks: PolicyLocks | null
-  /** На этапе 1 всегда null, причина — в `grade_reason`. */
-  grade: null
+  /** Оценка по считаемым находкам оценки; null — оценки нет, почему — в `grade_reason`. */
+  grade: PolicyGrade | null
   grade_reason: string
-  /** Находки снапшота `POLICY_*` с именем этой политики в `target`. */
+  /** Считаемые находки оценки этой политики (по `details.policy_id`). */
   findings: number
+}
+
+export type PolicyGrade = 'bad' | 'ok' | 'good'
+
+export const GRADE_LABELS: Record<PolicyGrade, string> = { bad: 'плохая', ok: 'нормальная', good: 'хорошая' }
+
+/** Находка оценки политики (`/policies/{pid}/findings`): и считаемые, и нет. */
+export interface PolicyGradeFinding {
+  key: string
+  check: string
+  check_title: string
+  severity: Severity
+  status: FindingStatus
+  status_title: string
+  /** Статус входит в учитываемые: находка влияет на оценку. */
+  counted: boolean
+  details: Record<string, unknown>
+}
+
+export interface PolicyGradeFindings {
+  items: PolicyGradeFinding[]
+}
+
+/** Настройка политики, распознанная словарём продукта. */
+export interface DescribedSetting {
+  section: string
+  path: string
+  title: string
+  value: string
+  /** Значение как есть (JSON-текст, длиннее 200 знаков обрезается). */
+  raw: string
+  locked: boolean | null
+  /** false — подпись значения не подтверждена (показан «код N»). */
+  verified: boolean
+}
+
+export interface SettingsComponentGroup {
+  component: string
+  title: string
+  /** null — у компонента нет признака «включён» или его нет в политике. */
+  enabled: boolean | null
+  settings: DescribedSetting[]
+}
+
+export interface OtherSetting {
+  section: string
+  path: string
+  value: string
+  locked: boolean | null
+}
+
+/** Вкладка «Настройки» (`/policies/{pid}/settings`). */
+export interface PolicySettings {
+  /** Для продукта есть словарь; false — все настройки в `other`. */
+  described: boolean
+  known: number
+  total: number
+  groups: SettingsComponentGroup[]
+  other: OtherSetting[]
 }
 
 export interface PolicyCard extends PolicyListItem {
@@ -356,6 +415,8 @@ export interface PolicyListQuery {
   q?: string
   product?: string
   active?: boolean
+  /** Оценка или `none` — без оценки. */
+  grade?: PolicyGrade | 'none'
 }
 
 export interface PolicyListResponse {
@@ -441,8 +502,10 @@ export interface ExclusionItem {
   components: string[]
   enabled: boolean
   comment: string
-  /** Коды рисков; на этапе 1 всегда пусто. */
+  /** Коды рисков (`EXCLUSION_RISKS`); пусто — риска нет или исключение выключено. */
   risks: string[]
+  /** Объяснения рисков в том же порядке; код, которого уже нет в правилах, — как есть. */
+  risk_titles: string[]
   key: string
   /** В скольких политиках встречается тот же ключ (по всему снапшоту, без учёта фильтров). */
   policies: number
@@ -459,7 +522,18 @@ export const EXCLUSION_DUP_LABELS: Record<ExclusionDup, string> = {
 }
 
 /** Подписи известных кодов; неизвестный код показывается как есть. */
-export const EXCLUSION_KIND_LABELS: Record<string, string> = { path: 'путь', mask: 'маска', hash: 'хеш' }
+export const EXCLUSION_KIND_LABELS: Record<string, string> = { path: 'путь', mask: 'маска', hash: 'хеш', threat: 'угроза', trusted_app: 'доверенная программа' }
+
+/** Код риска исключения (`core/exclusion_risks.RISKS`) → короткая подпись и серьёзность; объяснение приходит в `risk_titles`. */
+export const EXCLUSION_RISKS: Record<string, { label: string; severity: Severity }> = {
+  whole_drive: { label: 'весь диск', severity: 'High' },
+  user_writable: { label: 'каталог пользователя', severity: 'High' },
+  ext_mask: { label: 'маска исполняемых', severity: 'High' },
+  name_only: { label: 'имя без пути', severity: 'Medium' },
+  interpreter: { label: 'интерпретатор', severity: 'High' },
+  broad_trust: { label: 'широкое доверие', severity: 'Medium' },
+  threat_any: { label: 'любая угроза', severity: 'High' },
+}
 export const NET_ACTION_LABELS: Record<string, string> = { allow: 'разрешить', block: 'запретить' }
 export const NET_DIRECTION_LABELS: Record<string, string> = { in: 'входящее', out: 'исходящее' }
 
@@ -469,6 +543,8 @@ export interface ExclusionsQuery {
   kind?: string
   enabled?: boolean
   dup?: ExclusionDup
+  /** true — с рисками, false — без. */
+  risky?: boolean
   limit?: number
   offset?: number
 }
@@ -490,6 +566,7 @@ export interface ExclusionsResponse {
     kind: Record<string, number>
     enabled: Record<'true' | 'false', number>
     dup: Record<ExclusionDup, number>
+    risky: Record<'true' | 'false', number>
   } | null
   /** Без фильтров, по политикам с описанным продуктом и собранным содержимым; только при offset=0. */
   summary: ExclusionSummaryItem[] | null
@@ -703,6 +780,14 @@ export interface KscConfig {
   admin_role_patterns: string[]
   policy_lock_share: number
   policy_contents_max_policies: number
+  /** Подстроки пути каталогов с правом записи пользователя — риск `user_writable`. */
+  exclusion_user_writable: string[]
+  /** Маски расширений исполняемых файлов — риск `ext_mask`. */
+  exclusion_exec_extensions: string[]
+  /** Имена файлов интерпретаторов и системных загрузчиков — риск `interpreter`. */
+  exclusion_interpreters: string[]
+  /** Коды компонентов словаря KES: выключение — POLICY_COMPONENT_OFF, признак «включён» без замка — POLICY_KEY_UNLOCKED. */
+  policy_key_components: string[]
 }
 
 export interface SettingsView {
