@@ -2,8 +2,9 @@
 
 Находка относится к политике по `details["policy_id"]`; считается ли она — по статусу платформы и настройке `counted`, как
 счётчик находок хоста (`routers/hosts.py`). `bad` — среди считаемых есть Critical или High, `ok` — только Medium или Low,
-`good` — нет ни одной из них. Без оценки (`None`) — содержимого нет, политика неактивна, словаря продукта нет или снапшот
-посчитан анализатором другой версии (у находок прежних версий нет `policy_id`).
+`good` — нет ни одной из них. Без оценки (`None`) — содержимого нет, политика неактивна, словаря продукта нет, словарь не
+распознал ни одной настройки политики (правила молчат от незнания — это не «хорошая») или снапшот посчитан анализатором
+другой версии (у находок прежних версий нет `policy_id`).
 """
 from __future__ import annotations
 
@@ -59,6 +60,8 @@ def _grade(p: KscPolicy, counted: list[GradeFinding], old: bool) -> tuple[str | 
         return None, "политика неактивна"
     if dictionary_for(p.product) is None:
         return None, "структура продукта не описана"
+    if p.settings_known == 0:
+        return None, "настройки политики не распознаны словарём"
     if old:
         return None, OLD_ANALYZER
     severities = {g.finding.severity for g in counted}

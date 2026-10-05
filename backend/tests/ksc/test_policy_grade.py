@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from api.modules.ksc.models import KscSnapshot
 from api.modules.ksc.services.grade import GRADE_CHECKS
 from tests.ksc.kes11 import kes11_export
-from tests.ksc.synthetic import NOW
+from tests.ksc.synthetic import NOW, build_export
 from tests.ksc.test_api import upload
 
 
@@ -45,11 +45,29 @@ def test_grade_checks() -> None:
 def test_grades_good_bad_none(auth_client: TestClient) -> None:
     snap = _imported(auth_client, kes11_export())
     items = _by_id(_list(auth_client, snap))
-    # 1 — KES 11 без замечаний; 3 — KES без единого замка (POLICY_NO_LOCKS, High); 2 — агент, содержимое не собирается.
+    # 1 — KES 11 без замечаний; 2 — агент, содержимое не собирается.
     assert (items[1]["grade"], items[1]["findings"]) == ("good", 0)
-    assert (items[3]["grade"], items[3]["findings"]) == ("bad", 1)
+    assert items[1]["grade_reason"]
     assert (items[2]["grade"], items[2]["grade_reason"], items[2]["findings"]) == (None, "содержимое не собрано", 0)
-    assert items[1]["grade_reason"] and items[3]["grade_reason"]
+    # 3 — KES этапа 1 с выдуманными секциями `KLPRSS_*`: словарь не узнал ни одной настройки — не «хорошая», а без оценки;
+    # находка POLICY_NO_LOCKS (High) при этом считается.
+    assert (items[3]["grade"], items[3]["grade_reason"], items[3]["findings"]) == (None, "настройки политики не распознаны словарём", 1)
+
+
+def test_bad_on_high(auth_client: TestClient) -> None:
+    snap = _imported(auth_client, kes11_export(**{"1d3e35bd/selfDefense.enableSelfDefence": False}))
+    item = _by_id(_list(auth_client, snap))[1]
+    assert (item["grade"], item["findings"]) == ("bad", 1)
+
+
+def test_unrecognised_settings_not_good(auth_client: TestClient) -> None:
+    """Синтетика этапа 1 (`build_export`): обе политики KES — со словарём продукта, но без единой распознанной настройки."""
+    snap = _imported(auth_client, build_export())
+    items = _by_id(_list(auth_client, snap))
+    assert (items[1]["grade"], items[1]["grade_reason"], items[1]["findings"]) == (None, "настройки политики не распознаны словарём", 0)
+    assert (items[3]["grade"], items[3]["grade_reason"], items[3]["findings"]) == (None, "настройки политики не распознаны словарём", 1)
+    card = auth_client.get(f"/api/ksc/snapshots/{snap}/policies/1").json()
+    assert (card["settings_known"], card["grade"], card["grade_reason"]) == (0, None, "настройки политики не распознаны словарём")
 
 
 def test_grade_ok_on_medium_only(auth_client: TestClient) -> None:
@@ -106,12 +124,12 @@ def test_risk_accepted_improves_grade_and_policy_findings(auth_client: TestClien
 
 
 def test_grade_filter_and_facet(auth_client: TestClient) -> None:
-    snap = _imported(auth_client, kes11_export())
+    snap = _imported(auth_client, kes11_export(**{"1d3e35bd/selfDefense.enableSelfDefence": False}))
     body = _list(auth_client, snap)
-    assert body["facets"]["grade"] == {"bad": 1, "ok": 0, "good": 1, "none": 1}
-    assert [i["id"] for i in _list(auth_client, snap, grade="bad")["items"]] == [3]
-    assert [i["id"] for i in _list(auth_client, snap, grade="good")["items"]] == [1]
-    assert [i["id"] for i in _list(auth_client, snap, grade="none")["items"]] == [2]
+    assert body["facets"]["grade"] == {"bad": 1, "ok": 0, "good": 0, "none": 2}
+    assert [i["id"] for i in _list(auth_client, snap, grade="bad")["items"]] == [1]
+    assert [i["id"] for i in _list(auth_client, snap, grade="none")["items"]] == [2, 3]
+    assert _list(auth_client, snap, grade="good")["items"] == []
     assert _list(auth_client, snap, grade="ok")["items"] == []
     assert _list(auth_client, snap, grade="bad")["facets"]["grade"] == {"bad": 1, "ok": 0, "good": 0, "none": 0}
     assert auth_client.get(f"/api/ksc/snapshots/{snap}/policy-list", params={"grade": "awful"}).status_code == 422

@@ -213,6 +213,12 @@ def test_policy_without_contents_is_silent() -> None:
     assert not [f for f in _findings(raw) if f.check in RULES]
 
 
+def test_unrecognised_policy_is_silent() -> None:
+    """KES этапа 1 (`build_export`: секции `KLPRSS_*`) — словарь не узнал ни одной настройки: отсутствие значения или замка не
+    находка (`POLICY_KEY_UNLOCKED`, `POLICY_PASSWORD_OFF` и остальные молчат)."""
+    assert not [f for f in _findings(build_export()) if f.check in RULES]
+
+
 def test_lock_checks_carry_policy_id_with_same_keys() -> None:
     """`POLICY_NO_LOCKS`, `POLICY_WEAK_LOCKS`, `POLICY_CONTENT_MISSING` получили `policy_id`, ключи прежние (`key_extra` — id политики)."""
     raw = build_export()

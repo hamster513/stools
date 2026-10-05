@@ -30,14 +30,14 @@ def test_policy_list_items_facets_sort(auth_client: TestClient) -> None:
 
     assert [i["id"] for i in body["items"]] == [2, 3, 1]  # все активны — по имени: Agent, KES lab, KES workstations
     assert body["profiles_collected"] is True
-    assert body["facets"] == {"product": {"KES": 2, "1103": 1}, "active": {"true": 3, "false": 0}, "grade": {"bad": 1, "ok": 0, "good": 1, "none": 1}}
+    assert body["facets"] == {"product": {"KES": 2, "1103": 1}, "active": {"true": 3, "false": 0}, "grade": {"bad": 0, "ok": 0, "good": 0, "none": 3}}
 
     kes = _item(body, 1)
     assert kes == {
         "id": 1, "name": "KES workstations", "product": "KES", "version": "12.0.0.0", "group": "Managed devices", "active": True,
         "accept_parent": True, "modified_at": kes["modified_at"], "has_contents": True, "described": True, "groups": 2, "hosts": 11,
-        "profiles": 2, "exclusions": kes["exclusions"], "net_rules": kes["net_rules"], "locks": kes["locks"], "grade": "good",
-        "grade_reason": kes["grade_reason"], "findings": 0,
+        "profiles": 2, "exclusions": kes["exclusions"], "net_rules": kes["net_rules"], "locks": kes["locks"], "grade": None,
+        "grade_reason": "настройки политики не распознаны словарём", "findings": 0,
     }
     assert kes["modified_at"] is not None
     assert kes["locks"] == {"locked": 7, "with_lock_flag": 12}
@@ -47,9 +47,9 @@ def test_policy_list_items_facets_sort(auth_client: TestClient) -> None:
     assert agent["grade"] is None and agent["grade_reason"] == "содержимое не собрано"
     assert (agent["groups"], agent["hosts"]) == (4, 13)
 
-    lab = _item(body, 3)  # без единого замка — POLICY_NO_LOCKS (High)
+    lab = _item(body, 3)  # без единого замка — POLICY_NO_LOCKS (High) считается, оценки нет: настройки не распознаны
     assert lab["profiles"] == 0 and lab["locks"] == {"locked": 0, "with_lock_flag": 12}
-    assert (lab["grade"], lab["findings"]) == ("bad", 1)
+    assert (lab["grade"], lab["findings"]) == (None, 1)
 
 
 def test_policy_list_findings_counted_by_policy_id(auth_client: TestClient, db_session: Session) -> None:
