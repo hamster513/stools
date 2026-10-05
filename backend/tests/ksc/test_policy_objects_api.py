@@ -15,7 +15,10 @@ from api.modules.ksc.core.policy_model import (
     PolicyObjects,
     exclusion_key,
 )
+from api.modules.ksc.core.policy_model import covered_by as policy_model_covered_by
 from api.modules.ksc.models import KscPolicy
+from api.modules.ksc.routers import policy_objects
+from tests.ksc.kes11 import exclusion, kes11_export
 from tests.ksc.synthetic import build_export
 from tests.ksc.test_api import upload
 
@@ -119,8 +122,9 @@ def test_exclusions_facets_summary_and_paging(auth_client: TestClient, db_sessio
     }
     hosts = {p.policy_id: p.hosts for p in db_session.execute(select(KscPolicy).where(KscPolicy.snapshot_id == sid)).scalars()}
     assert first["summary"] == [
-        {"policy_id": 3, "policy_name": "KES lab", "hosts": hosts[3], "total": 1, "by_kind": {"path": 1}},
-        {"policy_id": 1, "policy_name": "KES workstations", "hosts": hosts[1], "total": 4, "by_kind": {"path": 3, "hash": 1}},
+        {"policy_id": 3, "policy_name": "KES lab", "hosts": hosts[3], "total": 1, "by_kind": {"path": 1}, "risky": 0, "partial": False},
+        {"policy_id": 1, "policy_name": "KES workstations", "hosts": hosts[1], "total": 4, "by_kind": {"path": 3, "hash": 1}, "risky": 0,
+         "partial": False},
     ]
     assert hosts[1] > 0
     second = _exclusions(auth_client, sid, "limit=2&offset=2")
@@ -160,8 +164,57 @@ def test_net_rules_list_filters_facets(auth_client: TestClient, sid: int) -> Non
     assert names("profile=%D0%9D%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA%D0%B8") == ["VPN"]
     assert names("action=block") == ["Block SMB"] and names("direction=in") == ["Block SMB"]
     assert names("enabled=false") == ["Block SMB"] and names("enabled=true") == ["Updater", "DNS", "VPN"]
+    assert body["partial"] == []
     page = _net_rules(auth_client, sid, "limit=3&offset=3")
     assert [i["name"] for i in page["items"]] == ["VPN"] and page["facets"] is None and page["total"] == 4
+
+
+def test_partial_policy_and_risky_count(auth_client: TestClient) -> None:
+    """Секция сетевого экрана политики 1 не прочиталась: сводка исключений и ответ правил помечают политику как неполную;
+    `risky` — исключений с рисками."""
+    raw = kes11_export(**{"852d0287/scanExclusionsAndTrustedZone.scanExclusions": [exclusion("C:\\"), exclusion("C:\\Tools\\a.exe")]})
+    content = raw["policy_contents"]["1"]
+    del content["sections"]["cf9370d5"]
+    content["errors"] = ["cf9370d5: секция больше лимита"]
+    assert upload(auth_client, raw)["status"] == "done"
+    sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    summary = {s["policy_id"]: s for s in _exclusions(auth_client, sid)["summary"]}
+    assert (summary[1]["partial"], summary[1]["risky"], summary[1]["total"]) == (True, 1, 4)
+    assert summary[3]["partial"] is False
+    assert _net_rules(auth_client, sid)["partial"] == [1]
+    assert _net_rules(auth_client, sid, "offset=1")["partial"] == [1]
+
+
+def _restricted(sections: dict[str, Any]) -> PolicyObjects:
+    if "KLPRSS_Deep" not in sections:
+        return PolicyObjects()
+    return PolicyObjects(exclusions=[Exclusion("path", "C:\\Tools", ("объект: not-a-virus:Test*",)), Exclusion("path", "C:\\Tools\\a.exe")])
+
+
+def test_exclusion_narrowed_by_object_does_not_cover(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(EXTRACTORS, "KES", _restricted)
+    assert upload(auth_client, build_export())["status"] == "done"
+    sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    body = _exclusions(auth_client, sid, "policy_id=1")
+    assert [(i["value"], i["covered_by"]) for i in body["items"]] == [("C:\\Tools", None), ("C:\\Tools\\a.exe", None)]
+    assert body["facets"]["dup"]["covered"] == 0
+
+
+def test_overlap_computed_only_for_needed_groups(auth_client: TestClient, sid: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Страница со `offset > 0` без фильтра `dup` считает перекрытия только для групп (политика, профиль) своих строк."""
+    calls: list[str] = []
+
+    def counting(e: Exclusion, others: Any) -> Exclusion | None:
+        calls.append(e.value)
+        return policy_model_covered_by(e, others)
+
+    monkeypatch.setattr(policy_objects, "covered_by", counting)
+    page = _exclusions(auth_client, sid, "limit=1&offset=4")
+    assert _values(page) == [(1, "Ноутбуки", "C:\\Tools")]
+    assert calls == ["C:\\Tools"]
+    calls.clear()
+    assert _values(_exclusions(auth_client, sid, "dup=covered&offset=0")) == [(1, "", "C:\\Tools\\a.exe")]
+    assert len(calls) == 5  # фильтр `dup` — все группы
 
 
 def test_undescribed_product_has_no_objects(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

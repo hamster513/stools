@@ -17,10 +17,9 @@ from api.modules.ksc.core.extractors.kes_windows import (
     CHILDREN_RECURSIVE,
     NET,
     NET_ENCRYPTED,
-    OBJECT,
     OPEN_FILES,
 )
-from api.modules.ksc.core.policy_model import Exclusion
+from api.modules.ksc.core.policy_model import Exclusion, restricted
 
 #: Код → (серьёзность, объяснение); в этом порядке коды и возвращаются.
 RISKS: dict[str, tuple[str, str]] = {
@@ -50,11 +49,6 @@ def _norm(text: str) -> str:
 def _is_drive(text: str) -> bool:
     """`c:`, `?:` или `%systemdrive%` — корень диска."""
     return text == "%systemdrive%" or (len(text) == 2 and (text[0].isalpha() or text[0] == "?") and text[1] == ":")
-
-
-def _restricted(e: Exclusion) -> bool:
-    """Исключение сужено именем объекта (`объект: <маска>`, кроме `*`)."""
-    return any(c.startswith(OBJECT) and c[len(OBJECT):].strip() != "*" for c in e.components)
 
 
 def _path_risks(path: str, cfg: KscConfig, broad: bool) -> set[str]:
@@ -88,7 +82,7 @@ def exclusion_risks(e: Exclusion, cfg: KscConfig) -> list[str]:
         return []
     found: set[str] = set()
     if e.kind in _PATH_KINDS:
-        found |= _path_risks(_norm(e.value), cfg, broad=not _restricted(e))
+        found |= _path_risks(_norm(e.value), cfg, broad=not restricted(e))
     if e.kind == "trusted_app" and sum(1 for group in _BROAD_TRUST if group & set(e.components)) >= _BROAD_TRUST_MIN:
         found.add("broad_trust")
     if e.kind == "threat" and e.value.strip() == "*":

@@ -15,7 +15,7 @@ import ipaddress
 from typing import Any
 
 from api.modules.ksc.core.policy_contents import bare_sections, truncate_value
-from api.modules.ksc.core.policy_model import Exclusion, NetRule, PolicyObjects
+from api.modules.ksc.core.policy_model import OBJECT, Exclusion, NetRule, PolicyObjects
 from api.modules.ksc.core.secrets import HIDDEN
 
 TRUSTED_ZONE = "852d0287"
@@ -39,8 +39,6 @@ CHILDREN = "не контролировать дочерние процессы"
 CHILDREN_RECURSIVE = "не контролировать дочерние процессы рекурсивно"
 NET = "не проверять сетевой трафик"
 NET_ENCRYPTED = "не проверять сетевой трафик (только зашифрованный)"
-#: Префикс компонента исключения с путём или хешем и именем объекта: «объект: <маска>».
-OBJECT = "объект: "
 
 #: Флаги доверенной программы → подпись; `excludeNet` — вложенный словарь, разбирается отдельно (на своём месте в порядке).
 _TRUSTED_FLAGS = (

@@ -102,23 +102,25 @@ def test_selfdefense_off(container: str) -> None:
     assert [(f.severity, f.target, f.key_extra, f.details["policy_id"]) for f in found] == [("High", "KES workstations", "1", 1)]
 
 
-def test_password_off_on_empty_login_and_hash() -> None:
-    found = _of(_findings(kes11_export(**{"1d3e35bd/passwordProtection.login": "", "1d3e35bd/passwordProtection.passwordHash": ""})),
-                "POLICY_PASSWORD_OFF")
+@pytest.mark.parametrize("over", [
+    {"1d3e35bd/passwordProtection.passwordHash": ""},  # имя учётной записи задано всегда (по умолчанию) — не в счёт
+    {"1d3e35bd/passwordProtection.login": "", "1d3e35bd/passwordProtection.passwordHash": ""},
+])
+def test_password_off_on_empty_hash(over: dict[str, Any]) -> None:
+    found = _of(_findings(kes11_export(**over)), "POLICY_PASSWORD_OFF")
     assert [(f.severity, f.key_extra, f.details["policy_id"]) for f in found] == [("Medium", "1", 1)]
 
 
 @pytest.mark.parametrize("over", [
-    {},  # оба заданы — после загрузки «<скрыто>»
-    {"1d3e35bd/passwordProtection.login": ""},  # пароль задан, имени нет
-    {"1d3e35bd/passwordProtection.passwordHash": ""},
-    {"1d3e35bd/passwordProtection.login": "<скрыто>", "1d3e35bd/passwordProtection.passwordHash": "<скрыто>"},  # старый сборщик: неизвестно
+    {},  # хеш задан — после загрузки «<скрыто>»
+    {"1d3e35bd/passwordProtection.login": ""},  # хеш задан, имени нет
+    {"1d3e35bd/passwordProtection.login": "", "1d3e35bd/passwordProtection.passwordHash": "<скрыто>"},  # старый сборщик: неизвестно
 ])
 def test_password_unknown_or_set_is_silent(over: dict[str, Any]) -> None:
     assert not _of(_findings(kes11_export(**over)), "POLICY_PASSWORD_OFF")
 
 
-def test_password_without_keys_is_silent() -> None:
+def test_password_without_hash_key_is_silent() -> None:
     raw = kes11_export(**{"1d3e35bd/passwordProtection.login": "", "1d3e35bd/passwordProtection.passwordHash": ""})
     del raw["policy_contents"]["1"]["sections"]["1d3e35bd"]["passwordProtection"]["passwordHash"]
     assert not _of(_findings(raw), "POLICY_PASSWORD_OFF")

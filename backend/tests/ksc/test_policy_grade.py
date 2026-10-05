@@ -95,6 +95,18 @@ def test_grade_none_reasons(auth_client: TestClient, db_session: Session) -> Non
     assert (item["grade"], item["grade_reason"]) == (None, "пересчитайте снапшот: оценка считается с версии анализатора 2")
 
 
+def test_old_analyzer_reason_before_unrecognised_settings(auth_client: TestClient, db_session: Session) -> None:
+    """Снапшот, посчитанный до этапа 2b: у строк `settings_known = 0` — причина «пересчитайте», а не «не распознаны»."""
+    snap = _imported(auth_client, build_export())
+    row = db_session.get(KscSnapshot, snap)
+    assert row is not None
+    row.analyzer_version = "1"
+    db_session.commit()
+    card = auth_client.get(f"/api/ksc/snapshots/{snap}/policies/1").json()
+    assert (card["settings_known"], card["contents_partial"]) == (0, False)
+    assert (card["grade"], card["grade_reason"]) == (None, "пересчитайте снапшот: оценка считается с версии анализатора 2")
+
+
 def test_risk_accepted_improves_grade_and_policy_findings(auth_client: TestClient) -> None:
     raw = kes11_export(**{"1d3e35bd/selfDefense.enableSelfDefence": False,
                           "852d0287/scanExclusionsAndTrustedZone.allowUseLocalScanExclusions": True})
@@ -205,8 +217,18 @@ def test_partial_contents_without_findings_has_no_grade(auth_client: TestClient)
 
 def test_partial_contents_with_high_is_bad(auth_client: TestClient) -> None:
     snap = _imported(auth_client, _partial(kes11_export(**{"1d3e35bd/selfDefense.enableSelfDefence": False})))
-    item = _by_id(_list(auth_client, snap))[1]
-    assert (item["grade"], item["findings"]) == ("bad", 1)
+    items = _by_id(_list(auth_client, snap))
+    item = items[1]
+    assert (item["grade"], item["findings"], item["contents_partial"]) == ("bad", 1, True)
+    assert item["grade_reason"] == "есть считаемые находки Critical или High (содержимое собрано не полностью)"
+    assert items[3]["contents_partial"] is False
+
+
+def test_inactive_partial_policy_reports_inactive(auth_client: TestClient) -> None:
+    raw = _partial(kes11_export())
+    raw["policies"][0]["KLPOL_ACTIVE"] = False
+    item = _by_id(_list(auth_client, _imported(auth_client, raw)))[1]
+    assert (item["grade"], item["grade_reason"], item["contents_partial"]) == (None, "политика неактивна", True)
 
 
 def test_partial_contents_do_not_resolve_policy_findings(auth_client: TestClient) -> None:

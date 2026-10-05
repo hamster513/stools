@@ -4,9 +4,10 @@
 счётчик находок хоста (`routers/hosts.py`). `bad` — среди считаемых есть Critical или High, `ok` — только Medium или Low,
 `good` — нет ни одной из них. Политика, собранная не полностью (часть секций — в `errors`), бывает только `bad` (считаемая
 Critical или High есть — этого достаточно) или без оценки: по неполным данным «нормальная» и «хорошая» не ставятся.
-Без оценки (`None`) — содержимого нет, оно собрано не полностью, политика неактивна, словаря продукта нет, словарь не
-распознал ни одной настройки политики (правила молчат от незнания — это не «хорошая») или снапшот посчитан анализатором
-другой версии (у находок прежних версий нет `policy_id`).
+Без оценки (`None`), причины в порядке проверки: содержимого нет; снапшот посчитан анализатором другой версии (у находок
+прежних версий нет `policy_id`); политика неактивна; содержимое собрано не полностью (и нет Critical или High); словаря
+продукта нет; словарь не распознал ни одной настройки политики (правила молчат от незнания — это не «хорошая»). У неполной
+`bad` к причине дописано «(содержимое собрано не полностью)».
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from api.platform.findings import service as finding_svc
 Grade = Literal["bad", "ok", "good"]
 GRADES: tuple[Grade, ...] = ("bad", "ok", "good")
 OLD_ANALYZER = "пересчитайте снапшот: оценка считается с версии анализатора 2"
+PARTIAL = "содержимое собрано не полностью"
 
 
 @dataclass(frozen=True)
@@ -57,18 +59,19 @@ def _grade(p: KscPolicy, counted: list[GradeFinding], old: bool) -> tuple[Grade 
     high = bool(severities & {"Critical", "High"})
     if not p.has_contents:
         return None, "содержимое не собрано"
-    if p.contents_partial and not high:
-        return None, "содержимое собрано не полностью"
+    # Раньше `settings_known`: у строк снапшота, посчитанного до словаря, он 0 — причина в версии, а не в словаре.
+    if old:
+        return None, OLD_ANALYZER
     if not p.active:
         return None, "политика неактивна"
+    if p.contents_partial and not high:
+        return None, PARTIAL
     if dictionary_for(p.product) is None:
         return None, "структура продукта не описана"
     if p.settings_known == 0:
         return None, "настройки политики не распознаны словарём"
-    if old:
-        return None, OLD_ANALYZER
     if high:
-        return "bad", "есть считаемые находки Critical или High"
+        return "bad", "есть считаемые находки Critical или High" + (f" ({PARTIAL})" if p.contents_partial else "")
     if severities & {"Medium", "Low"}:
         return "ok", "есть считаемые находки Medium или Low, нет Critical и High"
     return "good", "нет считаемых находок Critical, High, Medium, Low"

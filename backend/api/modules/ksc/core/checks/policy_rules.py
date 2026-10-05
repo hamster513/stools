@@ -23,7 +23,7 @@ COMPONENT_HIGH = frozenset({"file_threat", "behavior", "exploit", "network_threa
 #: Компонент → путь «только уведомлять (не блокировать)» в секции его признака «включён».
 NOTIFY_ONLY = {"firewall": "firewall.notifyOnly", "hips": "hips.notifyOnly", "network_threat": "notifyOnly"}
 SELF_DEFENSE = "selfDefense.enableSelfDefence"
-PASSWORD_LOGIN, PASSWORD_HASH = "passwordProtection.login", "passwordProtection.passwordHash"
+PASSWORD_HASH = "passwordProtection.passwordHash"
 #: Типы угроз — настройки словаря `threats.<тип>` в секции доверенной зоны; выключенное обнаружение этих — High, остальных — Medium.
 THREATS = "threats."
 THREAT_HIGH = frozenset({"virusesAndWorms", "trojans", "maliciousTools"})
@@ -109,11 +109,9 @@ def check_policy_selfdefense_off(idx: ExportIndex, cfg: KscConfig) -> list[Findi
 
 
 def check_policy_password_off(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
-    """Имя и пароль защиты паролем оба пусты (`""`, сборщик 1.3+). «<скрыто>» (задан или старый сборщик) или нет ключа — неизвестно."""
-    return [
-        _finding(cfg, "POLICY_PASSWORD_OFF", "Medium", p) for p in _graded(idx)
-        if p.value("general", PASSWORD_LOGIN) == "" and p.value("general", PASSWORD_HASH) == ""
-    ]
+    """Хеш пароля защиты паролем пуст (`""`, сборщик 1.3+). Имя не в счёт: учётная запись задана всегда (по умолчанию).
+    «<скрыто>» (пароль задан или старый сборщик) или нет ключа — неизвестно."""
+    return [_finding(cfg, "POLICY_PASSWORD_OFF", "Medium", p) for p in _graded(idx) if p.value("general", PASSWORD_HASH) == ""]
 
 
 def check_policy_threat_types_off(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:

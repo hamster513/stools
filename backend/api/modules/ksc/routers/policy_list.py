@@ -56,6 +56,8 @@ class PolicyItem(BaseModel):
     accept_parent: bool
     modified_at: dt.datetime | None = None
     has_contents: bool
+    #: Содержимое собрано не полностью (часть секций — в `errors`): списки записей и настроек могут быть неполными.
+    contents_partial: bool
     #: Для продукта есть извлекатель исключений и сетевых правил.
     described: bool
     #: Групп, где политика действует, и хостов прямо в них.
@@ -198,8 +200,9 @@ def _locks(idx: ExportIndex | None, p: KscPolicy) -> PolicyLocksView | None:
 def _item(p: KscPolicy, idx: ExportIndex | None, grade: tuple[Grade | None, str, int]) -> PolicyItem:
     return PolicyItem(
         id=p.policy_id, name=p.name, product=p.product, version=p.version, group=p.group_path, active=p.active, accept_parent=p.accept_parent,
-        modified_at=p.modified_at, has_contents=p.has_contents, described=p.described, groups=p.groups, hosts=p.hosts, profiles=p.profiles,
-        exclusions=p.exclusions, net_rules=p.net_rules, locks=_locks(idx, p), grade=grade[0], grade_reason=grade[1], findings=grade[2],
+        modified_at=p.modified_at, has_contents=p.has_contents, contents_partial=p.contents_partial, described=p.described, groups=p.groups,
+        hosts=p.hosts, profiles=p.profiles, exclusions=p.exclusions, net_rules=p.net_rules, locks=_locks(idx, p), grade=grade[0],
+        grade_reason=grade[1], findings=grade[2],
     )
 
 

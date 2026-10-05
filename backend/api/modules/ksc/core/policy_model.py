@@ -18,6 +18,8 @@ log = logging.getLogger(__name__)
 
 #: Виды исключений, которые сравниваются как пути: каталог или маска покрывает файл.
 PATH_KINDS = {"path", "mask"}
+#: Префикс компонента исключения с путём или хешем и именем объекта: «объект: <маска>» (ставит извлекатель KES).
+OBJECT = "объект: "
 
 
 @dataclass(frozen=True)
@@ -95,13 +97,19 @@ def _wider(other: str, value: str) -> bool:
     return ("*" in other or "?" in other) and fnmatch.fnmatchcase(value, other)
 
 
+def restricted(e: Exclusion) -> bool:
+    """Исключение сужено именем объекта (`объект: <маска>`, кроме `*`): касается одной угрозы в этом пути."""
+    return any(c.startswith(OBJECT) and c[len(OBJECT):].strip() != "*" for c in e.components)
+
+
 def covered_by(e: Exclusion, others: Iterable[Exclusion]) -> Exclusion | None:
-    """Первое другое включённое исключение-путь или маска, которое шире `e`; равные значения перекрытием не считаются."""
+    """Первое другое включённое исключение-путь или маска, которое шире `e`; равные значения перекрытием не считаются,
+    исключение, суженное именем объекта (`restricted`), не перекрывает другие."""
     if e.kind not in PATH_KINDS:
         return None
     value = e.value.strip().lower()
     for o in others:
-        if o is e or not o.enabled or o.kind not in PATH_KINDS:
+        if o is e or not o.enabled or o.kind not in PATH_KINDS or restricted(o):
             continue
         other = o.value.strip().lower()
         if other != value and _wider(other, value):

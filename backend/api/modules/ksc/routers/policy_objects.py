@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -46,6 +47,11 @@ def _undescribed(policies: dict[int, KscPolicy]) -> list[str]:
     return sorted({p.product for p in policies.values() if p.has_contents and not p.described})
 
 
+def _partial(policies: dict[int, KscPolicy]) -> list[int]:
+    """Политики описанного продукта, содержимое которых собрано не полностью: их записи могут быть неполными."""
+    return sorted(p.policy_id for p in policies.values() if p.described and p.contents_partial)
+
+
 def _count(facet: dict[str, int], value: str) -> None:
     facet[value] = facet.get(value, 0) + 1
 
@@ -59,18 +65,25 @@ def _order(policies: dict[int, KscPolicy], policy_id: int) -> tuple[str, int]:
     return (_name(policies, policy_id).lower(), policy_id)
 
 
-def _covered(rows: list[KscExclusion]) -> dict[int, str | None]:
-    """Строка → значение более широкого исключения той же политики и профиля (None — не перекрыто)."""
-    groups: dict[tuple[int, str], list[tuple[KscExclusion, Exclusion]]] = defaultdict(list)
+def _covered(rows: list[KscExclusion]) -> Callable[[KscExclusion], str | None]:
+    """Строка → значение более широкого исключения той же политики и профиля (None — не перекрыто). Перекрытия группы
+    (политика, профиль) считаются при первом обращении к её строке: странице без фильтра `dup` и фасетов — только свои группы."""
+    groups: dict[tuple[int, str], list[KscExclusion]] = defaultdict(list)
     for r in rows:
-        groups[(r.policy_id, r.profile)].append((r, Exclusion(r.kind, r.value, enabled=r.enabled)))
-    out: dict[int, str | None] = {}
-    for members in groups.values():
-        others = [e for _, e in members]
-        for r, e in members:
-            wider = covered_by(e, others)
-            out[r.id] = wider.value if wider is not None else None
-    return out
+        groups[(r.policy_id, r.profile)].append(r)
+    done: dict[int, str | None] = {}
+
+    def of(r: KscExclusion) -> str | None:
+        if r.id not in done:
+            members = [(m, Exclusion(m.kind, m.value, tuple(json.loads(m.components_json or "[]")), enabled=m.enabled))
+                       for m in groups[(r.policy_id, r.profile)]]
+            others = [e for _, e in members]
+            for m, e in members:
+                wider = covered_by(e, others)
+                done[m.id] = wider.value if wider is not None else None
+        return done[r.id]
+
+    return of
 
 
 def _risks(r: KscExclusion) -> list[str]:
@@ -127,7 +140,7 @@ def list_exclusions(
         if risky is not None and bool(_risks(r)) != risky:
             return False
         n = len(owners[r.key])
-        if (dup == "multi" and n < 2) or (dup == "single" and n != 1) or (dup == "covered" and covered[r.id] is None):
+        if (dup == "multi" and n < 2) or (dup == "single" and n != 1) or (dup == "covered" and covered(r) is None):
             return False
         return not needle or needle in r.value.lower() or needle in r.comment.lower() or needle in _name(policies, r.policy_id).lower()
 
@@ -142,20 +155,23 @@ def list_exclusions(
             facets["enabled"]["true" if r.enabled else "false"] += 1
             facets["risky"]["true" if _risks(r) else "false"] += 1
             facets["dup"]["multi" if len(owners[r.key]) > 1 else "single"] += 1
-            if covered[r.id] is not None:
+            if covered(r) is not None:
                 facets["dup"]["covered"] += 1
         # Сводка — без фильтров, по политикам с описанным продуктом и собранным содержимым (иначе «ноль» значил бы «не собрано»).
+        # `partial` — содержимое собрано не полностью: список может быть неполным; `risky` — исключений с рисками.
         by_policy: dict[int, dict[str, int]] = {p.policy_id: {} for p in policies.values() if p.described and p.has_contents}
+        risky_by: dict[int, int] = defaultdict(int)
         for r in rows:
             _count(by_policy.setdefault(r.policy_id, {}), r.kind)
+            risky_by[r.policy_id] += bool(_risks(r))
         summary = [
             {"policy_id": pid, "policy_name": _name(policies, pid), "hosts": policies[pid].hosts if pid in policies else 0,
-             "total": sum(kinds.values()), "by_kind": kinds}
+             "total": sum(kinds.values()), "by_kind": kinds, "risky": risky_by[pid], "partial": pid in policies and policies[pid].contents_partial}
             for pid, kinds in sorted(by_policy.items(), key=lambda kv: _order(policies, kv[0]))
         ]
     page = kept[offset : offset + limit]
     return {
-        "total": len(kept), "items": [_exclusion_item(r, _name(policies, r.policy_id), len(owners[r.key]), covered[r.id]) for r in page],
+        "total": len(kept), "items": [_exclusion_item(r, _name(policies, r.policy_id), len(owners[r.key]), covered(r)) for r in page],
         "facets": facets, "summary": summary, "undescribed": _undescribed(policies),
     }
 
@@ -210,5 +226,5 @@ def list_net_rules(
     page = kept[offset : offset + limit]
     return {
         "total": len(kept), "items": [_net_rule_item(r, _name(policies, r.policy_id)) for r in page], "facets": facets,
-        "undescribed": _undescribed(policies),
+        "undescribed": _undescribed(policies), "partial": _partial(policies),
     }

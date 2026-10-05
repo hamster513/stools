@@ -17,7 +17,7 @@ from api.modules.ksc.core.policy_model import EXTRACTORS, Exclusion, PolicyObjec
 from api.modules.ksc.models import KscChange, KscSnapshot
 from api.modules.ksc.services.changes import changes_summary
 from api.modules.ksc.services.snapshots import snapshot_path
-from tests.ksc.kes11 import exclusion, kes11_export
+from tests.ksc.kes11 import _PACKET_RULES, TCP, exclusion, kes11_export, packet_rule
 from tests.ksc.synthetic import _lock, build_export, without_new_sections
 from tests.ksc.test_api import upload
 
@@ -350,6 +350,24 @@ def test_extracted_exclusion_changed(monkeypatch: pytest.MonkeyPatch) -> None:
     excl = _of(diff, "exclusion")
     assert [(c.action, c.policy_id, c.before["enabled"], c.after["enabled"]) for c in excl] == [("changed", 1, True, False)]
     assert diff.compared["exclusion"] is True and diff.compared["net_rule"] is True
+
+
+def test_packet_rule_inserted_on_top_is_one_added() -> None:
+    """Номер правила (`position`) сдвигается у всех правил ниже вставленного — это не их изменение."""
+    prev = kes11_export()
+    cur = kes11_export(**{"cf9370d5/firewall.networkPacketRules": [packet_rule("Тестовое правило: новое", action=1, direction=3, protocol=TCP),
+                                                                    *_PACKET_RULES]})
+    rules = _of(_diff(prev, cur), "net_rule")
+    assert [(c.action, c.after["name"], c.after["position"]) for c in rules] == [("added", "Тестовое правило: новое", 0)]
+    assert _of(_diff(cur, prev), "net_rule")[0].action == "removed" and len(_of(_diff(cur, prev), "net_rule")) == 1
+
+
+def test_net_rule_changed_keeps_position_for_display() -> None:
+    edited = [dict(r) for r in _PACKET_RULES]
+    edited[1] = {**edited[1], "enabled": False}
+    rules = _of(_diff(kes11_export(), kes11_export(**{"cf9370d5/firewall.networkPacketRules": edited})), "net_rule")
+    assert [(c.action, c.before["enabled"], c.after["enabled"], c.before["position"], c.after["position"]) for c in rules] == [
+        ("changed", True, False, 1, 1)]
 
 
 def test_truncated(monkeypatch: pytest.MonkeyPatch) -> None:

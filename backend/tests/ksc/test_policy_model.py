@@ -43,6 +43,8 @@ TARGET = Exclusion("path", "C:\\Tools\\a.exe")
     (Exclusion("path", "C:\\Tools\\a.exe"), False),     # равное значение — не перекрытие
     (Exclusion("path", "C:\\Tools", enabled=False), False),
     (Exclusion("hash", "C:\\Tools"), False),
+    (Exclusion("path", "C:\\Tools", ("объект: not-a-virus:Test*",)), False),  # сужено именем объекта — касается одной угрозы
+    (Exclusion("path", "C:\\Tools", ("объект: *",)), True),
 ])
 def test_covered_by_cases(other: Exclusion, covered: bool) -> None:
     assert (covered_by(TARGET, [TARGET, other]) == other) is covered

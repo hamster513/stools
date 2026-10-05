@@ -230,11 +230,17 @@ def _settings(pid: int, name: str, old: dict[SettingKey, tuple[Any, bool | None]
         out.append(Change("setting", "changed", pid, name, profile, section, path, before=before, after=after))
 
 
+def _unplaced(record: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in record.items() if k != "position"}
+
+
 def _records(kind: str, pid: int, name: str, old: Iterable[Exclusion | NetRule], new: Iterable[Exclusion | NetRule],
              key: Callable[[Any], str], out: list[Change]) -> None:
     """Записи извлекателя по (профиль, ключ) как мультимножества: ключ у разных записей может совпасть (тот же путь с разными
     именами объекта, одноимённые правила программ). По одной записи с каждой стороны и они различаются — `changed`; иначе
-    записи, которых нет на другой стороне (с учётом кратности), — `removed` / `added`. `path` — ключ записи (как `key` в таблице)."""
+    записи, которых нет на другой стороне (с учётом кратности), — `removed` / `added`. `path` — ключ записи (как `key` в таблице).
+    Номер правила (`position`) не сравнивается: вставка или удаление правила сдвигает номера всех ниже, это не их изменение;
+    в `before` / `after` он остаётся для показа."""
     a: dict[tuple[str, str], list[dict[str, Any]]] = {}
     b: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for records, groups in ((old, a), (new, b)):
@@ -243,14 +249,15 @@ def _records(kind: str, pid: int, name: str, old: Iterable[Exclusion | NetRule],
     for k in sorted(a.keys() | b.keys()):
         before, after = a.get(k, []), b.get(k, [])
         if len(before) == 1 and len(after) == 1:
-            if before != after:
+            if _unplaced(before[0]) != _unplaced(after[0]):
                 out.append(Change(kind, "changed", pid, name, profile=k[0], path=k[1], before=before[0], after=after[0]))
             continue
         added = list(after)
         removed = []
         for x in before:
-            if x in added:
-                added.remove(x)
+            same = next((y for y in added if _unplaced(y) == _unplaced(x)), None)
+            if same is not None:
+                added.remove(same)
             else:
                 removed.append(x)
         out.extend(Change(kind, "removed", pid, name, profile=k[0], path=k[1], before=x) for x in removed)

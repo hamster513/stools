@@ -305,7 +305,7 @@ GET  /snapshots/{id}/tasks?q=&type=&failed=true
 ```
 
 `PolicyItem` = `{id, name, product, version, group, active, accept_parent, modified_at, has_contents,
-described, groups, hosts, profiles, exclusions, net_rules, locks: {locked, with_lock_flag}|null, grade,
+contents_partial, described, groups, hosts, profiles, exclusions, net_rules, locks: {locked, with_lock_flag}|null, grade,
 grade_reason, findings}`. Список, привязка и счётчики — из таблиц снапшота (`ksc_policy`, `ksc_policy_scope`,
 `ksc_profile`); они заполняются при импорте и пересчёте, а у снапшота, импортированного до их появления, —
 при первом обращении к политикам, исключениям, сетевым правилам или хостам снапшота (из файла выгрузки, вместе с
@@ -335,13 +335,15 @@ grade_reason, findings}`. Список, привязка и счётчики —
 Critical или High, `ok` — только Medium или Low, `good` — ни одной из них (Info оценку не меняет); `grade_reason` —
 пояснение. Политика, собранная не полностью (`ksc_policy.contents_partial`: секции есть, но `errors` записи содержимого не
 пуст), «нормальной» и «хорошей» не бывает: при считаемой Critical или High она `bad` (если оценка возможна по остальным
-условиям), иначе без оценки. `grade: null` с причиной: «содержимое не собрано» (нет содержимого), иначе «содержимое
-собрано не полностью» (неполное и без считаемых Critical/High), иначе «политика неактивна», иначе
+условиям, к причине `bad` дописано « (содержимое собрано не полностью)»), иначе без оценки. `grade: null` с причиной, в
+порядке проверки: «содержимое не собрано» (нет содержимого), иначе для снапшота, посчитанного другой версией
+анализатора, — «пересчитайте снапшот: оценка считается с версии анализатора 2» (у находок прежних версий нет `policy_id`,
+а `settings_known` и `contents_partial` у строк, записанных до их появления, — `0` и `false` до пересчёта), иначе
+«политика неактивна», иначе «содержимое собрано не полностью» (неполное и без считаемых Critical/High), иначе
 «структура продукта не описана» (для продукта нет словаря, сейчас описан только `KES`), иначе «настройки политики не
 распознаны словарём» (словарь есть, но `settings_known == 0` — например, другая версия продукта с иными именами секций:
-правила молчат от незнания, и такая политика не может стать «хорошей»), иначе для снапшота, посчитанного другой версией
-анализатора, — «пересчитайте снапшот: оценка считается с версии анализатора 2» (у находок прежних версий нет `policy_id`;
-`contents_partial` у строк, записанных до появления признака, — `false` до пересчёта). `findings` считается и для политик
+правила молчат от незнания, и такая политика не может стать «хорошей»). `contents_partial` — признак неполного
+содержимого: списки исключений, правил и настроек политики могут быть неполными. `findings` считается и для политик
 без оценки. Какие секции не прочитались — `errors` карточки. Фильтр `grade` — оценка или `none` (без оценки),
 другое значение — `422`; фасет `grade` — по отфильтрованному набору, как остальные. Оценка считается при каждом запросе:
 смена статуса находки меняет её сразу, без пересчёта снапшота.
@@ -395,12 +397,13 @@ GET  /snapshots/{id}/exclusions?q=&policy_id=&profile=&kind=&enabled=true|false&
                                                          enabled, comment, risks, risk_titles, key, policies, covered_by}],
                                         facets: {policy: {id: n}, kind, enabled: {true, false}, dup: {multi, single, covered},
                                                  risky: {true, false}}|null,
-                                        summary: [{policy_id, policy_name, hosts, total, by_kind}]|null,
+                                        summary: [{policy_id, policy_name, hosts, total, by_kind, risky, partial}]|null,
                                         undescribed: [код продукта]}
 GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&limit=200&offset=0
                                         {total, items: [{id, policy_id, policy_name, profile, layer, position, name, action,
                                                          direction, protocol, local_ports, remote_ports, addresses, enabled, key}],
-                                        facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта]}
+                                        facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта],
+                                        partial: [policy_id]}
 GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offset=0
                                         {total, items: [{id, snapshot_id, collected_at, kind, action, policy_id, policy_name,
                                                          profile, section, path, before, after}],
@@ -447,14 +450,18 @@ GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offse
 Поиск `q` — подстрока без регистра: у исключений в `value`, `comment` и имени политики, у правил в `name`, `addresses`
 и портах. Порядок: имя политики, сама политика раньше профилей (`profile` — пустая строка у самой политики; фильтр `profile=` с пустым значением
 оставляет только политику), затем значение (у правил — слой и позиция). Фасеты считаются по отфильтрованному набору.
-`summary` — без фильтров, по политикам с описанным продуктом и собранным содержимым: исключений по видам и `hosts`
-(хостов под политикой).
+`summary` — без фильтров, по политикам с описанным продуктом и собранным содержимым: исключений по видам, `hosts`
+(хостов под политикой), `risky` (исключений с непустыми `risks`) и `partial` (содержимое собрано не полностью — список
+может быть неполным: не собрано ≠ пусто). `partial` у сетевых правил — id таких политик описанного продукта (при любом
+`offset`).
 
 Дубли и перекрытия считаются по всем исключениям снапшота, фильтры на них не влияют: `policies` — в скольких политиках
 встречается тот же `key` (вид и значение без регистра, профиль не учитывается); `dup=multi` — `policies > 1`, `single` —
 `policies == 1`. `covered_by` — значение более широкого включённого исключения-пути или маски в той же политике и
 профиле (каталог-префикс по границе разделителя, замыкающий разделитель не в счёт, или подходящая маска; равное
-значение перекрытием не считается), иначе `null`; `dup=covered` — `covered_by` не пуст.
+значение перекрытием не считается; исключение, суженное именем объекта — «объект: X», X ≠ `*`, — других не перекрывает),
+иначе `null`; `dup=covered` — `covered_by` не пуст. Перекрытия группы (политика, профиль) считаются только когда нужны:
+для фильтра `dup`, фасетов и строк страницы.
 
 `risks` — коды рисков исключения (`core/exclusion_risks.py`), `risk_titles` — их объяснения в том же порядке (код, которого
 в правилах уже нет, показывается как есть); `risky=true` — `risks` не пуст, `false` — пуст. Коды считаются при импорте
@@ -487,7 +494,8 @@ GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offse
 `reason` — причина несравнения. `total: null` — изменения у снапшота не считались (импортирован до журнала изменений),
 нужен пересчёт. Записи `exclusion` / `net_rule` сравниваются по `(профиль, key)` как мультимножества: `key` у разных
 записей может совпасть (один путь с разными именами объекта, одноимённые правила программ). По одной записи с каждой
-стороны — `changed`, иначе записи без пары — `removed` / `added`; `path` — `key`. Тот же свод последнего снапшота — `changes` в обзоре сервера (`null`, если снапшотов нет).
+стороны — `changed`, иначе записи без пары — `removed` / `added`; `path` — `key`. `position` правила не сравнивается
+(вставка или удаление правила сдвигает номера всех ниже — это не их изменение), но остаётся в `before` / `after`. Тот же свод последнего снапшота — `changes` в обзоре сервера (`null`, если снапшотов нет).
 
 ## Сервер KSC
 
@@ -646,7 +654,7 @@ POLICY_KEY_UNLOCKED     Ключевой признак не под замком
 | `POLICY_COMPONENT_OFF` | High: `file_threat`, `behavior`, `exploit`, `network_threat`, `remediation`; Medium: остальные | признак «включён» компонента из `policy_key_components` равен `false` | `{id}\|{компонент}`; `component`, `title` |
 | `POLICY_NOTIFY_ONLY` | High | `firewall.notifyOnly`, `hips.notifyOnly`, `notifyOnly` защиты от сетевых угроз равно `true`, а компонент включён | `{id}\|{компонент}`; `component`, `title` |
 | `POLICY_SELFDEFENSE_OFF` | High | `selfDefense.enableSelfDefence` равно `false` | `{id}` |
-| `POLICY_PASSWORD_OFF` | Medium | `passwordProtection.login` и `passwordProtection.passwordHash` оба `""` (сборщик 1.3+); `"<скрыто>"` хотя бы у одного (пароль задан или сборщик до 1.3 скрыл и пустое) или ключа нет — неизвестно, находки нет | `{id}` |
+| `POLICY_PASSWORD_OFF` | Medium | `passwordProtection.passwordHash` равен `""` (сборщик 1.3+); `passwordProtection.login` не в счёт — учётная запись задана всегда (по умолчанию); `"<скрыто>"` (пароль задан или сборщик до 1.3 скрыл и пустое) или ключа нет — неизвестно, находки нет | `{id}` |
 | `POLICY_THREAT_TYPES_OFF` | High, если выключены `virusesAndWorms`, `trojans` или `maliciousTools`; иначе Medium | выключено обнаружение типов `threats.*` (девять типов словаря) | `{id}`; `types`, `titles` |
 | `POLICY_LOCAL_EXCLUSIONS` | Medium | `allowUseLocalScanExclusions` или `allowUseLocalTrustedApps` равно `true` | `{id}`; `allowed`, `titles` |
 | `POLICY_KEY_UNLOCKED` | Medium | признак «включён» компонента из `policy_key_components` или `selfDefense.enableSelfDefence` не под замком (`locked` `false`; без признака замка — молчит) | `{id}`; `unlocked` (`self_defense` — самозащита), `titles` |
