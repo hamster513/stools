@@ -21,6 +21,7 @@ from api.modules.ksc.routers import (
     policy_contents,
     policy_list,
     policy_objects,
+    policy_settings,
     server,
     settings,
     snapshots,
@@ -30,7 +31,7 @@ from api.platform.findings.adapters import register_adapter
 router = APIRouter(prefix="/api/ksc")
 for sub in (
     snapshots.router, hosts.router, findings.router, policies.router, policy_contents.router, policy_list.router,
-    policy_objects.router, changes.router,
+    policy_objects.router, policy_settings.router, changes.router,
     server.router, settings.router, collector.router, connections.router, make_jobs_router(KscJob, "ksc"),
 ):
     router.include_router(sub)

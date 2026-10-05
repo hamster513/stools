@@ -15,6 +15,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from api.modules.ksc.core.dictionary import describe
 from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_export_path
 from api.modules.ksc.core.policy_contents import walk_settings
 from api.modules.ksc.core.policy_index import policy_objects, policy_rows, profile_rows, scope_rows
@@ -71,6 +72,8 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex) -> None
     for p in policy_rows(idx):
         objs, described = policy_objects(export, str(p.policy_id))
         content = export.policy_contents.get(str(p.policy_id)) or {}
+        sections = content.get("sections") or {}
+        described_settings = describe(p.product, sections)
         entry = export.policy_profiles.get(str(p.policy_id)) if export.policy_profiles is not None else None
         policies.append({
             "snapshot_id": sid, "policy_id": p.policy_id, "name": p.name[:255], "product": p.product[:64], "version": p.version[:64],
@@ -78,7 +81,7 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex) -> None
             "modified_at": p.modified_at, "has_contents": p.has_contents, "described": described,
             "groups": groups[p.policy_id], "hosts": hosts[p.policy_id],
             "profiles": _profiles_count(entry), "exclusions": len(objs.exclusions), "net_rules": len(objs.net_rules),
-            "settings_total": len(walk_settings(content.get("sections") or {})), "settings_known": 0,
+            "settings_total": len(walk_settings(sections)), "settings_known": len(described_settings[0]) if described_settings else 0,
         })
         exclusions.extend(
             {"snapshot_id": sid, "policy_id": p.policy_id, "profile": e.profile[:255], "kind": e.kind[:32], "value": e.value,
