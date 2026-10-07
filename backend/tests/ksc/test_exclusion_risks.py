@@ -124,9 +124,12 @@ def test_disabled_has_no_risks() -> None:
 
 
 def test_risks_table() -> None:
-    assert set(RISKS) == {"whole_drive", "user_writable", "ext_mask", "name_only", "interpreter", "broad_trust", "threat_any"}
-    assert all(severity in SEVERITIES and why for severity, why in RISKS.values())
-    assert {code for code, (severity, _) in RISKS.items() if severity == "Medium"} == {"name_only", "broad_trust"}
+    assert list(RISKS) == ["whole_drive", "user_writable", "ext_mask", "name_only", "interpreter", "broad_trust", "threat_any"]
+    assert {code for code, risk in RISKS.items() if risk.severity == "Medium"} == {"name_only", "broad_trust"}
+    for risk in RISKS.values():
+        assert risk.severity in {"High", "Medium"} and risk.severity in SEVERITIES
+        assert risk.title and risk.detail and len(risk.detail) > len(risk.title)
+        assert len(risk.recommendations) >= 2 and all(r for r in risk.recommendations)
 
 
 def test_config_lists_change_result() -> None:
@@ -181,7 +184,7 @@ def test_findings_one_per_risky_exclusion() -> None:
     drive = found["C:\\"]
     assert (drive.severity, drive.target) == ("High", "KES workstations")
     assert drive.details == {"policy_id": 1, "profile": "", "kind": "path", "value": "C:\\", "risks": ["whole_drive"],
-                             "why": [RISKS["whole_drive"][1]], "comment": "весь диск"}
+                             "why": [RISKS["whole_drive"].title], "comment": "весь диск"}
     assert drive.key_extra == f"1||{exclusion_key(Exclusion('path', 'C:\\'))}"
     assert (found["*\\cmd.exe"].severity, found["*\\cmd.exe"].details["risks"]) == ("High", ["name_only", "interpreter"])
     assert (found["C:\\Tools\\b.exe"].severity, found["C:\\Tools\\b.exe"].details["risks"]) == ("Medium", ["broad_trust"])
@@ -236,7 +239,7 @@ def test_duplicate_key_is_one_finding_with_union() -> None:
     ]})
     [f] = _run(raw)
     assert (f.severity, f.details["risks"], f.details["why"]) == ("High", ["interpreter", "broad_trust"],
-                                                                 [RISKS["interpreter"][1], RISKS["broad_trust"][1]])
+                                                                 [RISKS["interpreter"].title, RISKS["broad_trust"].title])
 
 
 # --- импорт и API ----------------------------------------------------------------------------------
@@ -260,7 +263,7 @@ def test_import_stores_risks_findings_and_api_filter(auth_client: TestClient, db
     risky = auth_client.get(f"/api/ksc/snapshots/{sid}/exclusions?policy_id=1&profile=&risky=true").json()
     assert risky["total"] == 4 and risky["facets"]["risky"] == {"true": 4, "false": 0}
     item = next(i for i in risky["items"] if i["value"] == "*\\cmd.exe")
-    assert item["risks"] == ["name_only", "interpreter"] and item["risk_titles"] == [RISKS["name_only"][1], RISKS["interpreter"][1]]
+    assert item["risks"] == ["name_only", "interpreter"] and item["risk_titles"] == [RISKS["name_only"].title, RISKS["interpreter"].title]
     clean = auth_client.get(f"/api/ksc/snapshots/{sid}/exclusions?policy_id=1&profile=&risky=false").json()
     assert clean["total"] == 2 and all(i["risks"] == [] and i["risk_titles"] == [] for i in clean["items"])
     every = auth_client.get(f"/api/ksc/snapshots/{sid}/exclusions?policy_id=1").json()

@@ -43,8 +43,8 @@ def check_policy_exclusion_risky(idx: ExportIndex, cfg: KscConfig) -> list[Findi
             found.setdefault(f"{policy_id}|{e.profile}|{key}", (e, set()))[1].update(risks)
         for key_extra, (e, codes) in found.items():
             risks = [code for code in RISKS if code in codes]
-            severity = min((RISKS[code][0] for code in risks), key=SEVERITY_RANK.__getitem__)
+            severity = min((RISKS[code].severity for code in risks), key=SEVERITY_RANK.__getitem__)
             details: dict[str, Any] = {"policy_id": _int(policy.get("KLPOL_ID")), "profile": e.profile, "kind": e.kind, "value": e.value,
-                                       "risks": risks, "why": [RISKS[code][1] for code in risks], "comment": e.comment}
+                                       "risks": risks, "why": [RISKS[code].title for code in risks], "comment": e.comment}
             out.append(finalize(Finding(check="POLICY_EXCLUSION_RISKY", severity=severity, target=target, details=details, key_extra=key_extra), cfg))
     return out

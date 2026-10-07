@@ -1,4 +1,4 @@
-"""API исключений и сетевых правил: поиск, фильтры, дубли, перекрытия, фасеты, сводка, «не описан»."""
+"""API исключений и сетевых правил: поиск, фильтры, дубли, перекрытия, фасеты, сводка, «не описан», карточки объектов."""
 from __future__ import annotations
 
 from typing import Any
@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.modules.ksc.core.exclusion_risks import RISKS
 from api.modules.ksc.core.policy_model import (
     EXTRACTORS,
     Exclusion,
@@ -16,7 +17,7 @@ from api.modules.ksc.core.policy_model import (
     exclusion_key,
 )
 from api.modules.ksc.core.policy_model import covered_by as policy_model_covered_by
-from api.modules.ksc.models import KscPolicy
+from api.modules.ksc.models import KscExclusion, KscPolicy
 from api.modules.ksc.routers import policy_objects
 from tests.ksc.kes11 import exclusion, kes11_export
 from tests.ksc.synthetic import build_export
@@ -183,6 +184,9 @@ def test_partial_policy_and_risky_count(auth_client: TestClient) -> None:
     assert summary[3]["partial"] is False
     assert _net_rules(auth_client, sid)["partial"] == [1]
     assert _net_rules(auth_client, sid, "offset=1")["partial"] == [1]
+    drive = next(i for i in _exclusions(auth_client, sid, "policy_id=1")["items"] if i["value"] == "C:\\")
+    card = auth_client.get(f"/api/ksc/snapshots/{sid}/exclusions/{drive['id']}").json()
+    assert card["policy_partial"] is True and [d["code"] for d in card["risk_details"]] == ["whole_drive"]
 
 
 def _restricted(sections: dict[str, Any]) -> PolicyObjects:
@@ -230,3 +234,94 @@ def test_undescribed_product_has_no_objects(auth_client: TestClient, monkeypatch
 def test_snapshot_not_found(auth_client: TestClient) -> None:
     assert auth_client.get("/api/ksc/snapshots/999999/exclusions").status_code == 404
     assert auth_client.get("/api/ksc/snapshots/999999/net-rules").status_code == 404
+
+
+# --- карточки объектов -------------------------------------------------------------------------------
+
+
+def _card(client: TestClient, sid: int, kind: str, row_id: int) -> dict[str, Any]:
+    r = client.get(f"/api/ksc/snapshots/{sid}/{kind}/{row_id}")
+    assert r.status_code == 200, r.text
+    return dict(r.json())
+
+
+def _hosts(db_session: Session, sid: int) -> dict[int, int]:
+    return {p.policy_id: p.hosts for p in db_session.execute(select(KscPolicy).where(KscPolicy.snapshot_id == sid)).scalars()}
+
+
+def test_exclusion_card_same_fields_and_same_in(auth_client: TestClient, db_session: Session, sid: int) -> None:
+    """Карточка — элемент списка (с `covered_by` и `policies`) плюс та же запись в других политиках и профилях, хосты политики."""
+    by = {(i["policy_id"], i["profile"], i["value"]): i for i in _exclusions(auth_client, sid)["items"]}
+    a1, a3 = by[(1, "", "C:\\Tools\\a.exe")], by[(3, "", "C:\\Tools\\a.exe")]
+    card = _card(auth_client, sid, "exclusions", a1["id"])
+    assert {k: card[k] for k in a1} == a1 and card["covered_by"] == "C:\\Tools" and card["policies"] == 2
+    assert card["same_in"] == [{"row_id": a3["id"], "policy_id": 3, "policy_name": "KES lab", "profile": "", "enabled": True}]
+    assert card["risk_details"] == [] and card["policy_partial"] is False
+    hosts = _hosts(db_session, sid)
+    assert card["policy_hosts"] == hosts[1] > 0
+    # С той стороны — строка политики 1; у копии в профиле той же политики тот же `key`, она тоже «та же запись».
+    assert _card(auth_client, sid, "exclusions", a3["id"])["same_in"] == [
+        {"row_id": a1["id"], "policy_id": 1, "policy_name": "KES workstations", "profile": "", "enabled": True},
+    ]
+    tools, profile = by[(1, "", "C:\\Tools")], by[(1, "Ноутбуки", "C:\\Tools")]
+    assert _card(auth_client, sid, "exclusions", tools["id"])["same_in"] == [
+        {"row_id": profile["id"], "policy_id": 1, "policy_name": "KES workstations", "profile": "Ноутбуки", "enabled": True},
+    ]
+    assert _card(auth_client, sid, "exclusions", by[(1, "", "ABC")]["id"])["same_in"] == []
+
+
+def _risky(sections: dict[str, Any]) -> PolicyObjects:
+    """Политика 1 (замкнута) — весь диск и файл; политика 3 — весь диск (`enabled=False`); профили пусты."""
+    if "KLPRSS_Deep" not in sections:
+        return PolicyObjects()
+    if sections["KLPRSS_Basic"]["EnableSelfProtection"]["KLPRSS_Mnd"]:
+        return PolicyObjects(exclusions=[Exclusion("path", "C:\\"), Exclusion("path", "C:\\Tools\\a.exe")])
+    return PolicyObjects(exclusions=[Exclusion("path", "c:\\", enabled=False)])
+
+
+def test_exclusion_card_risk_details(auth_client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(EXTRACTORS, "KES", _risky)
+    assert upload(auth_client, build_export())["status"] == "done"
+    sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    by = {(i["policy_id"], i["value"]): i for i in _exclusions(auth_client, sid)["items"]}
+    drive = by[(1, "C:\\")]
+    card = _card(auth_client, sid, "exclusions", drive["id"])
+    risk = RISKS["whole_drive"]
+    assert card["risks"] == ["whole_drive"] and card["risk_details"] == [
+        {"code": "whole_drive", "severity": "High", "title": risk.title, "detail": risk.detail, "recommendations": list(risk.recommendations)},
+    ]
+    assert card["same_in"] == [{"row_id": by[(3, "c:\\")]["id"], "policy_id": 3, "policy_name": "KES lab", "profile": "", "enabled": False}]
+    # Код, которого в правилах уже нет (снапшот посчитан прежней версией), — заглушка с кодом вместо заголовка.
+    row = db_session.get(KscExclusion, drive["id"])
+    assert row is not None
+    row.risks_json = '["whole_drive", "old_code"]'
+    db_session.commit()
+    details = _card(auth_client, sid, "exclusions", drive["id"])["risk_details"]
+    assert [d["code"] for d in details] == ["whole_drive", "old_code"]
+    assert details[1] == {"code": "old_code", "severity": "", "title": "old_code", "detail": "", "recommendations": []}
+
+
+def test_net_rule_card(auth_client: TestClient, db_session: Session, sid: int) -> None:
+    items = _net_rules(auth_client, sid)["items"]
+    dns = next(i for i in items if i["name"] == "DNS")
+    card = _card(auth_client, sid, "net-rules", dns["id"])
+    assert {k: card[k] for k in dns} == dns
+    assert card["same_in"] == [] and card["policy_hosts"] == _hosts(db_session, sid)[1] and card["policy_partial"] is False
+    assert set(card) == set(dns) | {"same_in", "policy_hosts", "policy_partial"}
+
+
+def test_object_card_not_found(auth_client: TestClient, sid: int) -> None:
+    exclusion_id = _exclusions(auth_client, sid)["items"][0]["id"]
+    rule_id = _net_rules(auth_client, sid)["items"][0]["id"]
+    second = build_export()
+    second["server"]["collected_at"] = "2026-09-16T12:00:00Z"
+    assert upload(auth_client, second)["status"] == "done"
+    other = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    assert other != sid
+    for url in (f"/api/ksc/snapshots/{other}/exclusions/{exclusion_id}", f"/api/ksc/snapshots/{sid}/exclusions/999999"):
+        r = auth_client.get(url)
+        assert r.status_code == 404 and r.json()["detail"] == "исключение не найдено", r.text
+    for url in (f"/api/ksc/snapshots/{other}/net-rules/{rule_id}", f"/api/ksc/snapshots/{sid}/net-rules/999999"):
+        r = auth_client.get(url)
+        assert r.status_code == 404 and r.json()["detail"] == "правило не найдено", r.text
+    assert auth_client.get(f"/api/ksc/snapshots/999999/exclusions/{exclusion_id}").status_code == 404

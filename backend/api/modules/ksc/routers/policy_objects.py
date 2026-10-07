@@ -1,4 +1,4 @@
-"""Исключения и сетевые правила снапшота: поиск, фильтры, дубли и перекрытия, фасеты, сводка по политикам.
+"""Исключения и сетевые правила снапшота: поиск, фильтры, дубли и перекрытия, фасеты, сводка по политикам, карточки.
 
 Записи строятся при импорте извлекателем продукта; пока извлекателя нет (`undescribed`), список пуст — это «не описан»,
 а не «исключений нет». Числа дублей и перекрытий считаются в памяти по строкам снапшота (их сотни или тысячи).
@@ -90,13 +90,43 @@ def _risks(r: KscExclusion) -> list[str]:
     return list(json.loads(r.risks_json or "[]"))
 
 
+def _row[R: (KscExclusion, KscNetRule)](db: Session, model: type[R], snapshot_id: int, row_id: int, what: str) -> R:
+    """Строка снапшота по id; строки нет или она из другого снапшота — 404."""
+    row = db.get(model, row_id)
+    if row is None or row.snapshot_id != snapshot_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"{what} не найдено")
+    return row
+
+
+def _same_in[R: (KscExclusion, KscNetRule)](rows: list[R], row: R, policies: dict[int, KscPolicy]) -> list[dict[str, Any]]:
+    """Другие строки снапшота с тем же `key` — та же запись в других политиках и профилях (без самой строки), по имени политики."""
+    same = sorted((r for r in rows if r.key == row.key and r.id != row.id), key=lambda r: (*_order(policies, r.policy_id), r.profile, r.id))
+    return [{"row_id": r.id, "policy_id": r.policy_id, "policy_name": _name(policies, r.policy_id), "profile": r.profile, "enabled": r.enabled}
+            for r in same]
+
+
+def _policy_fields(policies: dict[int, KscPolicy], policy_id: int) -> dict[str, Any]:
+    """`policy_hosts` — хостов под политикой записи, `policy_partial` — её содержимое собрано не полностью."""
+    p = policies.get(policy_id)
+    return {"policy_hosts": p.hosts if p is not None else 0, "policy_partial": p is not None and p.contents_partial}
+
+
+def _risk_details(codes: list[str]) -> list[dict[str, Any]]:
+    """Код, которого уже нет в правилах, — заглушка с кодом вместо заголовка."""
+    return [
+        {"code": c, "severity": RISKS[c].severity, "title": RISKS[c].title, "detail": RISKS[c].detail, "recommendations": list(RISKS[c].recommendations)}
+        if c in RISKS else {"code": c, "severity": "", "title": c, "detail": "", "recommendations": []}
+        for c in codes
+    ]
+
+
 def _exclusion_item(r: KscExclusion, name: str, policies: int, covered: str | None) -> dict[str, Any]:
     risks = _risks(r)
     return {
         "id": r.id, "policy_id": r.policy_id, "policy_name": name, "profile": r.profile, "kind": r.kind, "value": r.value,
         "components": json.loads(r.components_json or "[]"), "enabled": r.enabled, "comment": r.comment, "risks": risks,
         # Код, которого уже нет в правилах (снапшот посчитан прежней версией), показывается как есть.
-        "risk_titles": [RISKS[c][1] if c in RISKS else c for c in risks], "key": r.key, "policies": policies, "covered_by": covered,
+        "risk_titles": [RISKS[c].title if c in RISKS else c for c in risks], "key": r.key, "policies": policies, "covered_by": covered,
     }
 
 
@@ -176,6 +206,24 @@ def list_exclusions(
     }
 
 
+@router.get("/snapshots/{snapshot_id}/exclusions/{row_id}")
+def get_exclusion(
+    snapshot_id: int,
+    row_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Карточка исключения: элемент списка, подробности рисков, та же запись в других политиках, хосты политики."""
+    _snapshot(db, snapshot_id, settings)
+    row = _row(db, KscExclusion, snapshot_id, row_id, "исключение")
+    policies = _policies(db, snapshot_id)
+    rows = list(db.execute(select(KscExclusion).where(KscExclusion.snapshot_id == snapshot_id)).scalars())
+    owners = len({r.policy_id for r in rows if r.key == row.key})
+    item = _exclusion_item(row, _name(policies, row.policy_id), owners, _covered(rows)(row))
+    return {**item, "risk_details": _risk_details(item["risks"]), "same_in": _same_in(rows, row, policies), **_policy_fields(policies, row.policy_id)}
+
+
 def _net_rule_item(r: KscNetRule, name: str) -> dict[str, Any]:
     return {
         "id": r.id, "policy_id": r.policy_id, "policy_name": name, "profile": r.profile, "layer": r.layer, "position": r.position, "name": r.name,
@@ -228,3 +276,19 @@ def list_net_rules(
         "total": len(kept), "items": [_net_rule_item(r, _name(policies, r.policy_id)) for r in page], "facets": facets,
         "undescribed": _undescribed(policies), "partial": _partial(policies),
     }
+
+
+@router.get("/snapshots/{snapshot_id}/net-rules/{row_id}")
+def get_net_rule(
+    snapshot_id: int,
+    row_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Карточка сетевого правила: элемент списка, то же правило в других политиках, хосты политики."""
+    _snapshot(db, snapshot_id, settings)
+    row = _row(db, KscNetRule, snapshot_id, row_id, "правило")
+    policies = _policies(db, snapshot_id)
+    rows = list(db.execute(select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id)).scalars())
+    return {**_net_rule_item(row, _name(policies, row.policy_id)), "same_in": _same_in(rows, row, policies), **_policy_fields(policies, row.policy_id)}

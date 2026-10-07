@@ -399,11 +399,17 @@ GET  /snapshots/{id}/exclusions?q=&policy_id=&profile=&kind=&enabled=true|false&
                                                  risky: {true, false}}|null,
                                         summary: [{policy_id, policy_name, hosts, total, by_kind, risky, partial}]|null,
                                         undescribed: [код продукта]}
+GET  /snapshots/{id}/exclusions/{row_id}  {…элемент списка (включая policies, covered_by),
+                                        risk_details: [{code, severity, title, detail, recommendations: [str]}],
+                                        same_in: [{row_id, policy_id, policy_name, profile, enabled}],
+                                        policy_hosts, policy_partial}
 GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&limit=200&offset=0
                                         {total, items: [{id, policy_id, policy_name, profile, layer, position, name, action,
                                                          direction, protocol, local_ports, remote_ports, addresses, enabled, key}],
                                         facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта],
                                         partial: [policy_id]}
+GET  /snapshots/{id}/net-rules/{row_id}   {…элемент списка, same_in: [{row_id, policy_id, policy_name, profile, enabled}],
+                                        policy_hosts, policy_partial}
 GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offset=0
                                         {total, items: [{id, snapshot_id, collected_at, kind, action, policy_id, policy_name,
                                                          profile, section, path, before, after}],
@@ -411,8 +417,16 @@ GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offse
                                         snapshots: [{id, collected_at, prev, total|null, compared, truncated, reason|null}]}
 ```
 
-`404` — снапшот или сервер не найдены; `422` — неизвестное значение `dup` или `limit` вне 1..1000.
+`404` — снапшот или сервер не найдены, у карточек — ещё «исключение не найдено» / «правило не найдено» (строки нет
+или она из другого снапшота); `422` — неизвестное значение `dup` или `limit` вне 1..1000.
 `facets` (и `summary` у исключений) приходят только при `offset=0`, иначе `null`.
+
+Карточка исключения или правила — та же строка, что в списке (у исключения `policies` и `covered_by` считаются по
+всем строкам снапшота, как в списке), плюс `same_in` — другие строки снапшота с тем же `key`: та же запись в других
+политиках и в профилях (в том числе профилях той же политики), без самой строки, по имени политики, затем профиль;
+`policy_hosts` — хостов под политикой записи; `policy_partial` — содержимое этой политики собрано не полностью.
+У исключения ещё `risk_details` — риски из `risks` в том же порядке с полями `Risk` (ниже); код, которого в правилах
+уже нет, — `{code, severity: "", title: code, detail: "", recommendations: []}`.
 
 Исключения и правила берутся из таблиц снапшота, которые заполняет извлекатель продукта при импорте. `undescribed` —
 коды продуктов политик с содержимым, для которых извлекателя нет: у них список пуст потому, что продукт не описан,
@@ -464,7 +478,11 @@ GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offse
 для фильтра `dup`, фасетов и строк страницы.
 
 `risks` — коды рисков исключения (`core/exclusion_risks.py`), `risk_titles` — их объяснения в том же порядке (код, которого
-в правилах уже нет, показывается как есть); `risky=true` — `risks` не пуст, `false` — пуст. Коды считаются при импорте
+в правилах уже нет, показывается как есть); `risky=true` — `risks` не пуст, `false` — пуст. Описание риска — `Risk`
+(`RISKS: dict[code, Risk]`, порядок кодов как в таблице ниже): `severity` (High | Medium), `title` — короткое
+объяснение (оно же `risk_titles` и `why` у находки), `detail` — что именно открывает исключение (2–4 предложения),
+`recommendations` — 2–4 пункта, как сузить или закрыть; тексты общие по продукту, без привязки к инфраструктуре,
+в каждом последним пунктом — комментарий с причиной, владельцем и датой и периодический пересмотр. Коды считаются при импорте
 и пересчёте по спискам настроек модуля на тот момент: после правки списков нужен пересчёт снапшота. Выключенное
 исключение рисков не имеет. Пути сравниваются без регистра, `/` и `\` не различаются, переменные окружения — как
 текст; правила пути действуют на виды `path`, `mask` и `trusted_app`. Исключение с путём и именем объекта (в
