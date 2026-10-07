@@ -14,6 +14,7 @@ import type {
   FindingsQuery,
   FindingsResponse,
   HostDetail,
+  HostProfiles,
   HostsQuery,
   HostsResponse,
   Job,
@@ -44,7 +45,7 @@ export const HOSTS_PAGE_SIZE = 200
 export const OBJECTS_PAGE_SIZE = 200
 
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
-  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-policy-list', 'ksc-policy',
+  for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-host-profiles', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-policy-list', 'ksc-policy',
     'ksc-policy-scope', 'ksc-policy-settings', 'ksc-policy-findings', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs',
     'ksc-exclusions', 'ksc-net-rules', 'ksc-changes', 'ksc']) {
     qc.invalidateQueries({ queryKey: [key] })
@@ -94,6 +95,15 @@ export function useHostDetail(snapshotId: number | undefined, hostId: string | u
   return useQuery<HostDetail, ApiRequestError>({
     queryKey: ['ksc-host', snapshotId, hostId],
     queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/hosts/${hostId}`),
+    enabled: snapshotId !== undefined && hostId !== undefined,
+  })
+}
+
+/** Политики хоста с профилями и их активацией на нём по тегам, и что включает каждый тег. */
+export function useHostProfiles(snapshotId: number | undefined, hostId: string | undefined) {
+  return useQuery<HostProfiles, ApiRequestError>({
+    queryKey: ['ksc-host-profiles', snapshotId, hostId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/hosts/${hostId}/profiles`),
     enabled: snapshotId !== undefined && hostId !== undefined,
   })
 }

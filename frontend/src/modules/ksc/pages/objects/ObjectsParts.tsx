@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { FileQuestion, FilterX, ShieldQuestion } from 'lucide-react'
 import { usePolicy, usePolicyList, useServers } from '@/modules/ksc/api/queries'
-import { EXCLUSION_RISKS, type Severity } from '@/modules/ksc/api/types'
+import { EXCLUSION_RISKS, type Severity, type UndeterminedProfile } from '@/modules/ksc/api/types'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
@@ -114,6 +114,21 @@ export function UndescribedNote({ codes, what }: { codes: string[]; what: string
   return (
     <div className="border-b border-grid bg-surface px-4 py-2 text-xs text-text-secondary">
       Структура продукта не описана: <span className="font-mono text-text">{codes.join(', ')}</span> — {what} этих политик появятся после описания структуры.
+    </div>
+  )
+}
+
+/** Пометка записи профиля, активацию которого на хосте не определить: запись, возможно, действует. */
+export function MaybeMark() {
+  return <span className="text-[11px] text-risk-medium" title="активацию профиля на хосте не определить: условие не по тегам или теги хоста не собраны — запись, возможно, действует">возможно</span>
+}
+
+/** Строка над списком хоста: профили, активацию которых на хосте не определить, — их записи остаются в списке с пометкой «возможно». */
+export function UndeterminedNote({ items }: { items: UndeterminedProfile[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="border-b border-grid bg-surface px-4 py-2 text-xs text-risk-medium">
+      Активацию профилей на хосте не определить: <span className="text-text">{items.map((u) => `${u.policy_name} → ${u.profile}`).join(', ')}</span> — их записи показаны с пометкой «возможно».
     </div>
   )
 }

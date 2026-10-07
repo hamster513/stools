@@ -18,7 +18,7 @@ import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { ObjectDrawer } from './objects/ObjectDrawer'
-import { LoadMore, ObjectsEmpty, PartialNote, PolicyCell, PolicyFacet, RiskChips, SnapshotSection, UndescribedNote } from './objects/ObjectsParts'
+import { LoadMore, MaybeMark, ObjectsEmpty, PartialNote, PolicyCell, PolicyFacet, RiskChips, SnapshotSection, UndescribedNote, UndeterminedNote } from './objects/ObjectsParts'
 
 interface Filters {
   policy?: { id: number; name: string }
@@ -69,8 +69,8 @@ function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p:
   )
 }
 
-/** Строки кликабельны: щелчок или Enter открывают запись в боковой панели; открытая подсвечена. */
-function Rows({ items, inPolicy, serverId, openRowId, onOpen }: { items: ExclusionItem[]; inPolicy: boolean; serverId: number; openRowId: number | null; onOpen: (rowId: number) => void }) {
+/** Строки кликабельны: щелчок или Enter открывают запись в боковой панели; открытая подсвечена. `maybe` — ключи `(policy_id, profile)` профилей, активацию которых на хосте не определить. */
+function Rows({ items, inPolicy, serverId, openRowId, onOpen, maybe }: { items: ExclusionItem[]; inPolicy: boolean; serverId: number; openRowId: number | null; onOpen: (rowId: number) => void; maybe: Set<string> }) {
   return (
     <div className="min-w-[1536px]">
       <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
@@ -89,7 +89,7 @@ function Rows({ items, inPolicy, serverId, openRowId, onOpen }: { items: Exclusi
           <div className="min-w-[240px] flex-1 px-2 font-mono break-all text-text">{e.value}</div>
           <div className="w-44 shrink-0 px-2"><RiskChips risks={e.risks} titles={e.risk_titles} /></div>
           <div className="w-24 shrink-0 px-2 text-text-secondary">{kindLabel(e.kind)}</div>
-          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={e.policy_id} policyName={e.policy_name} profile={e.profile} inPolicy={inPolicy} /></div>
+          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={e.policy_id} policyName={e.policy_name} profile={e.profile} inPolicy={inPolicy} />{maybe.has(`${e.policy_id}\u0000${e.profile}`) && <MaybeMark />}</div>
           <div className="w-48 shrink-0 px-2 text-text-secondary">{e.components.length ? e.components.join(', ') : '—'}</div>
           <div className="w-20 shrink-0 px-2 text-text-secondary">{e.enabled ? 'да' : 'нет'}</div>
           <div className="w-56 shrink-0 px-2 break-words text-text-secondary">{e.comment || '—'}</div>
@@ -103,9 +103,10 @@ function Rows({ items, inPolicy, serverId, openRowId, onOpen }: { items: Exclusi
 
 /**
  * Исключения снапшота: поиск, фильтры чипами, сводка, таблица. С `policyId` — по одной политике, без фильтра политики и сводки;
- * `partial` — её содержимое собрано не полностью.
+ * `partial` — её содержимое собрано не полностью. С `hostId` — действующие на хост (его политик и активных на нём профилей),
+ * записи профилей из `undetermined` помечены «возможно»; сводка и заметки — как в разделе сервера.
  */
-export function ExclusionsTable({ snapshotId, serverId, policyId, partial = false }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean }) {
+export function ExclusionsTable({ snapshotId, serverId, policyId, partial = false, hostId }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean; hostId?: string }) {
   const inPolicy = policyId !== undefined
   const [filters, setFilters] = useState<Filters>({})
   const [openRowId, setOpenRowId] = useState<number | null>(null)
@@ -114,8 +115,8 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
   const q = useDebouncedValue(searchInput, 250)
   const filtersPanel = useFiltersPanel('ksc-exclusions')
   const args = useMemo(
-    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, kind: filters.kind, enabled: filters.enabled, dup: filters.dup, risky: filters.risky }),
-    [q, policyId, filters],
+    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, kind: filters.kind, enabled: filters.enabled, dup: filters.dup, risky: filters.risky, host_id: hostId }),
+    [q, policyId, filters, hostId],
   )
   const query = useExclusions(snapshotId, args)
   const pages = query.data?.pages ?? []
@@ -134,6 +135,9 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить исключения' : null
   const undescribed = first?.undescribed ?? []
+  const undetermined = first?.undetermined ?? []
+  // Ключ `(policy_id, profile)`: имя политики не уникально.
+  const maybe = useMemo(() => new Set((first?.undetermined ?? []).map((u) => `${u.policy_id}\u0000${u.profile}`)), [first])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -179,19 +183,20 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
           {!query.isLoading && !errorMessage && (
             <>
               {!inPolicy && items.length > 0 && <UndescribedNote codes={undescribed} what="исключения" />}
+              <UndeterminedNote items={undetermined} />
               {inPolicy ? partial && <PartialNote bar /> : <PartialNote bar names={(first?.summary ?? []).filter((s) => s.partial).map((s) => s.policy_name)} />}
               {!inPolicy && first?.summary && first.summary.length > 0 && <Summary items={first.summary} onPick={(p) => set('policy', p)} />}
               {items.length === 0 ? (
-                <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="исключения" none="Исключений нет" nothing="Ни одно исключение не подходит под фильтры." />
+                <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="исключения" none={hostId === undefined ? 'Исключений нет' : 'На хост исключения не действуют'} nothing="Ни одно исключение не подходит под фильтры." />
               ) : (
-                <Rows items={items} inPolicy={inPolicy} serverId={serverId} openRowId={openRowId} onOpen={setOpenRowId} />
+                <Rows items={items} inPolicy={inPolicy} serverId={serverId} openRowId={openRowId} onOpen={setOpenRowId} maybe={maybe} />
               )}
               <LoadMore loaded={items.length} total={first?.total ?? 0} hasNext={!!query.hasNextPage} fetching={query.isFetchingNextPage} onMore={() => query.fetchNextPage()} />
             </>
           )}
         </div>
       </div>
-      <ObjectDrawer kind="exclusion" rowId={openRowId} snapshotId={snapshotId} serverId={serverId} onClose={closeRow} />
+      <ObjectDrawer kind="exclusion" rowId={openRowId} snapshotId={snapshotId} serverId={serverId} onOpen={setOpenRowId} onClose={closeRow} />
     </div>
   )
 }

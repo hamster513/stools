@@ -12,7 +12,7 @@ import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { ObjectDrawer } from './objects/ObjectDrawer'
-import { LoadMore, ObjectsEmpty, PartialNote, PartialPoliciesNote, PolicyCell, PolicyFacet, SnapshotSection, UndescribedNote } from './objects/ObjectsParts'
+import { LoadMore, MaybeMark, ObjectsEmpty, PartialNote, PartialPoliciesNote, PolicyCell, PolicyFacet, SnapshotSection, UndescribedNote, UndeterminedNote } from './objects/ObjectsParts'
 
 interface Filters {
   policy?: { id: number; name: string }
@@ -25,8 +25,8 @@ interface Filters {
 const actionLabel = (a: string) => a || '—'
 const directionLabel = (d: string) => d || '—'
 
-/** Строки кликабельны: щелчок или Enter открывают правило в боковой панели; открытое подсвечено. */
-function Rows({ items, inPolicy, serverId, openRowId, onOpen }: { items: NetRuleItem[]; inPolicy: boolean; serverId: number; openRowId: number | null; onOpen: (rowId: number) => void }) {
+/** Строки кликабельны: щелчок или Enter открывают правило в боковой панели; открытое подсвечено. `maybe` — ключи `(policy_id, profile)` профилей, активацию которых на хосте не определить. */
+function Rows({ items, inPolicy, serverId, openRowId, onOpen, maybe }: { items: NetRuleItem[]; inPolicy: boolean; serverId: number; openRowId: number | null; onOpen: (rowId: number) => void; maybe: Set<string> }) {
   return (
     <div className="min-w-[1356px]">
       <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
@@ -52,7 +52,7 @@ function Rows({ items, inPolicy, serverId, openRowId, onOpen }: { items: NetRule
           <div className="w-28 shrink-0 px-2 font-mono break-all text-text-secondary">{r.remote_ports || '—'}</div>
           <div className="w-48 shrink-0 px-2 font-mono break-all text-text-secondary">{r.addresses || '—'}</div>
           <div className="w-20 shrink-0 px-2 text-text-secondary">{r.enabled ? 'да' : 'нет'}</div>
-          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={r.policy_id} policyName={r.policy_name} profile={r.profile} inPolicy={inPolicy} /></div>
+          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={r.policy_id} policyName={r.policy_name} profile={r.profile} inPolicy={inPolicy} />{maybe.has(`${r.policy_id}\u0000${r.profile}`) && <MaybeMark />}</div>
         </div>
       ))}
     </div>
@@ -61,9 +61,10 @@ function Rows({ items, inPolicy, serverId, openRowId, onOpen }: { items: NetRule
 
 /**
  * Сетевые правила снапшота: поиск по названию, адресу и порту, фильтры чипами. С `policyId` — по одной политике;
- * `partial` — её содержимое собрано не полностью.
+ * `partial` — её содержимое собрано не полностью. С `hostId` — действующие на хост (его политик и активных на нём профилей),
+ * правила профилей из `undetermined` помечены «возможно»; заметки — как в разделе сервера.
  */
-export function NetRulesTable({ snapshotId, serverId, policyId, partial = false }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean }) {
+export function NetRulesTable({ snapshotId, serverId, policyId, partial = false, hostId }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean; hostId?: string }) {
   const inPolicy = policyId !== undefined
   const [filters, setFilters] = useState<Filters>({})
   const [openRowId, setOpenRowId] = useState<number | null>(null)
@@ -72,8 +73,8 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false 
   const q = useDebouncedValue(searchInput, 250)
   const filtersPanel = useFiltersPanel('ksc-net-rules')
   const args = useMemo(
-    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, action: filters.action, direction: filters.direction, enabled: filters.enabled }),
-    [q, policyId, filters],
+    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, action: filters.action, direction: filters.direction, enabled: filters.enabled, host_id: hostId }),
+    [q, policyId, filters, hostId],
   )
   const query = useNetRules(snapshotId, args)
   const pages = query.data?.pages ?? []
@@ -91,6 +92,9 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false 
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить сетевые правила' : null
   const undescribed = first?.undescribed ?? []
+  const undetermined = first?.undetermined ?? []
+  // Ключ `(policy_id, profile)`: имя политики не уникально.
+  const maybe = useMemo(() => new Set((first?.undetermined ?? []).map((u) => `${u.policy_id}\u0000${u.profile}`)), [first])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -131,18 +135,19 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false 
           {!query.isLoading && !errorMessage && (
             <>
               {!inPolicy && items.length > 0 && <UndescribedNote codes={undescribed} what="сетевые правила" />}
+              <UndeterminedNote items={undetermined} />
               {inPolicy ? partial && <PartialNote bar /> : <PartialPoliciesNote snapshotId={snapshotId} ids={first?.partial ?? []} />}
               {items.length === 0 ? (
-                <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="сетевые правила" none="Сетевых правил нет" nothing="Ни одно правило не подходит под фильтры." />
+                <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="сетевые правила" none={hostId === undefined ? 'Сетевых правил нет' : 'На хост сетевые правила не действуют'} nothing="Ни одно правило не подходит под фильтры." />
               ) : (
-                <Rows items={items} inPolicy={inPolicy} serverId={serverId} openRowId={openRowId} onOpen={setOpenRowId} />
+                <Rows items={items} inPolicy={inPolicy} serverId={serverId} openRowId={openRowId} onOpen={setOpenRowId} maybe={maybe} />
               )}
               <LoadMore loaded={items.length} total={first?.total ?? 0} hasNext={!!query.hasNextPage} fetching={query.isFetchingNextPage} onMore={() => query.fetchNextPage()} />
             </>
           )}
         </div>
       </div>
-      <ObjectDrawer kind="net_rule" rowId={openRowId} snapshotId={snapshotId} serverId={serverId} onClose={closeRow} />
+      <ObjectDrawer kind="net_rule" rowId={openRowId} snapshotId={snapshotId} serverId={serverId} onOpen={setOpenRowId} onClose={closeRow} />
     </div>
   )
 }

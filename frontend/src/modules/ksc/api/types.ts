@@ -215,6 +215,52 @@ export interface HostDetail extends Omit<Host, 'findings'> {
   policies: HostPolicy[]
 }
 
+/** Условие активации профиля словами: группа — список условий, внутри группы «и», между группами «или». */
+export interface HostProfileCondition {
+  field: 'tag' | 'nla' | 'cpus' | 'unknown'
+  text: string
+}
+
+/** Профиль политики и его активация на хосте (`/hosts/{host_id}/profiles`), трактовка условия — по тегам хоста. */
+export interface HostProfile {
+  name: string
+  enabled: boolean
+  priority: number
+  /** true — активен, false — нет, null — не определить (условие не по тегам, теги не собраны). */
+  active: boolean | null
+  /** «по тегу X», «нет подходящего тега», «правил активации нет», «профиль выключен», «условие не по тегам», «теги хоста не собраны». */
+  reason: string
+  matched_tags: string[]
+  condition: HostProfileCondition[][]
+  settings: number
+  /** Записей профиля; null — продукт политики не описан (записей нет потому, что извлекателя нет). */
+  exclusions: number | null
+  net_rules: number | null
+}
+
+export interface HostProfilesPolicy extends HostPolicy {
+  /** Профили этой политики собраны (у агента и сервера — всегда нет). */
+  profiles_collected: boolean
+  profiles: HostProfile[]
+}
+
+export interface HostTagProfile {
+  policy_id: number
+  policy_name: string
+  profile: string
+  enabled: boolean
+}
+
+export interface HostProfiles {
+  /** Секция профилей была хотя бы у одной политики снапшота. */
+  profiles_collected: boolean
+  /** Теги хоста; null — не собраны. */
+  tags: string[] | null
+  policies: HostProfilesPolicy[]
+  /** Для каждого тега хоста — профили, в условии которых он встречается (включая выключенные). */
+  by_tag: { tag: string; profiles: HostTagProfile[] }[]
+}
+
 export interface LockCount {
   total: number
   locked: number
@@ -576,6 +622,8 @@ export interface ExclusionsQuery {
   dup?: ExclusionDup
   /** true — с рисками, false — без. */
   risky?: boolean
+  /** Записи, действующие на хост: его политик и активных на нём профилей. */
+  host_id?: string
   limit?: number
   offset?: number
 }
@@ -590,6 +638,13 @@ export interface ExclusionSummaryItem {
   risky: number
   /** Содержимое политики собрано не полностью — список может быть неполным. */
   partial: boolean
+}
+
+/** Профиль, активацию которого на хосте не определить: его записи остаются в списке с пометкой «возможно». */
+export interface UndeterminedProfile {
+  policy_id: number
+  policy_name: string
+  profile: string
 }
 
 export interface ExclusionsResponse {
@@ -607,6 +662,8 @@ export interface ExclusionsResponse {
   summary: ExclusionSummaryItem[] | null
   /** Продукты политик с содержимым, для которых нет извлекателя: пустой список значит «не описан», а не «нет». */
   undescribed: string[]
+  /** Только с `host_id`. */
+  undetermined?: UndeterminedProfile[]
 }
 
 export interface NetRuleItem {
@@ -640,6 +697,8 @@ export interface NetRulesQuery {
   action?: string
   direction?: string
   enabled?: boolean
+  /** Записи, действующие на хост: его политик и активных на нём профилей. */
+  host_id?: string
   limit?: number
   offset?: number
 }
@@ -658,6 +717,8 @@ export interface NetRulesResponse {
   undescribed: string[]
   /** Политики описанного продукта, содержимое которых собрано не полностью: их правила могут быть неполными. */
   partial: number[]
+  /** Только с `host_id`. */
+  undetermined?: UndeterminedProfile[]
 }
 
 export type ChangeKind = 'policy' | 'scope' | 'profile' | 'setting' | 'net_rule' | 'exclusion'

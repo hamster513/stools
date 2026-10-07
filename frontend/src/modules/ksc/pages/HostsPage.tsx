@@ -3,15 +3,12 @@ import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { ChevronRight, FilterX, Monitor, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useHostDetail, useHosts, usePolicy, useServers } from '@/modules/ksc/api/queries'
-import { StatusBadge } from '@/platform/findings/StatusBadge'
 import {
   AGENT_LABELS,
   BASES_LABELS,
-  CPU_ARCH_LABELS,
   IN_AD_LABELS,
   PROTECTION_LABELS,
   RTP_STATE_LABELS,
-  vmTypeLabel,
   type ComponentState,
   type Host,
   type HostAgent,
@@ -20,8 +17,6 @@ import {
   type HostsQuery,
   type HostsResponse,
 } from '@/modules/ksc/api/types'
-import { SeverityBadge } from '@/platform/collector/SeverityBadge'
-import { AssetLink } from '@/modules/assets/AssetLink'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
@@ -32,19 +27,15 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
 import { FacetRow, FacetSection } from './policies/Facets'
+import type { TabDef } from './policies/TabBar'
+import { ExclusionsTable } from './ExclusionsPage'
+import { NetRulesTable } from './NetRulesPage'
+import { DrawerTabs } from './hosts/DrawerTabs'
+import { HostFindings, HostOverview } from './hosts/HostOverview'
+import { HostPoliciesTab } from './hosts/HostPoliciesTab'
+import { HostTagsTab } from './hosts/HostTagsTab'
 
 const ROW_HEIGHT = 40
-
-const COMPONENT_STATUS_LABELS: Record<number, string> = {
-  0: 'неизвестно',
-  1: 'остановлен',
-  2: 'приостановлен',
-  3: 'запускается',
-  4: 'работает',
-  9: 'сбой',
-  10: 'не установлен',
-  11: 'нет лицензии',
-}
 
 type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'component' | 'component_state' | 'tag' | 'policy'>
 
@@ -63,16 +54,8 @@ const TAGS_COLUMN_WIDTH = 192
 const CHEVRON_WIDTH = 22
 const TAGS_SHOWN = 3
 
-function edrLabel(code: number): string {
-  return code === 0 ? 'нет данных' : `код ${code}`
-}
-
 function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
-}
-
-function when(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
 }
 
 function HostFacetPanel({ facets, filters, onToggle, onComponent, tagsCollected, total }: {
@@ -224,113 +207,71 @@ function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, s
   )
 }
 
-function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string | null; snapshotId: number | undefined; serverId: number; onClose: () => void }) {
-  const open = hostId !== null
-  const detail = useHostDetail(open ? snapshotId : undefined, hostId ?? undefined)
+const DRAWER_TABS: TabDef[] = [
+  { key: 'overview', label: 'Обзор' },
+  { key: 'policies', label: 'Политики и профили' },
+  { key: 'tags', label: 'Теги' },
+  { key: 'exclusions', label: 'Исключения' },
+  { key: 'netrules', label: 'Сетевые правила' },
+  { key: 'findings', label: 'Находки' },
+]
+
+/**
+ * Содержимое панели хоста: шапка, вкладки (состояние здесь, не в адресе) и раздел. `key` по хосту возвращает «Обзор» и фокус
+ * на кнопку закрытия. Таблицы исключений и правил занимают панель целиком и прокручиваются сами; панель записи из них
+ * открывается поверх (порталом, `z-50`).
+ */
+function HostDrawerBody({ hostId, snapshotId, serverId, onClose }: { hostId: string; snapshotId: number; serverId: number; onClose: () => void }) {
+  const detail = useHostDetail(snapshotId, hostId)
+  const [tab, setTab] = useState('overview')
   const closeRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => { if (open) closeRef.current?.focus() }, [open, hostId])
+  useEffect(() => { closeRef.current?.focus() }, [])
   const h = detail.data
+  const errorMessage = detail.error instanceof ApiRequestError ? detail.error.message : detail.isError ? 'Не удалось загрузить хост' : null
+  const table = tab === 'exclusions' || tab === 'netrules'
 
   return (
     <>
-      <div className={cn('fixed inset-0 z-30 bg-black/50 transition-opacity duration-200', open ? 'opacity-100' : 'pointer-events-none opacity-0')} onClick={onClose} aria-hidden />
-      <aside role="dialog" aria-label="Хост" aria-hidden={!open} className={cn('fixed top-0 right-0 z-40 flex h-full w-[520px] flex-col border-l border-grid bg-surface transition-transform duration-200', open ? 'translate-x-0' : 'translate-x-full')}>
-        {open && (
-          <>
-            <div className="flex items-center justify-between border-b border-grid px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <Monitor size={16} className="shrink-0 text-text-secondary" aria-hidden />
-                <span className="truncate text-sm text-text">{h?.name ?? hostId}</span>
-              </div>
-              <button ref={closeRef} type="button" onClick={onClose} className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" aria-label="Свернуть (Esc)"><X size={16} aria-hidden /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
+      <div className="flex items-center justify-between border-b border-grid px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Monitor size={16} className="shrink-0 text-text-secondary" aria-hidden />
+          <span className="truncate text-sm text-text">{h?.name ?? hostId}</span>
+          {h && <span className="truncate text-xs text-text-secondary" title={h.group}>{h.group}</span>}
+        </div>
+        <button ref={closeRef} type="button" onClick={onClose} className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" aria-label="Свернуть (Esc)"><X size={16} aria-hidden /></button>
+      </div>
+      <DrawerTabs tabs={DRAWER_TABS} current={tab} onSelect={setTab} label="Разделы хоста" />
+      {table ? (
+        <div className="min-h-0 flex-1">
+          {tab === 'exclusions' && <ExclusionsTable snapshotId={snapshotId} serverId={serverId} hostId={hostId} />}
+          {tab === 'netrules' && <NetRulesTable snapshotId={snapshotId} serverId={serverId} hostId={hostId} />}
+        </div>
+      ) : (
+        <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
+          {tab === 'policies' && <HostPoliciesTab snapshotId={snapshotId} hostId={hostId} serverId={serverId} />}
+          {tab === 'tags' && <HostTagsTab snapshotId={snapshotId} hostId={hostId} serverId={serverId} />}
+          {(tab === 'overview' || tab === 'findings') && (
+            <>
               {detail.isLoading && <div className="flex justify-center py-8"><Spinner /></div>}
-              {h && (
-                <>
-                  <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                    <dt className="text-text-secondary">ID в KSC</dt><dd className="font-mono break-all text-text">{h.host_id}</dd>
-                    <dt className="text-text-secondary">FQDN</dt><dd className="font-mono break-all text-text">{h.fqdn || '—'}</dd>
-                    <dt className="text-text-secondary">Домен</dt><dd className="font-mono break-all text-text">{h.domain || '—'}</dd>
-                    <dt className="text-text-secondary">Группа</dt><dd className="text-text">{h.group}</dd>
-                    <dt className="text-text-secondary">ОС</dt><dd className="text-text">{h.os || '—'}</dd>
-                    <dt className="text-text-secondary">IP</dt><dd className="font-mono text-text">{h.ip || '—'}</dd>
-                    <dt className="text-text-secondary">Агент</dt><dd className="text-text">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · версия ${h.agent_version}` : ''}</dd>
-                    <dt className="text-text-secondary">Виден в сети</dt><dd className="text-text">{when(h.last_seen_at)}</dd>
-                    <dt className="text-text-secondary">Продукт</dt><dd className="text-text">{h.product || '—'}{h.product_version ? ` · ${h.product_version}` : ''}</dd>
-                    <dt className="text-text-secondary">Защита</dt><dd className="text-text">{PROTECTION_LABELS[h.protection]}{h.protection === 'off' ? ` · ${RTP_STATE_LABELS[h.rtp_state] ?? h.rtp_state}` : ''}</dd>
-                    <dt className="text-text-secondary">Базы</dt><dd className="text-text">{when(h.bases_at)} · {BASES_LABELS[h.bases]}</dd>
-                    <dt className="text-text-secondary">Полный поиск</dt><dd className="text-text">{when(h.last_fullscan_at)}</dd>
-                    <dt className="text-text-secondary">Статус KSC</dt><dd className="text-text">{h.status === 'ok' ? 'ок' : h.status === 'warning' ? 'предупреждение' : 'критично'}</dd>
-                    <dt className="text-text-secondary">Угрозы</dt><dd className="text-text">{h.threats}</dd>
-                    <dt className="text-text-secondary">Без группы</dt><dd className="text-text">{h.unassigned ? 'да' : 'нет'}</dd>
-                    <dt className="text-text-secondary">AD</dt><dd className="text-text">{h.in_ad ? IN_AD_LABELS[h.in_ad] : 'нет данных'}</dd>
-                  </dl>
-                  <AssetLink source="ksc" hostKey={`${serverId}:${h.host_id}`} className="mb-4 text-[11px]" />
+              {errorMessage && <ErrorState message={errorMessage} onRetry={() => detail.refetch()} />}
+              {h && tab === 'overview' && <HostOverview host={h} serverId={serverId} />}
+              {h && tab === 'findings' && <HostFindings host={h} serverId={serverId} />}
+            </>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
 
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Теги</div>
-                  <div className="mb-4 flex flex-wrap gap-1">
-                    {h.tags === null && <span className="text-text-secondary">не собраны</span>}
-                    {h.tags?.length === 0 && <span className="text-text-secondary">нет</span>}
-                    {h.tags?.map((t) => <span key={t} className="rounded bg-row-hover px-1.5 py-0.5 text-[11px] text-text">{t}</span>)}
-                  </div>
-
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Политики ({h.policies.length})</div>
-                  <ul className="mb-4 flex flex-col gap-0.5">
-                    {h.policies.length === 0 && <li className="text-text-secondary">нет действующих политик</li>}
-                    {h.policies.map((p) => (
-                      <li key={p.id}>
-                        <Link to={`/ksc/servers/${serverId}/policies/${p.id}`} className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-row-hover">
-                          <span className="min-w-0 flex-1 truncate text-text" title={p.name}>{p.name}</span>
-                          <span className="shrink-0 text-[11px] text-text-secondary">{p.product}</span>
-                          <span className="shrink-0 text-[11px] text-text-secondary">{p.own ? 'своя' : 'унаследована'}</span>
-                          {!p.active && <span className="shrink-0 text-[11px] text-risk-medium">неактивна</span>}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Система</div>
-                  <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                    <dt className="text-text-secondary">Сборка ОС</dt><dd className="font-mono text-text">{h.extra.os_build || '—'}</dd>
-                    <dt className="text-text-secondary">Архитектура</dt><dd className="text-text">{CPU_ARCH_LABELS[h.extra.cpu_arch] ?? 'неизвестно'}</dd>
-                    <dt className="text-text-secondary">Виртуализация</dt><dd className="text-text">{vmTypeLabel(h.extra.vm_type)}</dd>
-                    <dt className="text-text-secondary">Перезагрузка</dt>
-                    <dd className={cn('text-text', h.extra.reboot_required && 'text-risk-medium')}>
-                      {h.extra.reboot_required ? `требуется с ${when(h.extra.reboot_requested_at)}` : 'не требуется'}
-                    </dd>
-                    <dt className="text-text-secondary">EDR</dt><dd className="text-text">{edrLabel(h.extra.edr_status)}</dd>
-                  </dl>
-
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Компоненты</div>
-                  <ul className="mb-4 flex flex-col gap-0.5">
-                    {h.components.length === 0 && <li className="text-text-secondary">нет данных</li>}
-                    {h.components.map(([name, code]) => (
-                      <li key={name} className="flex items-center justify-between gap-2 py-0.5">
-                        <span className="truncate text-text" title={name}>{name}</span>
-                        <span className={cn('shrink-0 text-[11px]', code === 4 ? 'text-kind-accepted' : 'text-risk-high')}>{COMPONENT_STATUS_LABELS[code] ?? code}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Находки хоста ({h.findings_counted !== h.findings.length ? `учитываются ${h.findings_counted} из ${h.findings.length}` : h.findings.length})</div>
-                  <ul className="flex flex-col gap-1">
-                    {h.findings.length === 0 && <li className="text-text-secondary">находок нет</li>}
-                    {h.findings.map((f) => (
-                      <li key={f.key}>
-                        <Link to={`/ksc/servers/${serverId}/findings?check=${f.check}&q=${encodeURIComponent(h.name)}`} className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-row-hover">
-                          <SeverityBadge severity={f.severity} />
-                          <span className="truncate text-text">{f.check_title}</span>
-                          <StatusBadge status={f.status} className="ml-auto shrink-0" />
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-          </>
-        )}
+/** Боковая панель хоста поверх списка: затемнение, `aside role="dialog"`, Esc закрывает (обработчик списка). Шире прежней — в ней таблицы. */
+function HostDrawer({ hostId, snapshotId, serverId, onClose }: { hostId: string | null; snapshotId: number | undefined; serverId: number; onClose: () => void }) {
+  const open = hostId !== null
+  return (
+    <>
+      <div className={cn('fixed inset-0 z-30 bg-black/50 transition-opacity duration-200', open ? 'opacity-100' : 'pointer-events-none opacity-0')} onClick={onClose} aria-hidden />
+      <aside role="dialog" aria-label="Хост" aria-hidden={!open} className={cn('fixed top-0 right-0 z-40 flex h-full w-[960px] max-w-[calc(100vw-2rem)] flex-col border-l border-grid bg-surface transition-transform duration-200', open ? 'translate-x-0' : 'translate-x-full')}>
+        {hostId !== null && snapshotId !== undefined && <HostDrawerBody key={hostId} hostId={hostId} snapshotId={snapshotId} serverId={serverId} onClose={onClose} />}
       </aside>
     </>
   )
@@ -392,7 +333,8 @@ export function HostsPage({ serverId }: { serverId: number }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') { if (openHostId !== null) return setOpenHostId(null); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); return }
-      if (isTypingTarget(e.target)) return
+      // Панель хоста открыта: клавиши списка (Enter, j/k, /) не действуют — иначе Enter на кнопке или ссылке внутри панели заново открыл бы выбранный хост.
+      if (openHostId !== null || isTypingTarget(e.target)) return
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
       if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
       if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
