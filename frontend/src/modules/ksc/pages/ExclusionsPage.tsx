@@ -135,6 +135,13 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить исключения' : null
   const undescribed = first?.undescribed ?? []
+  // Сводка и пометки о неполных считаются сервером по всему снапшоту; в панели хоста — только политики, у которых есть записи на хост.
+  const summary = useMemo(() => {
+    const all = first?.summary ?? []
+    if (hostId === undefined) return all
+    const own = new Set(Object.keys(first?.facets?.policy ?? {}))
+    return all.filter((s) => own.has(String(s.policy_id)))
+  }, [first, hostId])
   const undetermined = first?.undetermined ?? []
   // Ключ `(policy_id, profile)`: имя политики не уникально.
   const maybe = useMemo(() => new Set((first?.undetermined ?? []).map((u) => `${u.policy_id}\u0000${u.profile}`)), [first])
@@ -184,8 +191,8 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
             <>
               {!inPolicy && items.length > 0 && <UndescribedNote codes={undescribed} what="исключения" />}
               <UndeterminedNote items={undetermined} />
-              {inPolicy ? partial && <PartialNote bar /> : <PartialNote bar names={(first?.summary ?? []).filter((s) => s.partial).map((s) => s.policy_name)} />}
-              {!inPolicy && first?.summary && first.summary.length > 0 && <Summary items={first.summary} onPick={(p) => set('policy', p)} />}
+              {inPolicy ? partial && <PartialNote bar /> : <PartialNote bar names={summary.filter((s) => s.partial).map((s) => s.policy_name)} />}
+              {!inPolicy && summary.length > 0 && <Summary items={summary} onPick={(p) => set('policy', p)} />}
               {items.length === 0 ? (
                 <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="исключения" none={hostId === undefined ? 'Исключений нет' : 'На хост исключения не действуют'} nothing="Ни одно исключение не подходит под фильтры." />
               ) : (

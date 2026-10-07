@@ -332,7 +332,13 @@ export function HostsPage({ serverId }: { serverId: number }) {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') { if (openHostId !== null) return setOpenHostId(null); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); return }
+      if (e.key === 'Escape') {
+        // В поле ввода (в том числе в поиске таблиц внутри панели хоста) Esc сначала снимает фокус, панель закрывает второй Esc.
+        if (isTypingTarget(e.target) && document.activeElement instanceof HTMLElement) return document.activeElement.blur()
+        if (openHostId !== null) return setOpenHostId(null)
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        return
+      }
       // Панель хоста открыта: клавиши списка (Enter, j/k, /) не действуют — иначе Enter на кнопке или ссылке внутри панели заново открыл бы выбранный хост.
       if (openHostId !== null || isTypingTarget(e.target)) return
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }

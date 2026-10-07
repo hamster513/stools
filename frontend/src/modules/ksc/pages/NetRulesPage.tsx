@@ -92,6 +92,13 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить сетевые правила' : null
   const undescribed = first?.undescribed ?? []
+  // Пометка о неполных политиках считается сервером по всему снапшоту; в панели хоста — только политики с правилами на хост.
+  const partialIds = useMemo(() => {
+    const all = first?.partial ?? []
+    if (hostId === undefined) return all
+    const own = new Set(Object.keys(first?.facets?.policy ?? {}))
+    return all.filter((id) => own.has(String(id)))
+  }, [first, hostId])
   const undetermined = first?.undetermined ?? []
   // Ключ `(policy_id, profile)`: имя политики не уникально.
   const maybe = useMemo(() => new Set((first?.undetermined ?? []).map((u) => `${u.policy_id}\u0000${u.profile}`)), [first])
@@ -136,7 +143,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
             <>
               {!inPolicy && items.length > 0 && <UndescribedNote codes={undescribed} what="сетевые правила" />}
               <UndeterminedNote items={undetermined} />
-              {inPolicy ? partial && <PartialNote bar /> : <PartialPoliciesNote snapshotId={snapshotId} ids={first?.partial ?? []} />}
+              {inPolicy ? partial && <PartialNote bar /> : <PartialPoliciesNote snapshotId={snapshotId} ids={partialIds} />}
               {items.length === 0 ? (
                 <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="сетевые правила" none={hostId === undefined ? 'Сетевых правил нет' : 'На хост сетевые правила не действуют'} nothing="Ни одно правило не подходит под фильтры." />
               ) : (
