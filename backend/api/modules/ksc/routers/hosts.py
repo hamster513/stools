@@ -1,12 +1,13 @@
-"""Инвентарь хостов снапшота с фасетами; карточка хоста с его находками."""
+"""Инвентарь хостов снапшота с фасетами; карточка хоста с его находками; профили, активные на хосте."""
 from __future__ import annotations
 
 import datetime as dt
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
@@ -15,7 +16,22 @@ from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.checks.hosts import COMPONENT_OFF_STATES
 from api.modules.ksc.core.dictionary.components import component_title
-from api.modules.ksc.models import KscFinding, KscHost, KscPolicy, KscPolicyScope, KscSnapshot
+from api.modules.ksc.core.profile_activation import (
+    REASON_DISABLED,
+    Activation,
+    evaluate,
+    parse_condition,
+)
+from api.modules.ksc.models import (
+    KscExclusion,
+    KscFinding,
+    KscHost,
+    KscNetRule,
+    KscPolicy,
+    KscPolicyScope,
+    KscProfile,
+    KscSnapshot,
+)
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.settings import load_config
 from api.platform.findings import service as finding_svc
@@ -119,8 +135,8 @@ def _findings_per_host(db: Session, snap: KscSnapshot) -> dict[str, int]:
     return per_host
 
 
-def _host_policies(db: Session, snapshot_id: int, h: KscHost) -> list[dict[str, Any]]:
-    """Политики, действующие на группу хоста; `own` — политика создана в этой группе, а не унаследована."""
+def _scope_policies(db: Session, snapshot_id: int, h: KscHost) -> list[tuple[KscPolicy, bool]]:
+    """Политики, действующие на группу хоста, по имени; bool — политика создана в этой группе, а не унаследована."""
     if h.group_id is None:
         return []
     rows = db.execute(
@@ -128,8 +144,66 @@ def _host_policies(db: Session, snapshot_id: int, h: KscHost) -> list[dict[str, 
         .join(KscPolicyScope, (KscPolicyScope.snapshot_id == KscPolicy.snapshot_id) & (KscPolicyScope.policy_id == KscPolicy.policy_id))
         .where(KscPolicy.snapshot_id == snapshot_id, KscPolicyScope.group_id == h.group_id)
     ).all()
-    out = [{"id": p.policy_id, "name": p.name, "product": p.product, "active": p.active, "own": own} for p, own in rows]
-    return sorted(out, key=lambda p: (p["name"].lower(), p["id"]))
+    return sorted(((p, own) for p, own in rows), key=lambda r: (r[0].name.lower(), r[0].policy_id))
+
+
+def _host_policies(db: Session, snapshot_id: int, h: KscHost) -> list[dict[str, Any]]:
+    """Политики, действующие на группу хоста; `own` — политика создана в этой группе, а не унаследована."""
+    return [{"id": p.policy_id, "name": p.name, "product": p.product, "active": p.active, "own": own} for p, own in _scope_policies(db, snapshot_id, h)]
+
+
+def _host(db: Session, snapshot_id: int, host_id: str) -> KscHost:
+    h = db.execute(select(KscHost).where(KscHost.snapshot_id == snapshot_id, KscHost.host_id == host_id)).scalars().first()
+    if h is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="хост не найден")
+    return h
+
+
+def _tags_collected_db(db: Session, snapshot_id: int) -> bool:
+    """Секция тегов была в выгрузке, если ключ `tags` есть хотя бы у одного хоста снапшота (поиск по тексту, без разбора JSON всех хостов)."""
+    has_tags = select(KscHost.id).where(KscHost.snapshot_id == snapshot_id, KscHost.extra_json.like('%"tags"%')).limit(1)
+    return db.scalar(has_tags) is not None
+
+
+@dataclass(frozen=True)
+class HostScope:
+    """Что действует на хост: политики его группы и активация каждого их профиля по тегам хоста."""
+
+    host: KscHost
+    #: None — теги не собраны.
+    tags: list[str] | None
+    policies: list[tuple[KscPolicy, bool]]
+    #: По политикам в порядке `policies`, внутри — по приоритету; выключенный профиль — не активен, «профиль выключен».
+    profiles: list[tuple[KscProfile, Activation]]
+
+
+def host_scope(db: Session, snapshot_id: int, host_id: str) -> HostScope:
+    """404 — хоста нет в снапшоте. Таблицы политик снапшота должны быть заполнены (`_snapshot`)."""
+    h = _host(db, snapshot_id, host_id)
+    tags = _tags(h, _tags_collected_db(db, snapshot_id))
+    policies = _scope_policies(db, snapshot_id, h)
+    order = {p.policy_id: n for n, (p, _) in enumerate(policies)}
+    rows: list[KscProfile] = []
+    if order:
+        rows = list(db.execute(select(KscProfile).where(KscProfile.snapshot_id == snapshot_id, KscProfile.policy_id.in_(order))).scalars())
+    profiles: list[tuple[KscProfile, Activation]] = []
+    for r in sorted(rows, key=lambda r: (order[r.policy_id], r.priority, r.id)):
+        groups = parse_condition(json.loads(r.condition_json or "{}"))
+        a = evaluate(groups, tags) if r.enabled else Activation(False, (), groups, REASON_DISABLED)
+        profiles.append((r, a))
+    return HostScope(h, tags, policies, profiles)
+
+
+def _object_counts(db: Session, model: type[KscExclusion | KscNetRule], snapshot_id: int, policy_ids: list[int]) -> dict[tuple[int, str], int]:
+    """(политика, профиль) → записей извлекателя в снапшоте."""
+    if not policy_ids:
+        return {}
+    stmt = (
+        select(model.policy_id, model.profile, func.count())
+        .where(model.snapshot_id == snapshot_id, model.policy_id.in_(policy_ids))
+        .group_by(model.policy_id, model.profile)
+    )
+    return {(pid, profile): n for pid, profile, n in db.execute(stmt).all()}
 
 
 @router.get("/snapshots/{snapshot_id}/hosts")
@@ -246,9 +320,7 @@ def host_detail(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     snap = _snapshot(db, snapshot_id, settings)
-    h = db.execute(select(KscHost).where(KscHost.snapshot_id == snapshot_id, KscHost.host_id == host_id)).scalars().first()
-    if h is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="хост не найден")
+    h = _host(db, snapshot_id, host_id)
     cfg = load_config(db)
     findings = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host_key == _host_key(h))).scalars())
     states = finding_svc.state_map(db, "ksc", snap.server_id, [f.key for f in findings])
@@ -260,9 +332,47 @@ def host_detail(
                       "severity": f.severity, "status": status_, "status_title": STATUS_TITLES[status_], "details": json.loads(f.details_json or "{}")})
     # `findings` — все находки хоста со статусами; `findings_counted` — по тому же правилу, что счётчик в списке хостов.
     n_counted = sum(1 for i in items if i["status"] in counted)
-    # Секция тегов была в выгрузке, если ключ `tags` есть хотя бы у одного хоста снапшота (поиск по тексту, без разбора JSON всех хостов).
-    has_tags = select(KscHost.id).where(KscHost.snapshot_id == snapshot_id, KscHost.extra_json.like('%"tags"%')).limit(1)
-    tags_collected = db.scalar(has_tags) is not None
     agent, bases = _agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days)
-    return {**_item(h, agent, bases, n_counted, _tags(h, tags_collected)),
+    return {**_item(h, agent, bases, n_counted, _tags(h, _tags_collected_db(db, snapshot_id))),
             "findings": items, "findings_counted": n_counted, "policies": _host_policies(db, snapshot_id, h)}
+
+
+@router.get("/snapshots/{snapshot_id}/hosts/{host_id}/profiles")
+def host_profiles(
+    snapshot_id: int,
+    host_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Политики группы хоста с профилями и их активацией на хосте по тегам (трактовка условия — `core/profile_activation`);
+    `by_tag` — какие профили (включая выключенные) упоминают каждый тег хоста в условии."""
+    _snapshot(db, snapshot_id, settings)
+    scope = host_scope(db, snapshot_id, host_id)
+    policy_ids = [p.policy_id for p, _ in scope.policies]
+    exclusions, net_rules = _object_counts(db, KscExclusion, snapshot_id, policy_ids), _object_counts(db, KscNetRule, snapshot_id, policy_ids)
+    names = {p.policy_id: p.name for p, _ in scope.policies}
+    policies: list[dict[str, Any]] = []
+    for p, own in scope.policies:
+        policies.append({
+            "id": p.policy_id, "name": p.name, "product": p.product, "active": p.active, "own": own, "profiles_collected": p.profiles is not None,
+            "profiles": [
+                {
+                    "name": r.name, "enabled": r.enabled, "priority": r.priority, "active": a.active, "reason": a.reason, "matched_tags": list(a.matched_tags),
+                    "condition": [[{"field": c.field, "text": c.text} for c in g] for g in a.groups], "settings": r.settings,
+                    # У политики с неописанным продуктом записей нет потому, что продукт не описан, а не потому, что их нет.
+                    "exclusions": exclusions.get((p.policy_id, r.name), 0) if p.described else None,
+                    "net_rules": net_rules.get((p.policy_id, r.name), 0) if p.described else None,
+                }
+                for r, a in scope.profiles if r.policy_id == p.policy_id
+            ],
+        })
+    by_tag = [
+        {"tag": tag, "profiles": [
+            {"policy_id": r.policy_id, "policy_name": names.get(r.policy_id, ""), "profile": r.name, "enabled": r.enabled}
+            for r, a in scope.profiles if any(c.field == "tag" and str(c.value).lower() == tag.lower() for g in a.groups for c in g)
+        ]}
+        for tag in scope.tags or []
+    ]
+    collected = db.scalar(select(KscPolicy.id).where(KscPolicy.snapshot_id == snapshot_id, KscPolicy.profiles.is_not(None)).limit(1)) is not None
+    return {"profiles_collected": collected, "tags": scope.tags, "policies": policies, "by_tag": by_tag}

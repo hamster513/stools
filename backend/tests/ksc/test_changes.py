@@ -18,7 +18,15 @@ from api.modules.ksc.models import KscChange, KscSnapshot
 from api.modules.ksc.services.changes import changes_summary
 from api.modules.ksc.services.snapshots import snapshot_path
 from tests.ksc.kes11 import _PACKET_RULES, TCP, exclusion, kes11_export, packet_rule
-from tests.ksc.synthetic import _lock, build_export, without_new_sections
+from tests.ksc.synthetic import (
+    NOTEBOOKS_EXPRESSION,
+    _lock,
+    activation,
+    build_export,
+    condition_group,
+    tag_condition,
+    without_new_sections,
+)
 from tests.ksc.test_api import upload
 
 
@@ -107,7 +115,7 @@ def test_profiles_added_disabled_priority_condition() -> None:
     entry = cur["policy_profiles"]["1"]
     notebooks = entry["profiles"][0]
     notebooks["attrs"]["KLSSPOL_PRF_ENABLED"] = False
-    notebooks["attrs"]["EXPRESSION"]["value"]["KLSSPOL_TAG"] = "Laptop"
+    notebooks["attrs"]["EXPRESSION"]["value"] = activation(condition_group(tag_condition("Laptop")))
     entry["profiles"].append({"name": "Серверы", "attrs": {"KLSSPOL_PRF_ENABLED": True}, "sections": {}, "errors": []})
     entry["priorities"] = ["Серверы", "Ноутбуки", "Выключенный"]
     prof = {(c.profile, c.action, c.path): c for c in _of(_diff(prev, cur), "profile")}
@@ -120,7 +128,7 @@ def test_profiles_added_disabled_priority_condition() -> None:
     assert (prof[("Ноутбуки", "changed", "enabled")].before, prof[("Ноутбуки", "changed", "enabled")].after) == (True, False)
     assert (prof[("Выключенный", "changed", "priority")].before, prof[("Выключенный", "changed", "priority")].after) == (1, 2)
     cond = prof[("Ноутбуки", "changed", "condition")]
-    assert cond.before["EXPRESSION"] == {"KLSSPOL_TAG": "Notebook"} and cond.after["EXPRESSION"] == {"KLSSPOL_TAG": "Laptop"}
+    assert cond.before["EXPRESSION"] == NOTEBOOKS_EXPRESSION and cond.after["EXPRESSION"] == activation(condition_group(tag_condition("Laptop")))
 
 
 def test_profile_only_disabled() -> None:

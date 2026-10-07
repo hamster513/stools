@@ -70,7 +70,7 @@ def test_policies_scope_profiles_stored(auth_client: TestClient, db_session: Ses
     profiles = {p.name: p for p in db_session.execute(select(KscProfile).where(KscProfile.snapshot_id == sid)).scalars()}
     assert set(profiles) == {"Ноутбуки", "Выключенный"} and all(p.policy_id == 1 for p in profiles.values())
     nb, off = profiles["Ноутбуки"], profiles["Выключенный"]
-    assert nb.enabled and nb.priority == 0 and nb.settings == 2 and '"KLSSPOL_TAG": "Notebook"' in nb.condition_json
+    assert nb.enabled and nb.priority == 0 and nb.settings == 2 and '"name": "NGTPP_sHostTag", "val": "VIP"' in nb.condition_json
     assert not off.enabled and off.priority == 1 and off.settings == 0 and off.errors_json == "[]"
 
     hosts = {h.name: h.group_id for h in db_session.execute(select(KscHost).where(KscHost.snapshot_id == sid)).scalars()}

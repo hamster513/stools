@@ -146,10 +146,29 @@ def _policy_contents() -> dict[str, Any]:
     }
 
 
-#: Профили политики 1: включённый (с замком и секретом) и выключенный.
+def tag_condition(tag: str, op: int = 9) -> dict[str, Any]:
+    """Условие активации по тегу хоста (`NGTPP_sHostTag`, код `OP` 9 — как приходит из KSC)."""
+    return {"OP": op, "name": "NGTPP_sHostTag", "val": tag}
+
+
+def condition_group(*conditions: dict[str, Any], name: str = "") -> dict[str, Any]:
+    """Группа условий активации: внутри группы условия через И (`LOP` 1)."""
+    return {"ARGS": list(conditions), "LOP": 1, "Name": name}
+
+
+def activation(*groups: dict[str, Any]) -> dict[str, Any]:
+    """Атрибут `EXPRESSION` профиля в форме KSC: контейнер `KLPRSS_Val` со списком из одного элемента,
+    группы через ИЛИ (`LOP` 2); пустое условие — `KLPRSS_Val: [{}]`."""
+    return {"KLPRSS_Val": [{"ARGS": list(groups), "LOP": 2} if groups else {}], "KLPRSS_Mnd": False}
+
+
+#: Условие профиля «Ноутбуки»: одна группа с одним тегом «VIP» (есть у WS01).
+NOTEBOOKS_EXPRESSION: dict[str, Any] = activation(condition_group(tag_condition("VIP"), name="VIP"))
+
+#: Профили политики 1: включённый (с замком, секретом и условием по тегу) и выключенный (без условия).
 P_NOTEBOOKS: dict[str, Any] = {
     "name": "Ноутбуки",
-    "attrs": {"KLSSPOL_PRF_ENABLED": True, "EXPRESSION": {"type": "params", "value": {"KLSSPOL_TAG": "Notebook"}}},
+    "attrs": {"KLSSPOL_PRF_ENABLED": True, "EXPRESSION": {"type": "params", "value": NOTEBOOKS_EXPRESSION}},
     "sections": {
         "KLPRSS_Components": {"KLPRSS_Val": {"Firewall": {"KLPRSS_Val": {"Enabled": _lock(False, locked=True)}}}},
         "KLPRSS_Basic": {"ProxyPassword": _lock("profile-secret", locked=True)},

@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
-from tests.ksc.synthetic import add_ws02_twin, build_export, without_new_sections
+from tests.ksc.synthetic import (
+    activation,
+    add_ws02_twin,
+    build_export,
+    condition_group,
+    tag_condition,
+    without_new_sections,
+)
 from tests.ksc.test_api import upload
 
 
@@ -191,3 +200,94 @@ def test_hosts_filter_by_policy_and_card_policies(auth_client: TestClient) -> No
     ]
     srv = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-srv01").json()
     assert [p["id"] for p in srv["policies"]] == [2]
+
+
+# --- профили, активные на хосте -------------------------------------------------------------------------
+
+
+def _profiles(auth_client: TestClient, host_id: str) -> dict:
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    r = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/{host_id}/profiles")
+    assert r.status_code == 200, r.text
+    return dict(r.json())
+
+
+def _with_profiles(raw: dict, *profiles: dict) -> dict:
+    """Копия выгрузки (модульные профили синтетики не трогаются) с добавленными профилями политики 1."""
+    raw = json.loads(json.dumps(raw))
+    entry = raw["policy_profiles"]["1"]
+    for p in profiles:
+        entry["profiles"].append(p)
+        entry["priorities"].append(p["name"])
+    return dict(raw)
+
+
+def test_host_profiles_active_by_tag(auth_client: TestClient) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    ws01 = _profiles(auth_client, "h-ws01")
+    assert ws01["profiles_collected"] is True and ws01["tags"] == ["VIP", "Бухгалтерия"]
+    # Политика агента в секции профилей не бывает — «не собрано», не «без профилей».
+    assert [(p["id"], p["profiles_collected"], p["profiles"]) for p in ws01["policies"]] == [(2, False, []), (1, True, ws01["policies"][1]["profiles"])]
+    kes = ws01["policies"][1]
+    assert {k: kes[k] for k in ("id", "name", "product", "active", "own")} == {"id": 1, "name": "KES workstations", "product": "KES", "active": True, "own": False}
+    notebooks, disabled = kes["profiles"]
+    assert notebooks == {
+        "name": "Ноутбуки", "enabled": True, "priority": 0, "active": True, "reason": "по тегу VIP", "matched_tags": ["VIP"],
+        "condition": [[{"field": "tag", "text": "тег «VIP»"}]], "settings": 2, "exclusions": 0, "net_rules": 0,
+    }
+    assert disabled == {
+        "name": "Выключенный", "enabled": False, "priority": 1, "active": False, "reason": "профиль выключен", "matched_tags": [],
+        "condition": [], "settings": 0, "exclusions": 0, "net_rules": 0,
+    }
+    assert ws01["by_tag"] == [
+        {"tag": "VIP", "profiles": [{"policy_id": 1, "policy_name": "KES workstations", "profile": "Ноутбуки", "enabled": True}]},
+        {"tag": "Бухгалтерия", "profiles": []},
+    ]
+    ws02 = _profiles(auth_client, "h-ws02")
+    assert ws02["tags"] == [] and ws02["by_tag"] == []
+    nb = ws02["policies"][1]["profiles"][0]
+    assert (nb["active"], nb["reason"], nb["matched_tags"]) == (False, "нет подходящего тега", [])
+    srv = _profiles(auth_client, "h-srv01")
+    assert [p["id"] for p in srv["policies"]] == [2] and srv["by_tag"] == [{"tag": "Server", "profiles": []}]
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    r = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/nope/profiles")
+    assert r.status_code == 404 and r.json()["detail"] == "хост не найден"
+
+
+def test_host_profiles_not_collected(auth_client: TestClient) -> None:
+    assert upload(auth_client, without_new_sections(build_export()))["status"] == "done"
+    body = _profiles(auth_client, "h-ws01")
+    assert body["profiles_collected"] is False and body["tags"] is None and body["by_tag"] == []
+    assert all(p["profiles_collected"] is False and p["profiles"] == [] for p in body["policies"]) and len(body["policies"]) == 2
+
+
+def test_host_profiles_tags_not_collected_is_undetermined(auth_client: TestClient) -> None:
+    raw = build_export()
+    del raw["host_tags"]
+    assert upload(auth_client, raw)["status"] == "done"
+    body = _profiles(auth_client, "h-ws01")
+    assert body["profiles_collected"] is True and body["tags"] is None and body["by_tag"] == []
+    nb = body["policies"][1]["profiles"][0]
+    assert (nb["active"], nb["reason"], nb["matched_tags"]) == (None, "теги хоста не собраны", [])
+
+
+def test_host_profiles_case_insensitive_tag_non_tag_condition_and_by_tag(auth_client: TestClient) -> None:
+    raw = build_export()
+    raw["host_tags"]["h-ws02"] = ["vip"]
+    office = {"name": "Офис", "attrs": {"KLSSPOL_PRF_ENABLED": True, "EXPRESSION": activation(condition_group(
+        {"OP": 7, "name": "NGTPP_sNlaLocation", "val": "Office"}, tag_condition("vip"), name="офис"))}, "sections": {}, "errors": []}
+    sleeping = {"name": "Спящий", "attrs": {"KLSSPOL_PRF_ENABLED": False, "EXPRESSION": activation(condition_group(tag_condition("VIP")))},
+                "sections": {}, "errors": []}
+    assert upload(auth_client, _with_profiles(raw, office, sleeping))["status"] == "done"
+    body = _profiles(auth_client, "h-ws02")
+    by_name = {p["name"]: p for p in body["policies"][1]["profiles"]}
+    assert (by_name["Ноутбуки"]["active"], by_name["Ноутбуки"]["reason"], by_name["Ноутбуки"]["matched_tags"]) == (True, "по тегу vip", ["vip"])
+    assert (by_name["Офис"]["active"], by_name["Офис"]["reason"], by_name["Офис"]["priority"]) == (None, "условие не по тегам", 2)
+    assert by_name["Офис"]["condition"] == [[{"field": "nla", "text": "сетевое расположение «Office»"}, {"field": "tag", "text": "тег «vip»"}]]
+    # Выключенный профиль по тегу не активен, но в списке «что включает тег» остаётся с пометкой.
+    assert (by_name["Спящий"]["active"], by_name["Спящий"]["reason"]) == (False, "профиль выключен")
+    assert body["by_tag"] == [{"tag": "vip", "profiles": [
+        {"policy_id": 1, "policy_name": "KES workstations", "profile": "Ноутбуки", "enabled": True},
+        {"policy_id": 1, "policy_name": "KES workstations", "profile": "Офис", "enabled": True},
+        {"policy_id": 1, "policy_name": "KES workstations", "profile": "Спящий", "enabled": False},
+    ]}]

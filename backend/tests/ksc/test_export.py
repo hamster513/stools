@@ -16,6 +16,7 @@ from api.modules.ksc.core.export import (
     unwrap,
 )
 from tests.ksc.synthetic import (
+    NOTEBOOKS_EXPRESSION,
     NOW,
     SECRET_VALUES,
     build_export,
@@ -148,7 +149,7 @@ def test_export_reads_host_tags_and_profiles() -> None:
     export = load_export(export_bytes())
     assert export.host_tags is not None and export.host_tags["h-ws01"] == ["VIP", "Бухгалтерия"]
     assert export.policy_profiles is not None and [p["name"] for p in export.policy_profiles["1"]["profiles"]] == ["Ноутбуки", "Выключенный"]
-    assert export.policy_profiles["1"]["profiles"][0]["attrs"]["EXPRESSION"] == {"KLSSPOL_TAG": "Notebook"}
+    assert export.policy_profiles["1"]["profiles"][0]["attrs"]["EXPRESSION"] == NOTEBOOKS_EXPRESSION
     by = {h.name: h for h in ExportIndex(export).hosts}
     assert by["WS01"].tags == ["VIP", "Бухгалтерия"] and by["WS01"].extra["tags"] == ["VIP", "Бухгалтерия"]
     assert by["WS02"].tags == [] and by["WS02"].extra["tags"] == []

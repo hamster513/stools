@@ -114,6 +114,13 @@ GET  /snapshots/{id}/hosts             group, product, agent(none|silent|alive),
 GET  /snapshots/{id}/hosts/{host_id}   + findings[] (каждая: key, check, check_title, severity, status, status_title, details),
                                        findings_counted — учитываемые (то же правило, что `findings` в списке),
                                        policies[] — действующие политики группы хоста: {id, name, product, active, own}
+GET  /snapshots/{id}/hosts/{host_id}/profiles
+                                       {profiles_collected, tags: [str]|null,
+                                        policies: [{id, name, product, active, own, profiles_collected,
+                                                    profiles: [{name, enabled, priority, active: true|false|null, reason,
+                                                                matched_tags: [str], condition: [[{field, text}]],
+                                                                settings, exclusions: n|null, net_rules: n|null}]}],
+                                        by_tag: [{tag, profiles: [{policy_id, policy_name, profile, enabled}]}]}
 ```
 
 Названия компонентов защиты сведены к одному написанию: хост присылает имя на языке консоли своего продукта, поэтому
@@ -149,6 +156,34 @@ GET  /snapshots/{id}/hosts/{host_id}   + findings[] (каждая: key, check, c
 
 `agent`, `bases` — фасады над `agent_silent_days` и `bases_old_days` из
 настроек: считаются на лету от `snapshot.collected_at`, в базе не хранятся.
+
+Профили на хосте (`/hosts/{host_id}/profiles`; `404` — хоста нет в снапшоте): политики группы хоста, как `policies`
+карточки, у каждой — профили по приоритету и их активация на этом хосте, вычисленная по тегам хоста
+(`core/profile_activation.py`). `profiles_collected` у политики — как `profiles != null` (у политик агента и сервера
+профили не читаются — «не собрано», не «без профилей»); верхний `profiles_collected` — секция профилей была хотя бы
+у одной политики снапшота. `tags` — теги хоста (`null` — не собраны). У профиля: `active` — `true` (активен),
+`false`, `null` (не определить); `reason` — «по тегу X» / «по тегам X, Y» (`matched_tags` — эти теги в написании
+хоста), «нет подходящего тега», «правил активации нет» (пустое условие: в KSC такой профиль не активируется),
+«профиль выключен» (`enabled: false`, условие при этом не вычисляется), «условие не по тегам», «теги хоста не
+собраны»; `condition` — условие словами: список групп, группа — список условий `{field: tag|nla|cpus|unknown, text}`
+(пусто — правил активации нет); `settings` — настроек профиля; `exclusions`, `net_rules` — записей профиля в
+таблицах исключений и правил (`null` — продукт политики не описан: записей нет потому, что извлекателя нет). `by_tag` —
+для каждого тега хоста (в его порядке) профили политик хоста, в условии которых этот тег встречается (без учёта
+регистра), включая выключенные — с `enabled`; теги не собраны — пустой список.
+
+**Трактовка условия активации** (с консолью KSC не сверена — принята по виду данных). Условие профиля
+(`condition.EXPRESSION` в карточке политики, атрибуты как пришли): `EXPRESSION.KLPRSS_Val` — список с одним элементом
+`{"ARGS": [<группа>…], "LOP": 2}`; группа — `{"ARGS": [<условие>…], "LOP": 1, "Name": "…"}`; условие —
+`{"OP": <код>, "name": "<поле>", "val": <значение>}`; пустое условие — `KLPRSS_Val: [{}]`. Известные поля:
+`NGTPP_sHostTag` (тег хоста, `OP` 9), `NGTPP_sNlaLocation` (сетевое расположение, `OP` 7), `NGTPP_nCpus` (число
+процессоров, `OP` 7). Принято: внутри группы все условия должны выполниться (И), профиль активен, если выполнена хоть
+одна группа (ИЛИ); условие по тегу выполнено, если у хоста есть тег с таким значением (сравнение без учёта регистра).
+Коды `OP` не расшифрованы: у тега код 9 считается «равно», другой код — «не определить». Поле не из списка известных и
+нетеговые поля (сетевое расположение, число процессоров) по снапшоту решить нельзя: группа с таким условием — «не
+определить», если только несовпавший тег в ней не отверг её (тогда «нет»); «не определить» целиком — когда ни одна
+группа не решена тегами в «да». Теги не собраны и в условии есть тег — «теги хоста не собраны»; без тегов в условии —
+«условие не по тегам». Типизированные значения (`{"type": "long", …}`) и обёртки `params` снимаются; условие
+неожиданной формы — группа из одного условия `unknown` («условие не разобрано»).
 `in_ad` — `both`, если хост сопоставлен с включённым компьютером домена по
 последнему снапшоту модуля AD на момент анализа, `ksc_only` — если нет,
 `null` — снапшота AD не было вовсе.
@@ -392,22 +427,23 @@ JSON-текст, как у профилей). `described: false` — слова�
 ## Исключения, сетевые правила, изменения
 
 ```
-GET  /snapshots/{id}/exclusions?q=&policy_id=&profile=&kind=&enabled=true|false&dup=multi|single|covered&risky=true|false&limit=200&offset=0
+GET  /snapshots/{id}/exclusions?q=&policy_id=&profile=&kind=&enabled=true|false&dup=multi|single|covered&risky=true|false&host_id=&limit=200&offset=0
                                         {total, items: [{id, policy_id, policy_name, profile, kind, value, components,
                                                          enabled, comment, risks, risk_titles, key, policies, covered_by}],
                                         facets: {policy: {id: n}, kind, enabled: {true, false}, dup: {multi, single, covered},
                                                  risky: {true, false}}|null,
                                         summary: [{policy_id, policy_name, hosts, total, by_kind, risky, partial}]|null,
-                                        undescribed: [код продукта]}
+                                        undescribed: [код продукта],
+                                        undetermined: [{policy_id, policy_name, profile}] — только с host_id}
 GET  /snapshots/{id}/exclusions/{row_id}  {…элемент списка (включая policies, covered_by),
                                         risk_details: [{code, severity, title, detail, recommendations: [str]}],
                                         same_in: [{row_id, policy_id, policy_name, profile, enabled}],
                                         policy_hosts, policy_partial}
-GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&limit=200&offset=0
+GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&host_id=&limit=200&offset=0
                                         {total, items: [{id, policy_id, policy_name, profile, layer, position, name, action,
                                                          direction, protocol, local_ports, remote_ports, addresses, enabled, key}],
                                         facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта],
-                                        partial: [policy_id]}
+                                        partial: [policy_id], undetermined: [{policy_id, policy_name, profile}] — только с host_id}
 GET  /snapshots/{id}/net-rules/{row_id}   {…элемент списка, same_in: [{row_id, policy_id, policy_name, profile, enabled}],
                                         policy_hosts, policy_partial}
 GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offset=0
@@ -418,8 +454,16 @@ GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offse
 ```
 
 `404` — снапшот или сервер не найдены, у карточек — ещё «исключение не найдено» / «правило не найдено» (строки нет
-или она из другого снапшота); `422` — неизвестное значение `dup` или `limit` вне 1..1000.
+или она из другого снапшота), с `host_id` — «хост не найден»; `422` — неизвестное значение `dup` или `limit` вне 1..1000.
 `facets` (и `summary` у исключений) приходят только при `offset=0`, иначе `null`.
+
+`host_id=<host_id хоста>` — записи, действующие на хост: политик его группы (`ksc_policy_scope`, как `policies` карточки
+хоста), у которых запись принадлежит самой политике (`profile` пуст) или профилю, активному на хосте по тегам (см.
+«Профили на хосте» в разделе «Хосты» — та же трактовка условия). Профиль, активацию которого не определить (условие не по
+тегам, теги хоста не собраны), не исключается: его записи остаются в списке, а сам профиль перечислен в `undetermined`,
+чтобы интерфейс пометил их как «возможно»; выключенный и не подошедший по тегам профиль — исключается. Фасет `policy` и
+`total` считаются по этому набору; с `policy_id`, `profile` и другими фильтрами — пересечение; `summary` исключений,
+`policies` и `covered_by` по-прежнему по всему снапшоту. Без `host_id` ключа `undetermined` в ответе нет.
 
 Карточка исключения или правила — та же строка, что в списке (у исключения `policies` и `covered_by` считаются по
 всем строкам снапшота, как в списке), плюс `same_in` — другие строки снапшота с тем же `key`: та же запись в других

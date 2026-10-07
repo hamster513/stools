@@ -20,6 +20,7 @@ from api.deps import get_current_user
 from api.modules.ksc.core.exclusion_risks import RISKS
 from api.modules.ksc.core.policy_model import Exclusion, covered_by
 from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy, KscSnapshot
+from api.modules.ksc.routers.hosts import host_scope
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.settings import Settings, get_settings
 
@@ -27,6 +28,27 @@ router = APIRouter(tags=["ksc"])
 
 MAX_LIMIT = 1000
 DUP = ("multi", "single", "covered")
+
+
+class _HostFilter:
+    """Фильтр `host_id`: записи политик группы хоста — самой политики и профилей, активных на хосте по тегам. Профиль,
+    активацию которого не определить (условие не по тегам, теги не собраны), не исключается, а перечисляется в `undetermined`,
+    чтобы интерфейс пометил его записи как «возможно»."""
+
+    def __init__(self, db: Session, snapshot_id: int, host_id: str) -> None:
+        scope = host_scope(db, snapshot_id, host_id)
+        names = {p.policy_id: p.name for p, _ in scope.policies}
+        self.policy_ids = set(names)
+        self.active = {(r.policy_id, r.name): a.active for r, a in scope.profiles}
+        self.undetermined = [
+            {"policy_id": r.policy_id, "policy_name": names[r.policy_id], "profile": r.name} for r, a in scope.profiles if a.active is None
+        ]
+
+    def keep(self, policy_id: int, profile: str) -> bool:
+        if policy_id not in self.policy_ids:
+            return False
+        # Профиля нет в таблице профилей (не должно случаться) — как «не определить»: запись остаётся.
+        return not profile or self.active.get((policy_id, profile)) is not False
 
 
 def _snapshot(db: Session, snapshot_id: int, settings: Settings) -> KscSnapshot:
@@ -140,6 +162,7 @@ def list_exclusions(
     enabled: bool | None = None,
     dup: str = "",
     risky: bool | None = None,
+    host_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -149,6 +172,7 @@ def list_exclusions(
     _snapshot(db, snapshot_id, settings)
     if dup and dup not in DUP:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{dup}»")
+    host = _HostFilter(db, snapshot_id, host_id) if host_id is not None else None
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscExclusion).where(KscExclusion.snapshot_id == snapshot_id)).scalars())
     # В скольких политиках встречается ключ и чем перекрыто исключение — по всем строкам снапшота, а не по отфильтрованным.
@@ -162,6 +186,8 @@ def list_exclusions(
         if policy_id is not None and r.policy_id != policy_id:
             return False
         if profile is not None and r.profile != profile:
+            return False
+        if host is not None and not host.keep(r.policy_id, r.profile):
             return False
         if kind and r.kind != kind:
             return False
@@ -203,6 +229,7 @@ def list_exclusions(
     return {
         "total": len(kept), "items": [_exclusion_item(r, _name(policies, r.policy_id), len(owners[r.key]), covered(r)) for r in page],
         "facets": facets, "summary": summary, "undescribed": _undescribed(policies),
+        **({"undetermined": host.undetermined} if host is not None else {}),
     }
 
 
@@ -241,6 +268,7 @@ def list_net_rules(
     action: str = "",
     direction: str = "",
     enabled: bool | None = None,
+    host_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -248,6 +276,7 @@ def list_net_rules(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     _snapshot(db, snapshot_id, settings)
+    host = _HostFilter(db, snapshot_id, host_id) if host_id is not None else None
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id)).scalars())
     needle = q.strip().lower()
@@ -256,6 +285,8 @@ def list_net_rules(
         if policy_id is not None and r.policy_id != policy_id:
             return False
         if profile is not None and r.profile != profile:
+            return False
+        if host is not None and not host.keep(r.policy_id, r.profile):
             return False
         if (action and r.action != action) or (direction and r.direction != direction) or (enabled is not None and r.enabled != enabled):
             return False
@@ -275,6 +306,7 @@ def list_net_rules(
     return {
         "total": len(kept), "items": [_net_rule_item(r, _name(policies, r.policy_id)) for r in page], "facets": facets,
         "undescribed": _undescribed(policies), "partial": _partial(policies),
+        **({"undetermined": host.undetermined} if host is not None else {}),
     }
 
 

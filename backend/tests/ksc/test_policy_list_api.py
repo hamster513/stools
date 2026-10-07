@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from api.modules.ksc.models import KscChange, KscFinding
 from api.modules.ksc.services.snapshots import snapshot_path
-from tests.ksc.synthetic import build_export, without_new_sections
+from tests.ksc.synthetic import NOTEBOOKS_EXPRESSION, build_export, without_new_sections
 from tests.ksc.test_api import upload
 
 
@@ -148,7 +148,7 @@ def test_policy_profiles_diff_condition_and_secret(auth_client: TestClient) -> N
 
     notebooks, disabled = body["profiles"]
     assert notebooks["condition"]["KLSSPOL_PRF_ENABLED"] is True
-    assert notebooks["condition"]["EXPRESSION"] == {"KLSSPOL_TAG": "Notebook"}
+    assert notebooks["condition"]["EXPRESSION"] == NOTEBOOKS_EXPRESSION
     assert notebooks["settings"] == 2 and notebooks["errors"] == []
     by_path = {(d["section"], d["path"]): d for d in notebooks["diff"]}
     assert set(by_path) == {("KLPRSS_Components", "Firewall.Enabled"), ("KLPRSS_Basic", "ProxyPassword")}

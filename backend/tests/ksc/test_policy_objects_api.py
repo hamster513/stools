@@ -1,6 +1,7 @@
 """API исключений и сетевых правил: поиск, фильтры, дубли, перекрытия, фасеты, сводка, «не описан», карточки объектов."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -20,7 +21,7 @@ from api.modules.ksc.core.policy_model import covered_by as policy_model_covered
 from api.modules.ksc.models import KscExclusion, KscPolicy
 from api.modules.ksc.routers import policy_objects
 from tests.ksc.kes11 import exclusion, kes11_export
-from tests.ksc.synthetic import build_export
+from tests.ksc.synthetic import activation, build_export, condition_group
 from tests.ksc.test_api import upload
 
 
@@ -325,3 +326,62 @@ def test_object_card_not_found(auth_client: TestClient, sid: int) -> None:
         r = auth_client.get(url)
         assert r.status_code == 404 and r.json()["detail"] == "правило не найдено", r.text
     assert auth_client.get(f"/api/ksc/snapshots/999999/exclusions/{exclusion_id}").status_code == 404
+
+
+# --- записи, действующие на хост ------------------------------------------------------------------------
+
+
+def test_objects_filtered_by_host(auth_client: TestClient, sid: int) -> None:
+    """`host_id` — записи политик группы хоста: самой политики и профилей, активных на хосте по тегам."""
+    # WS01 (группа Workstations, тег VIP): политика 1 и её профиль «Ноутбуки» (активен по тегу VIP).
+    ws01 = _exclusions(auth_client, sid, "host_id=h-ws01")
+    assert _values(ws01) == [(1, "", "ABC"), (1, "", "C:\\Tools"), (1, "", "C:\\Tools\\a.exe"), (1, "Ноутбуки", "C:\\Tools")]
+    assert ws01["facets"]["policy"] == {"1": 4} and ws01["undetermined"] == [] and ws01["total"] == 4
+    # WS02 без тегов: профиль не активен — только записи самой политики.
+    ws02 = _exclusions(auth_client, sid, "host_id=h-ws02")
+    assert _values(ws02) == [(1, "", "ABC"), (1, "", "C:\\Tools"), (1, "", "C:\\Tools\\a.exe")] and ws02["undetermined"] == []
+    assert _values(_exclusions(auth_client, sid, "host_id=h-lab01")) == [(3, "", "C:\\Tools\\a.exe")]
+    assert _exclusions(auth_client, sid, "host_id=h-srv01")["total"] == 0  # только политика агента
+    assert _exclusions(auth_client, sid, "host_id=h-ws01&policy_id=3")["total"] == 0  # пересечение с policy_id
+    assert _values(_exclusions(auth_client, sid, "host_id=h-ws01&profile=%D0%9D%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA%D0%B8")) == [(1, "Ноутбуки", "C:\\Tools")]
+    assert "undetermined" not in _exclusions(auth_client, sid)
+    # Дубли считаются по всему снапшоту, как без фильтра.
+    assert next(i for i in ws01["items"] if i["value"] == "C:\\Tools\\a.exe")["policies"] == 2
+
+    def names(query: str) -> list[str]:
+        return [i["name"] for i in _net_rules(auth_client, sid, query)["items"]]
+
+    assert names("host_id=h-ws01") == ["DNS", "Block SMB", "VPN"] and names("host_id=h-ws02") == ["DNS", "Block SMB"]
+    assert names("host_id=h-lab01") == ["Updater"] and names("host_id=h-srv01") == []
+    rules = _net_rules(auth_client, sid, "host_id=h-ws01")
+    assert rules["facets"]["policy"] == {"1": 3} and rules["undetermined"] == []
+    assert "undetermined" not in _net_rules(auth_client, sid)
+    for kind in ("exclusions", "net-rules"):
+        r = auth_client.get(f"/api/ksc/snapshots/{sid}/{kind}?host_id=nope")
+        assert r.status_code == 404 and r.json()["detail"] == "хост не найден", r.text
+
+
+def test_objects_by_host_keep_undetermined_profiles(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Профиль с условием не по тегам (или при несобранных тегах) нельзя ни включить, ни исключить: его записи
+    остаются, а профиль перечислен в `undetermined`."""
+    monkeypatch.setitem(EXTRACTORS, "KES", _fake)
+    raw = json.loads(json.dumps(build_export()))
+    raw["policy_profiles"]["1"]["profiles"][0]["attrs"]["EXPRESSION"] = activation(condition_group({"OP": 7, "name": "NGTPP_sNlaLocation", "val": "Office"}))
+    assert upload(auth_client, raw)["status"] == "done"
+    sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    undetermined = [{"policy_id": 1, "policy_name": "KES workstations", "profile": "Ноутбуки"}]
+    body = _exclusions(auth_client, sid, "host_id=h-ws02")
+    assert _values(body) == [(1, "", "ABC"), (1, "", "C:\\Tools"), (1, "", "C:\\Tools\\a.exe"), (1, "Ноутбуки", "C:\\Tools")]
+    assert body["undetermined"] == undetermined
+    rules = _net_rules(auth_client, sid, "host_id=h-ws02")
+    assert [i["name"] for i in rules["items"]] == ["DNS", "Block SMB", "VPN"] and rules["undetermined"] == undetermined
+    assert _exclusions(auth_client, sid, "host_id=h-lab01")["undetermined"] == []  # профиль не из политик хоста
+    # Теги не собраны — то же самое для профиля по тегу.
+    second = build_export()
+    del second["host_tags"]
+    second["server"]["collected_at"] = "2026-09-16T12:00:00Z"
+    assert upload(auth_client, second)["status"] == "done"
+    sid2 = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    assert sid2 != sid
+    body = _exclusions(auth_client, sid2, "host_id=h-ws01")
+    assert body["total"] == 4 and body["undetermined"] == undetermined
