@@ -342,6 +342,8 @@ def test_objects_filtered_by_host(auth_client: TestClient, sid: int) -> None:
     assert _values(ws02) == [(1, "", "ABC"), (1, "", "C:\\Tools"), (1, "", "C:\\Tools\\a.exe")] and ws02["undetermined"] == []
     assert _values(_exclusions(auth_client, sid, "host_id=h-lab01")) == [(3, "", "C:\\Tools\\a.exe")]
     assert _exclusions(auth_client, sid, "host_id=h-srv01")["total"] == 0  # только политика агента
+    # Пустой host_id — не фильтр (как q и kind), а не 404.
+    assert _exclusions(auth_client, sid, "host_id=")["total"] == _exclusions(auth_client, sid, "")["total"]
     assert _exclusions(auth_client, sid, "host_id=h-ws01&policy_id=3")["total"] == 0  # пересечение с policy_id
     assert _values(_exclusions(auth_client, sid, "host_id=h-ws01&profile=%D0%9D%D0%BE%D1%83%D1%82%D0%B1%D1%83%D0%BA%D0%B8")) == [(1, "Ноутбуки", "C:\\Tools")]
     assert "undetermined" not in _exclusions(auth_client, sid)

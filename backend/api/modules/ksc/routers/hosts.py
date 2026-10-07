@@ -185,7 +185,7 @@ def host_scope(db: Session, snapshot_id: int, host_id: str) -> HostScope:
     order = {p.policy_id: n for n, (p, _) in enumerate(policies)}
     rows: list[KscProfile] = []
     if order:
-        rows = list(db.execute(select(KscProfile).where(KscProfile.snapshot_id == snapshot_id, KscProfile.policy_id.in_(order))).scalars())
+        rows = list(db.execute(select(KscProfile).where(KscProfile.snapshot_id == snapshot_id, KscProfile.policy_id.in_(list(order)))).scalars())
     profiles: list[tuple[KscProfile, Activation]] = []
     for r in sorted(rows, key=lambda r: (order[r.policy_id], r.priority, r.id)):
         groups = parse_condition(json.loads(r.condition_json or "{}"))

@@ -172,7 +172,7 @@ def list_exclusions(
     _snapshot(db, snapshot_id, settings)
     if dup and dup not in DUP:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{dup}»")
-    host = _HostFilter(db, snapshot_id, host_id) if host_id is not None else None
+    host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscExclusion).where(KscExclusion.snapshot_id == snapshot_id)).scalars())
     # В скольких политиках встречается ключ и чем перекрыто исключение — по всем строкам снапшота, а не по отфильтрованным.
@@ -276,7 +276,7 @@ def list_net_rules(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     _snapshot(db, snapshot_id, settings)
-    host = _HostFilter(db, snapshot_id, host_id) if host_id is not None else None
+    host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id)).scalars())
     needle = q.strip().lower()

@@ -70,11 +70,15 @@ def _condition(item: Any) -> Condition:
 def _group(item: Any) -> tuple[Condition, ...]:
     if not isinstance(item, dict) or not isinstance(item.get("ARGS"), list):
         return (_unknown("группа условий не разобрана", item),)
+    if not item["ARGS"]:
+        return (_unknown("группа без условий", item),)
     return tuple(_condition(c) for c in item["ARGS"])
 
 
 def parse_condition(condition: dict[str, Any]) -> tuple[tuple[Condition, ...], ...]:
     """Группы условий из атрибутов профиля; пустой кортеж — правил активации нет."""
+    if not isinstance(condition, dict):
+        return ((_unknown("атрибуты профиля не разобраны", condition),),)
     expression = unwrap(condition.get("EXPRESSION"))
     if isinstance(expression, dict) and "KLPRSS_Val" in expression:
         expression = expression["KLPRSS_Val"]

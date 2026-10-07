@@ -4,8 +4,19 @@ from __future__ import annotations
 from typing import Any
 
 from api.modules.ksc.core.profile_activation import Activation, Condition, evaluate, parse_condition
-
 from tests.ksc.synthetic import activation, condition_group, tag_condition
+
+
+def test_non_dict_attributes_and_empty_group_are_undetermined() -> None:
+    """Атрибуты профиля не словарь и группа без условий — «не определить», а не ошибка и не ложное «нет»."""
+    for bad in ([], "x", None):
+        groups = parse_condition(bad)  # type: ignore[arg-type]
+        assert len(groups) == 1 and groups[0][0].field == "unknown"
+        assert evaluate(groups, ["VIP"]).active is None
+    groups = parse_condition({"EXPRESSION": activation({"ARGS": [], "LOP": 1})})
+    assert groups == ((Condition("unknown", "группа без условий", {"ARGS": [], "LOP": 1}),),)
+    assert evaluate(groups, ["VIP"]).active is None
+    assert evaluate(groups, []).active is None
 
 
 def _nla(value: str) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -252,6 +253,22 @@ def test_host_profiles_active_by_tag(auth_client: TestClient) -> None:
     snap = auth_client.get("/api/ksc/snapshots").json()[0]
     r = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/nope/profiles")
     assert r.status_code == 404 and r.json()["detail"] == "хост не найден"
+
+
+def test_host_profiles_object_counts(auth_client: TestClient, monkeypatch: Any) -> None:
+    """Счётчики исключений и правил профиля — по записям профиля; у неописанного продукта — null, не 0."""
+    from api.modules.ksc.core.policy_model import EXTRACTORS
+    from tests.ksc.test_policy_objects_api import _fake
+
+    monkeypatch.setitem(EXTRACTORS, "KES", _fake)
+    assert upload(auth_client, build_export())["status"] == "done"
+    nb = _profiles(auth_client, "h-ws01")["policies"][1]["profiles"][0]
+    assert (nb["name"], nb["exclusions"], nb["net_rules"]) == ("Ноутбуки", 1, 1)
+    monkeypatch.delitem(EXTRACTORS, "KES")
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    assert auth_client.post(f"/api/ksc/snapshots/{snap['id']}/reanalyze").status_code == 202
+    nb = _profiles(auth_client, "h-ws01")["policies"][1]["profiles"][0]
+    assert (nb["exclusions"], nb["net_rules"]) == (None, None)
 
 
 def test_host_profiles_not_collected(auth_client: TestClient) -> None:
