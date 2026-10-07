@@ -215,8 +215,9 @@ class KscNetRule(Base):
     layer: Mapped[str] = mapped_column(String(16))
     position: Mapped[int] = mapped_column(Integer, default=0)
     name: Mapped[str] = mapped_column(String(255), default="")
-    action: Mapped[str] = mapped_column(String(16), default="")
-    direction: Mapped[str] = mapped_column(String(16), default="")
+    #: Подписи словами («по правилам программ», «исходящий (поток)») — до 32 символов.
+    action: Mapped[str] = mapped_column(String(32), default="")
+    direction: Mapped[str] = mapped_column(String(32), default="")
     protocol: Mapped[str] = mapped_column(String(32), default="")
     local_ports: Mapped[str] = mapped_column(String(255), default="")
     remote_ports: Mapped[str] = mapped_column(String(255), default="")

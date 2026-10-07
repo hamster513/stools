@@ -96,7 +96,7 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex, cfg: Ks
         )
         net_rules.extend(
             {"snapshot_id": sid, "policy_id": p.policy_id, "profile": r.profile[:255], "layer": r.layer[:16], "position": r.position,
-             "name": r.name[:255], "action": r.action[:16], "direction": r.direction[:16], "protocol": r.protocol[:32],
+             "name": r.name[:255], "action": r.action[:32], "direction": r.direction[:32], "protocol": r.protocol[:32],
              "local_ports": r.local_ports[:255], "remote_ports": r.remote_ports[:255], "addresses": r.addresses, "enabled": r.enabled,
              "key": net_rule_key(r)}
             for r in objs.net_rules

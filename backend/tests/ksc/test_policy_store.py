@@ -130,6 +130,23 @@ def test_extracted_objects_stored_and_reanalyze_and_delete(auth_client: TestClie
     assert _counts(db_session, sid) == dict.fromkeys(before, 0)
 
 
+def test_rule_labels_longer_than_16_are_stored_whole(auth_client: TestClient, db_session: Session, monkeypatch: Any) -> None:
+    """Подписи действия и направления словами длиннее 16 символов не обрезаются (были колонки на 16)."""
+    def extractor(sections: dict[str, Any]) -> PolicyObjects:
+        if "KLPRSS_Deep" not in sections:
+            return PolicyObjects()
+        return PolicyObjects(net_rules=[NetRule("packet", 0, "Длинные подписи", "по правилам программ", "исходящий (поток)", "TCP")])
+
+    monkeypatch.setitem(EXTRACTORS, "KES", extractor)
+    raw = build_export()
+    raw["policy_contents"].pop("3")
+    assert upload(auth_client, raw)["status"] == "done"
+    rule = db_session.execute(select(KscNetRule).where(KscNetRule.snapshot_id == _snapshot_id(auth_client))).scalars().one()
+    assert (rule.action, rule.direction) == ("по правилам программ", "исходящий (поток)")
+    items = auth_client.get(f"/api/ksc/snapshots/{rule.snapshot_id}/net-rules").json()["items"]
+    assert (items[0]["action"], items[0]["direction"]) == ("по правилам программ", "исходящий (поток)")
+
+
 def _drop_policy_tables(db: Session, snapshot_id: int) -> None:
     """Как у снапшота, импортированного до таблиц политик: строк нет, у хостов нет группы."""
     for m in TABLES:
