@@ -524,7 +524,7 @@ export interface RiskDetail {
   recommendations: string[]
 }
 
-/** Та же запись (по `key`) в другой политике снапшота. */
+/** Та же запись (по `key`) в другой политике или профиле снапшота — профили своей политики тоже входят. */
 export interface SameInItem {
   row_id: number
   policy_id: number
@@ -533,7 +533,7 @@ export interface SameInItem {
   enabled: boolean
 }
 
-/** Карточка исключения (`/exclusions/{row_id}`): элемент списка плюс подробности рисков и та же запись в других политиках. */
+/** Карточка исключения (`/exclusions/{row_id}`): элемент списка плюс подробности рисков и та же запись в других политиках и профилях. */
 export interface ExclusionDetail extends ExclusionItem {
   risk_details: RiskDetail[]
   same_in: SameInItem[]

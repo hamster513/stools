@@ -17,7 +17,7 @@ const LAYER_TITLES: Record<string, string> = { packet: 'пакетное пра�
 
 /**
  * Боковая панель записи — исключения или сетевого правила: все поля целиком, политика и профиль ссылками,
- * у исключения — риски с рекомендациями, у обеих — та же запись в других политиках (нажатие открывает её здесь же).
+ * у исключения — риски с рекомендациями, у обеих — та же запись в других политиках и профилях (нажатие открывает её здесь же).
  * Esc закрывает только эту панель: перехватывается до обработчиков страниц (список хостов закрывает по Esc свою).
  */
 export function ObjectDrawer({ kind, rowId, snapshotId, serverId, onClose }: { kind: ObjectKind; rowId: number | null; snapshotId: number; serverId: number; onClose: () => void }) {
@@ -170,11 +170,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-/** Та же запись (по ключу) в других политиках: имя политики ведёт в карточку, строка целиком открывает ту запись здесь же. */
+/** Та же запись (по ключу) в других политиках и в профилях — в том числе своей политики: имя политики ведёт в карточку, строка целиком открывает ту запись здесь же. */
 function SameIn({ items, serverId, onOpen }: { items: SameInItem[]; serverId: number; onOpen: (rowId: number) => void }) {
   return (
-    <Section title="Та же запись в других политиках">
-      {items.length === 0 && <div className="text-text-secondary">в других политиках нет</div>}
+    <Section title="Та же запись в других политиках и профилях">
+      {items.length === 0 && <div className="text-text-secondary">больше нигде нет</div>}
       {items.length > 0 && (
         <ul className="flex flex-col gap-0.5">
           {items.map((s) => (
