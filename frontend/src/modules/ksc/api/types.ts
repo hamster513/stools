@@ -515,6 +515,34 @@ export interface ExclusionItem {
   covered_by: string | null
 }
 
+/** Риск исключения в карточке: серьёзность, заголовок, что именно открывает, как сузить. Неизвестный код — серьёзность пустая, заголовок — сам код. */
+export interface RiskDetail {
+  code: string
+  severity: Severity | ''
+  title: string
+  detail: string
+  recommendations: string[]
+}
+
+/** Та же запись (по `key`) в другой политике снапшота. */
+export interface SameInItem {
+  row_id: number
+  policy_id: number
+  policy_name: string
+  profile: string
+  enabled: boolean
+}
+
+/** Карточка исключения (`/exclusions/{row_id}`): элемент списка плюс подробности рисков и та же запись в других политиках. */
+export interface ExclusionDetail extends ExclusionItem {
+  risk_details: RiskDetail[]
+  same_in: SameInItem[]
+  /** Хостов под политикой записи. */
+  policy_hosts: number
+  /** Содержимое политики записи собрано не полностью. */
+  policy_partial: boolean
+}
+
 export type ExclusionDup = 'multi' | 'single' | 'covered'
 
 export const EXCLUSION_DUP_LABELS: Record<ExclusionDup, string> = {
@@ -597,6 +625,13 @@ export interface NetRuleItem {
   addresses: string
   enabled: boolean
   key: string
+}
+
+/** Карточка сетевого правила (`/net-rules/{row_id}`). */
+export interface NetRuleDetail extends NetRuleItem {
+  same_in: SameInItem[]
+  policy_hosts: number
+  policy_partial: boolean
 }
 
 export interface NetRulesQuery {

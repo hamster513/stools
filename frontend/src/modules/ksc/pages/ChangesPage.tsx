@@ -80,7 +80,7 @@ function SnapshotLine({ snap, all, inPolicy }: { snap: ChangesSnapshot; all: Cha
   )
 }
 
-function Rows({ items, inPolicy }: { items: ChangeItem[]; inPolicy: boolean }) {
+function Rows({ items, inPolicy, serverId }: { items: ChangeItem[]; inPolicy: boolean; serverId: number }) {
   return (
     <div className="min-w-[1240px]">
       <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
@@ -96,7 +96,7 @@ function Rows({ items, inPolicy }: { items: ChangeItem[]; inPolicy: boolean }) {
           <div className="w-36 shrink-0 px-2 text-text-secondary">{when(c.collected_at)}</div>
           <div className="w-36 shrink-0 px-2 text-text">{CHANGE_KIND_LABELS[c.kind] ?? c.kind}</div>
           <div className="w-24 shrink-0 px-2 text-text-secondary">{CHANGE_ACTION_LABELS[c.action] ?? c.action}</div>
-          <div className="w-56 shrink-0 px-2"><PolicyCell policyName={c.policy_name} profile={c.profile} inPolicy={inPolicy} /></div>
+          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={c.policy_id} policyName={c.policy_name} profile={c.profile} inPolicy={inPolicy} /></div>
           <div className="w-72 shrink-0 px-2 font-mono break-all text-text-secondary" title={isRecord(c) ? `ключ ${c.path}` : undefined}>{where(c)}</div>
           <div className="min-w-[280px] flex-1 px-2"><ChangeValue kind={c.kind} before={c.before} after={c.after} /></div>
         </div>
@@ -188,7 +188,7 @@ export function ChangesList({ serverId, policyId, snapshotId }: { serverId: numb
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
           {!query.isLoading && !errorMessage && (
             <>
-              {items.length === 0 ? <Empty snapshots={snapshots} hasFilters={chips.length > 0} /> : <Rows items={items} inPolicy={inPolicy} />}
+              {items.length === 0 ? <Empty snapshots={snapshots} hasFilters={chips.length > 0} /> : <Rows items={items} inPolicy={inPolicy} serverId={serverId} />}
               <LoadMore loaded={items.length} total={first?.total ?? 0} hasNext={!!query.hasNextPage} fetching={query.isFetchingNextPage} onMore={() => query.fetchNextPage()} />
             </>
           )}

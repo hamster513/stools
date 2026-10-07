@@ -5,6 +5,7 @@ import { EXCLUSION_RISKS, type Severity } from '@/modules/ksc/api/types'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
+import { Link } from '@/lib/router'
 import { FacetRow, FacetSection } from '../policies/Facets'
 
 /** Раздел сервера, которому нужен последний снапшот: заголовок с номером снапшота и содержимое. */
@@ -52,11 +53,18 @@ export function PolicyFacet({ snapshotId, counts, selected, onSelect }: {
   )
 }
 
-/** Политика и профиль записи; в карточке политики — только профиль. */
-export function PolicyCell({ policyName, profile, inPolicy }: { policyName: string; profile: string; inPolicy: boolean }) {
+/**
+ * Политика (ссылкой на карточку; без `policyId` — политики уже нет, текстом) и профиль записи; в карточке политики — только профиль.
+ * Нажатие на ссылку не доходит до строки-кнопки, иначе вместе с переходом открылась бы панель записи.
+ */
+export function PolicyCell({ serverId, policyId, policyName, profile, inPolicy }: { serverId: number; policyId: number | null; policyName: string; profile: string; inPolicy: boolean }) {
   return (
     <>
-      {!inPolicy && <div className="truncate text-text" title={policyName}>{policyName || '—'}</div>}
+      {!inPolicy && (
+        <div className="truncate text-text" title={policyName} onClick={(e) => e.stopPropagation()} role="presentation">
+          {policyId === null ? policyName || '—' : <Link to={`/ksc/servers/${serverId}/policies/${policyId}`} className="hover:text-primary hover:underline">{policyName || '—'}</Link>}
+        </div>
+      )}
       <div className="truncate text-text-secondary" title={profile}>{profile ? `профиль ${profile}` : 'сама политика'}</div>
     </>
   )

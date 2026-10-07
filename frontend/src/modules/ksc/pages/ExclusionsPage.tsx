@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { FilterX, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
+import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
+import { cn } from '@/lib/cn'
 import { useExclusions } from '@/modules/ksc/api/queries'
 import {
   EXCLUSION_DUP_LABELS,
@@ -15,6 +17,7 @@ import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
+import { ObjectDrawer } from './objects/ObjectDrawer'
 import { LoadMore, ObjectsEmpty, PartialNote, PolicyCell, PolicyFacet, RiskChips, SnapshotSection, UndescribedNote } from './objects/ObjectsParts'
 
 interface Filters {
@@ -66,7 +69,8 @@ function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p:
   )
 }
 
-function Rows({ items, inPolicy }: { items: ExclusionItem[]; inPolicy: boolean }) {
+/** Строки кликабельны: щелчок или Enter открывают запись в боковой панели; открытая подсвечена. */
+function Rows({ items, inPolicy, serverId, openRowId, onOpen }: { items: ExclusionItem[]; inPolicy: boolean; serverId: number; openRowId: number | null; onOpen: (rowId: number) => void }) {
   return (
     <div className="min-w-[1536px]">
       <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
@@ -81,11 +85,11 @@ function Rows({ items, inPolicy }: { items: ExclusionItem[]; inPolicy: boolean }
         <div className="w-48 shrink-0 px-2 py-2">Перекрыто</div>
       </div>
       {items.map((e) => (
-        <div key={e.id} className="flex items-start border-b border-grid py-2 text-xs">
+        <div key={e.id} {...clickableRow(() => onOpen(e.id))} className={cn(ROW_FOCUS, 'flex cursor-pointer items-start border-b border-grid py-2 text-xs', openRowId === e.id ? 'bg-row-selected' : 'hover:bg-row-hover')}>
           <div className="min-w-[240px] flex-1 px-2 font-mono break-all text-text">{e.value}</div>
           <div className="w-44 shrink-0 px-2"><RiskChips risks={e.risks} titles={e.risk_titles} /></div>
           <div className="w-24 shrink-0 px-2 text-text-secondary">{kindLabel(e.kind)}</div>
-          <div className="w-56 shrink-0 px-2"><PolicyCell policyName={e.policy_name} profile={e.profile} inPolicy={inPolicy} /></div>
+          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={e.policy_id} policyName={e.policy_name} profile={e.profile} inPolicy={inPolicy} /></div>
           <div className="w-48 shrink-0 px-2 text-text-secondary">{e.components.length ? e.components.join(', ') : '—'}</div>
           <div className="w-20 shrink-0 px-2 text-text-secondary">{e.enabled ? 'да' : 'нет'}</div>
           <div className="w-56 shrink-0 px-2 break-words text-text-secondary">{e.comment || '—'}</div>
@@ -101,9 +105,11 @@ function Rows({ items, inPolicy }: { items: ExclusionItem[]; inPolicy: boolean }
  * Исключения снапшота: поиск, фильтры чипами, сводка, таблица. С `policyId` — по одной политике, без фильтра политики и сводки;
  * `partial` — её содержимое собрано не полностью.
  */
-export function ExclusionsTable({ snapshotId, policyId, partial = false }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean }) {
+export function ExclusionsTable({ snapshotId, serverId, policyId, partial = false }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean }) {
   const inPolicy = policyId !== undefined
   const [filters, setFilters] = useState<Filters>({})
+  const [openRowId, setOpenRowId] = useState<number | null>(null)
+  const closeRow = useCallback(() => setOpenRowId(null), [])
   const [searchInput, setSearchInput] = useState('')
   const q = useDebouncedValue(searchInput, 250)
   const filtersPanel = useFiltersPanel('ksc-exclusions')
@@ -178,13 +184,14 @@ export function ExclusionsTable({ snapshotId, policyId, partial = false }: { sna
               {items.length === 0 ? (
                 <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="исключения" none="Исключений нет" nothing="Ни одно исключение не подходит под фильтры." />
               ) : (
-                <Rows items={items} inPolicy={inPolicy} />
+                <Rows items={items} inPolicy={inPolicy} serverId={serverId} openRowId={openRowId} onOpen={setOpenRowId} />
               )}
               <LoadMore loaded={items.length} total={first?.total ?? 0} hasNext={!!query.hasNextPage} fetching={query.isFetchingNextPage} onMore={() => query.fetchNextPage()} />
             </>
           )}
         </div>
       </div>
+      <ObjectDrawer kind="exclusion" rowId={openRowId} snapshotId={snapshotId} serverId={serverId} onClose={closeRow} />
     </div>
   )
 }

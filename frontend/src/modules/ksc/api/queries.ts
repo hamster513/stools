@@ -7,6 +7,7 @@ import type {
   ChangesResponse,
   Connection,
   ConnectionIn,
+  ExclusionDetail,
   ExclusionsQuery,
   ExclusionsResponse,
   FindingDetail,
@@ -17,6 +18,7 @@ import type {
   HostsResponse,
   Job,
   KscConfig,
+  NetRuleDetail,
   NetRulesQuery,
   NetRulesResponse,
   Overview,
@@ -44,7 +46,7 @@ export const OBJECTS_PAGE_SIZE = 200
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
   for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-policy-list', 'ksc-policy',
     'ksc-policy-scope', 'ksc-policy-settings', 'ksc-policy-findings', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs',
-    'ksc-exclusions', 'ksc-net-rules', 'ksc-changes']) {
+    'ksc-exclusions', 'ksc-net-rules', 'ksc-changes', 'ksc']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -251,6 +253,24 @@ export function useNetRules(snapshotId: number | undefined, query: Omit<NetRules
     getNextPageParam: nextPageOffset,
     enabled: snapshotId !== undefined,
     placeholderData: (prev) => prev,
+  })
+}
+
+/** Карточка исключения; `rowId === null` — панель закрыта, запроса нет. */
+export function useExclusionDetail(snapshotId: number | undefined, rowId: number | null) {
+  return useQuery<ExclusionDetail, ApiRequestError>({
+    queryKey: ['ksc', 'exclusion', snapshotId, rowId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/exclusions/${rowId}`),
+    enabled: snapshotId !== undefined && rowId !== null,
+  })
+}
+
+/** Карточка сетевого правила; `rowId === null` — панель закрыта, запроса нет. */
+export function useNetRuleDetail(snapshotId: number | undefined, rowId: number | null) {
+  return useQuery<NetRuleDetail, ApiRequestError>({
+    queryKey: ['ksc', 'net-rule', snapshotId, rowId],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/net-rules/${rowId}`),
+    enabled: snapshotId !== undefined && rowId !== null,
   })
 }
 
