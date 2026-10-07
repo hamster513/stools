@@ -77,6 +77,17 @@ def test_policies_scope_profiles_stored(auth_client: TestClient, db_session: Ses
     assert hosts["WS01"] == 2 and hosts["SRV01"] == 3 and hosts["LAB01"] == 4 and hosts["WS08"] == 1
 
 
+def test_profile_enabled_flag_in_container(auth_client: TestClient, db_session: Session) -> None:
+    """Признак включённости профиля в контейнере `KLPRSS_Val` (как в настоящей выгрузке) читается по значению:
+    выключенный профиль не становится включённым."""
+    raw = build_export()
+    for pr in raw["policy_profiles"]["1"]["profiles"]:
+        pr["attrs"] = {**pr["attrs"], "KLSSPOL_PRF_ENABLED": {"KLPRSS_Mnd": False, "KLPRSS_Val": pr["attrs"]["KLSSPOL_PRF_ENABLED"]}}
+    assert upload(auth_client, raw)["status"] == "done"
+    rows = {p.name: p.enabled for p in db_session.execute(select(KscProfile).where(KscProfile.snapshot_id == _snapshot_id(auth_client))).scalars()}
+    assert rows == {"Ноутбуки": True, "Выключенный": False}
+
+
 def test_profiles_not_collected(auth_client: TestClient, db_session: Session) -> None:
     assert upload(auth_client, without_new_sections(build_export()))["status"] == "done"
     sid = _snapshot_id(auth_client)
