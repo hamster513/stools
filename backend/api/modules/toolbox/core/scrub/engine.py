@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from api.modules.toolbox.core.scrub.detectors import VERSION_KEY, detect
+from api.modules.toolbox.core.scrub.detectors import KEYWORD_NAME, VERSION_KEY, detect
 from api.modules.toolbox.core.scrub.files import Entry, rewrite, walk
 from api.modules.toolbox.core.scrub.rules import compose, keep_case, replace
 from api.modules.toolbox.core.scrub.types import (
@@ -30,12 +30,10 @@ CONTEXT = 80
 VERSION_NEAR = 40
 #: Имена, которые после включения ищутся и голыми: jdoe из CORP\jdoe — та же учётка и в «user jdoe».
 BARE = {"host": "hosts", "user": "users", "domain": "domains"}
-#: Границы значения в самопроверке — как у словаря: всё, кроме букв и цифр («-», «_», «.» — тоже).
+#: Границы значения в самопроверке и псевдонима в обратном переводе — как у словаря: всё, кроме букв
+#: и цифр («-», «_», «.» — тоже). Так host-0001_notes и DOM1_backup переводятся обратно, «-500» за
+#: псевдонимом SID (RID) — граница, а word-0001 внутри word-00012 — нет.
 EDGE_BEFORE, EDGE_AFTER = r"(?<![^\W_])", r"(?![^\W_])"
-#: Границы псевдонима в обратном переводе: word-0001 не начало word-00012.
-ALIAS_BEFORE, ALIAS_AFTER = r"(?<![\w-])", r"(?![\w-])"
-#: За псевдонимом SID в тексте стоит RID («…-500»), он не продолжение псевдонима.
-SID_AFTER = r"(?=-\d+(?![\w-])|(?![\w-]))"
 
 
 class VerifyError(Exception):
@@ -166,6 +164,7 @@ def verify(target: Path, findings: list[Finding], ctx: Ctx) -> list[Finding]:
         raise VerifyError(f"{target.name}: результата нет")
     wanted = {(f.kind, f.value_key): f for f in findings if f.checked}
     literal = _literal(wanted)
+    mask = _own_aliases(wanted)
     left: dict[tuple[str, str], Finding] = {}
     keyed = _keyed(_with_checked(ctx, findings))
 
@@ -181,19 +180,53 @@ def verify(target: Path, findings: list[Finding], ctx: Ctx) -> list[Finding]:
         if entry.kind in ("broken", "skipped"):
             raise VerifyError(f"{entry.path}: не прочитан как текст ({entry.kind})")
         for json_key, text in pieces:
-            spans = []
+            if mask is not None:
+                # Свои псевдонимы и метки секретов — пробелами той же длины: «user» внутри user-0001,
+                # «example» внутри dom1.example — не остаток.
+                text = mask.sub(lambda m: " " * len(m.group(0)), text)
+            spans: list[tuple[int, int, set[tuple[str, str]]]] = []
             for m in detect(text, keyed(json_key)):
-                spans.append((m.start, m.end))
+                keys = {(kind, value_key(kind, value)) for kind, value in _parts(m)}
+                spans.append((m.start, m.end, keys))
                 for kind, value in _parts(m):
                     leftover((kind, value_key(kind, value)), entry.path)
             if literal is None:
                 continue
-            pattern, keys = literal
+            pattern, spellings = literal
             for hit in pattern.finditer(text):
-                # Уже посчитано детектором — второй раз не считается.
-                if not any(s <= hit.start() and hit.end() <= e for s, e in spans):
-                    leftover(keys[hit.group(0).lower()], entry.path)
+                key = _spelled(spellings, hit.group(0))
+                # Ключевое слово перед «=»/«:» — не значение, даже если пароль с ним совпал.
+                name = KEYWORD_NAME.match(text, hit.start())
+                if name is not None and name.end(1) == hit.end():
+                    continue
+                # Второй раз не считается только то, что детектор уже посчитал под тем же ключом.
+                if not any(s <= hit.start() and hit.end() <= e and key in keys for s, e, keys in spans):
+                    leftover(key, entry.path)
     return list(left.values())
+
+
+def _spelled(spellings: dict[str, tuple[str, str]], found: str) -> tuple[str, str]:
+    key = spellings.get(found.casefold())
+    if key is not None:
+        return key
+    # IGNORECASE сопоставляет и то, что casefold сворачивает иначе (редкие буквы): ищется то написание,
+    # под которое попало найденное.
+    return next(k for s, k in spellings.items() if re.fullmatch(re.escape(s), found, re.IGNORECASE))
+
+
+def _own_aliases(wanted: dict[tuple[str, str], Finding]) -> re.Pattern[str] | None:
+    """Всё, что apply пишет сам: псевдонимы включённых находок (составные — из них же) и метки секретов.
+    Псевдоним, совпавший с настоящим значением, не маскируется: иначе он спрятал бы настоящий остаток."""
+    reals = {s.casefold() for f in wanted.values() for s in (f.value, f.value_key)}
+    own = [f for f in wanted.values() if f.alias.casefold() not in reals]
+    if not own:
+        return None
+    # Слово меняется и внутри других слов (password → password-0001), его псевдоним — тоже без границ.
+    alternatives = "|".join(
+        re.escape(f.alias) if f.kind == "word" else f"{EDGE_BEFORE}{re.escape(f.alias)}{EDGE_AFTER}"
+        for f in sorted(own, key=lambda f: len(f.alias), reverse=True)
+    )
+    return re.compile(alternatives, re.IGNORECASE)
 
 
 def _literal(wanted: dict[tuple[str, str], Finding]) -> tuple[re.Pattern[str], dict[str, tuple[str, str]]] | None:
@@ -202,7 +235,7 @@ def _literal(wanted: dict[tuple[str, str], Finding]) -> tuple[re.Pattern[str], d
     keys: dict[str, tuple[str, str]] = {}
     for key, finding in wanted.items():
         for spelling in (finding.value, finding.value_key):
-            keys.setdefault(spelling.lower(), key)
+            keys.setdefault(spelling.casefold(), key)
     if not keys:
         return None
     alternatives = "|".join(re.escape(v) for v in sorted(keys, key=len, reverse=True))
@@ -211,17 +244,14 @@ def _literal(wanted: dict[tuple[str, str], Finding]) -> tuple[re.Pattern[str], d
 
 def reverse(text: str, pairs: Iterable[tuple[str, str]]) -> tuple[str, int]:
     """Пары (псевдоним, настоящее): псевдоним → настоящее, длинные раньше коротких, без учёта регистра,
-    целыми словами (`-` — часть слова: word-0001 внутри word-00012 не меняется)."""
+    целыми словами с границами словаря: host-0001_notes переводится, word-0001 внутри word-00012 — нет."""
     table: dict[str, tuple[str, str]] = {}
     for alias, real in pairs:
         table.setdefault(alias.lower(), (alias, real))
     if not table:
         return text, 0
-    alternatives = "|".join(
-        re.escape(a) + (SID_AFTER if a.startswith("s-1-5-21-") else ALIAS_AFTER)
-        for a in sorted(table, key=len, reverse=True)
-    )
-    pattern = re.compile(f"{ALIAS_BEFORE}(?:{alternatives})", re.IGNORECASE)
+    alternatives = "|".join(re.escape(a) for a in sorted(table, key=len, reverse=True))
+    pattern = re.compile(f"{EDGE_BEFORE}(?:{alternatives}){EDGE_AFTER}", re.IGNORECASE)
     replaced = 0
 
     def back(m: re.Match[str]) -> str:

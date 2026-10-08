@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from itertools import pairwise
 
+import pytest
+
 from api.modules.toolbox.core.scrub.detectors import (
     detect,
     find_domains,
@@ -174,6 +176,19 @@ def test_secrets_three_kinds_value_only() -> None:
         assert text[m.start:m.end] == m.value
 
 
+@pytest.mark.parametrize("value", [
+    "null", "None", "NIL", "true", "False", "yes", "no", "required", "empty", "REDACTED", "***", "********",
+    "xxxx", "XXXXXX", "<masked>", "<hidden>", "${DB_PASS}", "%PASSWORD%", "$SECRET",
+])
+def test_keyword_placeholders_are_not_secrets(value: str) -> None:
+    assert list(find_secrets(f"token: {value}\npassword={value}\nAuthorization: Bearer {value}", CTX)) == []
+
+
+def test_keyword_real_values_next_to_placeholder_words_are_secrets() -> None:
+    text = "token: nullable-Qx81\npassword=xxxxQ7!\npwd=$ecretW0rd"
+    assert sorted(values(find_secrets(text, CTX))) == ["$ecretW0rd", "nullable-Qx81", "xxxxQ7!"]
+
+
 def test_secrets_skip_plain_text_and_long_lines() -> None:
     assert list(find_secrets("hello world, logon host01 ok", CTX)) == []
     assert list(find_secrets("x" * 4100 + " AKIAIOSFODNN7EXAMPLE", CTX)) == []
@@ -188,8 +203,9 @@ def test_secrets_keywords_on_long_lines() -> None:
 def test_secrets_only_at_their_place() -> None:
     assert [(m.start, m.end) for m in find_secrets("secret=1234 port 12345", CTX)] == [(7, 11)]
     assert values(find_secrets("token: null1, other: null1", CTX)) == ["null1"]
-    found = list(find_secrets("Password: required by policy, required", CTX))
-    assert [(m.start, m.value) for m in found] == [(10, "required")]
+    # «required» теперь пустышка (см. test_keyword_placeholders_are_not_secrets) — место проверяется на пароле.
+    found = list(find_secrets("Password: Winter2026 by policy, Winter2026", CTX))
+    assert [(m.start, m.value) for m in found] == [(10, "Winter2026")]
 
 
 def test_secrets_right_after_equals_sign() -> None:

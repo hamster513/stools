@@ -7,6 +7,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -152,3 +153,21 @@ def test_read_errors_are_broken_not_skipped(tmp_path: Path) -> None:
     source.write_bytes(zipped({"bad.gz": b"not gzip at all", "tool.bin": b"\x00\x01", "a.txt": b"ok\n"}))
     assert [e.kind for e, _ in collected(source)] == ["broken", "skipped", "text"]
     assert [e.kind for e in rewrite(source, tmp_path / "clean.zip", to_host_alias)] == ["broken", "skipped", "text"]
+
+
+@pytest.mark.parametrize("error", [RuntimeError, NotImplementedError])
+def test_encrypted_or_unsupported_member_is_broken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                   error: type[Exception]) -> None:
+    source = tmp_path / "locked.zip"
+    source.write_bytes(zipped({"locked.txt": b"host01\n", "a.txt": b"ok\n"}))
+    original = zipfile.ZipFile.open
+
+    def guarded(self: zipfile.ZipFile, name: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        # Так zipfile отвечает на зашифрованный член без пароля и на сжатие, которого не знает (Deflate64).
+        if mode == "r" and getattr(name, "filename", name) == "locked.txt":
+            raise error("member is encrypted or uses unsupported compression")
+        return original(self, name, mode, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", guarded)
+    assert [e.kind for e, _ in collected(source)] == ["broken", "text"]
+    assert [e.kind for e in rewrite(source, tmp_path / "clean.zip", to_host_alias)] == ["broken", "text"]

@@ -48,6 +48,14 @@ NETBIOS_USER = re.compile(rf"(?<![\w-])([\w-]+)\\({NAME})")
 EMAIL = re.compile(r"(?<![\w.+-])([\w+-]+(?:\.[\w+-]+)*)@((?:[a-z0-9-]+\.)+[a-z]{2,})(?![\w-])", re.IGNORECASE)
 KEYWORD = re.compile(r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*[\"']?([^\s\"',;]{4,})")
 AUTH = re.compile(r"(?i)authorization:\s*(bearer|basic)\s+(\S+)")
+#: Само ключевое слово перед «=»/«:» — не значение, даже если пароль совпал с ним (password: password).
+KEYWORD_NAME = re.compile(r"(?i)(password|passwd|pwd|secret|token|api[_-]?key|authorization)\s*[=:]")
+#: Пустышки на месте значения у ключевого слова: в конфигах и логах их больше, чем настоящих паролей.
+#: Переменная — только имя заглавными ($DB_PASS): «$ecretW0rd» — уже пароль.
+PLACEHOLDER = re.compile(
+    r"(?i:null|none|nil|true|false|yes|no|required|empty|redacted|[*x]{3,}|<[\w -]+>|\$\{[^}]*\}|%[\w-]+%)"
+    r"|\$[A-Z_][A-Z0-9_]*",
+)
 #: Строки длиннее — base64-блоки, на них detect-secrets тормозит; ключевые слова ищутся в любой строке.
 SECRET_LINE_MAX = 4096
 # Голая hex-строка длины MD5/SHA-1/SHA-256 — хеш файла (их полно в выгрузках антивируса), не секрет;
@@ -230,7 +238,8 @@ def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsP
     # чем угодно (secret=1234 и порт 12345, token: null).
     for pattern in (KEYWORD, AUTH):
         for m in pattern.finditer(line):
-            spans[m.span(2)] = m.group(2)
+            if not PLACEHOLDER.fullmatch(m.group(2)):
+                spans[m.span(2)] = m.group(2)
     if len(line) <= SECRET_LINE_MAX:
         for value in dict.fromkeys(_scanned(line, entropy)):
             # Значение detect-secrets — целый токен, а не кусок другого слова или base64. «=» слева —

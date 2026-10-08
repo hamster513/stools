@@ -125,7 +125,10 @@ def test_verify_is_empty_on_honest_result_and_catches_leftover(source: Path, tmp
     assert [(f.kind, f.value_key, f.count, f.first_file) for f in left] == [("host", "host01", 1, "bad.txt")]
 
 
-def test_reverse_restores_everything_but_secrets(source: Path, tmp_path: Path) -> None:
+def test_reverse_restores_everything_but_secrets(tmp_path: Path) -> None:
+    # Имена внутри имён файлов: «-» и «_» — границы и в словаре, и в обратном переводе.
+    source = tmp_path / "log.txt"
+    source.write_text(SOURCE + "2026-10-08 10:00:11 files host01_notes CORP_backup host01-notes.txt\n", encoding="utf-8")
     aliases = MemoryAliases()
     findings = scan(source, CTX, aliases).findings
     _, counts = apply(source, tmp_path / "out.txt", findings, CTX, aliases)
@@ -135,6 +138,7 @@ def test_reverse_restores_everything_but_secrets(source: Path, tmp_path: Path) -
     text, replaced = reverse(out, aliases.pairs())
     assert text == expected
     assert replaced == sum(counts.values()) - counts["secret"]
+    assert "host-0001_notes DOM2_backup host-0001-notes.txt" in out
     assert reverse("nothing here", []) == ("nothing here", 0)
 
 
@@ -194,3 +198,42 @@ def test_name_of_skipped_member_is_not_counted(tmp_path: Path) -> None:
 def test_reverse_respects_word_boundaries() -> None:
     pairs = [("word-0001", "Ivanov"), ("host-0001", "host01")]
     assert reverse("word-0001 word-00012 host-0001x", pairs) == ("Ivanov word-00012 host-0001x", 1)
+
+
+@pytest.mark.parametrize(("line", "kind", "value"), [
+    ("logon CORP\\user ok\n", "user", "user"),
+    ("seen host.corp.test\n", "host", "host"),
+    ("logon EXAMPLE\\jdoe from mail.corp.test\n", "domain", "example"),
+    # dom1.example — псевдоним corp.test, выданный раньше настоящего DOM1 (он получит DOM2).
+    ("mail.corp.test logon DOM1\\jdoe\n", "domain", "dom1"),
+    ("password: password\n", "secret", "password"),
+    ("note word here, password: Qwerty123!\n", "word", "word"),
+])
+def test_verify_does_not_catch_its_own_aliases_or_keywords(tmp_path: Path, line: str, kind: str, value: str) -> None:
+    ctx = dataclasses.replace(CTX, domains=CTX.domains | {"example", "dom1"},
+                              words={**CTX.words, "word": ""} if kind == "word" else CTX.words)
+    source = tmp_path / "log.txt"
+    source.write_text(line, encoding="utf-8")
+    aliases = MemoryAliases(ctx)
+    findings = scan(source, ctx, aliases).findings
+    assert (kind, value) in by_value(findings) and by_value(findings)[(kind, value)].checked
+    apply(source, tmp_path / "out.txt", findings, ctx, aliases)
+    assert verify(tmp_path / "out.txt", findings, ctx) == []
+    # Настоящий остаток по-прежнему ловится.
+    leak = tmp_path / "leak.txt"
+    leak.write_text((tmp_path / "out.txt").read_text(encoding="utf-8") + f"left {line}", encoding="utf-8")
+    assert (kind, value) in {(f.kind, f.value_key) for f in verify(leak, findings, ctx)}
+
+
+def test_verify_literal_hit_inside_unrelated_detector_span_is_caught(source: Path, tmp_path: Path) -> None:
+    findings = scan(source, CTX, MemoryAliases()).findings
+    leak = tmp_path / "leak.txt"
+    leak.write_text("token=host01_backup\n", encoding="utf-8")
+    assert ("host", "host01") in {(f.kind, f.value_key) for f in verify(leak, findings, CTX)}
+
+
+def test_verify_literal_hit_with_unicode_case_fold(tmp_path: Path) -> None:
+    findings = [Finding("user", "jsmith", "jsmith", "user-0001")]
+    leak = tmp_path / "leak.txt"
+    leak.write_text("by j\u017fmith\n", encoding="utf-8")
+    assert [(f.kind, f.value_key) for f in verify(leak, findings, CTX)] == [("user", "jsmith")]

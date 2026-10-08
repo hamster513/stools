@@ -36,7 +36,8 @@ SPOOL = 64 * MB
 #: TextIOWrapper нельзя: в поток записи члена zip (не перематывается) он BOM не пишет.
 BOMS = {b"\xef\xbb\xbf": "utf-8", b"\xff\xfe": "utf-16-le", b"\xfe\xff": "utf-16-be"}
 #: Так рвётся повреждённый архив или чтение: такой файл — запись `broken`, в результат не идёт.
-BROKEN = (OSError, EOFError, zipfile.BadZipFile, zlib.error)
+#: RuntimeError — зашифрованный член zip без пароля, NotImplementedError — неизвестное сжатие (Deflate64).
+BROKEN = (OSError, EOFError, zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError)
 #: Ключи кусков, которые не значения JSON: имя файла в архиве и имя ключа JSON.
 NAME = "__name__"
 KEY = "__key__"
