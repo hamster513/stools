@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from itertools import pairwise
 
 from api.modules.toolbox.core.scrub.detectors import (
@@ -121,6 +122,14 @@ def test_hosts_dictionary_and_fqdn_with_confirmed_domain() -> None:
     assert (fqdn.start, fqdn.end) == (11, 25)
 
 
+def test_hosts_fqdn_with_dictionary_domain_deeper_in_name() -> None:
+    [fqdn] = [m for m in find_hosts("at msk1.sub.corp.test now", CTX) if m.parts]
+    assert (fqdn.start, fqdn.end) == (3, 21)
+    assert fqdn.parts == (("host", "msk1.sub"), ("domain", "corp.test"))
+    [whole] = detect("msk1.sub.corp.test", CTX)
+    assert whole.kind == "host" and whole.parts == fqdn.parts
+
+
 def test_hosts_respect_word_boundaries_and_unconfirmed_domains() -> None:
     assert list(find_hosts("host011 xhost01 host01-b", CTX)) == []
     assert [m for m in find_hosts("web7.other.org", CTX) if m.parts] == []
@@ -132,6 +141,12 @@ def test_users_composite_netbios_and_email() -> None:
         ("CORP\\jdoe", (("domain", "CORP"), ("user", "jdoe"))),
         ("jdoe@corp.test", (("user", "jdoe"), ("domain", "corp.test"))),
     ]
+
+
+def test_users_email_with_plus_tag() -> None:
+    [found] = find_users("to a.b+tag@corp.test.", CTX)
+    assert found.value == "a.b+tag@corp.test"
+    assert found.parts == (("user", "a.b+tag"), ("domain", "corp.test"))
 
 
 def test_users_skip_unknown_netbios_and_bare_names_without_dictionary() -> None:
@@ -152,8 +167,38 @@ def test_secrets_three_kinds_value_only() -> None:
 
 def test_secrets_skip_plain_text_and_long_lines() -> None:
     assert list(find_secrets("hello world, logon host01 ok", CTX)) == []
+    assert list(find_secrets("x" * 4100 + " AKIAIOSFODNN7EXAMPLE", CTX)) == []
+
+
+def test_secrets_keywords_on_long_lines() -> None:
+    # Лимит длины — только для detect-secrets; пароль по ключевому слову ищется в любой строке.
     long_line = "x" * 4100 + " password=Qwerty123!"
-    assert list(find_secrets(long_line, CTX)) == []
+    assert [(m.start, m.value) for m in find_secrets(long_line, CTX)] == [(4110, "Qwerty123!")]
+
+
+def test_secrets_only_at_their_place() -> None:
+    assert [(m.start, m.end) for m in find_secrets("secret=1234 port 12345", CTX)] == [(7, 11)]
+    assert values(find_secrets("token: null1, other: null1", CTX)) == ["null1"]
+    found = list(find_secrets("Password: required by policy, required", CTX))
+    assert [(m.start, m.value) for m in found] == [(10, "required")]
+
+
+def test_secrets_skip_bare_file_hashes() -> None:
+    for n in (32, 40, 64):
+        digest = ("8f14e45fceea167a5a36dedd4bea2543" * 2)[:n]
+        assert list(find_secrets(f'"sha": "{digest}"', CTX)) == []
+    sha256 = "8f14e45fceea167a5a36dedd4bea2543" * 2
+    assert values(find_secrets(f"token: {sha256}", CTX)) == [sha256]
+    # Другая длина — не хеш файла: высокоэнтропийная hex-строка остаётся секретом.
+    assert values(find_secrets('x = "8f14e45fceea167a5a36dedd4bea25"', CTX)) == ["8f14e45fceea167a5a36dedd4bea25"]
+
+
+def test_secrets_in_parallel_threads() -> None:
+    text = "aws AKIAIOSFODNN7EXAMPLE\nx = \"8f14e45fceea167a5a36dedd4bea25\"\n" * 20
+    expected = list(find_secrets(text, CTX))
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: list(find_secrets(text, CTX)), range(16)))
+    assert all(r == expected for r in results) and len(expected) == 40
 
 
 def test_words_part_of_string_any_case() -> None:

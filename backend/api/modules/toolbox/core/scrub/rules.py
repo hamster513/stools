@@ -52,7 +52,8 @@ def _ip4(key: str, hmac_key: bytes, taken: Callable[[str], bool], ctx: Ctx) -> s
             out = _auto(int(ip), keep, hmac_key)
             for _ in range(size >> 8):
                 alias = str(IPv4Address(out))
-                if not taken(alias):
+                # Сдвиг по кругу может вернуть адрес на себя — такой псевдоним ничего не прячет.
+                if out != int(ip) and not taken(alias):
                     return alias
                 # Занятый — в соседнюю /24 той же зоны: зона и последний октет сохраняются.
                 out = base + (out - base + 256) % size
@@ -63,7 +64,7 @@ def _ip4(key: str, hmac_key: bytes, taken: Callable[[str], bool], ctx: Ctx) -> s
     low = int.from_bytes(_digest(hmac_key, key)[:2], "big")
     for _ in range(65536):
         alias = f"8.8.{low >> 8}.{low & 255}"
-        if not taken(alias):
+        if alias != key and not taken(alias):
             return alias
         low = (low + 1) % 65536
     raise RuntimeError("8.8.0.0/16: свободных псевдонимов не осталось")
@@ -74,7 +75,8 @@ def candidate(kind: str, key: str, hmac_key: bytes, taken: Callable[[str], bool]
     if kind == "ip4":
         return _ip4(key, hmac_key, taken, ctx)
     if kind == "secret":
-        return f"<secret-{hashlib.sha256(key.encode()).hexdigest()[:8]}>"
+        # С ключом: по голому sha256 держатель файла проверил бы угаданный пароль у себя.
+        return f"<secret-{_digest(hmac_key, key).hex()[:8]}>"
     if kind not in ("ip6", "mac", "sid"):
         raise ValueError(f"{kind}: псевдоним назначается по номеру (Aliases.propose)")
     attempt = 0

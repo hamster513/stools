@@ -1,6 +1,8 @@
 """Правила замены (спека §1, перенос из export_scrub): регистр, кандидаты, нумерация, сборка, замена."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import re
 
@@ -64,7 +66,21 @@ def test_ip6_mac_sid_secret_shapes() -> None:
     assert re.fullmatch(r"S-1-5-21-\d+-\d+-\d+", sid) and sid != "S-1-5-21-111-222-333"
     secret = candidate("secret", "Qwerty123!", KEY, free, CTX)
     assert re.fullmatch(r"<secret-[0-9a-f]{8}>", secret)
-    assert candidate("secret", "Qwerty123!", b"other-key", free, CTX) == secret
+    assert candidate("secret", "Qwerty123!", KEY, free, CTX) == secret
+
+
+def test_secret_label_is_keyed() -> None:
+    # Без ключа держатель файла проверил бы угаданный пароль по хешу у себя.
+    secret = candidate("secret", "Qwerty123!", KEY, free, CTX)
+    assert candidate("secret", "Qwerty123!", b"other-key", free, CTX) != secret
+    assert secret != "<secret-" + hashlib.sha256(b"Qwerty123!").hexdigest()[:8] + ">"
+    assert secret == "<secret-" + hmac.new(KEY, b"Qwerty123!", hashlib.sha256).hexdigest()[:8] + ">"
+
+
+@pytest.mark.parametrize("ip", ["192.168.1.10", "8.8.4.4"])
+def test_taken_retry_never_maps_address_to_itself(ip: str) -> None:
+    with pytest.raises(RuntimeError):
+        candidate("ip4", ip, KEY, lambda alias: alias != ip, CTX)
 
 
 def test_numbered_kinds_are_not_candidates() -> None:

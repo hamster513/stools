@@ -7,13 +7,18 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Callable, Iterator
-from functools import lru_cache
+from functools import cache, lru_cache
 from ipaddress import IPv4Address, IPv6Address
 
+from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
 from detect_secrets.core.scan import scan_line
-from detect_secrets.plugins.high_entropy_strings import HighEntropyStringsPlugin
-from detect_secrets.settings import default_settings, get_plugins
+from detect_secrets.plugins.high_entropy_strings import (
+    HexHighEntropyString,
+    HighEntropyStringsPlugin,
+)
+from detect_secrets.settings import cache_bust, configure_settings_from_baseline, get_plugins
 
 from api.modules.toolbox.core.scrub.rules import AUTO, SERVICE, without_overlaps
 from api.modules.toolbox.core.scrub.types import KINDS, Ctx, Match
@@ -36,11 +41,15 @@ FILE_EXT = frozenset({
 RUN = re.compile(r"[\w-]+(?:\.[\w-]+)*")
 NAME = r"[\w-]+(?:\.[\w-]+)*"
 NETBIOS_USER = re.compile(rf"(?<![\w-])([\w-]+)\\({NAME})")
-EMAIL = re.compile(rf"(?<![\w.-])({NAME})@((?:[a-z0-9-]+\.)+[a-z]{{2,}})(?![\w-])", re.IGNORECASE)
+# В адресе e-mail бывает «+метка» (a.b+tag@…): без «+» нашлась бы только часть после него.
+EMAIL = re.compile(r"(?<![\w.+-])([\w+-]+(?:\.[\w+-]+)*)@((?:[a-z0-9-]+\.)+[a-z]{2,})(?![\w-])", re.IGNORECASE)
 KEYWORD = re.compile(r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*[\"']?([^\s\"',;]{4,})")
 AUTH = re.compile(r"(?i)authorization:\s*(bearer|basic)\s+(\S+)")
-#: Длиннее — base64-блоки, на них detect-secrets тормозит, а секретов-слов там нет.
+#: Строки длиннее — base64-блоки, на них detect-secrets тормозит; ключевые слова ищутся в любой строке.
 SECRET_LINE_MAX = 4096
+# Голая hex-строка длины MD5/SHA-1/SHA-256 — хеш файла (их полно в выгрузках антивируса), не секрет;
+# под ключевым словом (`token: <64 hex>`) она всё равно найдётся через KEYWORD.
+FILE_HASH = re.compile(r"[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}", re.IGNORECASE)
 #: Короче — обрывки (detect-secrets отдаёт группу regex, например «ghp» от токена GitHub).
 SECRET_MIN = 4
 RANK = {kind: i for i, kind in enumerate(KINDS)}
@@ -145,9 +154,15 @@ def find_hosts(text: str, ctx: Ctx) -> Iterator[Match]:
         if m.group(1):  # домен e-mail — не хост
             continue
         name = m.group(2)
-        left, _, rest = name.partition(".")
-        if rest.lower() in ctx.domains:
-            found.append(Match(m.start(2), m.end(2), "host", name, (("host", left), ("domain", rest))))
+        labels = name.split(".")
+        # Домен из словаря может стоять не сразу за первой меткой (msk1.sub.corp.test): всё, что
+        # левее самого длинного такого окончания, — имя хоста, иначе средняя метка уцелела бы.
+        for k in range(1, len(labels)):
+            rest = ".".join(labels[k:])
+            if rest.lower() in ctx.domains:
+                left = name[:len(name) - len(rest) - 1]
+                found.append(Match(m.start(2), m.end(2), "host", name, (("host", left), ("domain", rest))))
+                break
     found.extend(_dictionary(text, ctx.hosts, "host"))
     yield from _by_start(found)
 
@@ -178,11 +193,24 @@ def find_words(text: str, ctx: Ctx) -> Iterator[Match]:
         yield Match(m.start(), m.end(), "word", m.group(0))
 
 
-def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsPlugin]) -> Iterator[Match]:
-    values: dict[str, None] = {}  # упорядоченное множество: одно значение — один раз
-    for pattern in (KEYWORD, AUTH):
-        for m in pattern.finditer(line):
-            values[m.group(2)] = None
+# Настройки detect-secrets — глобальные для процесса, а scan_line сам их трогает (снимает фильтр,
+# сбрасывает кеш фильтров). Поэтому плагины настраиваются один раз, лениво, и все вызовы идут
+# под одним замком: временный default_settings() на каждый вызов стоил ~4,6 мс и при параллельных
+# сканах в потоках один скан восстанавливал настройки посреди другого — тот молча терял плагины.
+_DETECT_SECRETS = threading.Lock()
+
+
+@cache
+def _entropy_plugins() -> dict[str, HighEntropyStringsPlugin]:
+    """Включает все плагины detect-secrets на весь процесс; вызывать под _DETECT_SECRETS."""
+    cache_bust()
+    configure_settings_from_baseline(
+        {"plugins_used": [{"name": t.__name__} for t in get_mapping_from_secret_type_to_class().values()]},
+    )
+    return {p.secret_type: p for p in get_plugins() if isinstance(p, HighEntropyStringsPlugin)}
+
+
+def _scanned(line: str, entropy: dict[str, HighEntropyStringsPlugin]) -> Iterator[str]:
     for secret in scan_line(line):
         value = secret.secret_value
         if not value or len(value) < SECRET_MIN:
@@ -191,21 +219,34 @@ def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsP
         plugin = entropy.get(secret.type)
         if plugin is not None and plugin.calculate_shannon_entropy(value) <= plugin.entropy_limit:
             continue
-        values[value] = None
-    for value in values:
-        for m in re.finditer(re.escape(value), line):
-            yield Match(offset + m.start(), offset + m.end(), "secret", value)
+        if isinstance(plugin, HexHighEntropyString) and FILE_HASH.fullmatch(value):
+            continue
+        yield value
+
+
+def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsPlugin]) -> Iterator[Match]:
+    spans: dict[tuple[int, int], str] = {}  # одно место — одно совпадение
+    # Ключевые слова — ровно на своём месте: то же значение в другом месте строки может быть
+    # чем угодно (secret=1234 и порт 12345, token: null).
+    for pattern in (KEYWORD, AUTH):
+        for m in pattern.finditer(line):
+            spans[m.span(2)] = m.group(2)
+    if len(line) <= SECRET_LINE_MAX:
+        for value in dict.fromkeys(_scanned(line, entropy)):
+            # Значение detect-secrets — целый токен, а не кусок другого слова или base64.
+            for m in re.finditer(rf"(?<![\w+/=]){re.escape(value)}(?![\w+/=])", line):
+                spans[m.span()] = value
+    for (start, end), value in spans.items():
+        yield Match(offset + start, offset + end, "secret", value)
 
 
 def find_secrets(text: str, ctx: Ctx) -> Iterator[Match]:
     found: list[Match] = []
-    # Настройки detect-secrets глобальные: весь текст сканируется внутри одного контекста.
-    with default_settings():
-        entropy = {p.secret_type: p for p in get_plugins() if isinstance(p, HighEntropyStringsPlugin)}
+    with _DETECT_SECRETS:
+        entropy = _entropy_plugins()
         offset = 0
         for line in text.split("\n"):
-            if len(line) <= SECRET_LINE_MAX:
-                found.extend(_line_secrets(line, offset, entropy))
+            found.extend(_line_secrets(line, offset, entropy))
             offset += len(line) + 1
     yield from _by_start(found)
 
