@@ -6,9 +6,11 @@
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from ipaddress import IPv4Network
 from typing import Any
 
+from api.modules.toolbox.core.scrub.rules import candidate, numbered
 from api.modules.toolbox.core.scrub.types import Ctx
 
 CTX = Ctx(
@@ -42,3 +44,41 @@ EXPORT_JSON: dict[str, Any] = {
         },
     ],
 }
+
+
+#: Ключ установки для тестов; настоящий генерируется при первом запуске (спека §2).
+KEY = b"synthetic-key"
+
+
+class MemoryAliases:
+    """Таблица соответствий в словаре: (kind, key) → псевдоним; кандидаты — как у реализации на БД."""
+
+    def __init__(self, ctx: Ctx = CTX) -> None:
+        self.ctx = ctx
+        self.table: dict[tuple[str, str], str] = {}
+        self.reals: dict[tuple[str, str], str] = {}
+        self.proposed: dict[tuple[str, str], str] = {}
+
+    def get(self, kind: str, key: str) -> str | None:
+        return self.table.get((kind, key))
+
+    def propose(self, kind: str, value: str, key: str) -> str:
+        if (kind, key) in self.proposed:
+            return self.proposed[(kind, key)]
+        if kind in ("host", "domain", "user", "word"):
+            n = 1 + sum(1 for k in {*self.table, *self.proposed} if k[0] == kind)
+            alias = numbered(kind, n, key)
+        else:
+            used = {*self.table.values(), *self.proposed.values()}
+            alias = candidate(kind, key, KEY, used.__contains__, self.ctx)
+        self.proposed[(kind, key)] = alias
+        return alias
+
+    def commit(self, pairs: Iterable[tuple[str, str, str, str]]) -> None:
+        for kind, key, real, alias in pairs:
+            self.table[(kind, key)] = alias
+            self.reals[(kind, key)] = real
+
+    def pairs(self) -> list[tuple[str, str]]:
+        """(псевдоним, настоящее) — вход обратного перевода."""
+        return [(alias, self.reals[k]) for k, alias in self.table.items()]
