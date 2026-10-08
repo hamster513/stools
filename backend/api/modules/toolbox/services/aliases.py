@@ -168,8 +168,9 @@ def list_aliases(db: Session, *, q: str, kind: str | None, limit: int, offset: i
     if kind:
         stmt = stmt.where(ToolboxAlias.kind == kind)
     if q:
-        like = f"%{q.lower()}%"
-        stmt = stmt.where(or_(func.lower(ToolboxAlias.real).like(like), func.lower(ToolboxAlias.alias).like(like)))
+        needle = q.lower()
+        stmt = stmt.where(or_(func.lower(ToolboxAlias.real).contains(needle, autoescape=True),
+                              func.lower(ToolboxAlias.alias).contains(needle, autoescape=True)))
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(stmt.order_by(ToolboxAlias.kind, ToolboxAlias.id).limit(limit).offset(offset)).all()
     return list(rows), int(total)

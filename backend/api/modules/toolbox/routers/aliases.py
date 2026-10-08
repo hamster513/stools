@@ -36,6 +36,7 @@ class AliasPage(BaseModel):
 
 @router.get("", response_model=AliasPage)
 def get_aliases(
+    request: Request,
     q: str = "",
     kind: str | None = None,
     limit: int = Query(default=200, ge=1, le=1000),
@@ -43,6 +44,9 @@ def get_aliases(
     db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> AliasPage:
+    # Сводка — до проверки роли: отказ попадает в журнал, а без своей сводки туда ушла бы строка
+    # запроса с настоящим значением из поиска.
+    request.state.audit_summary = "таблица соответствий: просмотр"
     require_analyst(user)
     rows, total = list_aliases(db, q=q, kind=kind, limit=limit, offset=offset)
     return AliasPage(items=[AliasView.model_validate(r, from_attributes=True) for r in rows], total=total)

@@ -6,7 +6,7 @@ from typing import Any
 
 from api.modules.toolbox.core.scrub.types import Ctx, Finding
 from api.modules.toolbox.models import ToolboxAlias
-from api.modules.toolbox.services.aliases import DbAliases
+from api.modules.toolbox.services.aliases import DbAliases, list_aliases
 
 KEY = b"k" * 32
 CTX = Ctx(
@@ -82,3 +82,11 @@ def test_numbering_ignores_case_of_stored_aliases(db_session: Any) -> None:
     db_session.add(ToolboxAlias(kind="host", real_key="msk1", real="MSK1", alias="HOST-0003", created_by="x"))
     db_session.commit()
     assert aliases(db_session).propose("host", "host01", "host01") == "host-0004"
+
+
+def test_list_search_treats_like_wildcards_literally(db_session: Any) -> None:
+    db_session.add(ToolboxAlias(kind="host", real_key="host01", real="host01", alias="host-0001", created_by="x"))
+    db_session.commit()
+    assert list_aliases(db_session, q="host0", kind=None, limit=10, offset=0)[1] == 1
+    assert list_aliases(db_session, q="%", kind=None, limit=10, offset=0)[1] == 0
+    assert list_aliases(db_session, q="host_01", kind=None, limit=10, offset=0)[1] == 0

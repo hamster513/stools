@@ -14,11 +14,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from api.db.models import AuditEvent
+from api.jobs import run_job
 from api.modules.ad.models import AdDomain
 from api.modules.assets.models import Asset, Network
 from api.modules.toolbox.core.scrub import engine
 from api.modules.toolbox.core.scrub.types import Finding
-from api.modules.toolbox.models import ToolboxAlias, ToolboxJob
+from api.modules.toolbox.models import ToolboxAlias, ToolboxFinding, ToolboxJob
+from api.modules.toolbox.services import scrub
 from api.modules.toolbox.services.scrub import cleanup_handler, get_settings_row, job_dir
 from api.platform.scheduler import PlatformSchedule
 from tests.toolbox.synthetic import EXPORT_JSON, TEXT
@@ -282,3 +285,86 @@ def test_cleanup_removes_old_job_files(seeded: Any, auth_client: TestClient, app
     assert not folder.exists()
     # Расписание чистки заводится вместе с настройками модуля.
     assert seeded.query(PlatformSchedule).filter_by(module="toolbox", kind="cleanup").count() == 1
+
+
+def _job_with(db: Any, values: list[tuple[str, str]]) -> tuple[int, int]:
+    """Готовый скан с включёнными находками `values` и хостом host01 (его псевдоним правится)."""
+    job = ToolboxJob(kind="scan", status="done", stage="done", input_name="a.log", started_by="tester")
+    db.add(job)
+    db.flush()
+    target = ToolboxFinding(job_id=job.id, kind="host", value="host01", value_key="host01", alias="host-0001",
+                            count=1, contexts=[], checked=True)
+    db.add(target)
+    for kind, value in values:
+        db.add(ToolboxFinding(job_id=job.id, kind=kind, value=value, value_key=value.lower(), alias=f"{kind}-x-{value}",
+                              count=1, contexts=[], checked=True))
+    db.commit()
+    return job.id, target.id
+
+
+@pytest.mark.parametrize(("values", "alias", "ok"), [
+    ([("user", "x")], "box-01", True),
+    ([("host", "srv-db01")], "srv-db01-new", False),
+    ([("word", "bankov")], "contoso-bank", True),
+    ([("word", "bank")], "contoso-bank", False),
+])
+def test_alias_contains_real_value_only_as_whole_word(db_session: Any, values: list[tuple[str, str]], alias: str,
+                                                      ok: bool) -> None:
+    job_id, target = _job_with(db_session, values)
+    if ok:
+        scrub.update_findings(db_session, job_id, checks={}, aliases={target: alias}, words=[])
+        assert db_session.get(ToolboxFinding, target).alias == alias
+    else:
+        with pytest.raises(scrub.ScrubError, match="настоящее значение"):
+            scrub.update_findings(db_session, job_id, checks={}, aliases={target: alias}, words=[])
+
+
+def test_second_apply_of_one_job_is_refused(db_session: Any) -> None:
+    job_id, _ = _job_with(db_session, [])
+    scrub.start_apply(db_session, job_id)
+    with pytest.raises(scrub.JobBusy):
+        scrub.start_apply(db_session, job_id)
+    job = db_session.get(ToolboxJob, job_id)
+    assert (job.kind, job.status) == ("apply", "running")
+
+
+def test_cancel_before_replacement_leaves_no_result(seeded: Any, auth_client: TestClient, app_settings: Any) -> None:
+    job_id = upload(auth_client, build_zip())
+    scrub.start_apply(seeded, job_id)
+    seeded.get(ToolboxJob, job_id).cancel_requested = True
+    seeded.commit()
+    run_job(ToolboxJob, job_id, lambda s, h: scrub.run_apply(s, h, job_id))
+    seeded.expire_all()
+    assert seeded.get(ToolboxJob, job_id).status == "cancelled"
+    assert not (job_dir(app_settings.data_dir, job_id) / "out").exists()
+    assert seeded.query(ToolboxAlias).count() == 0
+    # Отменённое применение можно повторить.
+    assert apply(auth_client, job_id)["status"] == "done"
+
+
+def test_typed_alias_taken_by_another_job_fails_apply(seeded: Any, auth_client: TestClient) -> None:
+    seeded.add(Asset(name="srv-db01", name_key="srv-db01", fqdn="", domain=""))
+    seeded.commit()
+    first = upload(auth_client, b"logon host01.corp.test\n", "a.log")
+    second = upload(auth_client, b"logon srv-db01\n", "b.log")
+    for job_id, host in ((first, "host01"), (second, "srv-db01")):
+        found = item(findings(auth_client, job_id), "host", host)
+        r = auth_client.patch(f"{API}/jobs/{job_id}/findings", json={"aliases": {str(found["id"]): "web-01"}})
+        assert r.status_code == 200, r.text
+    assert apply(auth_client, second)["status"] == "done"
+    job = apply(auth_client, first)
+    assert job["status"] == "failed" and "web-01" in job["error"] and "host01" not in job["error"]
+    # Задание снова правится: другой псевдоним — и применение проходит.
+    found = item(findings(auth_client, first), "host", "host01")
+    r = auth_client.patch(f"{API}/jobs/{first}/findings", json={"aliases": {str(found["id"]): "web-09"}})
+    assert r.status_code == 200, r.text
+    assert apply(auth_client, first)["status"] == "done"
+
+
+def test_auditor_search_in_aliases_does_not_reach_audit_log(
+    db_session: Any, client_as: Callable[[str], TestClient],
+) -> None:
+    auditor = client_as("auditor")
+    assert auditor.get("/api/toolbox/aliases", params={"q": "host01"}).status_code == 403
+    last = db_session.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
+    assert last is not None and last.status == 403 and "host01" not in (last.summary or "")

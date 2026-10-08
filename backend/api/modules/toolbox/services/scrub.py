@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import logging
+import re
 import secrets
 import shutil
 import time
@@ -24,10 +25,18 @@ from sqlalchemy.orm import Session
 
 from api.audit import record
 from api.db.models import AppUser
-from api.jobs import UPLOAD_INTERRUPTED, JobHandle, fail_job, insert_chunked, run_job, start_job
+from api.jobs import (
+    UPLOAD_INTERRUPTED,
+    JobCancelled,
+    JobHandle,
+    fail_job,
+    insert_chunked,
+    run_job,
+    start_job,
+)
 from api.limits import MB, TOOLBOX_UPLOAD
 from api.modules.toolbox.core.scrub import engine
-from api.modules.toolbox.core.scrub.engine import VerifyError
+from api.modules.toolbox.core.scrub.engine import EDGE_AFTER, EDGE_BEFORE, VerifyError
 from api.modules.toolbox.core.scrub.files import UnpackLimit
 from api.modules.toolbox.core.scrub.types import KINDS, STORED_KINDS, Ctx, Finding
 from api.modules.toolbox.models import ToolboxAlias, ToolboxFinding, ToolboxJob, ToolboxSettings
@@ -257,9 +266,21 @@ def findings_page(db: Session, job_id: int, *, kind: str | None, q: str, limit: 
     return groups, list(items), int(total)
 
 
-def _check_alias(db: Session, job_id: int, row: ToolboxFinding) -> None:
+def _reals(db: Session, job_id: int) -> re.Pattern[str] | None:
+    """Включённые настоящие значения задания целыми словами — с границами самопроверки и обратного
+    перевода: «x» внутри box-01 — не значение, srv-db01 в srv-db01-new — значение."""
+    values = {v.casefold() for row in db.execute(select(ToolboxFinding.value, ToolboxFinding.value_key).where(
+        ToolboxFinding.job_id == job_id, ToolboxFinding.checked.is_(True))) for v in row if v}
+    if not values:
+        return None
+    alternatives = "|".join(re.escape(v) for v in sorted(values, key=len, reverse=True))
+    return re.compile(f"{EDGE_BEFORE}(?:{alternatives}){EDGE_AFTER}", re.IGNORECASE)
+
+
+def _check_alias(db: Session, job_id: int, row: ToolboxFinding, reals: re.Pattern[str] | None) -> None:
     """Псевдоним из предпросмотра: не пустой, не занят (без учёта регистра и kind — обратный перевод
-    регистр и kind не различает) и не содержит настоящего значения — иначе самопроверка его не увидит."""
+    регистр и kind не различает) и не содержит включённого настоящего значения задания — иначе
+    самопроверка (она ищет только значения задания) его не увидит."""
     alias = row.alias
     if not alias or len(alias) > 512:
         raise ScrubError("псевдоним — от 1 до 512 символов")
@@ -272,14 +293,7 @@ def _check_alias(db: Session, job_id: int, row: ToolboxFinding) -> None:
     ).limit(1))
     if other is not None or stored is not None:
         raise ScrubError(f"псевдоним {alias} уже у другого значения")
-    contains_job = db.scalar(select(ToolboxFinding.id).where(
-        ToolboxFinding.job_id == job_id, ToolboxFinding.checked.is_(True),
-        or_(func.strpos(low, func.lower(ToolboxFinding.value)) > 0, func.strpos(low, func.lower(ToolboxFinding.value_key)) > 0),
-    ).limit(1))
-    contains_table = db.scalar(select(ToolboxAlias.id).where(
-        or_(func.strpos(low, func.lower(ToolboxAlias.real)) > 0, func.strpos(low, func.lower(ToolboxAlias.real_key)) > 0),
-    ).limit(1))
-    if contains_job is not None or contains_table is not None:
+    if reals is not None and reals.search(alias):
         raise ScrubError(f"псевдоним {alias} содержит настоящее значение — самопроверка его не увидит")
 
 
@@ -326,8 +340,9 @@ def update_findings(db: Session, job_id: int, *, checks: dict[int, bool], aliase
             raise ScrubError(f"псевдоним {row.alias} уже в таблице соответствий — сменить его можно только через «забыть»")
         row.alias = alias.strip()
     db.flush()
+    reals = _reals(db, job_id) if aliases else None
     for finding_id in aliases:
-        _check_alias(db, job_id, rows[finding_id])
+        _check_alias(db, job_id, rows[finding_id], reals)
     added = _add_words(db, job, words) if words else 0
     db.commit()
     return added
@@ -336,9 +351,14 @@ def update_findings(db: Session, job_id: int, *, checks: dict[int, bool], aliase
 # --- применение ----------------------------------------------------------------------------------
 
 def start_apply(db: Session, job_id: int) -> None:
-    """Перевести задание в apply; поток запускает вызывающий (`run_job(…, run_apply)`)."""
-    job = _job(db, job_id)
+    """Перевести задание в apply; поток запускает вызывающий (`run_job(…, run_apply)`). Строка — под
+    блокировкой: два «применить» разом иначе оба прошли бы проверку и второй стёр бы out/ первого."""
+    job = db.get(ToolboxJob, job_id, with_for_update=True, populate_existing=True)
+    if job is None:
+        raise LookupError("задание не найдено")
     if not _editable(job):
+        # commit, а не rollback: rollback погасил бы пользователя запроса, которого читает журнал действий.
+        db.commit()
         raise JobBusy("применить можно готовый скан или повторить неудачное применение")
     job.kind, job.status, job.stage, job.message = "apply", "running", "pending", ""
     job.progress, job.processed, job.total = 0, 0, None
@@ -386,6 +406,9 @@ def run_apply(db: Session, handle: JobHandle, job_id: int) -> None:
         changed = aliases.finalize(findings)
     except AliasTaken as exc:
         raise ValueError(str(exc)) from None
+    # Отмена до замены: дальше результат и таблица меняются одним куском.
+    if handle.cancelled():
+        raise JobCancelled()
     by_key = {(r.kind, r.value_key): r for r in rows}
     for f in changed:
         by_key[(f.kind, f.value_key)].alias = f.alias
