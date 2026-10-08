@@ -13,7 +13,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
+from api.db.base import get_sessionmaker
 from api.db.models import AuditEvent
 from api.jobs import run_job
 from api.modules.ad.models import AdDomain
@@ -307,6 +310,9 @@ def _job_with(db: Any, values: list[tuple[str, str]]) -> tuple[int, int]:
     ([("host", "srv-db01")], "srv-db01-new", False),
     ([("word", "bankov")], "contoso-bank", True),
     ([("word", "bank")], "contoso-bank", False),
+    # Слово меняется и внутри других слов — и в псевдониме ищется подстрокой, иначе verify его не увидит.
+    ([("word", "bank")], "contosobank01", False),
+    ([("host", "srv-db01")], "box-01", True),
 ])
 def test_alias_contains_real_value_only_as_whole_word(db_session: Any, values: list[tuple[str, str]], alias: str,
                                                       ok: bool) -> None:
@@ -368,3 +374,17 @@ def test_auditor_search_in_aliases_does_not_reach_audit_log(
     assert auditor.get("/api/toolbox/aliases", params={"q": "host01"}).status_code == 403
     last = db_session.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
     assert last is not None and last.status == 403 and "host01" not in (last.summary or "")
+
+
+def test_findings_edit_waits_for_job_row_lock(db_session: Any) -> None:
+    job_id, target = _job_with(db_session, [])
+    # Применение уже взяло строку задания (start_apply держит её до своей фиксации).
+    locker = get_sessionmaker()()
+    try:
+        locker.get(ToolboxJob, job_id, with_for_update=True)
+        db_session.execute(text("SET lock_timeout = '200ms'"))
+        with pytest.raises(OperationalError):
+            scrub.update_findings(db_session, job_id, checks={target: False}, aliases={}, words=[])
+        db_session.rollback()
+    finally:
+        locker.close()

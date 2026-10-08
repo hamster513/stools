@@ -266,18 +266,24 @@ def findings_page(db: Session, job_id: int, *, kind: str | None, q: str, limit: 
     return groups, list(items), int(total)
 
 
-def _reals(db: Session, job_id: int) -> re.Pattern[str] | None:
-    """Включённые настоящие значения задания целыми словами — с границами самопроверки и обратного
-    перевода: «x» внутри box-01 — не значение, srv-db01 в srv-db01-new — значение."""
-    values = {v.casefold() for row in db.execute(select(ToolboxFinding.value, ToolboxFinding.value_key).where(
-        ToolboxFinding.job_id == job_id, ToolboxFinding.checked.is_(True))) for v in row if v}
-    if not values:
-        return None
-    alternatives = "|".join(re.escape(v) for v in sorted(values, key=len, reverse=True))
-    return re.compile(f"{EDGE_BEFORE}(?:{alternatives}){EDGE_AFTER}", re.IGNORECASE)
+def _reals(db: Session, job_id: int) -> list[re.Pattern[str]]:
+    """Включённые настоящие значения задания — так, как их ищет самопроверка: слова подстрокой (слово
+    меняется и внутри других слов), остальное — целыми словами с границами обратного перевода
+    («x» внутри box-01 — не значение, srv-db01 в srv-db01-new — значение)."""
+    words: set[str] = set()
+    others: set[str] = set()
+    for kind, value, key in db.execute(select(ToolboxFinding.kind, ToolboxFinding.value, ToolboxFinding.value_key)
+                                       .where(ToolboxFinding.job_id == job_id, ToolboxFinding.checked.is_(True))):
+        (words if kind == "word" else others).update(v.casefold() for v in (value, key) if v)
+    patterns = []
+    for values, before, after in ((others, EDGE_BEFORE, EDGE_AFTER), (words, "", "")):
+        if values:
+            alternatives = "|".join(re.escape(v) for v in sorted(values, key=len, reverse=True))
+            patterns.append(re.compile(f"{before}(?:{alternatives}){after}", re.IGNORECASE))
+    return patterns
 
 
-def _check_alias(db: Session, job_id: int, row: ToolboxFinding, reals: re.Pattern[str] | None) -> None:
+def _check_alias(db: Session, job_id: int, row: ToolboxFinding, reals: list[re.Pattern[str]]) -> None:
     """Псевдоним из предпросмотра: не пустой, не занят (без учёта регистра и kind — обратный перевод
     регистр и kind не различает) и не содержит включённого настоящего значения задания — иначе
     самопроверка (она ищет только значения задания) его не увидит."""
@@ -293,7 +299,7 @@ def _check_alias(db: Session, job_id: int, row: ToolboxFinding, reals: re.Patter
     ).limit(1))
     if other is not None or stored is not None:
         raise ScrubError(f"псевдоним {alias} уже у другого значения")
-    if reals is not None and reals.search(alias):
+    if any(pattern.search(alias) for pattern in reals):
         raise ScrubError(f"псевдоним {alias} содержит настоящее значение — самопроверка его не увидит")
 
 
@@ -321,8 +327,11 @@ def _add_words(db: Session, job: ToolboxJob, words: list[str]) -> int:
 
 def update_findings(db: Session, job_id: int, *, checks: dict[int, bool], aliases: dict[int, str],
                     words: list[str]) -> int:
-    """Галочки и псевдонимы по id находок, новые слова. Возвращает число новых находок."""
-    job = _job(db, job_id)
+    """Галочки и псевдонимы по id находок, новые слова. Возвращает число новых находок. Строка задания —
+    под блокировкой, как в start_apply: правка не проскочит после того, как применение прочитало находки."""
+    job = db.get(ToolboxJob, job_id, with_for_update=True, populate_existing=True)
+    if job is None:
+        raise LookupError("задание не найдено")
     if not _editable(job):
         raise JobBusy("находки правятся только у готового скана или после неудачного применения")
     ids = set(checks) | set(aliases)
@@ -340,7 +349,7 @@ def update_findings(db: Session, job_id: int, *, checks: dict[int, bool], aliase
             raise ScrubError(f"псевдоним {row.alias} уже в таблице соответствий — сменить его можно только через «забыть»")
         row.alias = alias.strip()
     db.flush()
-    reals = _reals(db, job_id) if aliases else None
+    reals = _reals(db, job_id) if aliases else []
     for finding_id in aliases:
         _check_alias(db, job_id, rows[finding_id], reals)
     added = _add_words(db, job, words) if words else 0
