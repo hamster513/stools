@@ -293,3 +293,27 @@ def test_secret_under_json_password_key() -> None:
     assert list(find_secrets("null", dataclasses.replace(CTX, json_key="token"))) == []
     assert list(find_secrets("abc", dataclasses.replace(CTX, json_key="Password"))) == []
     assert list(find_secrets("hunter22", dataclasses.replace(CTX, json_key="__key__"))) == []
+
+
+def test_secret_key_only_as_whole_name_or_last_segment() -> None:
+    # Ключевое слово — целое имя ключа или его последний сегмент через «_»/«-»; password_policy,
+    # token_count, secret_question, tokenizer — не пароли.
+    for key in ("password", "db_password", "api-key", "access_token", "Authorization"):
+        [found] = find_secrets("hunter22", dataclasses.replace(CTX, json_key=key))
+        assert found.value == "hunter22", key
+    for key in ("password_policy", "token_count", "secret_question", "tokenizer"):
+        assert list(find_secrets("enabled", dataclasses.replace(CTX, json_key=key))) == [], key
+
+
+def test_value_with_spaces_under_secret_like_key_is_scanned_normally() -> None:
+    # У пароля нет пробелов: значение с пробелами — обычный текст, в нём ищутся учётки, хосты и адреса,
+    # а не один секрет на всё целиком (он перекрыл бы их и снял бы с замены).
+    text = "Issued to jsmith@corp.test from srv-db01.corp.test 10.1.2.3"
+    found = detect(text, dataclasses.replace(CTX, json_key="token_description"))
+    assert [(m.kind, m.value) for m in found] == [
+        ("user", "jsmith@corp.test"), ("host", "srv-db01.corp.test"), ("ip4", "10.1.2.3"),
+    ]
+    found = detect(text, dataclasses.replace(CTX, json_key="password"))
+    assert [(m.kind, m.value) for m in found] == [
+        ("user", "jsmith@corp.test"), ("host", "srv-db01.corp.test"), ("ip4", "10.1.2.3"),
+    ]

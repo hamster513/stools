@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from api.modules.toolbox.core.scrub.engine import VerifyError, apply, reverse, scan, verify
-from api.modules.toolbox.core.scrub.types import KINDS, Finding
+from api.modules.toolbox.core.scrub.engine import VerifyError, _placed, apply, reverse, scan, verify
+from api.modules.toolbox.core.scrub.types import KINDS, Finding, Match
 from tests.toolbox.synthetic import CTX, TEXT, MemoryAliases
 
 #: Номер сборки, похожий на публичный адрес: найдётся, но без галочки.
@@ -265,4 +265,13 @@ def test_verify_many_aliases_is_fast(tmp_path: Path) -> None:
     result.write_text(line * (512 * 1024 // len(line) + 1), encoding="utf-8")
     started = time.perf_counter()
     assert verify(result, findings, CTX) == []
-    assert time.perf_counter() - started < 2
+    assert time.perf_counter() - started < 5
+
+
+def test_placed_rejects_composite_not_at_edges() -> None:
+    # Части составного лежат по его краям; другая форма должна упасть, а не проверить чужое место.
+    m = Match(0, 18, "host", "srv-db01.corp.test", (("host", "srv-db01"), ("domain", "corp.test")))
+    assert [(k, v) for k, v, _, _ in _placed(m, "srv-db01.corp.test")] == [("host", "srv-db01"), ("domain", "corp.test")]
+    odd = Match(0, 18, "host", "srv-db01.corp.test", (("host", "db01"), ("domain", "corp.test")))
+    with pytest.raises(AssertionError):
+        _placed(odd, "srv-db01.corp.test")

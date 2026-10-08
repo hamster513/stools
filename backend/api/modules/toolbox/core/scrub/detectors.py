@@ -49,8 +49,11 @@ EMAIL = re.compile(r"(?<![\w.+-])([\w+-]+(?:\.[\w+-]+)*)@((?:[a-z0-9-]+\.)+[a-z]
 KEYWORD = re.compile(r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*[\"']?([^\s\"',;]{4,})")
 AUTH = re.compile(r"(?i)authorization:\s*(bearer|basic)\s+(\S+)")
 #: Само ключевое слово перед «=»/«:» — не значение, даже если пароль совпал с ним (password: password).
-#: Ключ JSON, под которым значение — секрет; служебные «__key__»/«__name__» ни с чем не совпадают.
-SECRET_KEY = re.compile(r"(?i)password|passwd|pwd|secret|token|api[_-]?key|authorization")
+#: Ключ JSON, под которым значение — секрет: ключевое слово — целое имя или последний сегмент через
+#: «_»/«-» (db_password, api-key, access_token). Подстрока не годится: password_policy, token_count,
+#: secret_question, tokenizer — не пароли, а секрет на всё значение перекрыл бы в нём учётки и адреса.
+#: Служебные «__key__»/«__name__» ни с чем не совпадают.
+SECRET_KEY = re.compile(r"(?i)(?:^|[\W_])(?:password|passwd|pwd|secret|token|api[_-]?key|authorization)$")
 KEYWORD_NAME = re.compile(r"(?i)(password|passwd|pwd|secret|token|api[_-]?key|authorization)\s*[=:]")
 #: Пустышки на месте значения у ключевого слова: в конфигах и логах их больше, чем настоящих паролей.
 #: Переменная — только имя заглавными ($DB_PASS): «$ecretW0rd» — уже пароль.
@@ -65,6 +68,7 @@ SECRET_LINE_MAX = 4096
 FILE_HASH = re.compile(r"[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}", re.IGNORECASE)
 #: Короче — обрывки (detect-secrets отдаёт группу regex, например «ghp» от токена GitHub).
 SECRET_MIN = 4
+WHITESPACE = re.compile(r"\s")
 RANK = {kind: i for i, kind in enumerate(KINDS)}
 
 
@@ -253,8 +257,10 @@ def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsP
 
 
 def find_secrets(text: str, ctx: Ctx) -> Iterator[Match]:
-    # Значение JSON под ключом-паролем: «password:» в куске нет, ключевое слово — сам ключ.
-    if SECRET_KEY.search(ctx.json_key) and len(text) >= SECRET_MIN and not PLACEHOLDER.fullmatch(text):
+    # Значение JSON под ключом-паролем: «password:» в куске нет, ключевое слово — сам ключ. У пароля нет
+    # пробелов: значение с пробелами или переносами — обычный текст, его смотрят остальные детекторы.
+    if (SECRET_KEY.search(ctx.json_key) and len(text) >= SECRET_MIN and not WHITESPACE.search(text)
+            and not PLACEHOLDER.fullmatch(text)):
         yield Match(0, len(text), "secret", text)
         return
     found: list[Match] = []

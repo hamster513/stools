@@ -66,7 +66,7 @@ def _parts(m: Match) -> tuple[tuple[str, str], ...]:
     return m.parts
 
 
-def _placed(m: Match) -> list[tuple[str, str, int, int]]:
+def _placed(m: Match, text: str) -> list[tuple[str, str, int, int]]:
     """Части совпадения с их местом: составное — две части по краям (host.domain, DOM\\user,
     user@domain), значения частей — дословные куски текста."""
     parts = _parts(m)
@@ -74,7 +74,11 @@ def _placed(m: Match) -> list[tuple[str, str, int, int]]:
         (kind, value), = parts
         return [(kind, value, m.start, m.end)]
     (first, head), (last, tail) = parts
-    return [(first, head, m.start, m.start + len(head)), (last, tail, m.end - len(tail), m.end)]
+    placed = [(first, head, m.start, m.start + len(head)), (last, tail, m.end - len(tail), m.end)]
+    # Новая форма составного должна упасть здесь, а не молча проверять чужое место.
+    for _, value, start, end in placed:
+        assert text[start:end].lower() == value.lower(), (m, text[start:end])
+    return placed
 
 
 def _versionlike(m: Match, text: str, json_key: str) -> bool:
@@ -199,7 +203,7 @@ def verify(target: Path, findings: list[Finding], ctx: Ctx) -> list[Finding]:
             for m in detect(text, keyed(json_key)):
                 # Части составного — каждая на своём месте: в mail.dom2.example домен «example» лежит
                 # внутри своего псевдонима dom2.example, а совпадение целиком — нет.
-                for kind, value, start, end in _placed(m):
+                for kind, value, start, end in _placed(m, text):
                     if inside(start, end):
                         continue
                     key = (kind, value_key(kind, value))
