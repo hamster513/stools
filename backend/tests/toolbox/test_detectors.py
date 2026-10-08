@@ -183,6 +183,13 @@ def test_secrets_only_at_their_place() -> None:
     assert [(m.start, m.value) for m in found] == [(10, "required")]
 
 
+def test_secrets_right_after_equals_sign() -> None:
+    # Вид KEY=value (env, ini): ключевого слова нет, значение находит detect-secrets.
+    [found] = find_secrets("AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE", CTX)
+    assert (found.start, found.value) == (18, "AKIAIOSFODNN7EXAMPLE")
+    assert values(find_secrets("x=8f14e45fceea167a5a36dedd4bea25", CTX)) == ["8f14e45fceea167a5a36dedd4bea25"]
+
+
 def test_secrets_skip_bare_file_hashes() -> None:
     for n in (32, 40, 64):
         digest = ("8f14e45fceea167a5a36dedd4bea2543" * 2)[:n]

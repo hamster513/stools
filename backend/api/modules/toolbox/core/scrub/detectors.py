@@ -233,8 +233,9 @@ def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsP
             spans[m.span(2)] = m.group(2)
     if len(line) <= SECRET_LINE_MAX:
         for value in dict.fromkeys(_scanned(line, entropy)):
-            # Значение detect-secrets — целый токен, а не кусок другого слова или base64.
-            for m in re.finditer(rf"(?<![\w+/=]){re.escape(value)}(?![\w+/=])", line):
+            # Значение detect-secrets — целый токен, а не кусок другого слова или base64. «=» слева —
+            # граница (вид KEY=value), справа — нет: это может быть хвост base64.
+            for m in re.finditer(rf"(?<![\w+/]){re.escape(value)}(?![\w+/=])", line):
                 spans[m.span()] = value
     for (start, end), value in spans.items():
         yield Match(offset + start, offset + end, "secret", value)
