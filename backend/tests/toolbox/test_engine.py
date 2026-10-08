@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
 import re
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from api.modules.toolbox.core.scrub.engine import apply, reverse, scan, verify
+from api.modules.toolbox.core.scrub.engine import VerifyError, apply, reverse, scan, verify
 from api.modules.toolbox.core.scrub.types import KINDS, Finding
 from tests.toolbox.synthetic import CTX, TEXT, MemoryAliases
 
@@ -134,3 +136,61 @@ def test_reverse_restores_everything_but_secrets(source: Path, tmp_path: Path) -
     assert text == expected
     assert replaced == sum(counts.values()) - counts["secret"]
     assert reverse("nothing here", []) == ("nothing here", 0)
+
+
+def zipped(path: Path, members: dict[str, bytes]) -> Path:
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    path.write_bytes(out.getvalue())
+    return path
+
+
+def test_bare_user_is_replaced_and_its_leftover_caught(tmp_path: Path) -> None:
+    # Учёток в словаре нет: jdoe известен только из CORP\jdoe, но голый jdoe рядом — та же учётка.
+    source = tmp_path / "log.txt"
+    source.write_text("logon CORP\\jdoe ok\nuser jdoe again\n", encoding="utf-8")
+    aliases = MemoryAliases()
+    findings = scan(source, CTX, aliases).findings
+    out = scrubbed(source, tmp_path / "out.txt", findings, aliases)
+    assert out == "logon DOM1\\user-0001 ok\nuser user-0001 again\n"
+    assert verify(tmp_path / "out.txt", findings, CTX) == []
+    leak = tmp_path / "leak.txt"
+    leak.write_text(out.replace("user user-0001", "user jdoe"), encoding="utf-8")
+    assert [(f.kind, f.value_key) for f in verify(leak, findings, CTX)] == [("user", "jdoe")]
+
+
+def test_host_in_zip_member_names_is_replaced_and_checked(tmp_path: Path) -> None:
+    source = zipped(tmp_path / "in.zip", {"host01-notes.txt": b"a\n", "host01_notes.txt": b"b\n"})
+    aliases = MemoryAliases()
+    findings = scan(source, CTX, aliases).findings
+    assert by_value(findings)[("host", "host01")].count == 2
+    apply(source, tmp_path / "out.zip", findings, CTX, aliases)
+    with zipfile.ZipFile(tmp_path / "out.zip") as zf:
+        assert zf.namelist() == ["host-0001-notes.txt", "host-0001_notes.txt"]
+    assert verify(tmp_path / "out.zip", findings, CTX) == []
+    assert [(f.kind, f.value_key, f.count) for f in verify(source, findings, CTX)] == [("host", "host01", 2)]
+
+
+def test_verify_fails_closed_on_missing_or_broken_result(source: Path, tmp_path: Path) -> None:
+    findings = scan(source, CTX, MemoryAliases()).findings
+    with pytest.raises(VerifyError):
+        verify(tmp_path / "missing.zip", findings, CTX)
+    broken = tmp_path / "broken.zip"
+    broken.write_bytes(b"PK\x03\x04 truncated")
+    with pytest.raises(VerifyError):
+        verify(broken, findings, CTX)
+
+
+def test_name_of_skipped_member_is_not_counted(tmp_path: Path) -> None:
+    source = zipped(tmp_path / "in.zip", {"host01.bin": b"\x00\x01", "x.txt": b"host01\n"})
+    aliases = MemoryAliases()
+    findings = scan(source, CTX, aliases).findings
+    _, counts = apply(source, tmp_path / "out.zip", findings, CTX, aliases)
+    assert counts == {"host": 1}
+
+
+def test_reverse_respects_word_boundaries() -> None:
+    pairs = [("word-0001", "Ivanov"), ("host-0001", "host01")]
+    assert reverse("word-0001 word-00012 host-0001x", pairs) == ("Ivanov word-00012 host-0001x", 1)

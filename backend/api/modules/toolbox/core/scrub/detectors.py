@@ -37,8 +37,11 @@ FILE_EXT = frozenset({
     "rar", "bak", "csv", "doc", "docx", "xls", "xlsx", "pdf", "py", "js", "vbs", "scr", "lnk", "db", "sql", "html", "htm", "png",
     "jpg", "cab", "inf", "ocx", "drv", "bin", "iso", "img", "key", "pem", "cer", "crt", "yml", "yaml",
 })
-# Имя из словаря — целое слово: границы — всё, кроме букв, цифр, «_» и «-»; точка тоже граница.
+# Имя из словаря — целое слово из меток: границы — всё, кроме букв и цифр. «-» и «_» тоже границы
+# (host01-notes.txt, host01_old), но внутри имени из словаря они есть (srv-db01) — поэтому текст
+# режется на цепочки RUN, цепочки — на метки LABEL, и ищутся отрезки из целых меток.
 RUN = re.compile(r"[\w-]+(?:\.[\w-]+)*")
+LABEL = re.compile(r"[^._-]+")
 NAME = r"[\w-]+(?:\.[\w-]+)*"
 NETBIOS_USER = re.compile(rf"(?<![\w-])([\w-]+)\\({NAME})")
 # В адресе e-mail бывает «+метка» (a.b+tag@…): без «+» нашлась бы только часть после него.
@@ -62,7 +65,7 @@ def _by_start(matches: list[Match]) -> Iterator[Match]:
 
 @lru_cache(maxsize=16)
 def _depth(names: frozenset[str]) -> int:
-    return max((n.count(".") + 1 for n in names), default=0)
+    return max((len(LABEL.findall(n)) for n in names), default=0)
 
 
 def _dictionary(text: str, names: frozenset[str], kind: str) -> Iterator[Match]:
@@ -75,11 +78,7 @@ def _dictionary(text: str, names: frozenset[str], kind: str) -> Iterator[Match]:
     if not depth:
         return
     for run in RUN.finditer(text):
-        labels: list[tuple[int, int]] = []
-        pos = run.start()
-        for label in run.group(0).split("."):
-            labels.append((pos, pos + len(label)))
-            pos += len(label) + 1
+        labels = [(run.start() + m.start(), run.start() + m.end()) for m in LABEL.finditer(run.group(0))]
         i = 0
         while i < len(labels):
             for j in range(min(len(labels), i + depth), i, -1):

@@ -106,7 +106,7 @@ def test_domains_dictionary_and_auto() -> None:
 
 
 def test_domains_skip_files_and_partial_words() -> None:
-    assert list(find_domains("report.final.txt corporate corp-x x.corp_y", CTX)) == []
+    assert list(find_domains("report.final.txt corporate xcorp corp2", CTX)) == []
     # Без «@» имя из двух меток — не FQDN хоста, авто-поиск его не берёт.
     assert list(find_domains("example.test", CTX)) == []
 
@@ -131,8 +131,17 @@ def test_hosts_fqdn_with_dictionary_domain_deeper_in_name() -> None:
 
 
 def test_hosts_respect_word_boundaries_and_unconfirmed_domains() -> None:
-    assert list(find_hosts("host011 xhost01 host01-b", CTX)) == []
+    assert list(find_hosts("host011 xhost01", CTX)) == []
     assert [m for m in find_hosts("web7.other.org", CTX) if m.parts] == []
+
+
+def test_dictionary_dash_and_underscore_are_boundaries_longest_first() -> None:
+    # Имена файлов в выгрузках: host01-notes.txt, host01_notes.txt — имя хоста внутри.
+    ctx = dataclasses.replace(CTX, hosts=CTX.hosts | {"srv"})
+    found = list(find_hosts("host01-b host01-notes.txt host01_notes srv-db01 srv_x", ctx))
+    assert values(found) == ["host01", "host01", "host01", "srv-db01", "srv"]
+    assert values(find_domains("corp-x x.corp_y", CTX)) == ["corp", "corp"]
+    assert values(find_users("jdoe_old", with_users("jdoe"))) == ["jdoe"]
 
 
 def test_users_composite_netbios_and_email() -> None:

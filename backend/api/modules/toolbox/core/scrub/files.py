@@ -35,7 +35,7 @@ SPOOL = 64 * MB
 #: BOM снимается при чтении и ставится обратно при записи: кодировки ниже — без BOM. Средствами
 #: TextIOWrapper нельзя: в поток записи члена zip (не перематывается) он BOM не пишет.
 BOMS = {b"\xef\xbb\xbf": "utf-8", b"\xff\xfe": "utf-16-le", b"\xfe\xff": "utf-16-be"}
-#: Так рвётся повреждённый архив: такой файл пропускается, как не-текст.
+#: Так рвётся повреждённый архив или чтение: такой файл — запись `broken`, в результат не идёт.
 BROKEN = (OSError, EOFError, zipfile.BadZipFile, zlib.error)
 #: Ключи кусков, которые не значения JSON: имя файла в архиве и имя ключа JSON.
 NAME = "__name__"
@@ -54,7 +54,8 @@ class UnpackLimit(Exception):
 @dataclass(slots=True)
 class Entry:
     path: str  # «архив.zip:внутри/файл.json»
-    kind: str  # json | text | skipped
+    # json | text | skipped (не текст) | broken (ошибка чтения или повреждённый архив)
+    kind: str
 
 
 class _Budget:
@@ -145,9 +146,9 @@ def _zip_in(opener: Opener, budget: _Budget) -> Iterator[zipfile.ZipFile]:
             yield zf
 
 
-def _probe(opener: Opener, budget: _Budget) -> tuple[_Codec, str] | None:
-    """Кодировка и первый непробельный символ; None — не текст. Читает файл целиком, считая байты:
-    кодировка без BOM известна только в конце (utf-8, иначе cp1251)."""
+def _probe(opener: Opener, budget: _Budget) -> tuple[_Codec, str] | str:
+    """Кодировка и первый непробельный символ; иначе вид записи: skipped или broken. Читает файл
+    целиком, считая байты: кодировка без BOM известна только в конце (utf-8, иначе cp1251)."""
     try:
         with opener() as f:
             block = f.read(BLOCK)
@@ -169,21 +170,21 @@ def _probe(opener: Opener, budget: _Budget) -> tuple[_Codec, str] | None:
                     elif not first[enc]:
                         first[enc] = text.lstrip()[:1]
                 if not decoders:
-                    return None
+                    return "skipped"
                 if not block:
                     break
                 block = f.read(BLOCK)
     except BROKEN:
-        return None
+        return "broken"
     encoding = next(iter(decoders))
     return _Codec(bom, encoding), first[encoding]
 
 
-def _leaf(opener: Opener, budget: _Budget) -> tuple[_Codec, Any] | None:
-    """(кодировка, разобранный JSON или _TEXT); None — не текст."""
+def _leaf(opener: Opener, budget: _Budget) -> tuple[_Codec, Any] | str:
+    """(кодировка, разобранный JSON или _TEXT); иначе вид записи: skipped или broken."""
     probed = _probe(opener, budget)
-    if probed is None:
-        return None
+    if isinstance(probed, str):
+        return probed
     codec, first = probed
     if first in ("{", "["):
         # Целиком, как load_export в AD: память защищает потолок, проверенный в _probe.
@@ -219,9 +220,9 @@ def _walk(label: str, name: str, opener: Opener, budget: _Budget,
     if kind == "gz":
         yield from _walk(label, _inner(name), _gunzip(opener), budget, names)
         return
-    leaf = _leaf(opener, budget) if kind == "file" else None
-    if leaf is None:
-        yield Entry(label, "skipped"), iter(())
+    leaf = _leaf(opener, budget) if kind == "file" else kind
+    if isinstance(leaf, str):
+        yield Entry(label, leaf), iter(())
         return
     # Имена архивов и файлов на пути к этому файлу — первыми его кусками: в результат они попадут с ним.
     pending = names[:]
@@ -239,7 +240,7 @@ def _walk_zip(label: str, opener: Opener, budget: _Budget,
         try:
             zin = stack.enter_context(_zip_in(opener, budget))
         except BROKEN:
-            yield Entry(label, "skipped"), iter(())
+            yield Entry(label, "broken"), iter(())
             return
         for info in zin.infolist():
             if info.is_dir():
@@ -288,9 +289,9 @@ def _rewrite(label: str, name: str, opener: Opener, budget: _Budget, transform: 
         return _rewrite_zip(label, opener, budget, transform, entries, sink, top=top)
     if kind == "gz":
         return _rewrite(label, _inner(name), _gunzip(opener), budget, transform, entries, _gzip(sink), top=top)
-    leaf = _leaf(opener, budget) if kind == "file" else None
-    if leaf is None:
-        entries.append(Entry(label, "skipped"))
+    leaf = _leaf(opener, budget) if kind == "file" else kind
+    if isinstance(leaf, str):
+        entries.append(Entry(label, leaf))
         return False
     codec, data = leaf
     with sink() as out:
@@ -313,7 +314,7 @@ def _rewrite_zip(label: str, opener: Opener, budget: _Budget, transform: Transfo
         try:
             zin = stack.enter_context(_zip_in(opener, budget))
         except BROKEN:
-            entries.append(Entry(label, "skipped"))
+            entries.append(Entry(label, "broken"))
             return False
         spool = stack.enter_context(tempfile.SpooledTemporaryFile(SPOOL))
         written = top  # верхний архив пишется и пустым: результат задания должен существовать
@@ -321,11 +322,8 @@ def _rewrite_zip(label: str, opener: Opener, budget: _Budget, transform: Transfo
             for info in zin.infolist():
                 if info.is_dir():
                     continue
-                # Дата из исходника, а не текущая: два прогона дают один и тот же архив байт в байт.
-                member = zipfile.ZipInfo(transform(NAME, info.filename), info.date_time)
-                member.compress_type = zipfile.ZIP_DEFLATED
                 if _rewrite(f"{label}:{info.filename}", info.filename, partial(zin.open, info), budget, transform,
-                            entries, partial(zout.open, member, "w")):
+                            entries, partial(_member, zout, info, transform)):
                     written = True
         if not written:
             return False
@@ -333,6 +331,14 @@ def _rewrite_zip(label: str, opener: Opener, budget: _Budget, transform: Transfo
         with sink() as out:
             shutil.copyfileobj(spool, out, BLOCK)
     return True
+
+
+def _member(zout: zipfile.ZipFile, info: zipfile.ZipInfo, transform: Transform) -> IO[bytes]:
+    # Имя меняется, только когда член пишется: имя пропущенного файла не считается и не попадает в таблицу.
+    # Дата из исходника, а не текущая: два прогона дают один и тот же архив байт в байт.
+    member = zipfile.ZipInfo(transform(NAME, info.filename), info.date_time)
+    member.compress_type = zipfile.ZIP_DEFLATED
+    return zout.open(member, "w")
 
 
 def _gzip(sink: Opener) -> Opener:

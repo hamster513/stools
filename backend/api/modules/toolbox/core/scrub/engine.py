@@ -28,6 +28,18 @@ CONTEXTS = 3
 CONTEXT = 80
 #: Насколько далеко от адреса искать version/build: «agent build 7.2.3.4» — номер сборки.
 VERSION_NEAR = 40
+#: Имена, которые после включения ищутся и голыми: jdoe из CORP\jdoe — та же учётка и в «user jdoe».
+BARE = {"host": "hosts", "user": "users", "domain": "domains"}
+#: Границы значения в самопроверке — как у словаря: всё, кроме букв и цифр («-», «_», «.» — тоже).
+EDGE_BEFORE, EDGE_AFTER = r"(?<![^\W_])", r"(?![^\W_])"
+#: Границы псевдонима в обратном переводе: word-0001 не начало word-00012.
+ALIAS_BEFORE, ALIAS_AFTER = r"(?<![\w-])", r"(?![\w-])"
+#: За псевдонимом SID в тексте стоит RID («…-500»), он не продолжение псевдонима.
+SID_AFTER = r"(?=-\d+(?![\w-])|(?![\w-]))"
+
+
+class VerifyError(Exception):
+    """Результат не прочитан целиком: проверка не может сказать, что он чист."""
 
 
 @dataclass(slots=True)
@@ -107,6 +119,15 @@ def scan(source: Path, ctx: Ctx, aliases: Aliases, *,
     return ScanResult(list(found.values()), entries, chunks)
 
 
+def _with_checked(ctx: Ctx, findings: list[Finding]) -> Ctx:
+    """Включённые хосты, учётки и домены добавлены в словари: их голые вхождения — тоже замена."""
+    extra = {
+        field: getattr(ctx, field) | {f.value_key for f in findings if f.checked and f.kind == kind}
+        for kind, field in BARE.items()
+    }
+    return dataclasses.replace(ctx, **extra)
+
+
 def apply(source: Path, target: Path, findings: list[Finding], ctx: Ctx,
           aliases: Aliases) -> tuple[list[Entry], dict[str, int]]:
     """Замена включённых находок их псевдонимами; составные собираются из псевдонимов частей. Новые пары
@@ -114,7 +135,7 @@ def apply(source: Path, target: Path, findings: list[Finding], ctx: Ctx,
     chosen = {(f.kind, f.value_key): f.alias for f in findings if f.checked}
     counts: Counter[str] = Counter()
     met: dict[tuple[str, str], str] = {}  # (kind, key) → как встретилось впервые
-    keyed = _keyed(ctx)
+    keyed = _keyed(_with_checked(ctx, findings))
 
     def part(kind: str, value: str) -> str:
         key = (kind, value_key(kind, value))
@@ -135,32 +156,72 @@ def apply(source: Path, target: Path, findings: list[Finding], ctx: Ctx,
 
 
 def verify(target: Path, findings: list[Finding], ctx: Ctx) -> list[Finding]:
-    """Повторный поиск по результату: включённые значения, встретившиеся снова, — с числом и первым файлом."""
+    """Повторный поиск по результату — теми же детекторами и дословно по включённым значениям (спека §3.4):
+    включённые значения, встретившиеся снова, — с числом и первым файлом.
+
+    Закрыта по умолчанию: нет результата, или в нём не прочитанный как текст файл (а rewrite пишет только
+    текст) — `VerifyError`, а не «чисто».
+    """
+    if not target.is_file():
+        raise VerifyError(f"{target.name}: результата нет")
     wanted = {(f.kind, f.value_key): f for f in findings if f.checked}
+    literal = _literal(wanted)
     left: dict[tuple[str, str], Finding] = {}
-    keyed = _keyed(ctx)
+    keyed = _keyed(_with_checked(ctx, findings))
+
+    def leftover(key: tuple[str, str], path: str) -> None:
+        origin = wanted.get(key)
+        if origin is None:
+            return
+        if key not in left:
+            left[key] = Finding(key[0], origin.value, key[1], origin.alias, first_file=path)
+        left[key].count += 1
+
     for entry, pieces in walk(target):
+        if entry.kind in ("broken", "skipped"):
+            raise VerifyError(f"{entry.path}: не прочитан как текст ({entry.kind})")
         for json_key, text in pieces:
+            spans = []
             for m in detect(text, keyed(json_key)):
+                spans.append((m.start, m.end))
                 for kind, value in _parts(m):
-                    key = (kind, value_key(kind, value))
-                    origin = wanted.get(key)
-                    if origin is None:
-                        continue
-                    if key not in left:
-                        left[key] = Finding(kind, origin.value, key[1], origin.alias, first_file=entry.path)
-                    left[key].count += 1
+                    leftover((kind, value_key(kind, value)), entry.path)
+            if literal is None:
+                continue
+            pattern, keys = literal
+            for hit in pattern.finditer(text):
+                # Уже посчитано детектором — второй раз не считается.
+                if not any(s <= hit.start() and hit.end() <= e for s, e in spans):
+                    leftover(keys[hit.group(0).lower()], entry.path)
     return list(left.values())
 
 
+def _literal(wanted: dict[tuple[str, str], Finding]) -> tuple[re.Pattern[str], dict[str, tuple[str, str]]] | None:
+    """Все включённые значения дословно, без учёта регистра: детектор мог не узнать значение вне
+    его привычного окружения (голая учётка без словаря, имя хоста внутри имени файла)."""
+    keys: dict[str, tuple[str, str]] = {}
+    for key, finding in wanted.items():
+        for spelling in (finding.value, finding.value_key):
+            keys.setdefault(spelling.lower(), key)
+    if not keys:
+        return None
+    alternatives = "|".join(re.escape(v) for v in sorted(keys, key=len, reverse=True))
+    return re.compile(f"{EDGE_BEFORE}(?:{alternatives}){EDGE_AFTER}", re.IGNORECASE), keys
+
+
 def reverse(text: str, pairs: Iterable[tuple[str, str]]) -> tuple[str, int]:
-    """Пары (псевдоним, настоящее): псевдоним → настоящее, длинные раньше коротких, без учёта регистра."""
+    """Пары (псевдоним, настоящее): псевдоним → настоящее, длинные раньше коротких, без учёта регистра,
+    целыми словами (`-` — часть слова: word-0001 внутри word-00012 не меняется)."""
     table: dict[str, tuple[str, str]] = {}
     for alias, real in pairs:
         table.setdefault(alias.lower(), (alias, real))
     if not table:
         return text, 0
-    pattern = re.compile("|".join(re.escape(a) for a in sorted(table, key=len, reverse=True)), re.IGNORECASE)
+    alternatives = "|".join(
+        re.escape(a) + (SID_AFTER if a.startswith("s-1-5-21-") else ALIAS_AFTER)
+        for a in sorted(table, key=len, reverse=True)
+    )
+    pattern = re.compile(f"{ALIAS_BEFORE}(?:{alternatives})", re.IGNORECASE)
     replaced = 0
 
     def back(m: re.Match[str]) -> str:

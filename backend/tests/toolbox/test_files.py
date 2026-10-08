@@ -141,3 +141,14 @@ def test_unpack_limit_is_an_error_not_memory_exhaustion(tmp_path: Path) -> None:
         for _, chunks in walk(bomb):
             for _ in chunks:
                 pass
+
+
+def test_read_errors_are_broken_not_skipped(tmp_path: Path) -> None:
+    assert [(e.path, e.kind) for e, _ in collected(tmp_path / "missing.zip")] == [("missing.zip", "broken")]
+    truncated = tmp_path / "truncated.zip"
+    truncated.write_bytes(b"PK\x03\x04 truncated")
+    assert [e.kind for e, _ in collected(truncated)] == ["broken"]
+    source = tmp_path / "mixed.zip"
+    source.write_bytes(zipped({"bad.gz": b"not gzip at all", "tool.bin": b"\x00\x01", "a.txt": b"ok\n"}))
+    assert [e.kind for e, _ in collected(source)] == ["broken", "skipped", "text"]
+    assert [e.kind for e in rewrite(source, tmp_path / "clean.zip", to_host_alias)] == ["broken", "skipped", "text"]
