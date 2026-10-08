@@ -284,3 +284,12 @@ def test_detect_priority_and_length_on_overlap() -> None:
 def test_match_defaults() -> None:
     m = Match(0, 1, "ip4", "x")
     assert m.parts == () and m.auto is False
+
+
+def test_secret_under_json_password_key() -> None:
+    # В обходе JSON кусок — само значение, «password:» рядом нет: ключевое слово приходит ключом.
+    [found] = find_secrets("hunter22", dataclasses.replace(CTX, json_key="db_password"))
+    assert (found.start, found.end, found.value) == (0, 8, "hunter22")
+    assert list(find_secrets("null", dataclasses.replace(CTX, json_key="token"))) == []
+    assert list(find_secrets("abc", dataclasses.replace(CTX, json_key="Password"))) == []
+    assert list(find_secrets("hunter22", dataclasses.replace(CTX, json_key="__key__"))) == []

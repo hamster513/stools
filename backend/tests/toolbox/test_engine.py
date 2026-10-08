@@ -5,6 +5,7 @@ import dataclasses
 import io
 import json
 import re
+import time
 import zipfile
 from pathlib import Path
 
@@ -237,3 +238,31 @@ def test_verify_literal_hit_with_unicode_case_fold(tmp_path: Path) -> None:
     leak = tmp_path / "leak.txt"
     leak.write_text("by j\u017fmith\n", encoding="utf-8")
     assert [(f.kind, f.value_key) for f in verify(leak, findings, CTX)] == [("user", "jsmith")]
+
+
+def test_verify_hit_extending_past_own_alias_is_caught(tmp_path: Path) -> None:
+    # Псевдоним слова «Bank» — часть настоящих bankov и bank-srv01: они длиннее псевдонима, это остатки.
+    findings = [
+        Finding("word", "Acme", "acme", "Bank"),
+        Finding("user", "bankov", "bankov", "user-0001"),
+        Finding("host", "bank-srv01", "bank-srv01", "host-0001"),
+        Finding("domain", "CORP", "corp", "DOM1"),
+        Finding("domain", "dom1-dc", "dom1-dc", "DOM2"),
+    ]
+    leak = tmp_path / "leak.txt"
+    leak.write_text("logon bankov from bank-srv01 via Bank\nDOM1\\user-0001 at dom1-dc\n", encoding="utf-8")
+    assert sorted((f.kind, f.value_key) for f in verify(leak, findings, CTX)) == [
+        ("domain", "dom1-dc"), ("host", "bank-srv01"), ("user", "bankov"),
+    ]
+
+
+def test_verify_many_aliases_is_fast(tmp_path: Path) -> None:
+    """Сторож производительности: границы общие на всю альтернацию, иначе regex теряет префиксную
+    оптимизацию (было 34 с/МБ на 2000 псевдонимах)."""
+    findings = [Finding("host", f"realhost{i}", f"realhost{i}", f"host-{i:04d}") for i in range(2000)]
+    line = " ".join(f"seen host-{i:04d} ok" for i in range(0, 2000, 7)) + "\n"
+    result = tmp_path / "out.txt"
+    result.write_text(line * (512 * 1024 // len(line) + 1), encoding="utf-8")
+    started = time.perf_counter()
+    assert verify(result, findings, CTX) == []
+    assert time.perf_counter() - started < 2

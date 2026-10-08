@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from bisect import bisect_right
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +64,17 @@ def _parts(m: Match) -> tuple[tuple[str, str], ...]:
     if m.kind == "sid" or not m.parts:
         return ((m.kind, m.value),)
     return m.parts
+
+
+def _placed(m: Match) -> list[tuple[str, str, int, int]]:
+    """Части совпадения с их местом: составное — две части по краям (host.domain, DOM\\user,
+    user@domain), значения частей — дословные куски текста."""
+    parts = _parts(m)
+    if len(parts) == 1:
+        (kind, value), = parts
+        return [(kind, value, m.start, m.end)]
+    (first, head), (last, tail) = parts
+    return [(first, head, m.start, m.start + len(head)), (last, tail, m.end - len(tail), m.end)]
 
 
 def _versionlike(m: Match, text: str, json_key: str) -> bool:
@@ -164,7 +176,7 @@ def verify(target: Path, findings: list[Finding], ctx: Ctx) -> list[Finding]:
         raise VerifyError(f"{target.name}: результата нет")
     wanted = {(f.kind, f.value_key): f for f in findings if f.checked}
     literal = _literal(wanted)
-    mask = _own_aliases(wanted)
+    own = _own_aliases(wanted)
     left: dict[tuple[str, str], Finding] = {}
     keyed = _keyed(_with_checked(ctx, findings))
 
@@ -180,27 +192,32 @@ def verify(target: Path, findings: list[Finding], ctx: Ctx) -> list[Finding]:
         if entry.kind in ("broken", "skipped"):
             raise VerifyError(f"{entry.path}: не прочитан как текст ({entry.kind})")
         for json_key, text in pieces:
-            if mask is not None:
-                # Свои псевдонимы и метки секретов — пробелами той же длины: «user» внутри user-0001,
-                # «example» внутри dom1.example — не остаток.
-                text = mask.sub(lambda m: " " * len(m.group(0)), text)
-            spans: list[tuple[int, int, set[tuple[str, str]]]] = []
+            # «user» внутри user-0001, «example» внутри dom1.example — не остаток; bankov вокруг
+            # псевдонима Bank выходит за его пределы — остаток.
+            inside = _Inside([pattern.finditer(text) for pattern in own])
+            spans: list[tuple[int, int, tuple[str, str]]] = []
             for m in detect(text, keyed(json_key)):
-                keys = {(kind, value_key(kind, value)) for kind, value in _parts(m)}
-                spans.append((m.start, m.end, keys))
-                for kind, value in _parts(m):
-                    leftover((kind, value_key(kind, value)), entry.path)
+                # Части составного — каждая на своём месте: в mail.dom2.example домен «example» лежит
+                # внутри своего псевдонима dom2.example, а совпадение целиком — нет.
+                for kind, value, start, end in _placed(m):
+                    if inside(start, end):
+                        continue
+                    key = (kind, value_key(kind, value))
+                    spans.append((start, end, key))
+                    leftover(key, entry.path)
             if literal is None:
                 continue
             pattern, spellings = literal
             for hit in pattern.finditer(text):
+                if inside(hit.start(), hit.end()):
+                    continue
                 key = _spelled(spellings, hit.group(0))
                 # Ключевое слово перед «=»/«:» — не значение, даже если пароль с ним совпал.
                 name = KEYWORD_NAME.match(text, hit.start())
                 if name is not None and name.end(1) == hit.end():
                     continue
                 # Второй раз не считается только то, что детектор уже посчитал под тем же ключом.
-                if not any(s <= hit.start() and hit.end() <= e and key in keys for s, e, keys in spans):
+                if not any(s <= hit.start() and hit.end() <= e and key == k for s, e, k in spans):
                     leftover(key, entry.path)
     return list(left.values())
 
@@ -214,19 +231,38 @@ def _spelled(spellings: dict[str, tuple[str, str]], found: str) -> tuple[str, st
     return next(k for s, k in spellings.items() if re.fullmatch(re.escape(s), found, re.IGNORECASE))
 
 
-def _own_aliases(wanted: dict[tuple[str, str], Finding]) -> re.Pattern[str] | None:
+class _Inside:
+    """Лежит ли отрезок целиком внутри одного из своих псевдонимов. Совпадения каждого шаблона
+    не пересекаются и идут по порядку — ближайшее слева находится делением пополам."""
+
+    def __init__(self, found: list[Iterator[re.Match[str]]]) -> None:
+        self.spans = [[m.span() for m in matches] for matches in found]
+        self.starts = [[start for start, _ in spans] for spans in self.spans]
+
+    def __call__(self, start: int, end: int) -> bool:
+        for spans, starts in zip(self.spans, self.starts, strict=True):
+            i = bisect_right(starts, start)
+            if i and spans[i - 1][1] >= end:
+                return True
+        return False
+
+
+def _own_aliases(wanted: dict[tuple[str, str], Finding]) -> list[re.Pattern[str]]:
     """Всё, что apply пишет сам: псевдонимы включённых находок (составные — из них же) и метки секретов.
-    Псевдоним, совпавший с настоящим значением, не маскируется: иначе он спрятал бы настоящий остаток."""
+    Псевдоним, совпавший с настоящим значением, не в счёт: иначе он спрятал бы настоящий остаток.
+
+    Границы — общие на всю альтернацию, а не у каждой альтернативы: так regex ищет по общим префиксам
+    (на 2000 псевдонимах — десятки секунд на мегабайт против сотых)."""
     reals = {s.casefold() for f in wanted.values() for s in (f.value, f.value_key)}
     own = [f for f in wanted.values() if f.alias.casefold() not in reals]
-    if not own:
-        return None
+    patterns = []
     # Слово меняется и внутри других слов (password → password-0001), его псевдоним — тоже без границ.
-    alternatives = "|".join(
-        re.escape(f.alias) if f.kind == "word" else f"{EDGE_BEFORE}{re.escape(f.alias)}{EDGE_AFTER}"
-        for f in sorted(own, key=lambda f: len(f.alias), reverse=True)
-    )
-    return re.compile(alternatives, re.IGNORECASE)
+    for words, before, after in ((False, EDGE_BEFORE, EDGE_AFTER), (True, "", "")):
+        aliases = sorted({f.alias for f in own if (f.kind == "word") == words}, key=len, reverse=True)
+        if aliases:
+            alternatives = "|".join(re.escape(a) for a in aliases)
+            patterns.append(re.compile(f"{before}(?:{alternatives}){after}", re.IGNORECASE))
+    return patterns
 
 
 def _literal(wanted: dict[tuple[str, str], Finding]) -> tuple[re.Pattern[str], dict[str, tuple[str, str]]] | None:
