@@ -42,6 +42,8 @@ api = [
     "tzdata>=2024.1",
     # Модуль Assets: прямые и обратные запросы к DNS-серверу.
     "dnspython>=2.6",
+    # Модуль ToolBox: детекторы секретов.
+    "detect-secrets>=1.5",
 ]
 
 [project.scripts]
