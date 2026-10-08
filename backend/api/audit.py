@@ -40,6 +40,8 @@ RECORDED_READS = (
     re.compile(r"/api/settings/audit/export\.csv$"),
     re.compile(r"/api/vm/.*export$"),
     re.compile(r"/api/ksc/snapshots/[^/]+/policies/[^/]+/contents$"),
+    re.compile(r"/api/toolbox/scrub/jobs/[^/]+/(result|report|mapping)$"),
+    re.compile(r"/api/toolbox/aliases/export\.csv$"),
 )
 
 logger = logging.getLogger(__name__)

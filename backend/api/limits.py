@@ -53,6 +53,7 @@ SIEM_UPLOAD = 300 * MB
 VM_UPLOAD = 500 * MB
 AD_UPLOAD = 200 * MB
 KSC_UPLOAD = 200 * MB
+TOOLBOX_UPLOAD = 200 * MB
 ATTACK_BUNDLE_UPLOAD = 100 * MB
 RU_TTP_UPLOAD = 20 * MB
 #: Эталонная разметка ATT&CK (xlsx/csv): реальные таблицы больше 2 МБ.
@@ -67,6 +68,7 @@ BODY_LIMITS: list[tuple[str, str, int]] = [
     ("POST", "/api/vm/refs/{name}/upload", VM_UPLOAD),
     ("POST", "/api/ad/snapshots/file", AD_UPLOAD),
     ("POST", "/api/ksc/snapshots/file", KSC_UPLOAD),
+    ("POST", "/api/toolbox/scrub/jobs", TOOLBOX_UPLOAD),
     ("POST", "/api/settings/attack", ATTACK_BUNDLE_UPLOAD),
     ("POST", "/api/settings/attack/preview", ATTACK_BUNDLE_UPLOAD),
     ("POST", "/api/attack/ru-ttp", RU_TTP_UPLOAD),
