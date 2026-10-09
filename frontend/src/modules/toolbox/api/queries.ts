@@ -1,11 +1,16 @@
-/** Хуки TanStack Query модуля ToolBox: задания очистки файлов. */
+/** Хуки TanStack Query модуля ToolBox: задания очистки файлов, соответствия, настройки. */
 import { useEffect, useRef } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
-import type { Download, FindingsPatch, FindingsQuery, FindingsResponse, JobInfo, ScrubJob } from './types'
+import { nextPageOffset } from '@/platform/collector/paging'
+import type {
+  AliasesQuery, AliasesResponse, Download, FindingsPatch, FindingsQuery, FindingsResponse, JobInfo, ReverseResult, ScrubJob, ToolboxSettings,
+} from './types'
 
 const BASE = '/api/toolbox/scrub'
+const ALIASES = '/api/toolbox/aliases'
 export const FINDINGS_PAGE_SIZE = 200
+export const ALIASES_PAGE_SIZE = 100
 
 export function useScrubJobs() {
   return useQuery<ScrubJob[], ApiRequestError>({
@@ -115,4 +120,53 @@ export function useCancelJob() {
 
 export function downloadUrl(id: number, which: Download): string {
   return `${BASE}/jobs/${id}/${which}`
+}
+
+/** Обратный перевод — действие, а не данные: ответ не кэшируется, текст с настоящими значениями нигде не остаётся. */
+export function useReverse() {
+  return useMutation<ReverseResult, ApiRequestError, string>({
+    mutationFn: (text) => api.post(`${BASE}/reverse`, { text }),
+  })
+}
+
+/** `enabled` — аудитору запрос не уходит вовсе: сервер всё равно ответил бы 403. */
+export function useAliases(query: AliasesQuery, enabled = true) {
+  return useInfiniteQuery<AliasesResponse, ApiRequestError>({
+    queryKey: ['toolbox-aliases', query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get(`${ALIASES}${buildQuery({ ...query, limit: ALIASES_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
+    placeholderData: (prev) => prev,
+    enabled,
+  })
+}
+
+export function useForgetAlias() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`${ALIASES}/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['toolbox-aliases'] }),
+  })
+}
+
+export function aliasesExportUrl(): string {
+  return `${ALIASES}/export.csv`
+}
+
+export function useToolboxSettings(enabled = true) {
+  return useQuery<ToolboxSettings, ApiRequestError>({
+    queryKey: ['toolbox-settings'],
+    queryFn: () => api.get('/api/toolbox/settings'),
+    // Форма держит несохранённые правки; фоновое перечитывание не должно их сбрасывать.
+    refetchOnWindowFocus: false,
+    enabled,
+  })
+}
+
+export function useSaveToolboxSettings() {
+  const qc = useQueryClient()
+  return useMutation<ToolboxSettings, ApiRequestError, ToolboxSettings>({
+    mutationFn: (body) => api.put('/api/toolbox/settings', body),
+    onSuccess: (data) => qc.setQueryData(['toolbox-settings'], data),
+  })
 }

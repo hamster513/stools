@@ -1,28 +1,13 @@
-import { Construction } from 'lucide-react'
 import { matchPath, Redirect, useRouter } from '@/lib/router'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { EmptyState } from '@/components/ui/EmptyState'
 import { ToolboxSidebar } from './ToolboxSidebar'
+import { AliasesPage } from './pages/AliasesPage'
 import { NewJobForm } from './pages/NewJobForm'
+import { ReversePage } from './pages/ReversePage'
 import { ScrubJobPage } from './pages/ScrubJobPage'
 import { ScrubJobsPage } from './pages/ScrubJobsPage'
-
-const SOON: Record<string, string> = {
-  '/toolbox/reverse': 'Обратный перевод',
-  '/toolbox/aliases': 'Соответствия',
-  '/toolbox/settings': 'Настройки',
-}
-
-/** Разделы, которых ещё нет: ссылки сайдбара ведут сюда, а не обратно в список. */
-function SoonPage({ title }: { title: string }) {
-  return (
-    <div className="p-6">
-      <h1 className="mb-4 text-base font-semibold text-text">{title}</h1>
-      <EmptyState icon={Construction} title="Скоро" description="Раздел появится в следующей версии модуля." />
-    </div>
-  )
-}
+import { SettingsPage } from './pages/SettingsPage'
 
 /** Маршруты модуля ToolBox — всё под /toolbox. */
 export function ToolboxModule() {
@@ -34,7 +19,9 @@ export function ToolboxModule() {
   if (path === '/toolbox') page = <ScrubJobsPage />
   else if (path === '/toolbox/scrub/new') page = <NewJobForm />
   else if (jobId !== null) page = <ScrubJobPage id={jobId} />
-  else if (SOON[path]) page = <SoonPage title={SOON[path]} />
+  else if (path === '/toolbox/reverse') page = <ReversePage />
+  else if (path === '/toolbox/aliases') page = <AliasesPage />
+  else if (path === '/toolbox/settings') page = <SettingsPage />
   else return <Redirect to="/toolbox" />
 
   return (

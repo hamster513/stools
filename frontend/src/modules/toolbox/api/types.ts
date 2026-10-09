@@ -120,3 +120,34 @@ export function formatSize(bytes: number): string {
 }
 export const FILE_MAX = 200 * MB
 export const TEXT_MAX = 1 * MB
+
+export interface ReverseResult {
+  text: string
+  replaced: number
+}
+
+export interface AliasRow {
+  id: number
+  kind: string
+  real: string
+  alias: string
+  created_at: string
+  created_by: string
+  first_job_id: number | null
+}
+
+export interface AliasesResponse {
+  items: AliasRow[]
+  total: number
+}
+
+export interface AliasesQuery {
+  q?: string
+  kind?: string
+}
+
+export interface ToolboxSettings {
+  words: { word: string; alias: string }[]
+  subnets: { cidr: string; to: string }[]
+  retention_days: number
+}
