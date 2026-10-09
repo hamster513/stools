@@ -143,6 +143,19 @@ def test_hosts_respect_word_boundaries_and_unconfirmed_domains() -> None:
     assert [(m.value, m.auto) for m in found] == [("msk1.other.org", True), ("msk1", False)]
 
 
+def test_dictionary_domain_and_dictionary_host_are_not_split_by_auto_composite() -> None:
+    # Словарный домен из трёх меток целиком — домен, а не хост msk + авто-домен corp.local (host старше domain
+    # по приоритету, и настоящий домен AD уцелел бы без галочки).
+    ctx = dataclasses.replace(CTX, domains=frozenset({"msk.corp.local", "msk"}), hosts=frozenset())
+    assert list(find_hosts("msk.corp.local", ctx)) == []
+    assert [(m.kind, m.value, m.auto) for m in detect("msk.corp.local", ctx)] == [("domain", "msk.corp.local", False)]
+    ctx = dataclasses.replace(CTX, domains=frozenset({"ad.company.ru", "ad"}), hosts=frozenset())
+    assert [(m.kind, m.value, m.auto) for m in detect("domain ad.company.ru ok", ctx)] == [("domain", "ad.company.ru", False)]
+    # Словарный хост-FQDN с доменом не из словаря — один хост целиком, не srv-db01 + other.org без галочек.
+    ctx = dataclasses.replace(CTX, domains=frozenset(), hosts=frozenset({"srv-db01.other.org"}))
+    assert [(m.value, m.parts, m.auto) for m in find_hosts("see srv-db01.other.org", ctx)] == [("srv-db01.other.org", (), False)]
+
+
 def test_hosts_netbios_is_never_fqdn_suffix_and_longest_dotted_domain_wins() -> None:
     # Словарь со стенда: NetBIOS «test» без точки резал host01.corp.test на host01.corp + test — host01 утекал.
     ctx = dataclasses.replace(CTX, domains=frozenset({"corp", "test", "corp.local"}), hosts=frozenset())

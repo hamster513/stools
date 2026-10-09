@@ -170,7 +170,9 @@ def find_hosts(text: str, ctx: Ctx) -> Iterator[Match]:
             continue
         name = m.group(2)
         labels = name.split(".")
-        if len(labels) < 3 or labels[-1].lower() in FILE_EXT:
+        # Имя целиком из словаря доменов (msk.corp.local) — домен, не хост msk с авто-доменом: host старше
+        # domain по приоритету, и настоящий домен AD уцелел бы без галочки.
+        if len(labels) < 3 or labels[-1].lower() in FILE_EXT or name.lower() in ctx.domains:
             continue
         # Суффикс — самый длинный словарный домен с точкой (sub.corp.test раньше corp.test): всё, что левее,
         # — имя хоста (msk1.sub), иначе средняя метка уцелела бы. NetBIOS-имя (без точки) суффиксом не бывает:
@@ -183,6 +185,10 @@ def find_hosts(text: str, ctx: Ctx) -> Iterator[Match]:
                 auto = False
                 break
         else:
+            # Словарный хост-FQDN с доменом не из словаря — одно словарное совпадение целиком, как раньше,
+            # а не две части без галочек.
+            if name.lower() in ctx.hosts:
+                continue
             rest, auto = ".".join(labels[-2:]), True
         left = name[:len(name) - len(rest) - 1]
         found.append(Match(m.start(2), m.end(2), "host", name, (("host", left), ("domain", rest)), auto=auto))

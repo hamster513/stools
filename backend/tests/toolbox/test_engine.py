@@ -332,6 +332,22 @@ def test_checked_auto_host_without_its_domain_is_replaced_alone(tmp_path: Path) 
     assert verify(tmp_path / "out.txt", findings, STAND) == []
 
 
+@pytest.mark.parametrize(("ctx", "line", "kind", "value"), [
+    (dataclasses.replace(STAND, domains=frozenset({"msk.corp.local", "msk"})), "dc msk.corp.local up\n", "domain", "msk.corp.local"),
+    (dataclasses.replace(STAND, domains=frozenset({"ad.company.ru", "ad"})), "domain ad.company.ru ok\n", "domain", "ad.company.ru"),
+    (dataclasses.replace(STAND, hosts=frozenset({"srv-db01.other.org"})), "see srv-db01.other.org\n", "host", "srv-db01.other.org"),
+])
+def test_dictionary_whole_name_is_one_checked_finding_and_replaced(tmp_path: Path, ctx: Ctx, line: str, kind: str,
+                                                                   value: str) -> None:
+    source = tmp_path / "log.txt"
+    source.write_text(line, encoding="utf-8")
+    aliases = MemoryAliases(ctx)
+    findings = scan(source, ctx, aliases).findings
+    assert [(f.kind, f.value, f.checked, f.auto) for f in findings] == [(kind, value, True, False)]
+    out = scrubbed_with(source, tmp_path / "out.txt", findings, aliases, ctx)
+    assert value not in out and verify(tmp_path / "out.txt", findings, ctx) == []
+
+
 def test_verify_catches_short_name_of_checked_fqdn_host(tmp_path: Path) -> None:
     # Хост из словаря — FQDN (asset.fqdn): голое короткое имя в результате — тот же хост, остаток.
     findings = [Finding("host", "srv-db01.corp.test", "srv-db01.corp.test", "host-0001")]

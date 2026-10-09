@@ -258,12 +258,15 @@ def test_roles(seeded: Any, auth_client: TestClient, client_as: Callable[[str], 
     secrets = [i for i in body["items"] if i["kind"] == "secret"]
     assert secrets and all(i["value"] == "" and i["alias"].startswith("<secret-") for i in secrets)
     assert all(i["value"] for i in body["items"] if i["kind"] != "secret")
+    # Поиском по значению секрет не подобрать по буквам: для аудитора секреты под поиск не попадают.
+    assert findings(auditor, job_id, kind="secret", q="Qw")["total"] == 0
     assert auditor.get(f"{API}/jobs").status_code == 200
     assert auditor.get("/api/toolbox/settings").status_code == 403
 
     alias_id = seeded.query(ToolboxAlias).filter(ToolboxAlias.kind == "host").one().id
     analyst = client_as("analyst")
     assert all(i["value"] for i in findings(analyst, job_id)["items"] if i["kind"] == "secret")
+    assert findings(analyst, job_id, kind="secret", q="Qw")["total"] == 1
     assert analyst.get("/api/toolbox/aliases").status_code == 200
     assert analyst.delete(f"/api/toolbox/aliases/{alias_id}").status_code == 403
     assert analyst.get("/api/toolbox/settings").status_code == 403

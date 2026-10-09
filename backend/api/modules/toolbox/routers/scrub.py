@@ -157,13 +157,14 @@ def list_findings(
     db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> FindingsPage:
-    try:
-        groups, items, total = scrub.findings_page(db, job_id, kind=kind, q=q, limit=limit, offset=offset)
-    except LookupError as exc:
-        raise _http(exc) from None
     # Контексты — куски исходного текста вокруг значения; аудитору — только сами находки, а значения
     # секретов (пароли, ключи) — и вовсе нет: имена хостов и учёток он читает в снапшотах, пароли — нигде.
     full = allows(user.role, ROLE_ANALYST)
+    try:
+        groups, items, total = scrub.findings_page(db, job_id, kind=kind, q=q, limit=limit, offset=offset,
+                                                   secrets_searchable=full)
+    except LookupError as exc:
+        raise _http(exc) from None
     return FindingsPage(
         groups=[GroupView(**g) for g in groups],
         items=[

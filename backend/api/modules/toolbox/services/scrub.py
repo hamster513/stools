@@ -243,9 +243,11 @@ def run_scan(db: Session, handle: JobHandle, job_id: int) -> None:
 
 # --- предпросмотр --------------------------------------------------------------------------------
 
-def findings_page(db: Session, job_id: int, *, kind: str | None, q: str, limit: int,
-                  offset: int) -> tuple[list[dict[str, Any]], list[ToolboxFinding], int]:
-    """Группы по kind со счётчиками «всего / включено» и страница находок с поиском по значению."""
+def findings_page(db: Session, job_id: int, *, kind: str | None, q: str, limit: int, offset: int,
+                  secrets_searchable: bool = True) -> tuple[list[dict[str, Any]], list[ToolboxFinding], int]:
+    """Группы по kind со счётчиками «всего / включено» и страница находок с поиском по значению.
+    `secrets_searchable=False` (аудитор): секреты под поиск не попадают — иначе по `total` их можно
+    подобрать по букве."""
     _job(db, job_id)
     groups = [
         {"kind": k, "total": int(total), "checked": int(checked or 0)}
@@ -260,6 +262,8 @@ def findings_page(db: Session, job_id: int, *, kind: str | None, q: str, limit: 
         stmt = stmt.where(ToolboxFinding.kind == kind)
     if q:
         stmt = stmt.where(func.lower(ToolboxFinding.value).contains(q.lower(), autoescape=True))
+        if not secrets_searchable:
+            stmt = stmt.where(ToolboxFinding.kind != "secret")
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rank = case({k: i for i, k in enumerate(KINDS)}, value=ToolboxFinding.kind, else_=len(KINDS))
     items = db.scalars(stmt.order_by(rank, ToolboxFinding.count.desc(), ToolboxFinding.id).limit(limit).offset(offset)).all()
