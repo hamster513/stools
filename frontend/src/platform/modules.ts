@@ -1,4 +1,4 @@
-import { Bug, Grid3x3, Network, Radar, Server, ShieldAlert, Users, type LucideIcon } from 'lucide-react'
+import { Bug, Grid3x3, Network, Radar, Server, ShieldAlert, Users, Wrench, type LucideIcon } from 'lucide-react'
 
 export type ModuleStatus = 'available' | 'planned'
 
@@ -71,6 +71,15 @@ export const MODULES: readonly ModuleSpec[] = [
     description:
       'Реестр активов из VM, антивируса, AD, сканера сети и DNS: где актив засветился, какие данные устарели, кого никто не описал.',
     icon: Server,
+    status: 'available',
+  },
+  {
+    id: 'toolbox',
+    code: 'TBX',
+    title: 'ToolBox',
+    description:
+      'Утилиты для ИБ-специалиста: очистка файлов и текста от адресов, имён, учёток и секретов перед передачей наружу.',
+    icon: Wrench,
     status: 'available',
   },
   {

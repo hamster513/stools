@@ -16,6 +16,7 @@ import { VmModule } from '@/modules/vm/VmModule'
 import { AdModule } from '@/modules/ad/AdModule'
 import { KscModule } from '@/modules/ksc/KscModule'
 import { AssetsModule } from '@/modules/assets/AssetsModule'
+import { ToolboxModule } from '@/modules/toolbox/ToolboxModule'
 
 /**
  * Адреса до появления модулей: /snapshots/…, /upload. На них ведут
@@ -79,6 +80,7 @@ function Root() {
   if (module.id === 'ad') return <AdModule />
   if (module.id === 'ksc') return <KscModule />
   if (module.id === 'assets') return <AssetsModule />
+  if (module.id === 'toolbox') return <ToolboxModule />
 
   return (
     <AppShell>
