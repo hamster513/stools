@@ -106,9 +106,10 @@ def _dictionary(text: str, names: frozenset[str], kind: str) -> Iterator[Match]:
 
 
 def find_ip4(text: str, ctx: Ctx) -> Iterator[Match]:
-    # Под ключами version/build в JSON — номера версий, а не адреса; имя ключа JSON («__key__»,
-    # files.KEY) адресом не считается, как в скрипте.
-    if ctx.json_key == "__key__" or VERSION_KEY.search(ctx.json_key):
+    # Под ключами version/build в JSON — номера версий, а не адреса. Имя ключа JSON («__key__») — адрес, в
+    # отличие от скрипта: rewrite меняет и ключи, а самопроверка ищет включённые значения дословно, так что
+    # адрес-ключ без находки остался бы в результате и провалил бы задание.
+    if VERSION_KEY.search(ctx.json_key):
         return
     for m in IPV4.finditer(text):
         try:

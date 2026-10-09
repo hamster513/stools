@@ -95,7 +95,7 @@ export function useApply(id: number) {
   })
 }
 
-/** Удаляет файлы задания; строка и находки остаются, в сведениях — `files_deleted`. */
+/** Удаляет файлы и находки задания; строка и счётчики в stats остаются, в сведениях — `files_deleted`. */
 export function useDeleteJob() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, number>({

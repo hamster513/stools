@@ -101,7 +101,7 @@ export function ScrubJobPage({ id }: { id: number }) {
   const editable = write && !i.files_deleted && (scanDone || applyStopped)
 
   function deleteFiles() {
-    if (window.confirm(`Удалить файлы задания #${id}: исходный файл и результат? Находки и счётчики останутся, скачать больше будет нечего.`)) del.mutate(id)
+    if (window.confirm(`Удалить файлы задания #${id}: исходный файл и результат? Счётчики останутся, находки и файлы будут удалены, скачать больше будет нечего.`)) del.mutate(id)
   }
 
   return (
@@ -134,8 +134,12 @@ export function ScrubJobPage({ id }: { id: number }) {
         )}
         {j.kind === 'apply' && j.status === 'done' && <Result id={id} info={i} canDownload={write} />}
         {(scanDone || applyStopped) && (
-          <Section title="Находки" about={editable ? 'Отметьте, что заменять, поправьте псевдонимы, добавьте свои слова; сохраните и нажмите «Очистить».' : i.files_deleted ? 'Файлы задания удалены — находки только для просмотра.' : 'Только просмотр.'}>
-            <FindingsPreview id={id} readOnly={!editable} showContexts={write} />
+          <Section title="Находки" about={editable ? 'Отметьте, что заменять, поправьте псевдонимы, добавьте свои слова; сохраните и нажмите «Очистить».' : i.files_deleted ? 'Значения, контексты и секреты задания удалены из базы; остались счётчики по категориям.' : 'Только просмотр.'}>
+            {i.files_deleted ? (
+              <p className="flex items-center gap-1.5 text-sm text-text-secondary"><FileX size={15} aria-hidden />Находки удалены вместе с файлами.</p>
+            ) : (
+              <FindingsPreview id={id} readOnly={!editable} showContexts={write} />
+            )}
           </Section>
         )}
       </div>

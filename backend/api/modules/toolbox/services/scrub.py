@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import UploadFile
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -488,16 +488,19 @@ def result_file(db: Session, job_id: int, which: Literal["result", "report", "ma
 
 
 def delete_files(db: Session, job_id: int) -> None:
+    """Каталог задания и его находки: в находках настоящие значения, контексты и секреты, а счётчики
+    по категориям уже лежат в job.stats. Строка задания остаётся."""
     job = _job(db, job_id)
     if job.status == "running":
         raise JobBusy("задание идёт — сначала отмените его")
     shutil.rmtree(job_dir(get_settings().data_dir, job_id), ignore_errors=True)
+    db.execute(delete(ToolboxFinding).where(ToolboxFinding.job_id == job_id))
     job.files_deleted = True
     db.commit()
 
 
 def cleanup_handler(db: Session, sched: PlatformSchedule) -> None:
-    """Расписание toolbox/cleanup (jobless): файлы заданий старше срока хранения. Строки остаются."""
+    """Расписание toolbox/cleanup (jobless): файлы и находки заданий старше срока хранения. Строки остаются."""
     cutoff = utcnow() - dt.timedelta(days=get_settings_row(db).retention_days)
     ids = db.scalars(select(ToolboxJob.id).where(
         ToolboxJob.status.in_(FINISHED), ToolboxJob.finished_at < cutoff, ToolboxJob.files_deleted.is_(False),

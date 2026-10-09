@@ -147,9 +147,13 @@ def test_full_path(seeded: Any, auth_client: TestClient, app_settings: Any) -> N
 
     assert auth_client.delete(f"{API}/jobs/{job_id}").status_code == 204
     info = auth_client.get(f"{API}/jobs/{job_id}/info").json()
-    assert info["files_deleted"] is True
+    assert info["files_deleted"] is True and info["stats"]["replaced"]
     assert auth_client.get(f"{API}/jobs/{job_id}/result").status_code == 410
     assert not job_dir(app_settings.data_dir, job_id).exists()
+    # Находки (значения, контексты, секреты) уходят вместе с файлами; счётчики остаются в stats.
+    assert seeded.query(ToolboxFinding).filter_by(job_id=job_id).count() == 0
+    body = findings(auth_client, job_id)
+    assert body == {"groups": [], "items": [], "total": 0}
 
 
 def test_stand_netbios_domain_in_dictionary_does_not_leak_hosts(db_session: Any, auth_client: TestClient) -> None:
@@ -250,12 +254,19 @@ def test_roles(seeded: Any, auth_client: TestClient, client_as: Callable[[str], 
     assert auditor.get("/api/toolbox/aliases/export.csv").status_code == 403
     body = findings(auditor, job_id)
     assert body["items"] and all(i["contexts"] == [] for i in body["items"])
+    # Значения секретов аудитору не показываются — только метка.
+    secrets = [i for i in body["items"] if i["kind"] == "secret"]
+    assert secrets and all(i["value"] == "" and i["alias"].startswith("<secret-") for i in secrets)
+    assert all(i["value"] for i in body["items"] if i["kind"] != "secret")
     assert auditor.get(f"{API}/jobs").status_code == 200
+    assert auditor.get("/api/toolbox/settings").status_code == 403
 
     alias_id = seeded.query(ToolboxAlias).filter(ToolboxAlias.kind == "host").one().id
     analyst = client_as("analyst")
+    assert all(i["value"] for i in findings(analyst, job_id)["items"] if i["kind"] == "secret")
     assert analyst.get("/api/toolbox/aliases").status_code == 200
     assert analyst.delete(f"/api/toolbox/aliases/{alias_id}").status_code == 403
+    assert analyst.get("/api/toolbox/settings").status_code == 403
     assert analyst.put("/api/toolbox/settings", json={"words": [], "subnets": [], "retention_days": 7}).status_code == 403
 
     listed = auth_client.get("/api/toolbox/aliases", params={"kind": "host"}).json()
@@ -306,6 +317,8 @@ def test_cleanup_removes_old_job_files(seeded: Any, auth_client: TestClient, app
     job = seeded.get(ToolboxJob, job_id)
     assert job is not None and job.files_deleted is True
     assert not folder.exists()
+    assert seeded.query(ToolboxFinding).filter_by(job_id=job_id).count() == 0
+    assert findings(auth_client, job_id)["groups"] == []
     # Расписание чистки заводится вместе с настройками модуля.
     assert seeded.query(PlatformSchedule).filter_by(module="toolbox", kind="cleanup").count() == 1
 

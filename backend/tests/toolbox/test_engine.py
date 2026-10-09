@@ -8,6 +8,7 @@ import re
 import time
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -75,11 +76,23 @@ def test_scan_unchecks_auto_domain_and_version_like_address(source: Path) -> Non
     assert found[("host", "host01")].checked and found[("ip4", "10.1.2.15")].checked
 
 
-def test_scan_skips_addresses_in_json_keys(tmp_path: Path) -> None:
+@pytest.mark.parametrize("data", [{"10.1.2.3": {"addr": "10.1.2.3"}}, {"hosts": {"10.1.2.3": "x"}}])
+def test_address_in_json_key_is_found_replaced_and_verified(tmp_path: Path, data: dict[str, Any]) -> None:
+    # Адрес в имени ключа JSON — тоже адрес: иначе apply оставил бы его, а самопроверка нашла бы дословно.
     path = tmp_path / "keys.json"
-    path.write_text(json.dumps({"10.1.2.3": "up", "ip": "10.1.2.4"}), encoding="utf-8")
-    found = by_value(scan(path, CTX, MemoryAliases()).findings)
-    assert ("ip4", "10.1.2.4") in found and ("ip4", "10.1.2.3") not in found
+    path.write_text(json.dumps(data), encoding="utf-8")
+    aliases = MemoryAliases()
+    findings = scan(path, CTX, aliases).findings
+    assert [(f.kind, f.value, f.checked) for f in findings] == [("ip4", "10.1.2.3", True)]
+    apply(path, tmp_path / "out.json", findings, CTX, aliases)
+    assert "10.1.2.3" not in (tmp_path / "out.json").read_text(encoding="utf-8")
+    assert verify(tmp_path / "out.json", findings, CTX) == []
+
+
+def test_scan_skips_addresses_under_version_keys(tmp_path: Path) -> None:
+    path = tmp_path / "keys.json"
+    path.write_text(json.dumps({"version": "10.1.2.3"}), encoding="utf-8")
+    assert scan(path, CTX, MemoryAliases()).findings == []
 
 
 def test_apply_leaves_no_checked_real_value(source: Path, tmp_path: Path) -> None:
@@ -279,12 +292,14 @@ def test_verify_many_aliases_is_fast(tmp_path: Path) -> None:
 
 
 def test_placed_rejects_composite_not_at_edges() -> None:
-    # Части составного лежат по его краям; другая форма должна упасть, а не проверить чужое место.
+    # Части составного лежат по его краям; другая форма должна упасть, а не проверить чужое место —
+    # и без настоящего значения в тексте ошибки: он попадает в job.error, который видят все роли.
     m = Match(0, 18, "host", "srv-db01.corp.test", (("host", "srv-db01"), ("domain", "corp.test")))
-    assert [(k, v) for k, v, _, _ in _placed(m, "srv-db01.corp.test")] == [("host", "srv-db01"), ("domain", "corp.test")]
+    assert [(k, v) for k, v, _, _ in _placed(m, "srv-db01.corp.test", "a.txt")] == [("host", "srv-db01"), ("domain", "corp.test")]
     odd = Match(0, 18, "host", "srv-db01.corp.test", (("host", "db01"), ("domain", "corp.test")))
-    with pytest.raises(AssertionError):
-        _placed(odd, "srv-db01.corp.test")
+    with pytest.raises(VerifyError) as info:
+        _placed(odd, "srv-db01.corp.test", "a.txt")
+    assert str(info.value) == "a.txt: составное совпадение не на своём месте"
 
 
 def test_stand_netbios_in_dictionary_does_not_leak_host_names(tmp_path: Path) -> None:

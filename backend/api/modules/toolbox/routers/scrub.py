@@ -161,13 +161,14 @@ def list_findings(
         groups, items, total = scrub.findings_page(db, job_id, kind=kind, q=q, limit=limit, offset=offset)
     except LookupError as exc:
         raise _http(exc) from None
-    # Контексты — куски исходного текста вокруг значения; аудитору — только сами находки.
+    # Контексты — куски исходного текста вокруг значения; аудитору — только сами находки, а значения
+    # секретов (пароли, ключи) — и вовсе нет: имена хостов и учёток он читает в снапшотах, пароли — нигде.
     full = allows(user.role, ROLE_ANALYST)
     return FindingsPage(
         groups=[GroupView(**g) for g in groups],
         items=[
-            FindingView(id=f.id, kind=f.kind, value=f.value, alias=f.alias, count=f.count,
-                        contexts=list(f.contexts or []) if full else [], first_file=f.first_file,
+            FindingView(id=f.id, kind=f.kind, value=f.value if full or f.kind != "secret" else "", alias=f.alias,
+                        count=f.count, contexts=list(f.contexts or []) if full else [], first_file=f.first_file,
                         checked=f.checked, auto=f.auto, stored=f.alias_id is not None)
             for f in items
         ],
