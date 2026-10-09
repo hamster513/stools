@@ -113,5 +113,10 @@ export const STATUS_CLASS: Record<Job['status'], string> = {
 export const KNOWN_EXTENSIONS = ['.json', '.gz', '.zip', '.csv', '.txt', '.log', '.xml', '.conf', '.ini', '.yaml', '.yml']
 
 export const MB = 1024 * 1024
+
+/** Размер для подписи: от мегабайта — с десятой, меньше — килобайты вверх. */
+export function formatSize(bytes: number): string {
+  return bytes >= MB ? `${(bytes / MB).toFixed(1)} МБ` : `${Math.ceil(bytes / 1024)} КБ`
+}
 export const FILE_MAX = 200 * MB
 export const TEXT_MAX = 1 * MB

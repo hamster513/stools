@@ -8,13 +8,9 @@ import { cn } from '@/lib/cn'
 import { Link, useRouter } from '@/lib/router'
 import { Section } from '@/platform/collector/ui'
 import { useCreateJob } from '../api/queries'
-import { FILE_MAX, KNOWN_EXTENSIONS, MB, TEXT_MAX } from '../api/types'
+import { FILE_MAX, formatSize as size, KNOWN_EXTENSIONS, TEXT_MAX } from '../api/types'
 
 type Mode = 'file' | 'text'
-
-function size(bytes: number): string {
-  return bytes >= MB ? `${(bytes / MB).toFixed(1)} МБ` : `${Math.ceil(bytes / 1024)} КБ`
-}
 
 const TAB = 'rounded px-3 py-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 
@@ -51,7 +47,10 @@ export function NewJobForm() {
     if (!ready || create.isPending) return
     const form = new FormData()
     if (mode === 'file' && file) form.append('file', file)
-    else form.append('text', text)
+    // Текст — файлом, а не строковым полем: строковое поле multipart браузер переводит в CRLF (размер
+    // растёт, в результате другие переводы строк). Blob под именем `text` сервер не примет — поле
+    // объявлено строкой, — поэтому `file` с именем text.txt: задание становится файловым.
+    else form.append('file', new Blob([text], { type: 'text/plain' }), 'text.txt')
     form.append('users_from_ad', usersFromAd ? 'true' : 'false')
     create.mutate(form, { onSuccess: (r) => navigate(`/toolbox/scrub/${r.job_id}`) })
   }

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, Plus, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
@@ -9,6 +9,13 @@ import { KIND_LABELS, type Finding, type FindingsPatch } from '../api/types'
 
 const CELL = 'px-2 py-1.5 align-top'
 const EMPTY: FindingsPatch = { checks: {}, aliases: {}, words: [] }
+
+/** Буфер без отправленного: правки, сделанные пока шёл PATCH, остаются несохранёнными. */
+function withoutSent(b: FindingsPatch, sent: FindingsPatch): FindingsPatch {
+  const same = <T,>(rec: Record<number, T>, done: Record<number, T>) =>
+    Object.fromEntries(Object.entries(rec).filter(([k, v]) => !(k in done) || done[Number(k)] !== v)) as Record<number, T>
+  return { checks: same(b.checks, sent.checks), aliases: same(b.aliases, sent.aliases), words: b.words.filter((w) => !sent.words.includes(w)) }
+}
 
 function Banner({ children }: { children: React.ReactNode }) {
   return <div role="alert" className="flex items-start gap-2 rounded border border-kind-1/40 bg-kind-1/5 px-3 py-2.5 text-sm text-text"><AlertTriangle size={16} className="mt-0.5 shrink-0 text-kind-1" aria-hidden /><div className="flex-1">{children}</div></div>
@@ -27,7 +34,9 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
   const [offset, setOffset] = useState(0)
   const [buffer, setBuffer] = useState<FindingsPatch>(EMPTY)
   const [word, setWord] = useState('')
-  const [aliasError, setAliasError] = useState<{ id: number; message: string } | null>(null)
+  const [aliasError, setAliasError] = useState<{ id: number; value: string; message: string } | null>(null)
+  // Значения строк с правленым псевдонимом: строки может не быть на экране, а отказ назвать нужно.
+  const aliasValues = useRef<Record<number, string>>({})
   const [added, setAdded] = useState<number | null>(null)
 
   // Поиск уходит на сервер не на каждую букву.
@@ -63,6 +72,7 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
   function setAlias(f: Finding, value: string) {
     // Поправили псевдоним, на который пришёл отказ, — отказ больше не про него и не всплывает баннером.
     if (aliasError?.id === f.id) { setAliasError(null); update.reset() }
+    aliasValues.current[f.id] = f.value
     setBuffer((b) => {
       const aliases = { ...b.aliases }
       if (value === f.alias) delete aliases[f.id]
@@ -79,12 +89,13 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
   function save() {
     setAliasError(null)
     setAdded(null)
-    update.mutate(buffer, {
-      onSuccess: (r) => { setBuffer(EMPTY); setAdded(buffer.words.length ? r.added : null) },
+    const sent = buffer
+    update.mutate(sent, {
+      onSuccess: (r) => { setBuffer((b) => withoutSent(b, sent)); setAdded(sent.words.length ? r.added : null) },
       onError: (err) => {
         // Сервер не говорит, к какой строке отказ; если правился один псевдоним — он и есть.
-        const ids = Object.keys(buffer.aliases)
-        if (err.status === 422 && ids.length === 1) setAliasError({ id: Number(ids[0]), message: err.message })
+        const ids = Object.keys(sent.aliases).map(Number)
+        if (err.status === 422 && ids.length === 1) setAliasError({ id: ids[0], value: aliasValues.current[ids[0]] ?? `#${ids[0]}`, message: err.message })
       },
     })
   }
@@ -92,7 +103,8 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
   const allOn = rows.length > 0 && rows.every(isChecked)
   const someOn = rows.some(isChecked)
   const total = page.data?.total ?? 0
-  const bannerError = update.error && !(aliasError && update.error.status === 422) ? update.error.message : null
+  // Баннер — всегда: строки с отказом может не быть на экране (другая группа, страница, поиск).
+  const bannerError = aliasError ? `Псевдоним для ${aliasError.value}: ${aliasError.message}` : update.error?.message ?? null
 
   if (summary.isLoading) return <div className="flex justify-center py-10"><Spinner /></div>
   if (summary.isError) return <Banner>{summary.error.message}</Banner>
@@ -104,7 +116,7 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
           <Search size={14} className="pointer-events-none absolute top-2 left-2.5 text-text-secondary" aria-hidden />
           <input className={cn(FIELD, 'pl-8')} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по значению" aria-label="Поиск по значению" />
         </label>
-        {!readOnly && <WordsForm word={word} setWord={setWord} onSubmit={addWord} words={buffer.words} remove={(w) => setBuffer((b) => ({ ...b, words: b.words.filter((x) => x !== w) }))} />}
+        {!readOnly && <WordsForm disabled={update.isPending} word={word} setWord={setWord} onSubmit={addWord} words={buffer.words} remove={(w) => setBuffer((b) => ({ ...b, words: b.words.filter((x) => x !== w) }))} />}
       </div>
 
       {groups.length === 0 ? (
@@ -207,7 +219,9 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
   )
 }
 
-function WordsForm({ word, setWord, onSubmit, words, remove }: {
+function WordsForm({ disabled, word, setWord, onSubmit, words, remove }: {
+  /** Пока идёт сохранение: слова пересканируют весь вход, новое слово ушло бы мимо этого PATCH. */
+  disabled: boolean
   word: string
   setWord: (w: string) => void
   onSubmit: (e: FormEvent) => void
@@ -216,10 +230,10 @@ function WordsForm({ word, setWord, onSubmit, words, remove }: {
 }) {
   return (
     <form onSubmit={onSubmit} className="flex flex-wrap items-center gap-2">
-      <input className={cn(FIELD, 'w-56')} value={word} onChange={(e) => setWord(e.target.value)} placeholder="Своё слово: фамилия, проект…" aria-label="Добавить слово" />
-      <Button type="submit" disabled={word.trim() === ''}><Plus size={14} aria-hidden />Добавить слово</Button>
+      <input className={cn(FIELD, 'w-56')} disabled={disabled} value={word} onChange={(e) => setWord(e.target.value)} placeholder="Своё слово: фамилия, проект…" aria-label="Добавить слово" />
+      <Button type="submit" disabled={disabled || word.trim() === ''}><Plus size={14} aria-hidden />Добавить слово</Button>
       {words.map((w) => (
-        <button key={w} type="button" onClick={() => remove(w)} title="Убрать" className="flex items-center gap-1 rounded border border-primary/60 px-1.5 py-0.5 text-[11px] text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+        <button key={w} type="button" disabled={disabled} onClick={() => remove(w)} title="Убрать" className="flex items-center gap-1 rounded border border-primary/60 px-1.5 py-0.5 text-[11px] text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
           {w} <X size={11} className="text-text-secondary" aria-hidden />
         </button>
       ))}

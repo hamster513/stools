@@ -7,12 +7,8 @@ import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
 import { Section } from '@/platform/collector/ui'
 import { downloadUrl, useCancelJob, useDeleteJob, useJobInfo, useScrubJob } from '../api/queries'
-import { JOB_KIND_LABELS, KIND_LABELS, KIND_ORDER, MB, STAGE_LABELS, STATUS_CLASS, STATUS_LABELS, type JobInfo, type ScrubJob } from '../api/types'
+import { formatSize as size, JOB_KIND_LABELS, KIND_LABELS, KIND_ORDER, STAGE_LABELS, STATUS_CLASS, STATUS_LABELS, type JobInfo, type ScrubJob } from '../api/types'
 import { FindingsPreview } from './FindingsPreview'
-
-function size(bytes: number): string {
-  return bytes >= MB ? `${(bytes / MB).toFixed(1)} МБ` : `${Math.max(1, Math.ceil(bytes / 1024))} КБ`
-}
 
 const LINK_BUTTON =
   'inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-sm font-medium text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
@@ -131,6 +127,7 @@ export function ScrubJobPage({ id }: { id: number }) {
 
       <div className="space-y-4">
         {del.error && <ErrorState message={del.error.message} />}
+        {cancel.error && <ErrorState message={cancel.error.message} />}
         {running && <Progress job={j} canCancel={write} onCancel={() => cancel.mutate(id)} />}
         {(j.status === 'failed' || j.status === 'cancelled') && (
           <ErrorState message={`${stopTitle(j)}${j.error ? `: ${j.error}` : ''}.${applyStopped && editable ? ' Поправьте находки и нажмите «Очистить» снова.' : ''}`} />
