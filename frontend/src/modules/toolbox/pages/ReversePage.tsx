@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, Copy, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -11,7 +11,7 @@ const AREA = cn(FIELD, 'min-h-[320px] resize-y font-mono text-xs')
 
 /**
  * Обратный перевод: ответ, полученный по очищенному тексту, возвращается к настоящим значениям.
- * Текст не сохраняется ни на сервере, ни в кэше запросов. Аудитору страница закрыта: результат
+ * Текст не сохраняется на сервере, а результат сбрасывается при уходе со страницы. Аудитору страница закрыта: результат
  * содержит настоящие значения, а запрос он всё равно получил бы с 403.
  */
 export function ReversePage() {
@@ -19,6 +19,14 @@ export function ReversePage() {
   const reverse = useReverse()
   const [input, setInput] = useState('')
   const [copied, setCopied] = useState<'ok' | 'fail' | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const { reset } = reverse
+
+  // При уходе со страницы: результат (настоящие значения) не остаётся в кэше мутаций, таймер не живёт без страницы.
+  useEffect(() => () => {
+    reset()
+    clearTimeout(timer.current)
+  }, [reset])
 
   if (!write) {
     return <div className="p-6"><EmptyState icon={Lock} title="Доступно аналитику и администратору" description="Результат перевода содержит настоящие значения — аудитору он не открывается." /></div>
@@ -40,7 +48,8 @@ export function ReversePage() {
       // Буфер недоступен (не защищённый контекст, запрет браузера) — текст остаётся выделяемым в поле.
       setCopied('fail')
     }
-    setTimeout(() => setCopied(null), 2500)
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setCopied(null), 2500)
   }
 
   return (

@@ -122,10 +122,12 @@ export function downloadUrl(id: number, which: Download): string {
   return `${BASE}/jobs/${id}/${which}`
 }
 
-/** Обратный перевод — действие, а не данные: ответ не кэшируется, текст с настоящими значениями нигде не остаётся. */
+/** Обратный перевод — действие, а не данные: результат с настоящими значениями держит сама мутация, поэтому страница сбрасывает её при уходе (`reset`), а `gcTime: 0` убирает запись из кэша. */
 export function useReverse() {
   return useMutation<ReverseResult, ApiRequestError, string>({
     mutationFn: (text) => api.post(`${BASE}/reverse`, { text }),
+    // Без наблюдателя запись с результатом сразу уходит из кэша мутаций (по умолчанию живёт 5 минут).
+    gcTime: 0,
   })
 }
 
