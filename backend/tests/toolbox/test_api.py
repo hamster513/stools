@@ -152,6 +152,26 @@ def test_full_path(seeded: Any, auth_client: TestClient, app_settings: Any) -> N
     assert not job_dir(app_settings.data_dir, job_id).exists()
 
 
+def test_stand_netbios_domain_in_dictionary_does_not_leak_hosts(db_session: Any, auth_client: TestClient) -> None:
+    # Со стенда: два домена AD, NetBIOS без точки; выгрузка — про третий домен corp.test (только авто).
+    db_session.add(AdDomain(sid="S-1-5-21-1000-2000-3000", dns_root="corp.local", netbios="CORP"))
+    db_session.add(AdDomain(sid="S-1-5-21-4000-5000-6000", dns_root="test.internal", netbios="TEST"))
+    db_session.commit()
+    log = "logon host01.corp.test (10.1.2.15) user CORP\\jdoe; see srv-db01.corp.test\nmail from jdoe@corp.test\n"
+    job_id = upload(auth_client, build_zip(log))
+    body = findings(auth_client, job_id)
+    assert {i["value"] for i in body["items"] if i["kind"] == "host"} == {"host01", "srv-db01"}
+    assert all(i["auto"] and not i["checked"] for i in body["items"] if i["kind"] == "host")
+    assert item(body, "domain", "corp.test")["checked"] is True  # подтверждён e-mail, как на стенде
+    checks = {str(i["id"]): True for i in body["items"] if i["kind"] in ("host", "domain")}
+    r = auth_client.patch(f"{API}/jobs/{job_id}/findings", json={"checks": checks})
+    assert r.status_code == 200, r.text
+    job = apply(auth_client, job_id)
+    assert job["status"] == "done", job
+    out = result_text(auth_client, job_id)
+    assert re.search(r"(?<![\w-])(host01|srv-db01|corp\.test)(?![\w-])", out, re.IGNORECASE) is None, out
+
+
 def test_text_input_is_scanned_at_once(seeded: Any, auth_client: TestClient) -> None:
     r = auth_client.post(f"{API}/jobs", data={"text": "logon host01.corp.test from 10.1.2.15"})
     assert r.status_code == 202, r.text

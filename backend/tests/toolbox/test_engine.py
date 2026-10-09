@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from api.modules.toolbox.core.scrub.engine import VerifyError, _placed, apply, reverse, scan, verify
-from api.modules.toolbox.core.scrub.types import KINDS, Finding, Match
+from api.modules.toolbox.core.scrub.types import KINDS, Ctx, Finding, Match
 from tests.toolbox.synthetic import CTX, TEXT, MemoryAliases
 
 #: Номер сборки, похожий на публичный адрес: найдётся, но без галочки.
@@ -22,6 +22,12 @@ REAL = (
     "10.1.2.15", "host01.", "corp.test", "corp\\", "jdoe", "S-1-5-21-111-222-333", "2001:4860::8888",
     "00:1a:2b:3c:4d:5e", "Qwerty123!", "am9lOnNlY3JldA==", "AKIAIOSFODNN7EXAMPLE", "ivanov", "acme",
 )
+
+
+#: Словарь со стенда: два домена AD, NetBIOS-имена без точки, хостов в словаре нет; corp.test — только авто.
+STAND = Ctx(domains=frozenset({"corp.local", "corp", "test.internal", "test"}), hosts=frozenset(), users=frozenset(),
+            words={}, subnets=[])
+STAND_TEXT = "logon host01.corp.test (10.1.2.15) user CORP\\jdoe; see srv-db01.corp.test\nmail from jdoe@corp.test\n"
 
 
 @pytest.fixture
@@ -35,9 +41,13 @@ def by_value(findings: list[Finding]) -> dict[tuple[str, str], Finding]:
     return {(f.kind, f.value_key): f for f in findings}
 
 
-def scrubbed(source: Path, target: Path, findings: list[Finding], aliases: MemoryAliases) -> str:
-    apply(source, target, findings, CTX, aliases)
+def scrubbed_with(source: Path, target: Path, findings: list[Finding], aliases: MemoryAliases, ctx: Ctx) -> str:
+    apply(source, target, findings, ctx, aliases)
     return target.read_text(encoding="utf-8")
+
+
+def scrubbed(source: Path, target: Path, findings: list[Finding], aliases: MemoryAliases) -> str:
+    return scrubbed_with(source, target, findings, aliases, CTX)
 
 
 def test_scan_finds_every_kind_with_counts_and_contexts(source: Path) -> None:
@@ -275,3 +285,41 @@ def test_placed_rejects_composite_not_at_edges() -> None:
     odd = Match(0, 18, "host", "srv-db01.corp.test", (("host", "db01"), ("domain", "corp.test")))
     with pytest.raises(AssertionError):
         _placed(odd, "srv-db01.corp.test")
+
+
+def test_stand_netbios_in_dictionary_does_not_leak_host_names(tmp_path: Path) -> None:
+    # Со стенда: NetBIOS «test» резал host01.corp.test на host01.corp + test; когда авто-домен corp.test
+    # включали, apply собирал host01.dom3.example — имя хоста утекало, а самопроверка молчала.
+    source = tmp_path / "log.txt"
+    source.write_text(STAND_TEXT, encoding="utf-8")
+    aliases = MemoryAliases(STAND)
+    found = by_value(scan(source, STAND, aliases).findings)
+    assert ("host", "host01.corp") not in found and ("domain", "test") not in found
+    assert found[("host", "host01")].auto and not found[("host", "host01")].checked
+    # corp.test подтверждён e-mail jdoe@corp.test — как на стенде, где он был включён.
+    assert found[("domain", "corp.test")].count == 3 and found[("domain", "corp.test")].checked
+    findings = [dataclasses.replace(f, checked=True) for f in found.values()]
+    out = scrubbed_with(source, tmp_path / "out.txt", findings, aliases, STAND)
+    assert not re.search(r"host01|srv-db01|corp\.test|jdoe", out, re.IGNORECASE), out
+    assert verify(tmp_path / "out.txt", findings, STAND) == []
+    leak = tmp_path / "leak.txt"
+    leak.write_text(out + "seen host01\n", encoding="utf-8")
+    assert [(f.kind, f.value_key) for f in verify(leak, findings, STAND)] == [("host", "host01")]
+
+
+def test_checked_auto_host_without_its_domain_is_replaced_alone(tmp_path: Path) -> None:
+    source = tmp_path / "log.txt"
+    source.write_text("logon host01.corp.test\n", encoding="utf-8")
+    aliases = MemoryAliases(STAND)
+    findings = [dataclasses.replace(f, checked=f.kind == "host") for f in scan(source, STAND, aliases).findings]
+    out = scrubbed_with(source, tmp_path / "out.txt", findings, aliases, STAND)
+    assert out == "logon host-0001.corp.test\n"
+    assert verify(tmp_path / "out.txt", findings, STAND) == []
+
+
+def test_verify_catches_short_name_of_checked_fqdn_host(tmp_path: Path) -> None:
+    # Хост из словаря — FQDN (asset.fqdn): голое короткое имя в результате — тот же хост, остаток.
+    findings = [Finding("host", "srv-db01.corp.test", "srv-db01.corp.test", "host-0001")]
+    leak = tmp_path / "leak.txt"
+    leak.write_text("node srv-db01 up, srv-db011 is another, host-0001 ok\n", encoding="utf-8")
+    assert [(f.kind, f.value_key, f.count) for f in verify(leak, findings, STAND)] == [("host", "srv-db01.corp.test", 1)]

@@ -169,14 +169,22 @@ def find_hosts(text: str, ctx: Ctx) -> Iterator[Match]:
             continue
         name = m.group(2)
         labels = name.split(".")
-        # Домен из словаря может стоять не сразу за первой меткой (msk1.sub.corp.test): всё, что
-        # левее самого длинного такого окончания, — имя хоста, иначе средняя метка уцелела бы.
-        for k in range(1, len(labels)):
+        if len(labels) < 3 or labels[-1].lower() in FILE_EXT:
+            continue
+        # Суффикс — самый длинный словарный домен с точкой (sub.corp.test раньше corp.test): всё, что левее,
+        # — имя хоста (msk1.sub), иначе средняя метка уцелела бы. NetBIOS-имя (без точки) суффиксом не бывает:
+        # на стенде NetBIOS «test» резал host01.corp.test на host01.corp + test, и host01 утекал. Без
+        # словарного домена суффикс — авто-домен из двух последних меток (как в find_domains), а составное
+        # целиком авто: обе части в предпросмотре без галочки, пока их не включат.
+        for k in range(1, len(labels) - 1):
             rest = ".".join(labels[k:])
             if rest.lower() in ctx.domains:
-                left = name[:len(name) - len(rest) - 1]
-                found.append(Match(m.start(2), m.end(2), "host", name, (("host", left), ("domain", rest))))
+                auto = False
                 break
+        else:
+            rest, auto = ".".join(labels[-2:]), True
+        left = name[:len(name) - len(rest) - 1]
+        found.append(Match(m.start(2), m.end(2), "host", name, (("host", left), ("domain", rest)), auto=auto))
     found.extend(_dictionary(text, ctx.hosts, "host"))
     yield from _by_start(found)
 

@@ -110,7 +110,7 @@ def scan(source: Path, ctx: Ctx, aliases: Aliases, *,
         for json_key, text in pieces:
             chunks += 1
             for m in detect(text, keyed(json_key)):
-                doubtful = m.auto or _versionlike(m, text, json_key)
+                version = _versionlike(m, text, json_key)
                 for kind, value in _parts(m):
                     key = (kind, value_key(kind, value))
                     finding = found.get(key)
@@ -121,9 +121,11 @@ def scan(source: Path, ctx: Ctx, aliases: Aliases, *,
                     finding.count += 1
                     if len(finding.contexts) < CONTEXTS:
                         finding.contexts.append(_context(text, m.start, m.end))
-                    if not m.auto:
+                    # Часть авто-составного, которая есть в словаре (msk1 из msk1.other.org), — не авто.
+                    auto = m.auto and not (kind in BARE and key[1] in getattr(ctx, BARE[kind]))
+                    if not auto:
                         manual.add(key)
-                    if not doubtful:
+                    if not (auto or version):
                         plain.add(key)
         if progress is not None:
             progress(len(entries), entry.path)
@@ -257,7 +259,7 @@ def _own_aliases(wanted: dict[tuple[str, str], Finding]) -> list[re.Pattern[str]
 
     Границы — общие на всю альтернацию, а не у каждой альтернативы: так regex ищет по общим префиксам
     (на 2000 псевдонимах — десятки секунд на мегабайт против сотых)."""
-    reals = {s.casefold() for f in wanted.values() for s in (f.value, f.value_key)}
+    reals = {s.casefold() for f in wanted.values() for s in _spellings(f)}
     own = [f for f in wanted.values() if f.alias.casefold() not in reals]
     patterns = []
     # Слово меняется и внутри других слов (password → password-0001), его псевдоним — тоже без границ.
@@ -269,12 +271,21 @@ def _own_aliases(wanted: dict[tuple[str, str], Finding]) -> list[re.Pattern[str]
     return patterns
 
 
+def _spellings(finding: Finding) -> tuple[str, ...]:
+    """Как включённое значение может встретиться дословно: как найдено, по ключу и — у хоста с точками —
+    коротким именем (srv-db01 из srv-db01.corp.test): если составное разрезано не там, голое короткое
+    имя — тот же хост и остаток."""
+    if finding.kind == "host" and "." in finding.value_key:
+        return finding.value, finding.value_key, finding.value_key.split(".", 1)[0]
+    return finding.value, finding.value_key
+
+
 def _literal(wanted: dict[tuple[str, str], Finding]) -> tuple[re.Pattern[str], dict[str, tuple[str, str]]] | None:
     """Все включённые значения дословно, без учёта регистра: детектор мог не узнать значение вне
     его привычного окружения (голая учётка без словаря, имя хоста внутри имени файла)."""
     keys: dict[str, tuple[str, str]] = {}
     for key, finding in wanted.items():
-        for spelling in (finding.value, finding.value_key):
+        for spelling in _spellings(finding):
             keys.setdefault(spelling.casefold(), key)
     if not keys:
         return None

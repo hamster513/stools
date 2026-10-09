@@ -134,7 +134,34 @@ def test_hosts_fqdn_with_dictionary_domain_deeper_in_name() -> None:
 
 def test_hosts_respect_word_boundaries_and_unconfirmed_domains() -> None:
     assert list(find_hosts("host011 xhost01", CTX)) == []
-    assert [m for m in find_hosts("web7.other.org", CTX) if m.parts] == []
+    # Домен не из словаря — авто-домен из двух последних меток, составное целиком авто (без галочки).
+    [fqdn] = find_hosts("web7.other.org", CTX)
+    assert fqdn.auto and fqdn.parts == (("host", "web7"), ("domain", "other.org"))
+    assert list(find_hosts("report.final.txt two.labels", CTX)) == []
+    # Словарный хост внутри авто-FQDN: составное есть, и словарное совпадение тоже.
+    found = list(find_hosts("msk1.other.org", CTX))
+    assert [(m.value, m.auto) for m in found] == [("msk1.other.org", True), ("msk1", False)]
+
+
+def test_hosts_netbios_is_never_fqdn_suffix_and_longest_dotted_domain_wins() -> None:
+    # Словарь со стенда: NetBIOS «test» без точки резал host01.corp.test на host01.corp + test — host01 утекал.
+    ctx = dataclasses.replace(CTX, domains=frozenset({"corp", "test", "corp.local"}), hosts=frozenset())
+    [fqdn] = find_hosts("logon host01.corp.test", ctx)
+    assert fqdn.parts == (("host", "host01"), ("domain", "corp.test")) and fqdn.auto
+    ctx = dataclasses.replace(CTX, domains=frozenset({"test.internal", "test"}), hosts=frozenset())
+    [fqdn] = find_hosts("dc1.test.internal", ctx)
+    assert fqdn.parts == (("host", "dc1"), ("domain", "test.internal")) and not fqdn.auto
+    # Несколько словарных доменов подходят суффиксом — побеждает самый длинный.
+    ctx = dataclasses.replace(CTX, domains=frozenset({"corp.test", "sub.corp.test"}))
+    [fqdn] = [m for m in find_hosts("msk1.sub.corp.test", ctx) if m.parts]
+    assert fqdn.parts == (("host", "msk1"), ("domain", "sub.corp.test")) and not fqdn.auto
+    # NetBIOS по-прежнему находится в учётке и голым; FQDN из двух меток с ним — не хост.
+    ctx = dataclasses.replace(CTX, domains=frozenset({"corp", "test"}))
+    assert [(m.value, m.parts) for m in find_users("TEST\\jdoe", ctx)] == [
+        ("TEST\\jdoe", (("domain", "TEST"), ("user", "jdoe"))),
+    ]
+    assert values(find_domains("domain TEST ok", ctx)) == ["TEST"]
+    assert [m for m in find_hosts("host01.test", ctx) if m.parts] == []
 
 
 def test_dictionary_dash_and_underscore_are_boundaries_longest_first() -> None:
@@ -256,14 +283,15 @@ def test_detect_on_synthetic_log() -> None:
         ("secret", "AKIAIOSFODNN7EXAMPLE"),
         ("word", "Ivanov"),
         ("word", "ACME"),
-        ("domain", "example.test"),
+        ("host", "mail.example.test"),
     }
     assert by_value == expected
     texts = [TEXT[m.start:m.end] for m in found]
     assert "host01" not in texts  # внутри host011 и внутри FQDN — не отдельное совпадение
     assert not any(t in ("fe80::1", "127.0.0.1", "12.3.0.0") for t in texts)
-    [auto] = [m for m in found if m.kind == "domain"]
-    assert auto.auto is True
+    # Хост с авто-доменом — составное авто: и mail, и example.test в предпросмотре без галочки.
+    [auto] = [m for m in found if m.auto]
+    assert auto.value == "mail.example.test" and auto.parts == (("host", "mail"), ("domain", "example.test"))
 
 
 def test_detect_secret_wins_inside_authorization() -> None:
