@@ -455,3 +455,74 @@ def test_cancel_during_pause_stops_before_next_request(auth_client: TestClient, 
     assert job["status"] == "cancelled", job
     # Первый запрос прошёл, отмена пришла в паузе — второго запроса нет.
     assert len(fake_conn.paged_sizes) == 1
+
+
+# ---- Расписание сбора --------------------------------------------------------
+
+
+def test_schedule_create_read_and_delete(auth_client: TestClient, db_session: Any) -> None:
+    from sqlalchemy import select
+
+    from api.platform.scheduler import PlatformSchedule
+
+    cid = _create(auth_client)
+    url = f"/api/ad/connections/{cid}/schedule"
+    assert auth_client.get(url).json() is None
+    assert auth_client.get("/api/ad/connections").json()[0]["schedule"] is None
+    r = auth_client.put(url, json={"interval_hours": 24, "window_from": "02:00", "window_to": "05:00", "enabled": True})
+    assert r.status_code == 200, r.text
+    assert (r.json()["interval_hours"], r.json()["window_from"], r.json()["enabled"]) == (24, "02:00", True)
+    db_session.expire_all()
+    sched = db_session.execute(select(PlatformSchedule)).scalar_one()
+    assert (sched.module, sched.kind, sched.target_id) == ("ad", "collect", cid)
+    assert auth_client.get(url).json()["id"] == sched.id
+    assert auth_client.get("/api/ad/connections").json()[0]["schedule"]["id"] == sched.id
+    assert auth_client.put(url, json={"interval_hours": 12, "window_from": "02:00", "window_to": None, "enabled": True}).status_code == 422
+    assert auth_client.put("/api/ad/connections/999999/schedule", json={"interval_hours": 12, "enabled": True}).status_code == 404
+    assert auth_client.delete(url).status_code == 204
+    db_session.expire_all()
+    assert db_session.execute(select(PlatformSchedule)).scalars().all() == []
+    # Удаление подключения уносит и его расписание.
+    assert auth_client.put(url, json={"interval_hours": 12, "enabled": True}).status_code == 200
+    assert auth_client.delete(f"/api/ad/connections/{cid}").status_code == 204
+    db_session.expire_all()
+    assert db_session.execute(select(PlatformSchedule)).scalars().all() == []
+
+
+def test_scheduler_tick_collects_via_fake_ldap(auth_client: TestClient, db_session: Any, monkeypatch: Any) -> None:
+    import datetime as dt
+
+    from sqlalchemy import select
+
+    from api import collector_routes
+    from api.collector_routes import SCHEDULE_STARTED_BY
+    from api.modules.ad.models import AdJob
+    from api.platform.scheduler import PlatformSchedule, tick
+
+    monkeypatch.setattr(collector_routes, "spawn", lambda fn: fn())
+    fake_conn = _FakeConn()
+    monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
+    monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: fake_conn.fake.search)
+    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
+    cid = _create(auth_client)
+    assert auth_client.put(f"/api/ad/connections/{cid}/schedule", json={"interval_hours": 1, "enabled": True}).status_code == 200
+    now = dt.datetime.now(dt.UTC) + dt.timedelta(hours=2)
+    started = tick(db_session, now)
+    assert len(started) == 1
+    db_session.expire_all()
+    job = db_session.get(AdJob, started[0])
+    assert job is not None and (job.kind, job.started_by) == ("collect", SCHEDULE_STARTED_BY)
+    assert job.status == "done", job.error
+    assert job.message.startswith("снапшот #")
+    snaps = auth_client.get("/api/ad/snapshots").json()
+    assert len(snaps) == 1 and snaps[0]["source"] == "ldap"
+    sched = db_session.execute(select(PlatformSchedule)).scalar_one()
+    assert sched.last_job_id == job.id and sched.next_run_at == now + dt.timedelta(hours=1)
+    # Без пароля расписание выключается на следующем срабатывании.
+    from api.modules.ad.models import AdConnection
+
+    db_session.get(AdConnection, cid).password = ""
+    db_session.commit()
+    assert tick(db_session, now + dt.timedelta(hours=2)) == []
+    db_session.expire_all()
+    assert db_session.execute(select(PlatformSchedule)).scalar_one().enabled is False

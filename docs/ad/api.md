@@ -139,14 +139,34 @@ GET  /snapshots/{id}/findings/{key}    элемент списка + description
 GET  /collector.ps1                    PowerShell-сборщик (attachment)
 GET  /connections                      [{id, title, host, port, use_ssl, verify_tls, username,
                                         password_set, base_dn, collect_sysvol, page_size,
-                                        pause_ms, domain_id}]
+                                        pause_ms, domain_id, schedule}]
 POST /connections  PUT /{id}  DELETE /{id}      пустой пароль в PUT — оставить прежний;
                                         page_size 50–1000 (500), pause_ms 0–10000 (500) —
                                         страница LDAP и пауза между запросами к контроллеру
-                                        (LDAP и SYSVOL); нет поля в PUT — оставить прежнее
+                                        (LDAP и SYSVOL); нет поля в PUT — оставить прежнее;
+                                        DELETE уносит и расписание сбора
 POST /connections/{id}/test            {ok, message}
 POST /connections/{id}/collect         {job_id} | 400 нет пароля | 409 идёт задача
+GET  /connections/{id}/schedule        ScheduleView | null (не задано)
+PUT  /connections/{id}/schedule        {interval_hours 1–720, window_from?, window_to?, enabled}
+                                        → ScheduleView | 422 окно не ЧЧ:ММ или задан один конец
+DELETE /connections/{id}/schedule      204 (и когда расписания нет) | 404 подключение не найдено
 ```
+
+**Расписание сбора.** У подключения одно расписание — строка `platform_schedule
+(ad, collect, id подключения)`; `schedule` в списке подключений и ответ
+`/schedule` — тот же `ScheduleView`, что у сетей Assets (`id, interval_hours,
+window_from, window_to, enabled, next_run_at, last_run_at, last_job_id, tz`;
+окно — в поясе `STOOLS_TZ`). Читать расписание могут все роли, менять —
+аналитик и администратор, как и само подключение. Планировщик платформы
+раз в минуту запускает ту же задачу `collect`, что и кнопка «собрать», со
+`started_by = "расписание"` и адресом контроллера в `message`; в списке
+задач она выглядит как обычный сбор. Три отказа обработчика: подключения
+больше нет — расписание удаляется; у подключения нет логина или пароля —
+расписание выключается (`enabled=false`, в настройках «выключено»; включат,
+введя пароль); идёт задача модуля (`import_file`, `collect`, `reanalyze`)
+или заняты оба слота расписания — запуск откладывается на следующий тик,
+а не на интервал.
 
 ## Настройки и задачи
 

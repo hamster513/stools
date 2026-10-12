@@ -16,8 +16,8 @@ from api.deps import get_current_user
 from api.hosts import validate_host
 from api.modules.ad.models import AdConnection
 from api.modules.assets.models import AssetDns
-from api.modules.assets.routers.scan import ScheduleIn, ScheduleView, schedule_view
 from api.modules.assets.services.dns import DnsBusy, DnsDisabled, start_dns
+from api.platform.schedule_views import ScheduleIn, ScheduleView, schedule_view
 from api.platform.scheduler import PlatformSchedule, delete_schedule, upsert_schedule
 
 router = APIRouter(prefix="/dns", tags=["assets"])

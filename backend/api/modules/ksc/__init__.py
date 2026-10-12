@@ -7,11 +7,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from api.collector_routes import make_collect_schedule_handler
 from api.jobs import make_jobs_router
 from api.modules.ksc import models as models  # таблицы должны попасть в metadata
 from api.modules.ksc.core import extractors as extractors  # регистрирует извлекатели
 from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
-from api.modules.ksc.models import KscJob
+from api.modules.ksc.models import KscConnection, KscJob
 from api.modules.ksc.routers import (
     changes,
     collector,
@@ -27,6 +28,7 @@ from api.modules.ksc.routers import (
     settings,
     snapshots,
 )
+from api.platform import scheduler
 from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/ksc")
@@ -38,5 +40,9 @@ for sub in (
     router.include_router(sub)
 
 register_adapter(FINDINGS_ADAPTER)
+# Сбор по расписанию: та же задача `collect`, что у кнопки «собрать», от имени «расписание».
+scheduler.register_schedule_kind("ksc", "collect", make_collect_schedule_handler(
+    module="ksc", connection_model=KscConnection, job_model=KscJob, collect=connections.collect_snapshot_job,
+))
 
 __all__ = ["router"]

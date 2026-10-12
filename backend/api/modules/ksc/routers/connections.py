@@ -1,4 +1,4 @@
-"""Профили онлайн-подключения к KSC: CRUD, проверка, сбор."""
+"""Профили онлайн-подключения к KSC: CRUD, проверка, сбор, расписание сбора."""
 from __future__ import annotations
 
 from typing import Any
@@ -8,16 +8,28 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.collector_routes import add_connection, edit_connection, run_connection_test, start_collect
+from api.collector_routes import (
+    add_connection,
+    add_schedule_routes,
+    collect_schedule,
+    collect_schedules,
+    delete_collect_schedule,
+    edit_connection,
+    run_connection_test,
+    start_collect,
+)
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import validate_host
-from api.modules.ksc.models import KscConnection, KscJob
+from api.jobs import JobHandle
+from api.modules.ksc.models import KscConnection, KscJob, KscSnapshot
 from api.modules.ksc.routers.snapshots import JobStarted
 from api.modules.ksc.services import connections as svc
 from api.modules.ksc.services.settings import load_config
-from api.settings import Settings, get_settings
+from api.platform.schedule_views import ScheduleView, schedule_view
+from api.platform.scheduler import PlatformSchedule
+from api.settings import get_settings
 
 router = APIRouter(prefix="/connections", tags=["ksc"])
 
@@ -57,13 +69,15 @@ class ConnectionView(BaseModel):
     domain: str
     server_id: int | None = None
     skip_policy_contents: bool
+    #: Расписание сбора по этому подключению; None — не задано.
+    schedule: ScheduleView | None = None
 
 
-def _view(c: KscConnection) -> ConnectionView:
+def _view(c: KscConnection, sched: PlatformSchedule | None) -> ConnectionView:
     return ConnectionView(
         id=c.id, title=c.title, host=c.host, port=c.port, username=c.username, password_set=bool(c.password),
         verify_tls=c.verify_tls, internal=c.internal, domain=c.domain, server_id=c.server_id,
-        skip_policy_contents=c.skip_policy_contents,
+        skip_policy_contents=c.skip_policy_contents, schedule=schedule_view(sched) if sched is not None else None,
     )
 
 
@@ -74,14 +88,21 @@ def _get(db: Session, connection_id: int) -> KscConnection:
     return c
 
 
+def collect_snapshot_job(session: Session, handle: JobHandle, conn: KscConnection) -> KscSnapshot:
+    """Сбор по подключению — один и тот же у кнопки «собрать» и у расписания."""
+    return svc.collect_snapshot(session, handle, conn, load_config(session), get_settings().data_dir)
+
+
 @router.get("", response_model=list[ConnectionView])
 def list_connections(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[ConnectionView]:
-    return [_view(c) for c in db.execute(select(KscConnection).order_by(KscConnection.id)).scalars()]
+    rows = list(db.execute(select(KscConnection).order_by(KscConnection.id)).scalars())
+    schedules = collect_schedules(db, "ksc", [c.id for c in rows])
+    return [_view(c, schedules.get(c.id)) for c in rows]
 
 
 @router.post("", response_model=ConnectionView, status_code=status.HTTP_201_CREATED)
 def create_connection(payload: ConnectionIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ConnectionView:
-    return _view(add_connection(db, KscConnection, payload))
+    return _view(add_connection(db, KscConnection, payload), None)
 
 
 @router.put("/{connection_id}", response_model=ConnectionView)
@@ -90,12 +111,14 @@ def update_connection(
 ) -> ConnectionView:
     c = _get(db, connection_id)
     edit_connection(db, c, payload, request, ADDRESS_FIELDS)
-    return _view(c)
+    return _view(c, collect_schedule(db, "ksc", c.id))
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_connection(connection_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> None:
-    db.delete(_get(db, connection_id))
+    c = _get(db, connection_id)
+    delete_collect_schedule(db, "ksc", c.id)
+    db.delete(c)
     db.commit()
 
 
@@ -110,13 +133,11 @@ def collect(
     connection_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
     c = _get(db, connection_id)
-    data_dir = settings.data_dir
-    job_id = start_collect(
-        background_tasks, db, user, c, module="ksc", job_model=KscJob,
-        collect=lambda session, handle, conn: svc.collect_snapshot(session, handle, conn, load_config(session), data_dir),
-    )
+    job_id = start_collect(background_tasks, db, user, c, module="ksc", job_model=KscJob, collect=collect_snapshot_job)
     return JobStarted(job_id=job_id)
+
+
+add_schedule_routes(router, module="ksc", connection_model=KscConnection)

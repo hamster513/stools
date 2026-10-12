@@ -29,7 +29,6 @@ from api.modules.assets.core.discrepancies import CODES
 from api.modules.assets.findings_adapter import MODULE, SCOPE
 from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import AssetJob
-from api.modules.assets.routers.scan import ScheduleIn, ScheduleView, schedule_view
 from api.modules.assets.services.assets import (
     ANY_CODE,
     CRITICALITY,
@@ -56,6 +55,7 @@ from api.modules.assets.services.sync import (
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUSES, RoleRequired, TransitionError
 from api.platform.findings.router import ChangeBody
+from api.platform.schedule_views import ScheduleIn, ScheduleView, schedule_view
 from api.platform.scheduler import PlatformSchedule, delete_schedule, upsert_schedule
 
 router = APIRouter(tags=["assets"])

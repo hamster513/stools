@@ -1,4 +1,4 @@
-"""Профили онлайн-подключения: CRUD, проверка, сбор."""
+"""Профили онлайн-подключения: CRUD, проверка, сбор, расписание сбора."""
 from __future__ import annotations
 
 from typing import Any
@@ -8,17 +8,29 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.collector_routes import add_connection, edit_connection, run_connection_test, start_collect
+from api.collector_routes import (
+    add_connection,
+    add_schedule_routes,
+    collect_schedule,
+    collect_schedules,
+    delete_collect_schedule,
+    edit_connection,
+    run_connection_test,
+    start_collect,
+)
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import validate_host
+from api.jobs import JobHandle
 from api.modules.ad.core.ldap_collector import PAGE_SIZE_DEFAULT, PAUSE_MS_DEFAULT
-from api.modules.ad.models import AdConnection, AdJob
+from api.modules.ad.models import AdConnection, AdJob, AdSnapshot
 from api.modules.ad.routers.snapshots import JobStarted
 from api.modules.ad.services import connections as svc
 from api.modules.ad.services.settings import load_config
-from api.settings import Settings, get_settings
+from api.platform.schedule_views import ScheduleView, schedule_view
+from api.platform.scheduler import PlatformSchedule
+from api.settings import get_settings
 
 router = APIRouter(prefix="/connections", tags=["ad"])
 
@@ -87,13 +99,16 @@ class ConnectionView(BaseModel):
     page_size: int
     pause_ms: int
     domain_id: int | None = None
+    #: Расписание сбора по этому подключению; None — не задано.
+    schedule: ScheduleView | None = None
 
 
-def _view(c: AdConnection) -> ConnectionView:
+def _view(c: AdConnection, sched: PlatformSchedule | None) -> ConnectionView:
     return ConnectionView(
         id=c.id, title=c.title, host=c.host, port=c.port, use_ssl=c.use_ssl, verify_tls=c.verify_tls,
         username=c.username, password_set=bool(c.password), base_dn=c.base_dn, collect_sysvol=c.collect_sysvol,
         page_size=c.page_size, pause_ms=c.pause_ms, domain_id=c.domain_id,
+        schedule=schedule_view(sched) if sched is not None else None,
     )
 
 
@@ -104,14 +119,21 @@ def _get(db: Session, connection_id: int) -> AdConnection:
     return c
 
 
+def collect_snapshot_job(session: Session, handle: JobHandle, conn: AdConnection) -> AdSnapshot:
+    """Сбор по подключению — один и тот же у кнопки «собрать» и у расписания."""
+    return svc.collect_snapshot(session, handle, conn, load_config(session), get_settings().data_dir)
+
+
 @router.get("", response_model=list[ConnectionView])
 def list_connections(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[ConnectionView]:
-    return [_view(c) for c in db.execute(select(AdConnection).order_by(AdConnection.id)).scalars()]
+    rows = list(db.execute(select(AdConnection).order_by(AdConnection.id)).scalars())
+    schedules = collect_schedules(db, "ad", [c.id for c in rows])
+    return [_view(c, schedules.get(c.id)) for c in rows]
 
 
 @router.post("", response_model=ConnectionView, status_code=status.HTTP_201_CREATED)
 def create_connection(payload: ConnectionIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ConnectionView:
-    return _view(add_connection(db, AdConnection, payload))
+    return _view(add_connection(db, AdConnection, payload), None)
 
 
 @router.put("/{connection_id}", response_model=ConnectionView)
@@ -120,12 +142,14 @@ def update_connection(
 ) -> ConnectionView:
     c = _get(db, connection_id)
     edit_connection(db, c, payload, request, ADDRESS_FIELDS)
-    return _view(c)
+    return _view(c, collect_schedule(db, "ad", c.id))
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_connection(connection_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> None:
-    db.delete(_get(db, connection_id))
+    c = _get(db, connection_id)
+    delete_collect_schedule(db, "ad", c.id)
+    db.delete(c)
     db.commit()
 
 
@@ -140,13 +164,11 @@ def collect(
     connection_id: int,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
     c = _get(db, connection_id)
-    data_dir = settings.data_dir
-    job_id = start_collect(
-        background_tasks, db, user, c, module="ad", job_model=AdJob,
-        collect=lambda session, handle, conn: svc.collect_snapshot(session, handle, conn, load_config(session), data_dir),
-    )
+    job_id = start_collect(background_tasks, db, user, c, module="ad", job_model=AdJob, collect=collect_snapshot_job)
     return JobStarted(job_id=job_id)
+
+
+add_schedule_routes(router, module="ad", connection_model=AdConnection)

@@ -1,10 +1,8 @@
 """Скан сети вручную и расписание сканов сети."""
 from __future__ import annotations
 
-import datetime as dt
-
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
@@ -13,8 +11,8 @@ from api.deps import get_current_user
 from api.modules.assets.core import scanner
 from api.modules.assets.models import Network
 from api.modules.assets.services.scan import ScanBusy, ScanDisabled, start_scan
+from api.platform.schedule_views import ScheduleIn, ScheduleView, schedule_view
 from api.platform.scheduler import PlatformSchedule, delete_schedule, upsert_schedule
-from api.settings import get_settings
 
 router = APIRouter(prefix="/networks", tags=["assets"])
 
@@ -25,39 +23,11 @@ class ScanStarted(BaseModel):
     icmp: bool
 
 
-class ScheduleIn(BaseModel):
-    interval_hours: int = Field(ge=1, le=720)
-    #: HH:MM в поясе STOOLS_TZ; оба пустые — без окна.
-    window_from: str | None = None
-    window_to: str | None = None
-    enabled: bool = True
-
-
-class ScheduleView(BaseModel):
-    id: int
-    interval_hours: int
-    window_from: str | None
-    window_to: str | None
-    enabled: bool
-    next_run_at: dt.datetime | None
-    last_run_at: dt.datetime | None
-    last_job_id: int | None
-    #: Пояс окна — STOOLS_TZ.
-    tz: str
-
-
 def _network(db: Session, network_id: int) -> Network:
     network = db.get(Network, network_id)
     if network is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="сеть не найдена")
     return network
-
-
-def schedule_view(s: PlatformSchedule) -> ScheduleView:
-    return ScheduleView(
-        id=s.id, interval_hours=s.interval_hours, window_from=s.window_from, window_to=s.window_to, enabled=s.enabled,
-        next_run_at=s.next_run_at, last_run_at=s.last_run_at, last_job_id=s.last_job_id, tz=get_settings().tz,
-    )
 
 
 @router.post("/{network_id}/scan", response_model=ScanStarted, status_code=status.HTTP_202_ACCEPTED)

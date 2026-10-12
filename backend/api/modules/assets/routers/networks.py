@@ -17,7 +17,6 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.assets.models import DEFAULT_PORTS, Network
-from api.modules.assets.routers.scan import ScheduleView, schedule_view
 from api.modules.assets.services.networks import (
     NetworkConflict,
     NetworkNotFound,
@@ -31,6 +30,7 @@ from api.modules.assets.services.networks import (
     normalize_exclude,
     update_network,
 )
+from api.platform.schedule_views import ScheduleView, schedule_view
 from api.platform.scheduler import PlatformSchedule
 
 router = APIRouter(prefix="/networks", tags=["assets"])

@@ -8,12 +8,23 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import threading
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from fastapi import BackgroundTasks, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel
 from sqlalchemy import String, select
 from sqlalchemy.orm import Session
@@ -21,17 +32,39 @@ from sqlalchemy.orm import Session
 from api.audit import changes_summary
 from api.collector_findings import SnapshotFindingAdapter, first_seen_map, last_known
 from api.crypto import encrypt, reseal
+from api.db.base import get_db
 from api.db.models import AppUser
+from api.deps import get_current_user
 from api.hosts import take_slot
 from api.jobs import UPLOAD_INTERRUPTED, JobHandle, active_job, fail_job, run_job, start_job
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
+from api.platform.schedule_views import ScheduleIn, ScheduleView, schedule_view
+from api.platform.scheduler import Handler, PlatformSchedule, delete_schedule, upsert_schedule
+
+log = logging.getLogger(__name__)
 
 #: Задачи, при которых нельзя начать ещё одну: все пишут в те же снапшоты.
 BUSY_KINDS = ("import_file", "collect", "reanalyze")
 SNAPSHOT_NOT_FOUND = "снапшот не найден"
+CONNECTION_NOT_FOUND = "подключение не найдено"
 REENTER_SECRET_TEXT = "при смене адреса или учётной записи пароль нужно ввести заново"
+#: Сбор по расписанию: кто записан в `started_by` задачи и чей слот `take_slot` она занимает
+#: (0 — не id человека, у людей id с 1).
+SCHEDULE_STARTED_BY = "расписание"
+SCHEDULE_USER_ID = 0
+#: Вид расписания сбора в `platform_schedule`; цель — подключение модуля.
+SCHEDULE_KIND = "collect"
+
+
+def _in_thread(fn: Callable[[], None]) -> None:
+    threading.Thread(target=fn, name="stools-collect", daemon=True).start()
+
+
+#: Как сбор по расписанию уходит из потока планировщика: тик не ждёт сбора.
+#: Тесты подменяют на вызов на месте (поток пережил бы тест).
+spawn: Callable[[Callable[[], None]], None] = _in_thread
 
 
 class Comparison(Protocol):
@@ -100,20 +133,16 @@ def run_connection_test(
         slot.release()
 
 
-def start_collect(
-    background_tasks: BackgroundTasks, db: Session, user: AppUser, c: Any, *,
-    module: str, job_model: type[Any], collect: Callable[[Session, JobHandle, Any], Any],
+def _launch_collect(
+    db: Session, c: Any, *, module: str, job_model: type[Any], collect: Callable[[Session, JobHandle, Any], Any],
+    started_by: str, user_id: int, run: Callable[[Callable[[], None]], None],
 ) -> int:
-    """Сбор по подключению `c` в фоне; `collect(session, handle, conn)` возвращает снапшот."""
-    if not c.username or not c.password:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="у подключения нет логина или пароля")
+    """Задача `collect` по подключению `c`: слот `take_slot(module, user_id)` (429, если оба заняты)
+    держится до конца задачи, `run` уводит её в фон. `collect(session, handle, conn)` возвращает снапшот."""
     connection_model, connection_id = type(c), c.id
-    running = active_job(db, job_model, BUSY_KINDS)
-    if running is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, дождитесь её")
-    slot = take_slot(module, user.id)
+    slot = take_slot(module, user_id)
     try:
-        job_id = start_job(db, job_model, "collect", user.login, message=c.host)
+        job_id = start_job(db, job_model, "collect", started_by, message=c.host)
     except Exception:
         slot.release()
         raise
@@ -131,8 +160,127 @@ def start_collect(
         finally:
             slot.release()
 
-    background_tasks.add_task(guarded)
+    run(guarded)
     return job_id
+
+
+def start_collect(
+    background_tasks: BackgroundTasks, db: Session, user: AppUser, c: Any, *,
+    module: str, job_model: type[Any], collect: Callable[[Session, JobHandle, Any], Any],
+) -> int:
+    """Сбор по подключению `c` в фоне запроса; отказы — HTTP-исключениями."""
+    if not c.username or not c.password:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="у подключения нет логина или пароля")
+    running = active_job(db, job_model, BUSY_KINDS)
+    if running is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, дождитесь её")
+    return _launch_collect(
+        db, c, module=module, job_model=job_model, collect=collect,
+        started_by=user.login, user_id=user.id, run=background_tasks.add_task,
+    )
+
+
+def make_collect_schedule_handler(
+    *, module: str, connection_model: type[Any], job_model: type[Any], collect: Callable[[Session, JobHandle, Any], Any],
+) -> Handler:
+    """Обработчик планировщика `<module>/collect`: то же, что `start_collect`, но без HTTP-исключений.
+    Подключения по `target_id` нет — расписание удаляется; у подключения нет логина или пароля —
+    расписание выключается (в настройках видно «выключено»; включат, введя пароль); идёт задача
+    модуля или заняты оба слота расписания — None, повтор на следующем тике."""
+
+    def handler(db: Session, schedule: PlatformSchedule) -> int | None:
+        c = db.get(connection_model, schedule.target_id)
+        if c is None:
+            log.warning("расписание %s (%s/collect): подключения #%s нет — расписание удалено",
+                        schedule.id, module, schedule.target_id)
+            delete_schedule(db, schedule.id)
+            return None
+        if not c.username or not c.password:
+            log.warning("расписание %s (%s/collect): у подключения #%s нет логина или пароля — расписание выключено",
+                        schedule.id, module, c.id)
+            # Тик после None сам ставит next_run_at через период; выключенное расписание он не выбирает,
+            # а при включении upsert_schedule пересчитает срок.
+            schedule.enabled = False
+            schedule.next_run_at = None
+            return None
+        if active_job(db, job_model, BUSY_KINDS) is not None:
+            return None
+        try:
+            return _launch_collect(
+                db, c, module=module, job_model=job_model, collect=collect,
+                started_by=SCHEDULE_STARTED_BY, user_id=SCHEDULE_USER_ID, run=spawn,
+            )
+        except HTTPException as exc:
+            # 429 от take_slot: оба слота расписания заняты прежними сборами.
+            log.info("расписание %s (%s/collect): %s — повтор на следующем тике", schedule.id, module, exc.detail)
+            return None
+
+    return handler
+
+
+# ---- Расписание сбора у подключения ---------------------------------------------
+
+
+def collect_schedules(db: Session, module: str, connection_ids: Iterable[int]) -> dict[int, PlatformSchedule]:
+    """Расписания сбора подключений модуля: id подключения → строка расписания."""
+    ids = list(connection_ids)
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(PlatformSchedule).where(
+            PlatformSchedule.module == module, PlatformSchedule.kind == SCHEDULE_KIND, PlatformSchedule.target_id.in_(ids),
+        )
+    ).scalars()
+    return {s.target_id: s for s in rows}
+
+
+def collect_schedule(db: Session, module: str, connection_id: int) -> PlatformSchedule | None:
+    return collect_schedules(db, module, [connection_id]).get(connection_id)
+
+
+def delete_collect_schedule(db: Session, module: str, connection_id: int) -> None:
+    """Убрать расписание сбора подключения, если оно есть; фиксирует вызывающий."""
+    sched = collect_schedule(db, module, connection_id)
+    if sched is not None:
+        delete_schedule(db, sched.id)
+
+
+def add_schedule_routes(router: APIRouter, *, module: str, connection_model: type[Any]) -> None:
+    """`GET|PUT|DELETE /{connection_id}/schedule` у роутера подключений модуля. Читать могут все,
+    менять — аналитик и администратор: как и сами подключения, по общему правилу `api/rbac.py`
+    (запись — от аналитика), отдельной зависимости не нужно."""
+
+    def connection(db: Session, connection_id: int) -> Any:
+        c = db.get(connection_model, connection_id)
+        if c is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=CONNECTION_NOT_FOUND)
+        return c
+
+    @router.get("/{connection_id}/schedule", response_model=ScheduleView | None)
+    def get_schedule(connection_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ScheduleView | None:
+        sched = collect_schedule(db, module, connection(db, connection_id).id)
+        return schedule_view(sched) if sched is not None else None
+
+    @router.put("/{connection_id}/schedule", response_model=ScheduleView)
+    def put_schedule(
+        connection_id: int, payload: ScheduleIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+    ) -> ScheduleView:
+        c = connection(db, connection_id)
+        try:
+            sched = upsert_schedule(
+                db, module=module, kind=SCHEDULE_KIND, target_id=c.id, interval_hours=payload.interval_hours,
+                window_from=payload.window_from or None, window_to=payload.window_to or None, enabled=payload.enabled,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+        db.commit()
+        return schedule_view(sched)
+
+    @router.delete("/{connection_id}/schedule", status_code=status.HTTP_204_NO_CONTENT)
+    def remove_schedule(connection_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> Response:
+        delete_collect_schedule(db, module, connection(db, connection_id).id)
+        db.commit()
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 # ---- Снапшоты -------------------------------------------------------------
