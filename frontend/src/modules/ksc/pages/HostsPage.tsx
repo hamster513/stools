@@ -243,8 +243,8 @@ function HostDrawerBody({ hostId, snapshotId, serverId, onClose }: { hostId: str
       <DrawerTabs tabs={DRAWER_TABS} current={tab} onSelect={setTab} label="Разделы хоста" />
       {table ? (
         <div className="min-h-0 flex-1">
-          {tab === 'exclusions' && <ExclusionsTable snapshotId={snapshotId} serverId={serverId} hostId={hostId} />}
-          {tab === 'netrules' && <NetRulesTable snapshotId={snapshotId} serverId={serverId} hostId={hostId} />}
+          {tab === 'exclusions' && <ExclusionsTable snapshotId={snapshotId} serverId={serverId} hostId={hostId} policyIds={h?.policies.map((p) => p.id)} />}
+          {tab === 'netrules' && <NetRulesTable snapshotId={snapshotId} serverId={serverId} hostId={hostId} policyIds={h?.policies.map((p) => p.id)} />}
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">

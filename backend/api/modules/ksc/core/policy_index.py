@@ -84,7 +84,7 @@ def scope_rows(idx: ExportIndex) -> list[ScopeRow]:
     return out
 
 
-def _flag(value: Any) -> bool:
+def profile_enabled(value: Any) -> bool:
     """Признак включённости профиля: в выгрузке он приходит и голым (`true`), и в контейнере
     `{"KLPRSS_Val": false, "KLPRSS_Mnd": …}` — у контейнера берётся значение, а не сам словарь."""
     value = unwrap(value)
@@ -106,7 +106,7 @@ def profile_rows(export: KscExport) -> list[ProfileRow] | None:
             attrs = pr.get("attrs") or {}
             sections = pr.get("sections") or {}
             out.append(ProfileRow(
-                policy_id=_int(key), name=_str(pr.get("name")), enabled=_flag(attrs.get("KLSSPOL_PRF_ENABLED", True)), priority=priority,
+                policy_id=_int(key), name=_str(pr.get("name")), enabled=profile_enabled(attrs.get("KLSSPOL_PRF_ENABLED", True)), priority=priority,
                 condition=attrs, settings=len(walk_settings(sections)), errors=[str(e) for e in pr.get("errors") or []], sections=sections,
             ))
     return out

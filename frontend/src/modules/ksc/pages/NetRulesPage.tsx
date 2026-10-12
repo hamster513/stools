@@ -64,7 +64,7 @@ function Rows({ items, inPolicy, serverId, openRowId, onOpen, maybe }: { items: 
  * `partial` — её содержимое собрано не полностью. С `hostId` — действующие на хост (его политик и активных на нём профилей),
  * правила профилей из `undetermined` помечены «возможно»; заметки — как в разделе сервера.
  */
-export function NetRulesTable({ snapshotId, serverId, policyId, partial = false, hostId }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean; hostId?: string }) {
+export function NetRulesTable({ snapshotId, serverId, policyId, partial = false, hostId, policyIds }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean; hostId?: string; policyIds?: number[] }) {
   const inPolicy = policyId !== undefined
   const [filters, setFilters] = useState<Filters>({})
   const [openRowId, setOpenRowId] = useState<number | null>(null)
@@ -92,13 +92,13 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить сетевые правила' : null
   const undescribed = first?.undescribed ?? []
-  // Пометка о неполных политиках считается сервером по всему снапшоту; в панели хоста — только политики с правилами на хост.
+  // Пометка о неполных политиках считается сервером по всему снапшоту; в панели хоста — только политики хоста (`policyIds` из его карточки).
   const partialIds = useMemo(() => {
     const all = first?.partial ?? []
     if (hostId === undefined) return all
-    const own = new Set(Object.keys(first?.facets?.policy ?? {}))
-    return all.filter((id) => own.has(String(id)))
-  }, [first, hostId])
+    const own = new Set(policyIds ?? [])
+    return all.filter((id) => own.has(id))
+  }, [first, hostId, policyIds])
   const undetermined = first?.undetermined ?? []
   // Ключ `(policy_id, profile)`: имя политики не уникально.
   const maybe = useMemo(() => new Set((first?.undetermined ?? []).map((u) => `${u.policy_id}\u0000${u.profile}`)), [first])

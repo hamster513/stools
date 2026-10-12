@@ -7,14 +7,14 @@ from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.exclusion_risks import RISKS, exclusion_risks
 from api.modules.ksc.core.export import ExportIndex, _int, _str, unwrap
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding, finalize
-from api.modules.ksc.core.policy_index import policy_objects
+from api.modules.ksc.core.policy_index import policy_objects, profile_enabled
 from api.modules.ksc.core.policy_model import Exclusion, exclusion_key
 
 
 def _disabled_profiles(idx: ExportIndex, policy_id: str) -> set[str]:
     """Имена выключенных профилей политики (`KLSSPOL_PRF_ENABLED`, как в `policy_index.profile_rows`)."""
     entry = (idx.export.policy_profiles or {}).get(policy_id) or {}
-    return {_str(pr.get("name")) for pr in entry.get("profiles") or [] if not bool(unwrap((pr.get("attrs") or {}).get("KLSSPOL_PRF_ENABLED", True)))}
+    return {_str(pr.get("name")) for pr in entry.get("profiles") or [] if not profile_enabled((pr.get("attrs") or {}).get("KLSSPOL_PRF_ENABLED", True))}
 
 
 def check_policy_exclusion_risky(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:

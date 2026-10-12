@@ -224,6 +224,10 @@ def test_key_stable_and_profile_has_own_key() -> None:
 def test_disabled_profile_has_no_findings() -> None:
     raw = _with_profiles(kes11_export(), [], [exclusion("E:\\")])
     assert _run(raw) == []
+    # Признак включённости в контейнере KLPRSS_Val (как в настоящей выгрузке): выключенный профиль по-прежнему без находок.
+    profiles = raw["policy_profiles"]["1"]["profiles"]
+    profiles[1] = {**profiles[1], "attrs": {**profiles[1]["attrs"], "KLSSPOL_PRF_ENABLED": {"KLPRSS_Mnd": False, "KLPRSS_Val": False}}}
+    assert _run(raw) == []
 
 
 def test_duplicate_key_is_one_finding_with_union() -> None:
