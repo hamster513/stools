@@ -2,6 +2,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
+import { makeConnectionScheduleHooks } from '@/platform/collector/queries'
 import type {
   ChangesQuery,
   ChangesResponse,
@@ -337,6 +338,13 @@ export function useCollect() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ksc-jobs'] }),
   })
 }
+
+/** Расписание сбора подключения; после изменений список подключений (с его `schedule`) читается заново. */
+export const {
+  useSchedule: useConnectionSchedule,
+  useSaveSchedule: useSaveConnectionSchedule,
+  useDeleteSchedule: useDeleteConnectionSchedule,
+} = makeConnectionScheduleHooks('/api/ksc', 'ksc-connections')
 
 export function useKscSettings() {
   return useQuery<SettingsView, ApiRequestError>({ queryKey: ['ksc-settings'], queryFn: () => api.get('/api/ksc/settings') })

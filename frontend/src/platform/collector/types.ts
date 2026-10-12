@@ -165,6 +165,26 @@ export interface FindingFilters extends FindingFacetFilters {
   delta?: FindingDelta
 }
 
+/** Расписание задачи планировщика (скан сети, DNS, синхронизация, сбор по подключению); окно — местное время пояса STOOLS_TZ (`tz`). */
+export interface ScheduleView {
+  id: number
+  interval_hours: number
+  window_from: string | null
+  window_to: string | null
+  enabled: boolean
+  next_run_at: string | null
+  last_run_at: string | null
+  last_job_id: number | null
+  tz: string
+}
+
+export interface ScheduleIn {
+  interval_hours: number
+  window_from: string | null
+  window_to: string | null
+  enabled: boolean
+}
+
 export type JobStatus = 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface Job {

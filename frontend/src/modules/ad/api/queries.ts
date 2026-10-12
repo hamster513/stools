@@ -2,6 +2,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
+import { makeConnectionScheduleHooks } from '@/platform/collector/queries'
 import type {
   AdConfig,
   CaData,
@@ -173,6 +174,13 @@ export function useCollect() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ad-jobs'] }),
   })
 }
+
+/** Расписание сбора подключения; после изменений список подключений (с его `schedule`) читается заново. */
+export const {
+  useSchedule: useConnectionSchedule,
+  useSaveSchedule: useSaveConnectionSchedule,
+  useDeleteSchedule: useDeleteConnectionSchedule,
+} = makeConnectionScheduleHooks('/api/ad', 'ad-connections')
 
 export function useJobs() {
   return useQuery<Job[], ApiRequestError>({

@@ -5,11 +5,12 @@ import type {
   FindingDetail as CollectorFindingDetail,
   FindingsResponse as CollectorFindingsResponse,
   OverviewBase,
+  ScheduleView,
   SnapshotBase,
 } from '@/platform/collector/types'
 
 export { SEVERITIES, SEVERITY_LABELS, STAGE_LABELS } from '@/platform/collector/types'
-export type { CheckSummary, FindingsQuery, Job, JobStatus, Severity } from '@/platform/collector/types'
+export type { CheckSummary, FindingsQuery, Job, JobStatus, ScheduleIn, ScheduleView, Severity } from '@/platform/collector/types'
 export type { FindingStatus } from '@/platform/findings/types'
 
 export interface Domain {
@@ -119,6 +120,8 @@ export interface Connection {
   page_size: number
   pause_ms: number
   domain_id: number | null
+  /** Расписание сбора; null — не задано. */
+  schedule: ScheduleView | null
 }
 
 export interface ConnectionIn {

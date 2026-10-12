@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import type { UseMutationResult } from '@tanstack/react-query'
 import { ApiRequestError } from '@/api/client'
-import type { NetworkSchedule, ScheduleIn } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
-import { Field, FIELD } from '@/platform/collector/ui'
+import type { ScheduleIn, ScheduleView } from './types'
+import { Field, FIELD } from './ui'
 
 // Пустое числовое поле — NaN: уходит как null, и API отвечает русским текстом о границах.
 const numberOrEmpty = (value: string) => (value === '' ? NaN : Number(value))
@@ -14,16 +14,16 @@ function when(iso: string | null): string {
 }
 
 /**
- * Расписание задачи модуля (скан сети, обновление DNS, синхронизация): интервал и окно. Сохраняется отдельно
- * от формы владельца — это своя запись планировщика. Начальные значения берутся из `current` при монтировании.
+ * Расписание задачи модуля (скан сети, обновление DNS, синхронизация, сбор по подключению): интервал и окно.
+ * Сохраняется отдельно от формы владельца — это своя запись планировщика. Начальные значения берутся из `current` при монтировании.
  */
 export function ScheduleBlock({ title, enableLabel, note, current, save, remove }: {
   title: string
   enableLabel: string
   /** Чем запуск по расписанию может быть отклонён. */
   note: string
-  current: NetworkSchedule | null
-  save: UseMutationResult<NetworkSchedule, ApiRequestError, ScheduleIn>
+  current: ScheduleView | null
+  save: UseMutationResult<ScheduleView, ApiRequestError, ScheduleIn>
   remove: UseMutationResult<void, ApiRequestError, void>
 }) {
   const [hours, setHours] = useState<number>(current?.interval_hours ?? 24)

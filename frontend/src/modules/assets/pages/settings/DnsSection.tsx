@@ -11,8 +11,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
+import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
-import { ScheduleBlock } from '../ScheduleBlock'
 
 const EMPTY: DnsIn = {
   title: '', mode: 'direct', server: '', ad_connection_id: null, zones: [], forward: true, reverse: true, zone_read: false,

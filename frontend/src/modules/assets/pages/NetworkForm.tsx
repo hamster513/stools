@@ -3,8 +3,8 @@ import { ApiRequestError } from '@/api/client'
 import { useDeleteSchedule, useSaveNetwork, useSaveSchedule, useZones } from '@/modules/assets/api/queries'
 import { DEFAULT_PORTS, scanEstimate, type Network, type NetworkIn } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
+import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import { Field, FIELD } from '@/platform/collector/ui'
-import { ScheduleBlock } from './ScheduleBlock'
 
 /** Списки в форме — строкой: так их удобно вставлять из заметок и таблиц. */
 interface FormState extends Omit<NetworkIn, 'tags' | 'ports' | 'exclude'> {

@@ -1,8 +1,9 @@
 /** Типы API модуля Assets. */
+import type { ScheduleView } from '@/platform/collector/types'
 import type { FindingChange, FindingStatus } from '@/platform/findings/types'
 
 export { STAGE_LABELS } from '@/platform/collector/types'
-export type { Job, JobStatus } from '@/platform/collector/types'
+export type { Job, JobStatus, ScheduleIn } from '@/platform/collector/types'
 
 export const JOB_KIND_LABELS: Record<string, string> = {
   scan: 'Скан сети',
@@ -236,25 +237,8 @@ export interface NetworkIn {
   rate_per_s: number
 }
 
-/** Расписание сканов сети; окно — местное время пояса STOOLS_TZ (`tz`). */
-export interface NetworkSchedule {
-  id: number
-  interval_hours: number
-  window_from: string | null
-  window_to: string | null
-  enabled: boolean
-  next_run_at: string | null
-  last_run_at: string | null
-  last_job_id: number | null
-  tz: string
-}
-
-export interface ScheduleIn {
-  interval_hours: number
-  window_from: string | null
-  window_to: string | null
-  enabled: boolean
-}
+/** Расписание сканов сети — общее расписание планировщика (platform/collector). */
+export type NetworkSchedule = ScheduleView
 
 export interface ScanStarted {
   job_id: number

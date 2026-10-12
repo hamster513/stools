@@ -6,12 +6,13 @@ import type {
   FindingDetail as CollectorFindingDetail,
   FindingsResponse as CollectorFindingsResponse,
   OverviewBase,
+  ScheduleView,
   Severity,
   SnapshotBase,
 } from '@/platform/collector/types'
 
 export { SEVERITIES, SEVERITY_LABELS, STAGE_LABELS } from '@/platform/collector/types'
-export type { CheckSummary, FindingsQuery, Job, JobStatus, Severity } from '@/platform/collector/types'
+export type { CheckSummary, FindingsQuery, Job, JobStatus, ScheduleIn, ScheduleView, Severity } from '@/platform/collector/types'
 export type { FindingStatus } from '@/platform/findings/types'
 
 export interface Server {
@@ -857,6 +858,8 @@ export interface Connection {
   domain: string
   server_id: number | null
   skip_policy_contents: boolean
+  /** Расписание сбора; null — не задано. */
+  schedule: ScheduleView | null
 }
 
 export interface ConnectionIn {
