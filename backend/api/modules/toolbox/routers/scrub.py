@@ -225,14 +225,14 @@ def download(
 
 
 @router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_job_files(
+def delete_job(
     job_id: int, request: Request, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> Response:
     try:
-        scrub.delete_files(db, job_id)
+        scrub.delete_job(db, job_id)
     except (scrub.JobBusy, LookupError) as exc:
         raise _http(exc) from None
-    request.state.audit_summary = f"задание #{job_id}: файлы удалены"
+    request.state.audit_summary = f"задание очистки #{job_id} удалено"
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

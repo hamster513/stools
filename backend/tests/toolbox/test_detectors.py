@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import dataclasses
+import random
+import time
+from collections import Counter
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from itertools import pairwise
@@ -358,3 +361,70 @@ def test_value_with_spaces_under_secret_like_key_is_scanned_normally() -> None:
     assert [(m.kind, m.value) for m in found] == [
         ("user", "jsmith@corp.test"), ("host", "srv-db01.corp.test"), ("ip4", "10.1.2.3"),
     ]
+
+
+def _log_corpus() -> list[str]:
+    """~0,5 МБ лога: случайные строки синтетики с уникальным хвостом, как в профиле скорости (5863 строки)."""
+    rng = random.Random(20261009)
+    source = TEXT.splitlines()
+    lines: list[str] = []
+    size = 0
+    while size < 512_000:
+        line = f"{rng.choice(source)} id={len(lines)} host{len(lines)}.corp.test"
+        lines.append(line)
+        size += len(line) + 1
+    return lines
+
+
+def test_secrets_on_log_corpus_same_as_before_direct_plugin_calls() -> None:
+    # Эталон снят со старой реализации (scan_line detect-secrets) до перехода на прямые вызовы плагинов.
+    lines = _log_corpus()
+    found = Counter(m.value for line in lines for m in find_secrets(line, CTX))
+    assert found == {"AKIAIOSFODNN7EXAMPLE": 633, "Qwerty123!": 631, "am9lOnNlY3JldA==": 628}
+    assert Counter(m.value for m in find_secrets("\n".join(lines), CTX)) == found
+
+
+@pytest.mark.parametrize(("line", "expected"), [
+    # hex: 9 символов уже могут пройти порог 3,0 бита — короче 16 строки пропускать нельзя.
+    ("x=8f14e45fce end", []),
+    ("ref 9d4e1f7a2c ok", [(4, "9d4e1f7a2c")]),
+    ("sha1 da39a3ee5e6b4b0d3255bfef95601890afd80709 md5 d41d8cd98f00b204e9800998ecf8427e", []),
+    # base64: в кавычках, без кавычек; короткая строка в кавычках отменяет поиск без кавычек.
+    ("cfg 'Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg' quoted", [(5, "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg")]),
+    ("blob Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg end", [(5, "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg")]),
+    ('name="ab" key Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg', []),
+    (("mixed '0aF9' \"Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg==\" tail "
+      "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"),
+     [(14, "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg==")]),
+    # Фильтры detect-secrets: uuid, последовательности, *_id, шаблоны, «$», allowlist.
+    ("id 550e8400-e29b-41d4-a716-446655440000 ok", []),
+    ("seq abcdefghijklmnopqrstuvwxyz0123456789 ABCDEF0123456789abcdef", []),
+    ("user_id=8f14e45fceea167a session_id: 9b2c7d1e4f5a6b8c", []),
+    ('v="${SOME_TOKEN_VALUE_HERE_1234}" w=<SomeValueFromVault12345678>', []),
+    ("cost $8f14e45fceea167a5a3 total", [(6, "8f14e45fceea167a5a3")]),
+    ("key=8f14e45fceea167a5a36 # pragma: allowlist secret", []),
+    ("path C:\\Temp\\8f14e45fceea167a5a36dedd4bea2543\\setup.exe", []),
+    ("registry HKLM\\SOFTWARE\\Classes\\CLSID\\{4234d49b-0245-4df3-b780-3893943456e1}\\InprocServer32", []),
+    # Плагины-regex: JWT, приватный ключ, KeywordDetector, BasicAuth; публичный адрес — не секрет.
+    ("jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+     [(69, "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U")]),
+    ("-----BEGIN RSA PRIVATE KEY-----", [(5, "BEGIN RSA PRIVATE KEY")]),
+    ("private_key: 'abcd1234xyz'", [(14, "abcd1234xyz")]),
+    ("url https://admin:pa55w0rd@host.example.test/path", [(18, "pa55w0rd")]),
+    ("connect 8.8.8.8:53 and 203.0.113.7", []),
+    ("ps1 $env:API_TOKEN=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg9x",
+     [(9, "API_TOKEN=Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg9x"), (19, "Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg9x")]),
+])
+def test_secrets_detect_secrets_paths_same_as_before(line: str, expected: list[tuple[int, str]]) -> None:
+    # Эталон снят со старой реализации через scan_line: плагины, порог энтропии и фильтры — те же.
+    assert sorted((m.start, m.value) for m in find_secrets(line, CTX)) == expected
+
+
+def test_detect_log_corpus_speed() -> None:
+    # Через scan_line detect-secrets этот корпус шёл ~4,6 с (под cProfile ~12 с), напрямую — ~1,2 с.
+    lines = _log_corpus()
+    find_secrets("warm up", CTX)
+    started = time.perf_counter()
+    for line in lines:
+        detect(line, CTX)
+    assert time.perf_counter() - started < 4

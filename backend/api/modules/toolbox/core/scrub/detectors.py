@@ -11,14 +11,25 @@ import threading
 from collections.abc import Callable, Iterator
 from functools import cache, lru_cache
 from ipaddress import IPv4Address, IPv6Address
+from typing import cast
 
 from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
-from detect_secrets.core.scan import scan_line
+from detect_secrets.filters.allowlist import is_line_allowlisted
+from detect_secrets.filters.heuristic import (
+    is_likely_id_string,
+    is_not_alphanumeric_string,
+    is_potential_uuid,
+    is_prefixed_with_dollar_sign,
+    is_sequential_string,
+    is_templated_secret,
+)
+from detect_secrets.plugins.base import BasePlugin
 from detect_secrets.plugins.high_entropy_strings import (
     HexHighEntropyString,
     HighEntropyStringsPlugin,
 )
 from detect_secrets.settings import cache_bust, configure_settings_from_baseline, get_plugins
+from detect_secrets.util.code_snippet import get_code_snippet
 
 from api.modules.toolbox.core.scrub.rules import AUTO, SERVICE, without_overlaps
 from api.modules.toolbox.core.scrub.types import KINDS, Ctx, Match
@@ -222,38 +233,81 @@ def find_words(text: str, ctx: Ctx) -> Iterator[Match]:
         yield Match(m.start(), m.end(), "word", m.group(0))
 
 
-# Настройки detect-secrets — глобальные для процесса, а scan_line сам их трогает (снимает фильтр,
-# сбрасывает кеш фильтров). Поэтому плагины настраиваются один раз, лениво, и все вызовы идут
-# под одним замком: временный default_settings() на каждый вызов стоил ~4,6 мс и при параллельных
-# сканах в потоках один скан восстанавливал настройки посреди другого — тот молча терял плагины.
+# Настройки detect-secrets — глобальные для процесса. Плагины настраиваются один раз, лениво, под
+# замком: временный default_settings() на каждый вызов стоил ~4,6 мс, и при параллельных сканах в
+# потоках один скан восстанавливал настройки посреди другого — тот молча терял плагины. Поиск тоже
+# идёт под замком, как раньше.
 _DETECT_SECRETS = threading.Lock()
+#: Имя «файла» разового поиска, как в scan_line: от него зависят набор regex KeywordDetector и allowlist.
+_ADHOC = "adhoc-string-scan"
+#: Плагин и, для высокоэнтропийных, regex строки его алфавита без кавычек (сам плагин не трогаем — см. _entropy_values).
+_Plugin = tuple[BasePlugin, re.Pattern[str] | None]
 
 
 @cache
-def _entropy_plugins() -> dict[str, HighEntropyStringsPlugin]:
+def _plugins() -> tuple[_Plugin, ...]:
     """Включает все плагины detect-secrets на весь процесс; вызывать под _DETECT_SECRETS."""
     cache_bust()
     configure_settings_from_baseline(
         {"plugins_used": [{"name": t.__name__} for t in get_mapping_from_secret_type_to_class().values()]},
     )
-    return {p.secret_type: p for p in get_plugins() if isinstance(p, HighEntropyStringsPlugin)}
+    return tuple(
+        (p, re.compile(f"[{re.escape(p.charset)}]+") if isinstance(p, HighEntropyStringsPlugin) else None)
+        for p in get_plugins()
+    )
 
 
-def _scanned(line: str, entropy: dict[str, HighEntropyStringsPlugin]) -> Iterator[str]:
-    for secret in scan_line(line):
-        value = secret.secret_value
-        if not value or len(value) < SECRET_MIN:
-            continue
-        # scan_line — режим разового поиска: высокоэнтропийные строки он отдаёт без порога, порог — здесь.
-        plugin = entropy.get(secret.type)
-        if plugin is not None and plugin.calculate_shannon_entropy(value) <= plugin.entropy_limit:
+def _entropy_values(line: str, plugin: HighEntropyStringsPlugin, unquoted: re.Pattern[str]) -> Iterator[str]:
+    # Как analyze_line(enable_eager_search=True) в scan_line: строки в кавычках, а если их в строке нет
+    # совсем — любые отрезки алфавита. Но без подмены plugin.regex на время поиска (non_quoted_string_regex),
+    # поэтому без побочных эффектов на общий объект плагина. Порог энтропии — здесь (в этом режиме
+    # analyze_line отдавал строки без кавычек без порога, и его ставил вызывающий).
+    candidates = [m[1] for m in plugin.regex.findall(line)] or unquoted.findall(line)
+    limit = plugin.entropy_limit
+    for value in candidates:
+        # Энтропия строки из n символов не больше log2(n): короче 2**limit порог не пройти (base64 — 23
+        # символа, hex — 9), а таких отрезков в логе почти все слова. Строго «<», чтобы округление
+        # на ровно 2**limit не решало за calculate_shannon_entropy.
+        if len(value) < 2 ** limit or plugin.calculate_shannon_entropy(value) <= limit:
             continue
         if isinstance(plugin, HexHighEntropyString) and FILE_HASH.fullmatch(value):
             continue
         yield value
 
 
-def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsPlugin]) -> Iterator[Match]:
+def _filtered_out(value: str, line: str, plugin: BasePlugin) -> bool:
+    # Те же фильтры по значению, что включены в detect-secrets по умолчанию и что scan_line применял к
+    # каждой находке, но вызванные напрямую: внедрение аргументов через inspect (call_function_with_arguments)
+    # стоило ~70% всего поиска секретов. Все дешёвые, оставлены все — находки те же. Фильтры по имени файла
+    # (lock-файлы, swagger, не текст) и is_indirect_reference scan_line к разовой строке не применял.
+    return (
+        is_sequential_string(value)
+        or is_potential_uuid(value)
+        or is_likely_id_string(value, line, plugin)
+        or is_templated_secret(value)
+        or is_not_alphanumeric_string(value)
+        or is_prefixed_with_dollar_sign(value)
+    )
+
+
+def _scanned(line: str, plugins: tuple[_Plugin, ...]) -> Iterator[str]:
+    found: list[str] = []
+    for plugin, unquoted in plugins:
+        if unquoted is None:
+            # Плагины-regex (AWS, JWT, Stripe, KeywordDetector…) — их собственный analyze_line, он дешёвый.
+            values: Iterator[str] = (
+                s.secret_value for s in plugin.analyze_line(filename=_ADHOC, line=line, line_number=0)
+                if s.secret_value
+            )
+        else:
+            values = _entropy_values(line, cast(HighEntropyStringsPlugin, plugin), unquoted)
+        found.extend(v for v in values if len(v) >= SECRET_MIN and not _filtered_out(v, line, plugin))
+    # «# pragma: allowlist secret» в строке снимает все её находки, как в scan_line.
+    if found and not is_line_allowlisted(_ADHOC, line, get_code_snippet(lines=[line], line_number=1)):
+        yield from found
+
+
+def _line_secrets(line: str, offset: int, plugins: tuple[_Plugin, ...]) -> Iterator[Match]:
     spans: dict[tuple[int, int], str] = {}  # одно место — одно совпадение
     # Ключевые слова — ровно на своём месте: то же значение в другом месте строки может быть
     # чем угодно (secret=1234 и порт 12345, token: null).
@@ -262,7 +316,7 @@ def _line_secrets(line: str, offset: int, entropy: dict[str, HighEntropyStringsP
             if not PLACEHOLDER.fullmatch(m.group(2)):
                 spans[m.span(2)] = m.group(2)
     if len(line) <= SECRET_LINE_MAX:
-        for value in dict.fromkeys(_scanned(line, entropy)):
+        for value in dict.fromkeys(_scanned(line, plugins)):
             # Значение detect-secrets — целый токен, а не кусок другого слова или base64. «=» слева —
             # граница (вид KEY=value), справа — нет: это может быть хвост base64.
             for m in re.finditer(rf"(?<![\w+/]){re.escape(value)}(?![\w+/=])", line):
@@ -280,12 +334,22 @@ def find_secrets(text: str, ctx: Ctx) -> Iterator[Match]:
         return
     found: list[Match] = []
     with _DETECT_SECRETS:
-        entropy = _entropy_plugins()
+        plugins = _plugins()
         offset = 0
         for line in text.split("\n"):
-            found.extend(_line_secrets(line, offset, entropy))
+            found.extend(_line_secrets(line, offset, plugins))
             offset += len(line) + 1
     yield from _by_start(found)
+
+
+def key_class(json_key: str) -> str:
+    """Класс ключа JSON — всё, что детекторы берут из ключа: номер версии под version/build (find_ip4) и
+    секрет под ключом-паролем (find_secrets). Ключи одного класса дают одни и те же находки на одном тексте,
+    поэтому движок кеширует находки по (класс, текст). Возвращается представитель класса — ключ, на
+    котором оба regex отвечают так же, как на исходном: «» (обычный), «version», «password» или оба."""
+    version = VERSION_KEY.search(json_key) is not None
+    secret = SECRET_KEY.search(json_key) is not None
+    return ("version_" if version else "") + ("password" if secret else "")
 
 
 FINDERS: tuple[Callable[[str, Ctx], Iterator[Match]], ...] = (

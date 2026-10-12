@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import gzip
 import io
 import json
 import re
@@ -12,9 +13,19 @@ from typing import Any
 
 import pytest
 
-from api.modules.toolbox.core.scrub.engine import VerifyError, _placed, apply, reverse, scan, verify
+from api.modules.toolbox.core.scrub.detectors import detect
+from api.modules.toolbox.core.scrub.engine import (
+    Memo,
+    Status,
+    VerifyError,
+    _placed,
+    apply,
+    reverse,
+    scan,
+    verify,
+)
 from api.modules.toolbox.core.scrub.types import KINDS, Ctx, Finding, Match
-from tests.toolbox.synthetic import CTX, TEXT, MemoryAliases
+from tests.toolbox.synthetic import CTX, TEXT, MemoryAliases, ksc_like_ctx, ksc_like_export
 
 #: Номер сборки, похожий на публичный адрес: найдётся, но без галочки.
 SOURCE = TEXT + "2026-10-08 10:00:10 agent build 7.2.3.4\n"
@@ -354,3 +365,268 @@ def test_verify_catches_short_name_of_checked_fqdn_host(tmp_path: Path) -> None:
     leak = tmp_path / "leak.txt"
     leak.write_text("node srv-db01 up, srv-db011 is another, host-0001 ok\n", encoding="utf-8")
     assert [(f.kind, f.value_key, f.count) for f in verify(leak, findings, STAND)] == [("host", "srv-db01.corp.test", 1)]
+
+
+def test_scan_apply_verify_report_their_phases(tmp_path: Path) -> None:
+    source = zipped(tmp_path / "in.zip", {"a.log": SOURCE.encode(), "b.log": b"logon host01 again\n"})
+    calls: list[Status] = []
+    aliases = MemoryAliases()
+    result = scan(source, CTX, aliases, progress=calls.append)
+    scanned = [p for p in calls if p.phase == "scan"]
+    assert scanned == calls and [p.entries_done for p in scanned][-1] == 2
+    # Найдено — уникальных значений к этому месту: растёт и в конце равно итогу скана.
+    assert [p.findings for p in scanned] == sorted(p.findings for p in scanned)
+    assert scanned[-1].findings == len(result.findings) > 0
+
+    calls.clear()
+    apply(source, tmp_path / "out.zip", result.findings, CTX, aliases, progress=calls.append)
+    assert calls and {p.phase for p in calls} == {"apply"} and calls[-1].entries_done == 2
+    calls.clear()
+    assert verify(tmp_path / "out.zip", result.findings, CTX, progress=calls.append) == []
+    assert calls and {p.phase for p in calls} == {"verify"} and calls[-1].entries_done == 2
+    assert calls[-1].source_pos == (tmp_path / "out.zip").stat().st_size
+
+
+# --- симметрия apply и verify (стенд, задание №8: 4 остатка при 160 тыс. замен) --------------------
+
+def test_address_equal_to_version_value_is_left_by_apply_and_not_flagged_by_verify(tmp_path: Path) -> None:
+    # Включённый адрес встречается и целым значением под ключом *Version: find_ip4 под version/build не ищет
+    # (номер версии, спека §1), apply оставляет — и дословный поиск самопроверки не должен его считать.
+    data = {"hosts": [{"ip": "10.1.2.3"}], "plugins": [{"MinimalPluginVersion": "10.1.2.3", "KLHST_WKS_NAG_VERSION": "10.1.2.3"}]}
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    aliases = MemoryAliases()
+    findings = scan(path, CTX, aliases).findings
+    assert [(f.kind, f.value, f.count, f.checked) for f in findings] == [("ip4", "10.1.2.3", 1, True)]
+    _, counts = apply(path, tmp_path / "out.json", findings, CTX, aliases)
+    out = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert counts == {"ip4": 1} and out["hosts"][0]["ip"] != "10.1.2.3"
+    assert out["plugins"] == data["plugins"]
+    assert verify(tmp_path / "out.json", findings, CTX) == []
+    # Тот же адрес под обычным ключом — остаток.
+    leak = tmp_path / "leak.json"
+    leak.write_text(json.dumps({**out, "relay": "10.1.2.3"}), encoding="utf-8")
+    assert [(f.kind, f.value_key, f.count) for f in verify(leak, findings, CTX)] == [("ip4", "10.1.2.3", 1)]
+
+
+def test_checked_netbios_domain_inside_unchecked_auto_host_is_replaced(tmp_path: Path) -> None:
+    # Со стенда: NetBIOS-домен — метка внутри имени авто-хоста (site-corp.other.org). Составное побеждает
+    # словарный домен на том же месте; хост без галочки, apply оставлял site-corp, а дословный поиск
+    # самопроверки видел «corp» на границе «-». Голый site-corp без FQDN словарь разобрал бы — так и здесь.
+    source = tmp_path / "log.txt"
+    source.write_text("logon CORP\\jdoe at site-corp.other.org; mail jdoe@other.org\n", encoding="utf-8")
+    aliases = MemoryAliases()
+    found = by_value(scan(source, CTX, aliases).findings)
+    assert found[("host", "site-corp")].auto and not found[("host", "site-corp")].checked
+    assert found[("domain", "other.org")].checked and found[("domain", "corp")].checked
+    findings = list(found.values())
+    out = scrubbed(source, tmp_path / "out.txt", findings, aliases)
+    assert out == "logon DOM1\\user-0001 at site-dom1.dom2.example; mail user-0001@dom2.example\n"
+    assert verify(tmp_path / "out.txt", findings, CTX) == []
+    assert ("host", "site-corp") not in aliases.table
+    # Голое имя того же хоста в тексте — тот же разбор, та же замена.
+    source.write_text("backup of site-corp done; CORP\\jdoe\n", encoding="utf-8")
+    assert scrubbed(source, tmp_path / "out2.txt", findings, aliases) == "backup of site-dom1 done; DOM1\\user-0001\n"
+
+
+def test_checked_value_inside_unchecked_dictionary_match_is_replaced(tmp_path: Path) -> None:
+    # Хост из словаря снят владельцем, а домен внутри его имени включён: замена домена не зависит от галочки
+    # хоста. Слово — тоже: внутри снятого секрета оно меняется.
+    ctx = dataclasses.replace(CTX, hosts=CTX.hosts | {"dc-corp"})
+    source = tmp_path / "log.txt"
+    source.write_text("logon CORP\\jdoe at dc-corp; password=acme-Qwerty123! vendor Acme\n", encoding="utf-8")
+    aliases = MemoryAliases(ctx)
+    findings = [dataclasses.replace(f, checked=f.kind not in ("host", "secret")) for f in scan(source, ctx, aliases).findings]
+    out = scrubbed_with(source, tmp_path / "out.txt", findings, aliases, ctx)
+    assert out == "logon DOM1\\user-0001 at dc-dom1; password=contoso-Qwerty123! vendor Contoso\n"
+    assert verify(tmp_path / "out.txt", findings, ctx) == []
+
+
+def test_bare_short_name_of_checked_dotted_host_is_replaced_with_host_alias(tmp_path: Path) -> None:
+    # Хост с точкой (msk1.sub из msk1.sub.corp.test): его короткое имя голым — тот же хост. Самопроверка
+    # это уже ловила (A4), теперь и apply меняет на псевдоним хоста целиком; обратный перевод вернёт
+    # host-0001 → msk1.sub, а не msk1 — это принято. msk11 и msk1 внутри слов — не трогаются.
+    ctx = dataclasses.replace(STAND, domains=frozenset({"corp.test"}))
+    source = tmp_path / "log.txt"
+    source.write_text("seen msk1.sub.corp.test; share \\\\fs\\msk1\\logs; MSK1 up; msk11 and xmsk1 other\n", encoding="utf-8")
+    aliases = MemoryAliases(ctx)
+    found = by_value(scan(source, ctx, aliases).findings)
+    assert set(found) == {("host", "msk1.sub"), ("domain", "corp.test")} and not found[("host", "msk1.sub")].auto
+    findings = list(found.values())
+    apply(source, tmp_path / "out.txt", findings, ctx, aliases)
+    out = (tmp_path / "out.txt").read_text(encoding="utf-8")
+    assert out == "seen host-0001.dom1.example; share \\\\fs\\host-0001\\logs; HOST-0001 up; msk11 and xmsk1 other\n"
+    assert verify(tmp_path / "out.txt", findings, ctx) == []
+    assert aliases.table == {("host", "msk1.sub"): "host-0001", ("domain", "corp.test"): "dom1.example"}
+    assert reverse(out, aliases.pairs())[0] == "seen msk1.sub.corp.test; share \\\\fs\\msk1.sub\\logs; MSK1.SUB up; msk11 and xmsk1 other\n"
+    leak = tmp_path / "leak.txt"
+    leak.write_text(out + "node msk1 down\n", encoding="utf-8")
+    assert [(f.kind, f.value_key, f.count) for f in verify(leak, findings, ctx)] == [("host", "msk1.sub", 1)]
+
+
+def test_short_name_that_is_its_own_checked_host_keeps_its_own_alias(tmp_path: Path) -> None:
+    # msk1 — отдельный хост словаря, и msk1.sub — тоже хост: голый msk1 получает свой псевдоним, не чужой.
+    ctx = dataclasses.replace(STAND, domains=frozenset({"corp.test"}), hosts=frozenset({"msk1"}))
+    source = tmp_path / "log.txt"
+    source.write_text("seen msk1.sub.corp.test and msk1\n", encoding="utf-8")
+    aliases = MemoryAliases(ctx)
+    findings = scan(source, ctx, aliases).findings
+    assert {(f.kind, f.value_key) for f in findings} == {("host", "msk1.sub"), ("host", "msk1"), ("domain", "corp.test")}
+    out = scrubbed_with(source, tmp_path / "out.txt", findings, aliases, ctx)
+    assert out == "seen host-0001.dom1.example and host-0002\n"
+    assert verify(tmp_path / "out.txt", findings, ctx) == []
+
+
+#: Документы с тремя закономерностями стенда поверх выгрузки KSC: значение под ключом *Version, равное
+#: адресу; NetBIOS-домен (corp — 4 символа) в именах ключей и строках KLPRSS_Val на границах «_» и в имени
+#: авто-хоста; хост с точкой, короткое имя которого встречается голым.
+STAND_PATTERNS: dict[str, Any] = {
+    "plugins": [{"MinimalPluginVersion": "10.1.2.15", "ProdVersion": "10.1.2.15"}],
+    "KLPRSS_CORP_Settings": {"KLPRSS_Val": "C:\\Shares\\CORP_backup\\x", "CORP_path": {"KLPRSS_Val": "\\\\CORP\\share"}},
+    "events": ["logon CORP\\user001 at mail-corp.other.org", "contact admin@other.org", "seen dc1.site.corp.local",
+               "share \\\\fs\\dc1\\logs", "DC1 up", "relay 10.1.2.15 via ws00001"],
+}
+
+
+@pytest.fixture(scope="module")
+def stand_corpus(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Ctx]:
+    """Выгрузка KSC на 100 хостов и документы с закономерностями стенда — одним zip."""
+    source = tmp_path_factory.mktemp("stand") / "export.zip"
+    zipped(source, {
+        "export.json": json.dumps(ksc_like_export(100), ensure_ascii=False).encode(),
+        "patterns.json": json.dumps(STAND_PATTERNS).encode(),
+        "notes.txt": "\n".join(STAND_PATTERNS["events"]).encode(),
+    })
+    return source, ksc_like_ctx(100)
+
+
+@pytest.mark.parametrize("auto_hosts_checked", [True, False])
+def test_apply_then_verify_is_clean_on_stand_corpus_and_planted_leak_fails(stand_corpus: tuple[Path, Ctx], tmp_path: Path,
+                                                                            auto_hosts_checked: bool) -> None:
+    # Свойство симметрии: всё, что самопроверка нашла бы дословно, apply уже заменил; что apply оставляет
+    # намеренно (номер версии, авто-хост без галочки), самопроверка не считает. Как на стенде: без галочки
+    # остаются только авто-хосты (или ничего).
+    source, ctx = stand_corpus
+    aliases = MemoryAliases(ctx)
+    found = scan(source, ctx, aliases).findings
+    findings = [dataclasses.replace(f, checked=auto_hosts_checked or not (f.auto and f.kind == "host")) for f in found]
+    assert any(f.kind == "host" and f.auto for f in findings)  # mail-corp из mail-corp.other.org
+    memo = Memo()
+    target = tmp_path / "out.zip"
+    apply(source, target, findings, ctx, aliases, memo=memo)
+    assert verify(target, findings, ctx, memo=memo) == []
+    with zipfile.ZipFile(target) as zf:
+        patterns = json.loads(zf.read("patterns.json"))
+        notes = zf.read("notes.txt").decode()
+    assert patterns["plugins"] == STAND_PATTERNS["plugins"]  # номер версии на месте
+    assert "corp" not in notes.lower() and "dc1" not in notes.lower() and "10.1.2.15" not in notes
+    # Подложенная утечка в результат — по одному значению каждого вида из закономерностей.
+    for line in ("seen dc1\n", "domain CORP\n", "relay 10.1.2.15\n", "user001\n"):
+        leak = tmp_path / f"leak-{len(line)}.zip"
+        with zipfile.ZipFile(target) as zf:
+            zipped(leak, {**{n: zf.read(n) for n in zf.namelist()}, "leak.txt": line.encode()})
+        assert verify(leak, findings, ctx, memo=memo) != [], line
+
+
+# --- скорость на выгрузке KSC -------------------------------------------------------------------
+
+KSC_HOSTS = 100
+
+
+@pytest.fixture(scope="module")
+def ksc_corpus(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Ctx]:
+    """Выгрузка в стиле KSC на 100 хостов (~16 тыс. кусков, уникальных ~12%), как на стенде — в .json.gz."""
+    source = tmp_path_factory.mktemp("ksc") / "export.json.gz"
+    source.write_bytes(gzip.compress(json.dumps(ksc_like_export(KSC_HOSTS), ensure_ascii=False).encode()))
+    return source, ksc_like_ctx(KSC_HOSTS)
+
+
+def run_job(source: Path, target: Path, ctx: Ctx, *, enabled: bool) -> tuple[Any, ...]:
+    """Скан, замена и самопроверка одним заданием; всё, что в них считается, — для сверки путей."""
+    aliases = MemoryAliases(ctx)
+    result = scan(source, ctx, aliases, memo=Memo(enabled=enabled))
+    memo = Memo(enabled=enabled)  # общий у замены и самопроверки, как в сервисе
+    entries, counts = apply(source, target, result.findings, ctx, aliases, memo=memo)
+    left = verify(target, result.findings, ctx, memo=memo)
+    return (
+        [(f.kind, f.value_key, f.count, f.alias, f.checked, f.auto, f.first_file, f.contexts) for f in result.findings],
+        result.chunks, [e.kind for e in entries], counts, [(f.kind, f.value_key, f.count) for f in left],
+        dict(aliases.table), target.read_bytes(),
+    )
+
+
+def test_fast_path_gives_same_findings_bytes_and_leftovers_as_slow_path(ksc_corpus: tuple[Path, Ctx],
+                                                                       tmp_path: Path) -> None:
+    # Медленный путь — каждый кусок через detect и regex; быстрый — пропуск пустышек и кеш по тексту.
+    source, ctx = ksc_corpus
+    slow = run_job(source, tmp_path / "slow.json.gz", ctx, enabled=False)
+    fast = run_job(source, tmp_path / "fast.json.gz", ctx, enabled=True)
+    assert fast == slow
+    findings, chunks, kinds, counts, left, table, _ = fast
+    assert chunks > 10_000 and kinds == ["json"] and left == []
+    assert {kind for kind, *_ in findings} == set(KINDS)
+    assert counts["host"] > KSC_HOSTS and counts["secret"] > 0 and ("host", "ws00001") in table
+
+
+def test_memo_skips_trivial_chunks_only_when_detect_would_find_nothing() -> None:
+    # Пустышки (пустая строка, пробелы, короткие цифры) — те же находки, что у detect, под любым ключом,
+    # и с цифровым именем в словаре (тогда пропуска нет).
+    digits = dataclasses.replace(CTX, hosts=CTX.hosts | {"123"}, words={**CTX.words, "12": ""})
+    chunks = ["", " ", "\n", "0", "123", "12345678", "123456789", "1234567890123456789012", "true", "null",
+              *TEXT.splitlines(), "ws00001.corp.test", "AKIAIOSFODNN7EXAMPLE"]
+    for ctx in (CTX, digits):
+        find = Memo().bind(ctx)
+        for json_key in ("", "__key__", "__name__", "octets", "password", "version", "token_version"):
+            expected = [detect(text, dataclasses.replace(ctx, json_key=json_key)) for text in chunks]
+            assert [find(json_key, text) for text in chunks] == expected, (json_key, ctx is digits)
+            assert [find(json_key, text) for text in chunks] == expected  # и из кеша
+
+
+def test_memo_is_shared_by_equal_ctx_and_cleared_by_another() -> None:
+    memo = Memo()
+    find = memo.bind(CTX)
+    assert find("", "logon host01") == detect("logon host01", CTX) and memo.entries == 1
+    memo.bind(dataclasses.replace(CTX, hosts=frozenset(CTX.hosts)))  # равный ctx — кеш живёт
+    assert memo.entries == 1
+    memo.bind(dataclasses.replace(CTX, words={}))
+    assert memo.entries == 0
+    find = Memo(enabled=False).bind(CTX)
+    assert find("", "logon host01") == detect("logon host01", CTX)
+    disabled = Memo(enabled=False)
+    disabled.bind(CTX)("", "logon host01")
+    assert disabled.entries == 0
+    # Полный кеш: дальше ищется мимо него, находки те же.
+    small = Memo(entries=1)
+    find = small.bind(CTX)
+    assert [find("", t) for t in ("logon host01", "sid S-1-5-21-1-2-3-500")] == [detect("logon host01", CTX), detect("sid S-1-5-21-1-2-3-500", CTX)]
+    assert small.entries == 1
+
+
+def test_ksc_corpus_job_is_fast(ksc_corpus: tuple[Path, Ctx], tmp_path: Path) -> None:
+    """Сторож скорости: до кеша три прохода по этому корпусу шли ~4,5 с (5000 хостов — 377 с), теперь ~0,5 с."""
+    source, ctx = ksc_corpus
+    started = time.perf_counter()
+    run_job(source, tmp_path / "out.json.gz", ctx, enabled=True)
+    assert time.perf_counter() - started < 10
+
+
+def test_alternation_survives_long_values_and_prefix_chains() -> None:
+    """Свёртка в дерево была рекурсивной по символам: включённое значение длиннее ~1000 символов
+    (длинный секрет из выгрузки) роняло verify с RecursionError. Набор-цепочка префиксов упирается
+    уже в разбор регулярки — тогда отдаётся плоская альтернация. В обоих случаях совпадения те же."""
+    import random
+    import string
+
+    from api.modules.toolbox.core.scrub.engine import _alternation, _nesting
+
+    random.seed(7)
+    long_value = "".join(random.choice(string.ascii_letters + string.digits) for _ in range(3000))
+    chain = ["a" * n for n in range(1, 700)]
+    for values in ([long_value], chain, [long_value, "host01", "host0", "host011", "h"]):
+        pattern = _alternation(values)
+        folded = re.compile(pattern, re.IGNORECASE)
+        flat = re.compile("|".join(re.escape(v) for v in sorted(set(values), key=len, reverse=True)), re.IGNORECASE)
+        text = " ".join(random.choice(values) for _ in range(50)) + " xhost01 host0110 " + "a" * 800 + " " + long_value[:100]
+        assert [m.span() for m in folded.finditer(text)] == [m.span() for m in flat.finditer(text)]
+    assert _nesting(_alternation(chain)) == 0  # цепочка — плоская альтернация
+    assert _nesting(r"a\(b(?:c(?:d))") == 2

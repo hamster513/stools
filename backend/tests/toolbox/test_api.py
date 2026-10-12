@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
 import io
 import json
 import re
@@ -18,10 +19,11 @@ from sqlalchemy.exc import OperationalError
 
 from api.db.base import get_sessionmaker
 from api.db.models import AuditEvent
-from api.jobs import run_job
+from api.jobs import JobHandle, run_job
 from api.modules.ad.models import AdDomain
 from api.modules.assets.models import Asset, Network
 from api.modules.toolbox.core.scrub import engine
+from api.modules.toolbox.core.scrub.files import MB
 from api.modules.toolbox.core.scrub.types import Finding
 from api.modules.toolbox.models import ToolboxAlias, ToolboxFinding, ToolboxJob
 from api.modules.toolbox.services import scrub
@@ -146,14 +148,11 @@ def test_full_path(seeded: Any, auth_client: TestClient, app_settings: Any) -> N
     assert "host01.corp.test" in r.json()["text"]
 
     assert auth_client.delete(f"{API}/jobs/{job_id}").status_code == 204
-    info = auth_client.get(f"{API}/jobs/{job_id}/info").json()
-    assert info["files_deleted"] is True and info["stats"]["replaced"]
-    assert auth_client.get(f"{API}/jobs/{job_id}/result").status_code == 410
+    # Ручное удаление целиком: строки задания нет, скачать и открыть нечего.
+    assert auth_client.get(f"{API}/jobs/{job_id}").status_code == 404
+    assert auth_client.get(f"{API}/jobs/{job_id}/result").status_code == 404
     assert not job_dir(app_settings.data_dir, job_id).exists()
-    # Находки (значения, контексты, секреты) уходят вместе с файлами; счётчики остаются в stats.
     assert seeded.query(ToolboxFinding).filter_by(job_id=job_id).count() == 0
-    body = findings(auth_client, job_id)
-    assert body == {"groups": [], "items": [], "total": 0}
 
 
 def test_stand_netbios_domain_in_dictionary_does_not_leak_hosts(db_session: Any, auth_client: TestClient) -> None:
@@ -242,6 +241,41 @@ def test_two_jobs_with_one_proposed_number_get_distinct_aliases(seeded: Any, aut
     assert sorted(r.alias for r in rows) == ["host-0001", "host-0002"]
 
 
+def test_delete_job_removes_everything_but_keeps_aliases(
+    seeded: Any, auth_client: TestClient, app_settings: Any,
+) -> None:
+    job_id = upload(auth_client, build_zip())
+    assert apply(auth_client, job_id)["status"] == "done"
+    folder = job_dir(app_settings.data_dir, job_id)
+    assert folder.exists()
+    aliases = seeded.query(ToolboxAlias).filter(ToolboxAlias.first_job_id == job_id).count()
+    assert aliases > 0
+    assert seeded.query(ToolboxFinding).filter_by(job_id=job_id).count() > 0
+
+    assert auth_client.delete(f"{API}/jobs/{job_id}").status_code == 204
+    seeded.expire_all()
+    assert seeded.get(ToolboxJob, job_id) is None
+    assert seeded.query(ToolboxFinding).filter_by(job_id=job_id).count() == 0
+    assert not folder.exists()
+    # Псевдонимы живут в таблице соответствий дольше задания, только ссылка на задание обнуляется.
+    assert seeded.query(ToolboxAlias).count() >= aliases
+    assert seeded.query(ToolboxAlias).filter(ToolboxAlias.first_job_id == job_id).count() == 0
+    assert seeded.query(ToolboxAlias).filter(ToolboxAlias.first_job_id.is_(None)).count() >= aliases
+    assert auth_client.delete(f"{API}/jobs/{job_id}").status_code == 404
+    event = seeded.query(AuditEvent).filter(AuditEvent.summary.like("%удалено%")).order_by(AuditEvent.id.desc()).first()
+    assert event is not None and f"#{job_id}" in event.summary
+
+
+def test_delete_running_job_is_refused(seeded: Any, auth_client: TestClient, app_settings: Any) -> None:
+    job_id = upload(auth_client, build_zip())
+    seeded.query(ToolboxJob).filter_by(id=job_id).update({"status": "running"})
+    seeded.commit()
+    assert auth_client.delete(f"{API}/jobs/{job_id}").status_code == 409
+    seeded.expire_all()
+    assert seeded.get(ToolboxJob, job_id) is not None
+    assert job_dir(app_settings.data_dir, job_id).exists()
+
+
 def test_roles(seeded: Any, auth_client: TestClient, client_as: Callable[[str], TestClient]) -> None:
     job_id = upload(auth_client, build_zip())
     assert apply(auth_client, job_id)["status"] == "done"
@@ -249,6 +283,7 @@ def test_roles(seeded: Any, auth_client: TestClient, client_as: Callable[[str], 
     assert auditor.post(f"{API}/jobs", data={"text": "host01"}).status_code == 403
     for which in ("result", "report", "mapping"):
         assert auditor.get(f"{API}/jobs/{job_id}/{which}").status_code == 403
+    assert auditor.delete(f"{API}/jobs/{job_id}").status_code == 403
     assert auditor.post(f"{API}/reverse", json={"text": "web-01"}).status_code == 403
     assert auditor.get("/api/toolbox/aliases").status_code == 403
     assert auditor.get("/api/toolbox/aliases/export.csv").status_code == 403
@@ -424,3 +459,52 @@ def test_findings_edit_waits_for_job_row_lock(db_session: Any) -> None:
         db_session.rollback()
     finally:
         locker.close()
+
+
+def test_progress_detail_numbers_the_current_file() -> None:
+    # Пока единственный файл читается, entries_done = 0: в строке — «файл 1 из 1», а не «файлов 0».
+    reading = engine.Status("a.json", 0, 1, MB, MB, 10, phase="apply")
+    assert scrub._detail(reading, 3 * MB).startswith("файлов 1 из 1 · прочитано 1,0 МБ из 3,0 МБ")
+    assert scrub._detail(dataclasses.replace(reading, entries_done=1), 3 * MB).startswith("файлов 1 из 1 · ")
+    assert scrub._detail(dataclasses.replace(reading, entries_done=2, entries_total=5), 3 * MB).startswith("файлов 3 из 5 · ")
+    # Число записей неизвестно (gz, вложенные архивы): как раньше, сколько пройдено.
+    assert scrub._detail(dataclasses.replace(reading, entries_total=None), 3 * MB).startswith("файлов 0 · ")
+
+
+def test_progress_of_one_big_file_is_in_bytes(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Один большой файл: полоса — байты входа, сообщение меняется по ходу, а не раз на файл."""
+    line = "2026-10-08 10:00:01 event {:07d} from 10.1.2.15 status ok\n"
+    data = "".join(line.format(i) for i in range(3 * MB // len(line.format(0)) + 1)).encode()
+    # Поиск значений здесь ни при чём, а на 3 МБ он идёт десятки секунд.
+    monkeypatch.setattr(engine, "detect", lambda text, ctx: [])
+    monkeypatch.setattr(scrub, "REPORT_EVERY_S", 0)
+    ticks: list[tuple[str, int, int | None, str]] = []
+    sides: list[tuple[str | None, int, int, str]] = []
+    tick, side = JobHandle.tick, JobHandle.report_progress
+
+    def spy_tick(self: JobHandle, processed: int, message: str | None = None, total: int | None = None) -> None:
+        tick(self, processed, message, total)
+        job: Any = self._job
+        ticks.append((job.stage, job.processed, job.total, job.message))
+
+    def spy_side(self: JobHandle, processed: int, total: int, message: str, stage: str | None = None) -> None:
+        side(self, processed, total, message, stage)
+        sides.append((stage, processed, total, message))
+
+    monkeypatch.setattr(JobHandle, "tick", spy_tick)
+    monkeypatch.setattr(JobHandle, "report_progress", spy_side)
+
+    job_id = upload(auth_client, data, "big.log")
+    scanned = [t for t in ticks if t[0] == "scan"]
+    assert {total for _, _, total, _ in scanned} == {len(data)}
+    assert scanned[-1][1] == len(data)
+    assert len({message for *_, message in scanned}) >= 2
+    assert any(0 < processed < len(data) for _, processed, _, _ in scanned)
+    assert "файлов 1 из 1" in scanned[-1][3] and "3,0 МБ" in scanned[-1][3] and "найдено значений 0" in scanned[-1][3]
+
+    assert apply(auth_client, job_id)["status"] == "done"
+    stages = [stage for stage, *_ in sides if stage]
+    assert stages[0] == "apply" and stages[-1] == "verify" and stages == sorted(stages)
+    applied = [s for s in sides if s[0] == "apply"]
+    assert applied[-1][1] == applied[-1][2] == len(data)
+    assert any(0 < processed < len(data) for _, processed, _, _ in applied)

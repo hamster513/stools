@@ -107,19 +107,22 @@ class JobHandle:
         if self.cancelled():
             raise JobCancelled()
 
-    def report_progress(self, processed: int, total: int, message: str) -> None:
+    def report_progress(self, processed: int, total: int, message: str, stage: str | None = None) -> None:
         """Прогресс отдельной короткой транзакцией, основная транзакция задачи
         не фиксируется: на середине записи снапшота `tick` сделал бы видимой
         половину находок и оставил бы её при ошибке. Строка задачи обновляется
         по id; копия в сессии задачи получает те же значения как уже
-        записанные, чтобы следующий `stage` не счёл их неизменными."""
+        записанные, чтобы следующий `stage` не счёл их неизменными. `stage` —
+        смена стадии без фиксации основной транзакции (`stage()` её фиксирует)."""
         model: Any = type(self._job)
-        values = {
+        values: dict[str, Any] = {
             "processed": processed,
             "total": total,
             "progress": min(100, int(processed * 100 / total)) if total else 0,
             "message": message,
         }
+        if stage is not None:
+            values["stage"] = stage
         # Прогресс — подсказка человеку, а не часть работы: если строку задачи
         # держит чужая транзакция или связь оборвалась, отметка пропускается,
         # а задача идёт дальше. lock_timeout не даёт отметке повиснуть.

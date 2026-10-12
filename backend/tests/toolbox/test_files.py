@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from api.modules.toolbox.core.scrub.files import Entry, UnpackLimit, rewrite, walk
+from api.modules.toolbox.core.scrub.files import Entry, Progress, UnpackLimit, rewrite, walk
 from kbaudit.safe_io import MB
 from tests.toolbox.synthetic import EXPORT_JSON, TEXT
 
@@ -171,3 +171,76 @@ def test_encrypted_or_unsupported_member_is_broken(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(zipfile.ZipFile, "open", guarded)
     assert [e.kind for e, _ in collected(source)] == ["broken", "text"]
     assert [e.kind for e in rewrite(source, tmp_path / "clean.zip", to_host_alias)] == ["broken", "text"]
+
+
+# --- ход обхода ----------------------------------------------------------------------------------
+
+def big_log(path: Path, size: int = 3 * MB + 1000) -> Path:
+    """Синтетический лог чуть больше 3 МБ: строки по ~70 байт."""
+    line = "2026-10-08 10:00:01 event {:07d} from 10.1.2.15 user CORP\\jdoe status ok\n"
+    path.write_text("".join(line.format(i) for i in range(size // len(line.format(0)) + 1)), encoding="utf-8")
+    return path
+
+
+def assert_moves(calls: list[Progress], size: int) -> None:
+    positions = [p.source_pos for p in calls]
+    assert len(calls) >= 3
+    assert positions == sorted(positions), "позиция в исходнике не убывает"
+    assert positions[-1] == size
+    # Полоса движется по ходу чтения, а не прыгает в конец сразу.
+    assert any(0 < pos < size for pos in positions)
+
+
+def test_walk_reports_progress_of_one_big_text_file(tmp_path: Path) -> None:
+    source = big_log(tmp_path / "big.log")
+    calls: list[Progress] = []
+    for _, chunks in walk(source, on_progress=calls.append):
+        for _ in chunks:
+            pass
+    assert_moves(calls, source.stat().st_size)
+    last = calls[-1]
+    assert (last.entries_done, last.entries_total, last.path) == (1, 1, "big.log")
+    assert last.unpacked == source.stat().st_size and last.chunks > 40_000
+
+
+def test_walk_reports_progress_of_one_big_json_file(tmp_path: Path) -> None:
+    # JSON разбирается целиком: позиция по ходу кусков — доля пройденного текста внутри файла.
+    source = tmp_path / "big.json"
+    source.write_text(json.dumps({"rows": [{"host": f"host{i:07d}", "note": "x" * 40} for i in range(40_000)]}))
+    calls: list[Progress] = []
+    for _, chunks in walk(source, on_progress=calls.append):
+        for _ in chunks:
+            pass
+    assert_moves(calls, source.stat().st_size)
+    assert calls[-1].entries_done == 1
+
+
+def test_walk_reports_zip_members_as_entries(tmp_path: Path) -> None:
+    source = tmp_path / "three.zip"
+    source.write_bytes(zipped({"a.txt": b"one\n", "b.json": b'{"k": "v"}', "c.log": b"two\n"}))
+    calls: list[Progress] = []
+    for _, chunks in walk(source, on_progress=calls.append):
+        for _ in chunks:
+            pass
+    assert {p.entries_total for p in calls} == {3}
+    assert [(p.entries_done, p.path) for p in calls if p.source_pos < source.stat().st_size] == [
+        (1, "three.zip:a.txt"), (2, "three.zip:b.json"), (3, "three.zip:c.log"),
+    ]
+    assert calls[-1].entries_done == 3 and calls[-1].source_pos == source.stat().st_size
+
+
+def test_nested_archive_count_is_unknown(archive: Path) -> None:
+    calls: list[Progress] = []
+    for _, chunks in walk(archive, on_progress=calls.append):
+        for _ in chunks:
+            pass
+    assert {p.entries_total for p in calls} == {None}
+    assert calls[-1].entries_done == 3
+
+
+def test_rewrite_reports_progress(tmp_path: Path) -> None:
+    source = big_log(tmp_path / "big.log")
+    calls: list[Progress] = []
+    rewrite(source, tmp_path / "out.log", to_host_alias, on_progress=calls.append)
+    assert_moves(calls, source.stat().st_size)
+    assert calls[-1].entries_done == 1 and calls[-1].chunks > 40_000

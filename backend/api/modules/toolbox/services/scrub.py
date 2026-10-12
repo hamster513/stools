@@ -13,8 +13,8 @@ import re
 import secrets
 import shutil
 import time
-import zipfile
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,6 +29,7 @@ from api.jobs import (
     UPLOAD_INTERRUPTED,
     JobCancelled,
     JobHandle,
+    _num,
     fail_job,
     insert_chunked,
     run_job,
@@ -36,7 +37,7 @@ from api.jobs import (
 )
 from api.limits import MB, TOOLBOX_UPLOAD
 from api.modules.toolbox.core.scrub import engine
-from api.modules.toolbox.core.scrub.engine import EDGE_AFTER, EDGE_BEFORE, VerifyError
+from api.modules.toolbox.core.scrub.engine import EDGE_AFTER, EDGE_BEFORE, Status, VerifyError
 from api.modules.toolbox.core.scrub.files import UnpackLimit
 from api.modules.toolbox.core.scrub.types import KINDS, STORED_KINDS, Ctx, Finding
 from api.modules.toolbox.models import ToolboxAlias, ToolboxFinding, ToolboxJob, ToolboxSettings
@@ -57,7 +58,7 @@ TEXT_NAME = "text.txt"
 REPORT = "report.txt"
 MAPPING = "mapping.csv"
 NO_TEXT = "в файле нет текста"
-#: Прогресс скана пишется в базу не чаще раза в столько секунд.
+#: Ход скана и применения пишется в базу не чаще раза в столько секунд.
 REPORT_EVERY_S = 1.0
 FINISHED = ("done", "failed", "cancelled")
 LABELS = {
@@ -190,15 +191,51 @@ def create_job(db: Session, *, user: AppUser, upload: UploadFile | None, text: s
     return job
 
 
-def _files_in(source: Path) -> int | None:
-    """Сколько файлов в архиве (без вложенных) — для прогресса; не архив — один."""
-    if not zipfile.is_zipfile(source):
-        return 1
-    try:
-        with zipfile.ZipFile(source) as zf:
-            return sum(1 for info in zf.infolist() if not info.is_dir())
-    except (OSError, zipfile.BadZipFile):
-        return None
+def _mb(size: int) -> str:
+    return f"{size / MB:.1f}".replace(".", ",") + " МБ"
+
+
+def _detail(p: Status, size: int) -> str:
+    """Ход для человека: по нему видно, что задание не подвисло. Имён файлов нет — список заданий видят
+    все роли, а имя файла в архиве бывает настоящим именем хоста; сообщение переживает удаление файлов."""
+    # Пока запись читается, entries_done её не считает: показывается номер текущей («файл 1 из 1»
+    # на одном файле с первой отметки), а не ноль до самого конца.
+    if p.entries_total:
+        files = f"файлов {_num(min(p.entries_done + 1, p.entries_total))} из {_num(p.entries_total)}"
+    else:
+        files = f"файлов {_num(p.entries_done)}"
+    read = f"прочитано {_mb(p.source_pos)} из {_mb(size)}"
+    # У простого файла распаковано столько же, сколько прочитано: повторять незачем.
+    if p.unpacked != size:
+        read += f" (распаковано {_mb(p.unpacked)})"
+    parts = [files, read, f"фрагментов {_num(p.chunks)}"]
+    if p.phase == "scan":
+        parts.append(f"найдено значений {_num(p.findings)}")
+    return " · ".join(parts)
+
+
+class _Throttle:
+    """Ход в строку задания — не чаще раза в REPORT_EVERY_S; пропущенный последним пишется `flush`,
+    чтобы в конце стадии в строке были итоговые цифры, а не секундной давности."""
+
+    def __init__(self, write: Callable[[Status], None]) -> None:
+        self._write = write
+        self._last = float("-inf")
+        self._pending: Status | None = None
+
+    def __call__(self, p: Status) -> None:
+        now = time.monotonic()
+        if now - self._last >= REPORT_EVERY_S:
+            self._last = now
+            self._pending = None
+            self._write(p)
+        else:
+            self._pending = p
+
+    def flush(self) -> None:
+        if self._pending is not None:
+            self._write(self._pending)
+            self._pending = None
 
 
 def _finding_rows(job_id: int, findings: list[Finding], aliases: DbAliases) -> list[dict[str, Any]]:
@@ -216,22 +253,19 @@ def run_scan(db: Session, handle: JobHandle, job_id: int) -> None:
     source = _input(data_dir, job_id)
     row = get_settings_row(db)
     ctx = build_ctx(db, row, users_from_ad=job.users_from_ad, data_dir=data_dir)
-    # В сообщении задания — счётчики, а не имена файлов: список заданий видят все роли.
-    handle.stage("scan", total=_files_in(source), message="поиск значений")
+    # Полоса — байты входа: его размер известен, и она движется внутри одного большого файла.
+    size = job.input_size
+    handle.stage("scan", total=size, message="поиск значений")
     aliases = DbAliases(db, row.key, job.started_by, job.id, ctx)
-    last = [0.0]
-
-    def progress(done: int, _path: str) -> None:
-        now = time.monotonic()
-        if now - last[0] >= REPORT_EVERY_S:
-            last[0] = now
-            handle.tick(done, f"файлов просмотрено: {done}")
-
+    progress = _Throttle(lambda p: handle.tick(p.source_pos, _detail(p, size)))
     try:
         result = engine.scan(source, ctx, aliases, progress=progress)
     except UnpackLimit as exc:
         raise ValueError(str(exc)) from None
+    progress.flush()
     findings = result.findings
+    # Своя стадия: дальше processed и total — строки находок, а не байты входа.
+    handle.stage("persisting", total=len(findings), message="запись находок")
     insert_chunked(db, ToolboxFinding, _finding_rows(job_id, findings, aliases), len(findings), handle, "находок")
     job.stats = {
         "files": len(result.entries),
@@ -411,7 +445,8 @@ def run_apply(db: Session, handle: JobHandle, job_id: int) -> None:
     rows = list(db.scalars(select(ToolboxFinding).where(ToolboxFinding.job_id == job_id).order_by(ToolboxFinding.id)))
     ctx = build_ctx(db, row, users_from_ad=job.users_from_ad, data_dir=data_dir,
                     extra_words={r.value: r.alias for r in rows if r.kind == "word"})
-    handle.stage("apply", message="замена значений")
+    size = job.input_size
+    handle.stage("apply", total=size, message="замена значений")
     # Дальше до stage("done") — одна транзакция: замок таблицы соответствий из finalize держится до неё.
     aliases = DbAliases(db, row.key, job.started_by, job.id, ctx)
     findings = [Finding(r.kind, r.value, r.value_key, r.alias, r.count, [], r.first_file, r.checked, r.auto) for r in rows]
@@ -429,9 +464,22 @@ def run_apply(db: Session, handle: JobHandle, job_id: int) -> None:
     out = job_dir(data_dir, job_id) / "out"
     shutil.rmtree(out, ignore_errors=True)
     target = out / source.name
+
+    def reporter(stage: str, total: int) -> _Throttle:
+        # Ход — отдельной транзакцией: tick и stage зафиксировали бы основную на середине применения.
+        return _Throttle(lambda p: handle.report_progress(p.source_pos, total, _detail(p, total), stage=stage))
+
+    # Кеш находок один на замену и самопроверку: словари у них одни, а строки результата — те же.
+    memo = engine.Memo()
     try:
-        entries, counts = engine.apply(source, target, findings, ctx, aliases)
-        left = engine.verify(target, findings, ctx)
+        progress = reporter("apply", size)
+        entries, counts = engine.apply(source, target, findings, ctx, aliases, progress=progress, memo=memo)
+        progress.flush()
+        result_size = target.stat().st_size if target.is_file() else 0
+        handle.report_progress(0, result_size, "проверка результата", stage="verify")
+        progress = reporter("verify", result_size)
+        left = engine.verify(target, findings, ctx, progress=progress, memo=memo)
+        progress.flush()
     except VerifyError:
         no_text = not target.is_file()
         shutil.rmtree(out, ignore_errors=True)
@@ -500,6 +548,24 @@ def delete_files(db: Session, job_id: int) -> None:
     shutil.rmtree(job_dir(get_settings().data_dir, job_id), ignore_errors=True)
     db.execute(delete(ToolboxFinding).where(ToolboxFinding.job_id == job_id))
     job.files_deleted = True
+    db.commit()
+
+
+def delete_job(db: Session, job_id: int) -> None:
+    """Ручное удаление целиком: каталог, находки (каскадом БД) и строка задания. Псевдонимы остаются в таблице
+    соответствий, у них `first_job_id` обнуляется (ondelete SET NULL). Строка — под блокировкой, как в
+    start_apply: «применить» не проскочит между проверкой статуса и удалением."""
+    job = db.get(ToolboxJob, job_id, with_for_update=True, populate_existing=True)
+    if job is None:
+        raise LookupError("задание не найдено")
+    if job.status == "running":
+        # commit, а не rollback: rollback погасил бы пользователя запроса, которого читает журнал действий.
+        db.commit()
+        raise JobBusy("задание идёт — сначала отмените его")
+    # Файлы раньше строки: упавшее удаление строки оставит задание с пустым каталогом (его можно удалить
+    # снова), а обратный порядок оставил бы каталог с настоящими значениями без строки, по которой его найти.
+    shutil.rmtree(job_dir(get_settings().data_dir, job_id), ignore_errors=True)
+    db.delete(job)
     db.commit()
 
 

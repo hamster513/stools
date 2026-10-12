@@ -30,6 +30,9 @@ from kbaudit.safe_io import MB
 #: Потолок распакованного, как у AD: gzip разворачивается до ~1000:1.
 MAX_UNPACKED = 512 * MB
 BLOCK = MB
+#: Шаг отчёта о ходе: поиск идёт порядка секунд на мегабайт, и отметка раз в мегабайт была бы редкой
+#: для «не подвисло ли»; запись в базу всё равно реже — её прореживает вызывающий.
+STEP = MB // 4
 #: Вложенный архив меньше этого держится в памяти, больше — во временном файле.
 SPOOL = 64 * MB
 #: BOM снимается при чтении и ставится обратно при записи: кодировки ниже — без BOM. Средствами
@@ -46,6 +49,7 @@ OCTETS = "octets"
 Opener = Callable[[], AbstractContextManager[IO[bytes]]]
 Chunks = Iterator[tuple[str, str]]
 Transform = Callable[[str, str], str]
+OnProgress = Callable[["Progress"], None]
 
 
 class UnpackLimit(Exception):
@@ -59,14 +63,125 @@ class Entry:
     kind: str
 
 
+@dataclass(frozen=True, slots=True)
+class Progress:
+    """Ход обхода — чтобы человек видел, что задание не подвисло, даже внутри одного большого файла."""
+
+    path: str  # текущая запись
+    entries_done: int
+    #: Известно заранее для простого файла (1) и zip без вложенных архивов (число файлов); иначе None.
+    entries_total: int | None
+    #: Пройдено байт исходного файла верхнего уровня: его размер известен — это честная полоса.
+    source_pos: int
+    unpacked: int
+    chunks: int
+
+
 class _Budget:
-    def __init__(self) -> None:
+    """Распакованный объём (потолок MAX_UNPACKED) и ход обхода для `on_progress`.
+
+    Позиция берётся из `tell()` исходного файла верхнего уровня — пока куски идут из потока (текст
+    построчно). JSON разбирается целиком, и файл к началу кусков уже дочитан: тогда позиция внутри
+    записи — доля пройденного текста её кусков. Пока файл распознаётся и проверяется кодировка (он
+    читается целиком до кусков), позиция стоит: иначе полоса дошла бы до конца раньше работы.
+    """
+
+    def __init__(self, source: Path, on_progress: OnProgress | None = None) -> None:
         self.used = 0
+        self._source = source
+        self._on_progress = on_progress
+        self._total = _count(source) if on_progress is not None else None
+        self._file: IO[bytes] | None = None
+        self._closed_at = 0  # где был исходный файл, когда его закрыли
+        self._pos = 0
+        #: (позиция в начале записи, в конце, объём текста кусков) — пока куски идут не из потока.
+        self._span: tuple[int, int, int] | None = (0, 0, 0)
+        self._weight = 0
+        self._since = 0  # прочитано с прошлого отчёта
+        self._path = ""
+        self._done = 0
+        self._chunks = 0
 
     def add(self, size: int) -> None:
         self.used += size
         if self.used > MAX_UNPACKED:
             raise UnpackLimit(f"распакованный размер больше лимита ({MAX_UNPACKED // MB} МБ)")
+        self._tick(size, sample=False)
+
+    @contextmanager
+    def open(self) -> Iterator[IO[bytes]]:
+        """Исходный файл верхнего уровня; его позиция — ход обхода."""
+        with self._source.open("rb") as f:
+            self._file = f
+            try:
+                yield f
+            finally:
+                self._closed_at = f.tell()
+                self._file = None
+
+    def begin(self, path: str) -> None:
+        self._path = path
+
+    def stream(self) -> None:
+        """Куски записи идут из потока: позиция — по tell()."""
+        self._span = None
+
+    def in_memory(self, data: Any) -> None:
+        """Запись (JSON) прочитана целиком: позиция идёт от прежней до нынешней по доле текста кусков."""
+        if self._on_progress is None:
+            return  # без отчёта лишний проход по разобранному JSON не нужен
+        total = sum(len(text) for _, text in _json_chunks(data, ""))
+        self._span = (self._pos, max(self._pos, self._tell()), total)
+        self._weight = 0
+
+    def feed(self, text: str) -> None:
+        self._chunks += 1
+        self._weight += len(text)
+        self._tick(len(text), sample=True)
+
+    def metered(self, chunks: Chunks) -> Chunks:
+        for chunk in chunks:
+            self.feed(chunk[1])
+            yield chunk
+
+    def entry_done(self) -> None:
+        self._done += 1
+        if self._total is not None and self._done > self._total:
+            self._total = None  # вложенный архив без расширения .zip: заранее посчитать не вышло
+        self._pos = max(self._pos, self._tell())
+        self._span = (self._pos, self._pos, 0)
+        self._report()
+
+    def finish(self) -> None:
+        """Обход кончился — исходный файл пройден целиком (хвост zip — каталог, а не записи)."""
+        try:
+            self._pos = max(self._pos, self._source.stat().st_size)
+        except OSError:
+            pass
+        self._report()
+
+    def _tell(self) -> int:
+        return self._file.tell() if self._file is not None else self._closed_at
+
+    def _tick(self, size: int, *, sample: bool) -> None:
+        if self._on_progress is None:
+            return
+        self._since += size
+        if self._since < STEP:
+            return
+        self._since = 0
+        if sample:
+            if self._span is None:
+                self._pos = max(self._pos, self._tell())
+            else:
+                start, end, total = self._span
+                if total:
+                    self._pos = max(self._pos, start + (end - start) * min(self._weight, total) // total)
+        self._report()
+
+    def _report(self) -> None:
+        if self._on_progress is not None:
+            self._on_progress(Progress(self._path, self._done, self._total, self._pos, self.used, self._chunks))
 
 
 _TEXT = object()  # вместо разобранного JSON: файл читается построчно
@@ -77,25 +192,39 @@ class _Codec(NamedTuple):
     encoding: str
 
 
-def walk(source: Path) -> Iterator[tuple[Entry, Chunks]]:
+def walk(source: Path, on_progress: OnProgress | None = None) -> Iterator[tuple[Entry, Chunks]]:
     """Для каждого файла (включая лежащие в zip, во вложенных zip, в .gz) — запись и итератор кусков
     (json_key, text). Итератор кусков читается до следующего шага `walk`: он читает из открытого архива.
 
     Имена файлов в архиве — куски с ключом `__name__`, имена ключей JSON — с `__key__`, двоичный адрес
     `octets` — кусок с адресом текстом. Распаковано больше MAX_UNPACKED — `UnpackLimit`.
+
+    `on_progress` — не реже чем через мегабайт прочитанного и на конце каждой записи.
     """
-    yield from _walk(source.name, source.name, lambda: source.open("rb"), _Budget(), [])
+    budget = _Budget(source, on_progress)
+    for entry, chunks in _walk(source.name, source.name, budget.open, budget, []):
+        budget.begin(entry.path)
+        yield entry, budget.metered(chunks)
+        # Сюда обход возвращается, когда вызывающий попросил следующую запись: куски этой прочитаны.
+        budget.entry_done()
+    budget.finish()
 
 
-def rewrite(source: Path, target: Path, transform: Transform) -> list[Entry]:
+def rewrite(source: Path, target: Path, transform: Transform, on_progress: OnProgress | None = None) -> list[Entry]:
     """Тот же обход, но каждый кусок проходит через `transform(json_key, text)` и пишется в результат
     того же типа: zip → zip, .gz → .gz, json → компактный json, текст — той же кодировкой и с теми же
     концами строк. Не-текст в результат не попадает; если весь вход — не текст, `target` не создаётся.
-    При `UnpackLimit` недописанный `target` удаляет вызывающий."""
+    При `UnpackLimit` недописанный `target` удаляет вызывающий. `on_progress` — как у `walk`."""
     entries: list[Entry] = []
     target.parent.mkdir(parents=True, exist_ok=True)
-    _rewrite(source.name, source.name, lambda: source.open("rb"), _Budget(), transform, entries,
-             lambda: target.open("wb"), top=True)
+    budget = _Budget(source, on_progress)
+
+    def metered(json_key: str, text: str) -> str:
+        budget.feed(text)
+        return transform(json_key, text)
+
+    _rewrite(source.name, source.name, budget.open, budget, metered, entries, lambda: target.open("wb"), top=True)
+    budget.finish()
     return entries
 
 
@@ -113,6 +242,22 @@ def _classify(name: str, opener: Opener) -> str:
     if low.endswith(".gz") or head[:2] == b"\x1f\x8b":
         return "gz"
     return "file"
+
+
+def _count(source: Path) -> int | None:
+    """Сколько записей даст обход, если это известно заранее: простой файл — одна, zip — по одной на
+    файл, если среди них нет вложенных zip; .gz (в нём может быть архив) — неизвестно."""
+    kind = _classify(source.name, lambda: source.open("rb"))
+    if kind == "gz":
+        return None
+    if kind != "zip":
+        return 1
+    try:
+        with zipfile.ZipFile(source) as zf:
+            names = [info.filename.lower() for info in zf.infolist() if not info.is_dir()]
+    except BROKEN:
+        return 1  # повреждённый архив — одна запись broken
+    return None if any(name.endswith(".zip") for name in names) else len(names)
 
 
 def _inner(name: str) -> str:
@@ -230,8 +375,9 @@ def _walk(label: str, name: str, opener: Opener, budget: _Budget,
     names.clear()
     codec, data = leaf
     if data is _TEXT:
-        yield Entry(label, "text"), chain(pending, _lines(opener, codec))
+        yield Entry(label, "text"), chain(pending, _lines(opener, codec, budget))
     else:
+        budget.in_memory(data)
         yield Entry(label, "json"), chain(pending, _json_chunks(data, ""))
 
 
@@ -253,8 +399,9 @@ def _walk_zip(label: str, opener: Opener, budget: _Budget,
             del names[mark:]
 
 
-def _lines(opener: Opener, codec: _Codec) -> Chunks:
+def _lines(opener: Opener, codec: _Codec, budget: _Budget) -> Chunks:
     with opener() as raw:
+        budget.stream()
         raw.read(len(codec.bom))
         reader = io.TextIOWrapper(raw, encoding=codec.encoding, newline="")
         try:
@@ -291,8 +438,10 @@ def _rewrite(label: str, name: str, opener: Opener, budget: _Budget, transform: 
     if kind == "gz":
         return _rewrite(label, _inner(name), _gunzip(opener), budget, transform, entries, _gzip(sink), top=top)
     leaf = _leaf(opener, budget) if kind == "file" else kind
+    budget.begin(label)
     if isinstance(leaf, str):
         entries.append(Entry(label, leaf))
+        budget.entry_done()
         return False
     codec, data = leaf
     with sink() as out:
@@ -300,12 +449,15 @@ def _rewrite(label: str, name: str, opener: Opener, budget: _Budget, transform: 
         if data is _TEXT:
             entries.append(Entry(label, "text"))
             with opener() as raw:
+                budget.stream()
                 raw.read(len(codec.bom))
                 _rewrite_lines(raw, out, codec.encoding, transform)
         else:
             entries.append(Entry(label, "json"))
+            budget.in_memory(data)
             clean = _json_rewrite(data, "", transform)
             out.write(json.dumps(clean, ensure_ascii=False, separators=(",", ":")).encode(codec.encoding))
+    budget.entry_done()
     return True
 
 
@@ -315,7 +467,9 @@ def _rewrite_zip(label: str, opener: Opener, budget: _Budget, transform: Transfo
         try:
             zin = stack.enter_context(_zip_in(opener, budget))
         except BROKEN:
+            budget.begin(label)
             entries.append(Entry(label, "broken"))
+            budget.entry_done()
             return False
         spool = stack.enter_context(tempfile.SpooledTemporaryFile(SPOOL))
         written = top  # верхний архив пишется и пустым: результат задания должен существовать
