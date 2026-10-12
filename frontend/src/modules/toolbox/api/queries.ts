@@ -95,14 +95,20 @@ export function useApply(id: number) {
   })
 }
 
-/** Удаляет файлы и находки задания; строка и счётчики в stats остаются, в сведениях — `files_deleted`. */
+/** Удаляет задание целиком: файлы, находки и строку. Псевдонимы остаются в таблице соответствий, но у них
+ * обнуляется «первое задание» — список перечитывается. Запросы удалённого задания (в находках настоящие
+ * значения) убираются из кэша, а не обновляются, и не сразу: пока карточка ещё на экране, перерисовка
+ * пересоздала бы запрос и показала 404 — сначала страница уходит на список (колбэк вызывающего). */
 export function useDeleteJob() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, number>({
     mutationFn: (id) => api.del(`${BASE}/jobs/${id}`),
     onSuccess: (_, id) => {
-      qc.invalidateQueries({ queryKey: ['toolbox-info', id] })
       qc.invalidateQueries({ queryKey: ['toolbox-jobs'] })
+      qc.invalidateQueries({ queryKey: ['toolbox-aliases'] })
+      setTimeout(() => {
+        for (const key of ['toolbox-job', 'toolbox-info', 'toolbox-findings']) qc.removeQueries({ queryKey: [key, id] })
+      }, 0)
     },
   })
 }

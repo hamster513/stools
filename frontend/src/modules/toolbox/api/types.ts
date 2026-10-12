@@ -91,7 +91,9 @@ export const JOB_KIND_LABELS: Record<string, string> = { scan: 'сканиров
 export const STAGE_LABELS: Record<string, string> = {
   pending: 'ожидание',
   scan: 'поиск значений',
+  persisting: 'запись находок',
   apply: 'замена значений',
+  verify: 'проверка результата',
   done: 'готово',
 }
 

@@ -3,12 +3,12 @@ import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
-import { cn } from '@/lib/cn'
-import { Link } from '@/lib/router'
+import { Link, useRouter } from '@/lib/router'
 import { Section } from '@/platform/collector/ui'
 import { downloadUrl, useCancelJob, useDeleteJob, useJobInfo, useScrubJob } from '../api/queries'
 import { formatSize as size, JOB_KIND_LABELS, KIND_LABELS, KIND_ORDER, STAGE_LABELS, STATUS_CLASS, STATUS_LABELS, type JobInfo, type ScrubJob } from '../api/types'
 import { FindingsPreview } from './FindingsPreview'
+import { JobRun } from './JobRun'
 
 const LINK_BUTTON =
   'inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-sm font-medium text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
@@ -16,12 +16,10 @@ const LINK_BUTTON =
 function Progress({ job, canCancel, onCancel }: { job: ScrubJob; canCancel: boolean; onCancel: () => void }) {
   return (
     <Section title={job.kind === 'apply' ? 'Идёт очистка' : 'Идёт сканирование'} about="Страница обновляется сама; уходить с неё можно — задание идёт на сервере.">
-      <div className="max-w-md">
-        <div className="mb-1 text-xs text-text">{STAGE_LABELS[job.stage] ?? job.stage}{job.message && job.message !== STAGE_LABELS[job.stage] && <span className="text-text-secondary"> — {job.message}</span>}</div>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-grid">
-          <div className={cn('h-full rounded-full bg-primary transition-[width] duration-300', !job.total && 'animate-pulse')} style={{ width: job.total ? `${job.progress}%` : '100%' }} />
-        </div>
-        {job.total ? <div className="mt-1 font-mono text-[11px] tabular-nums text-text-secondary">файлов {job.processed} / {job.total}</div> : null}
+      <div className="max-w-xl">
+        <div className="mb-1 text-sm font-medium text-text">{STAGE_LABELS[job.stage] ?? job.stage}</div>
+        {job.message && job.message !== STAGE_LABELS[job.stage] && <div className="mb-2 text-xs text-text-secondary">{job.message}</div>}
+        <JobRun job={job} large />
         {canCancel && (
           <div className="mt-3">
             {job.cancel_requested ? <span className="text-xs text-text-secondary">отменяется…</span> : <Button variant="ghost" onClick={onCancel}><XCircle size={13} aria-hidden />Отменить</Button>}
@@ -87,6 +85,7 @@ export function ScrubJobPage({ id }: { id: number }) {
   const info = useJobInfo(id)
   const cancel = useCancelJob()
   const del = useDeleteJob()
+  const { navigate } = useRouter()
 
   if (job.isLoading || info.isLoading) return <FullPageSpinner />
   if (job.isError || info.isError || !job.data || !info.data) {
@@ -100,8 +99,8 @@ export function ScrubJobPage({ id }: { id: number }) {
   const applyStopped = j.kind === 'apply' && (j.status === 'failed' || j.status === 'cancelled')
   const editable = write && !i.files_deleted && (scanDone || applyStopped)
 
-  function deleteFiles() {
-    if (window.confirm(`Удалить файлы задания #${id}: исходный файл и результат? Счётчики останутся, находки и файлы будут удалены, скачать больше будет нечего.`)) del.mutate(id)
+  function deleteJob() {
+    if (window.confirm(`Удалить задание #${id} вместе с файлами и находками? Псевдонимы в таблице соответствий останутся.`)) del.mutate(id, { onSuccess: () => navigate('/toolbox') })
   }
 
   return (
@@ -120,8 +119,8 @@ export function ScrubJobPage({ id }: { id: number }) {
             {i.files_deleted && ' · файлы удалены'}
           </p>
         </div>
-        {write && !i.files_deleted && !running && (
-          <Button variant="danger" onClick={deleteFiles} loading={del.isPending}><Trash2 size={14} aria-hidden />Удалить файлы</Button>
+        {write && !running && (
+          <Button variant="danger" onClick={deleteJob} loading={del.isPending}><Trash2 size={14} aria-hidden />Удалить задание</Button>
         )}
       </div>
 

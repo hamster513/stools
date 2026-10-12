@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Eraser, Plus } from 'lucide-react'
+import { Eraser, Plus, Trash2, XCircle } from 'lucide-react'
 import { useMe } from '@/api/auth'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -12,8 +12,9 @@ import { cn } from '@/lib/cn'
 import { useRouter } from '@/lib/router'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
-import { useScrubJobs } from '../api/queries'
+import { useCancelJob, useDeleteJob, useScrubJobs } from '../api/queries'
 import { JOB_KIND_LABELS, STAGE_LABELS, STATUS_CLASS, STATUS_LABELS, type ScrubJob } from '../api/types'
+import { JobRun } from './JobRun'
 
 const CELL = 'px-3 py-2 align-top'
 
@@ -28,6 +29,8 @@ function when(iso: string): string {
  */
 export function ScrubJobsPage() {
   const { write } = useCan()
+  const cancel = useCancelJob()
+  const del = useDeleteJob()
   const me = useMe()
   const { navigate } = useRouter()
   const jobs = useScrubJobs()
@@ -41,6 +44,10 @@ export function ScrubJobsPage() {
   if (status) chips.push({ label: `статус: ${STATUS_LABELS[status as ScrubJob['status']]}`, clear: () => setStatus('') })
   if (kind) chips.push({ label: `вид: ${JOB_KIND_LABELS[kind]}`, clear: () => setKind('') })
   if (mine && login) chips.push({ label: 'только мои', clear: () => setMine(false) })
+
+  function remove(id: number) {
+    if (window.confirm(`Удалить задание #${id} вместе с файлами и находками? Псевдонимы в таблице соответствий останутся.`)) del.mutate(id)
+  }
 
   const rows = (jobs.data ?? []).filter((j) => (!status || j.status === status) && (!kind || j.kind === kind) && (!mine || !login || j.started_by === login))
 
@@ -92,16 +99,20 @@ export function ScrubJobsPage() {
       ) : rows.length === 0 ? (
         <EmptyState icon={Eraser} title="Под фильтры ничего не попало" description="Снимите часть фильтров." />
       ) : (
+        <>
+        {cancel.error && <ErrorState message={cancel.error.message} />}
+        {del.error && <ErrorState message={del.error.message} />}
         <div className="overflow-x-auto rounded border border-grid">
           <table className="w-full min-w-[800px] text-xs">
             <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
               <tr>
                 <th className="px-3 py-2 text-left">Задание</th>
                 <th className="px-3 py-2 text-left">Статус</th>
-                <th className="w-44 px-3 py-2 text-left">Ход</th>
+                <th className="w-56 px-3 py-2 text-left">Ход</th>
                 <th className="px-3 py-2 text-left">Итог</th>
                 <th className="px-3 py-2 text-left">Кто</th>
                 <th className="px-3 py-2 text-left">Когда</th>
+                <th className="px-3 py-2"><span className="sr-only">Действие</span></th>
               </tr>
             </thead>
             <tbody>
@@ -109,22 +120,26 @@ export function ScrubJobsPage() {
                 <tr key={j.id} {...clickableRow(() => navigate(`/toolbox/scrub/${j.id}`))} className={cn('cursor-pointer border-t border-grid hover:bg-row-hover', ROW_FOCUS)}>
                   <td className={cn(CELL, 'whitespace-nowrap text-text')}><span className="font-mono text-text-secondary">#{j.id}</span> {JOB_KIND_LABELS[j.kind] ?? j.kind}</td>
                   <td className={cn(CELL, STATUS_CLASS[j.status])}>{STATUS_LABELS[j.status]}{j.status === 'running' && <span className="text-text-secondary"> · {STAGE_LABELS[j.stage] ?? j.stage}</span>}</td>
-                  <td className={CELL}>
-                    {j.status === 'running' && j.total ? (
-                      <div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-grid"><div className="h-full rounded-full bg-primary" style={{ width: `${j.progress}%` }} /></div>
-                        <div className="mt-1 font-mono text-[11px] tabular-nums text-text-secondary">{j.processed} / {j.total}</div>
-                      </div>
-                    ) : null}
-                  </td>
+                  <td className={CELL}>{j.status === 'running' ? <JobRun job={j} /> : null}</td>
                   <td className={cn(CELL, 'max-w-[360px] text-text-secondary')}>{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
                   <td className={cn(CELL, 'font-mono text-text-secondary')}>{j.started_by}</td>
                   <td className={cn(CELL, 'whitespace-nowrap text-text-secondary')}>{when(j.started_at)}</td>
+                  {/* Отмена и удаление прямо из списка: карточку ради них открывать не нужно. Клик не должен открыть строку. */}
+                  <td className={cn(CELL, 'whitespace-nowrap text-right')} onClick={(e) => e.stopPropagation()}>
+                    {write && j.status === 'running' && (j.cancel_requested
+                      ? <span className="text-text-secondary">отменяется…</span>
+                      : <Button variant="ghost" aria-label={`Отменить задание #${j.id}`} disabled={cancel.isPending} onClick={() => cancel.mutate(j.id)}><XCircle size={13} aria-hidden />Отменить</Button>)}
+                    {/* Идущее задание сначала отменяют: сервер удалять его откажет. */}
+                    {write && j.status !== 'running' && (
+                      <Button variant="ghost" aria-label={`Удалить задание #${j.id}`} disabled={del.isPending} onClick={() => remove(j.id)}><Trash2 size={13} aria-hidden />Удалить</Button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   )
