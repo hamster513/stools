@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import { AlertTriangle, Check, Lock, Plus, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Lock, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -44,16 +44,10 @@ function SettingsForm({ initial }: { initial: ToolboxSettings }) {
   const daysOk = days.trim() !== '' && Number.isInteger(daysNum) && daysNum >= 0 && daysNum <= RETENTION_MAX
 
   // Псевдоним без слова сервер отвергает английским текстом без номера строки — ловим здесь.
+  // Пустое слово возможно только после правки на месте: через «Добавить» и список слово всегда задано.
   const noWord = words.flatMap((r, i) => (r.a.trim() === '' && r.b.trim() !== '' ? [i] : []))
 
-  function edit(set: typeof setWords, k: number, field: 'a' | 'b', value: string) {
-    setSaved(false)
-    set((rows) => rows.map((r) => (r.k === k ? { ...r, [field]: value } : r)))
-  }
-  function remove(set: typeof setWords, k: number) {
-    setSaved(false)
-    set((rows) => rows.filter((r) => r.k !== k))
-  }
+  function touch() { setSaved(false) }
   function submit(e: React.FormEvent) {
     e.preventDefault()
     if (!daysOk || noWord.length > 0 || save.isPending) return
@@ -83,12 +77,12 @@ function SettingsForm({ initial }: { initial: ToolboxSettings }) {
       <h1 className="mb-4 text-base font-semibold text-text">Настройки</h1>
       <div className="max-w-3xl space-y-4">
         <Section title="Слова" about="Свои слова: названия проектов, площадок, систем. Слово ищется как часть слова, без учёта регистра — короткое слово заменится и внутри других слов. Псевдоним можно не задавать — тогда он будет вида word-NNNN.">
-          <PairList rows={words} left="слово" right="word-NNNN" label="Слово" rightLabel="Псевдоним" onEdit={(k, f, v) => edit(setWords, k, f, v)} onRemove={(k) => remove(setWords, k)} onAdd={() => { setSaved(false); setWords((r) => [...r, mk()]) }} addLabel="Добавить слово" invalid={noWord} />
+          <PairEditor cfg={WORDS} rows={words} setRows={setWords} mk={mk} onChange={touch} invalid={noWord} />
           {noWord.map((i) => <p key={i} role="alert" className="mt-2 text-xs text-kind-1">Слово не задано в строке {i + 1}</p>)}
         </Section>
 
         <Section title="Подсети" about="Дополнительные подсети к сетям модуля «Активы»: адреса первой подсети заменяются адресами второй, которую вы задаёте явно. Длины префиксов в паре должны совпадать.">
-          <PairList rows={subnets} left="10.20.0.0/16" right="172.30.0.0/16" label="Подсеть" rightLabel="Заменить на" onEdit={(k, f, v) => edit(setSubnets, k, f, v)} onRemove={(k) => remove(setSubnets, k)} onAdd={() => { setSaved(false); setSubnets((r) => [...r, mk()]) }} addLabel="Добавить подсеть" mono />
+          <PairEditor cfg={SUBNETS} rows={subnets} setRows={setSubnets} mk={mk} onChange={touch} />
         </Section>
 
         <Section title="Хранение файлов" about="Файлы задания (исходный, результат, отчёт) удаляются при ежесуточной очистке: через указанное число дней после завершения задания; 0 — при ближайшей очистке. Строка задания, находки и таблица соответствий остаются.">
@@ -110,33 +104,241 @@ function SettingsForm({ initial }: { initial: ToolboxSettings }) {
   )
 }
 
-function PairList({ rows, left, right, label, rightLabel, onEdit, onRemove, onAdd, addLabel, mono, invalid = [] }: {
+/** Чем различаются два списка пар: подписи, подсказки и обязательность правой части. */
+interface PairCfg {
+  leftPh: string
+  rightPh: string
+  /** aria-label полей правки на месте и добавления; номер строки дописывается к первым двум. */
+  edit: [string, string]
+  add: [string, string]
+  remove: string
+  /** Правая часть обязательна (подсети) или может быть пустой (слова: псевдоним создастся сам). */
+  requireRight: boolean
+  /** Приглушённая подстановка вместо пустой правой части. */
+  emptyRight: string
+  /** Что считается пропуском при вставке списка: «пропущено <skipNote> K». */
+  skipNote: string
+  hint: ReactNode
+}
+
+const WORDS: PairCfg = {
+  leftPh: 'слово',
+  rightPh: 'псевдоним (необязательно)',
+  edit: ['Слово', 'Псевдоним'],
+  add: ['Новое слово', 'Псевдоним нового слова'],
+  remove: 'Удалить слово',
+  requireRight: false,
+  emptyRight: 'word-NNNN',
+  skipNote: 'без слова',
+  hint: <>По одной паре на строку: <code className="font-mono">{'MSK = WRKST'}</code>. Без <code className="font-mono">=</code> — только слово, псевдоним будет вида word-NNNN.</>,
+}
+
+const SUBNETS: PairCfg = {
+  leftPh: 'что: 10.1.0.0/16',
+  rightPh: 'во что: 10.201.0.0/16',
+  edit: ['Подсеть', 'Заменить на'],
+  add: ['Новая подсеть', 'Заменить новую подсеть на'],
+  remove: 'Удалить подсеть',
+  requireRight: true,
+  emptyRight: '—',
+  skipNote: 'без второй подсети',
+  hint: <>По одной паре на строку: <code className="font-mono">{'10.1.0.0/16 = 10.201.0.0/16'}</code>. Вторая подсеть обязательна: строки без неё пропускаются.</>,
+}
+
+/** Разбор вставленного списка: «левое => правое» по строке; для слов без разделителя это только слово. */
+function parsePairs(text: string, requireRight: boolean) {
+  const pairs: { left: string; right: string }[] = []
+  let skipped = 0
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === '') continue
+    // Разделитель — «=» (как в файле правил скрипта); «=>», «->» и «→» тоже принимаются, чтобы вставка из старых заметок не ломалась. Делим по первому.
+    const m = /=>|->|→|=/.exec(line)
+    const left = (m ? line.slice(0, m.index) : line).trim()
+    const right = m ? line.slice(m.index + m[0].length).trim() : ''
+    if (left === '' || (requireRight && right === '')) skipped++
+    else pairs.push({ left, right })
+  }
+  return { pairs, skipped }
+}
+
+const ROW_BTN = 'rounded px-1 font-mono hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
+
+type Editing = { k: number; field: 'a' | 'b' } | null
+
+/** Список пар компактно + добавление по одной и списком; общий для слов и подсетей, меняется только набор подписей. */
+function PairEditor({ cfg, rows, setRows, mk, onChange, invalid = [] }: {
+  cfg: PairCfg
   rows: Row[]
-  left: string
-  right: string
-  label: string
-  rightLabel: string
-  onEdit: (k: number, field: 'a' | 'b', value: string) => void
-  onRemove: (k: number) => void
-  onAdd: () => void
-  addLabel: string
-  mono?: boolean
-  /** Номера строк (с нуля), у которых левое поле не заполнено. */
+  setRows: React.Dispatch<React.SetStateAction<Row[]>>
+  mk: (a?: string, b?: string) => Row
+  /** Любая правка: сбрасывает «Сохранено». */
+  onChange: () => void
+  /** Номера строк (с нуля), у которых левая часть не заполнена. */
   invalid?: number[]
 }) {
-  const field = cn(FIELD, 'py-1 text-xs', mono && 'font-mono')
+  // Какая строка правится на месте (и какое поле в фокусе); остальные показываются компактным списком.
+  const [editing, setEditing] = useState<Editing>(null)
+
+  /**
+   * Добавляет пары; левая часть, уже стоящая в списке (без учёта регистра), не дублируется,
+   * а получает новую правую — так сервер не отвергнет повтор, а вставка списка работает как обновление.
+   */
+  function addPairs(pairs: { left: string; right: string }[]) {
+    const next = [...rows]
+    let added = 0
+    let updated = 0
+    for (const p of pairs) {
+      const at = next.findIndex((r) => r.a.trim().toLowerCase() === p.left.toLowerCase())
+      if (at >= 0) {
+        next[at] = { ...next[at], b: p.right }
+        updated++
+      } else {
+        next.push(mk(p.left, p.right))
+        added++
+      }
+    }
+    onChange()
+    setRows(next)
+    return { added, updated }
+  }
+  function commit(k: number, a: string, b: string) {
+    onChange()
+    setEditing(null)
+    // Строка, из которой стёрли всё, исчезает: пустышку в компактном списке не показать, а сервер ей не нужен.
+    setRows((rs) => (a.trim() === '' && b.trim() === '' ? rs.filter((r) => r.k !== k) : rs.map((r) => (r.k === k ? { ...r, a, b } : r))))
+  }
+  function remove(k: number) {
+    onChange()
+    setEditing(null)
+    setRows((rs) => rs.filter((r) => r.k !== k))
+  }
   return (
-    <div className="space-y-2">
-      {rows.length === 0 && <p className="text-xs text-text-secondary">Список пуст.</p>}
-      {rows.map((r, i) => (
-        <div key={r.k} className="flex items-center gap-2">
-          <input className={cn(field, invalid.includes(i) && 'border-kind-1')} aria-invalid={invalid.includes(i)} value={r.a} onChange={(e) => onEdit(r.k, 'a', e.target.value)} placeholder={left} aria-label={`${label} ${i + 1}`} spellCheck={false} />
-          <span className="text-text-secondary" aria-hidden>→</span>
-          <input className={field} value={r.b} onChange={(e) => onEdit(r.k, 'b', e.target.value)} placeholder={right} aria-label={`${rightLabel} ${i + 1}`} spellCheck={false} />
-          <button type="button" onClick={() => onRemove(r.k)} aria-label={`Убрать строку ${i + 1}`} title="Убрать" className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><X size={14} aria-hidden /></button>
-        </div>
-      ))}
-      <Button type="button" onClick={onAdd}><Plus size={14} aria-hidden />{addLabel}</Button>
+    <>
+      {rows.length === 0 ? (
+        <p className="mb-3 text-xs text-text-secondary">Список пуст.</p>
+      ) : (
+        // Длинный список (вставили сотню строк) прокручивается внутри блока, а не растягивает страницу.
+        <ul className="mb-3 max-h-72 overflow-y-auto">
+          {rows.map((r, i) => (
+            <li key={r.k} className="flex min-h-7 items-center gap-2 rounded px-1 text-xs hover:bg-row-hover/50">
+              {editing?.k === r.k ? (
+                <PairEditRow cfg={cfg} row={r} index={i} focus={editing.field} invalid={invalid.includes(i)} onCommit={(a, b) => commit(r.k, a, b)} onCancel={() => setEditing(null)} />
+              ) : (
+                <>
+                  <button type="button" onClick={() => setEditing({ k: r.k, field: 'a' })} title="Изменить" className={cn(ROW_BTN, 'text-text', invalid.includes(i) && 'text-kind-1')}>{r.a || '—'}</button>
+                  <span className="text-text-secondary" aria-hidden>→</span>
+                  <button type="button" onClick={() => setEditing({ k: r.k, field: 'b' })} title="Изменить" className={cn(ROW_BTN, r.b ? 'text-text' : 'text-text-secondary')}>{r.b || cfg.emptyRight}</button>
+                  <button type="button" onClick={() => remove(r.k)} aria-label={`${cfg.remove} ${i + 1}`} title="Удалить" className="ml-auto rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><X size={12} aria-hidden /></button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <PairAdd cfg={cfg} onAdd={addPairs} />
+    </>
+  )
+}
+
+/** Правка строки на месте: Enter и уход фокуса принимают, Esc отменяет. Пока правится, значения живут здесь, а не в списке. */
+function PairEditRow({ cfg, row, index, focus, invalid, onCommit, onCancel }: {
+  cfg: PairCfg
+  row: Row
+  index: number
+  focus: 'a' | 'b'
+  invalid: boolean
+  onCommit: (a: string, b: string) => void
+  onCancel: () => void
+}) {
+  const [a, setA] = useState(row.a)
+  const [b, setB] = useState(row.b)
+  const aRef = useRef<HTMLInputElement>(null)
+  const bRef = useRef<HTMLInputElement>(null)
+  // После Enter/Esc строка исчезает вместе с фокусом и может вызвать blur ещё раз — второй вызов не нужен.
+  const done = useRef(false)
+  useEffect(() => { (focus === 'b' ? bRef : aRef).current?.focus() }, [focus])
+
+  function finish(commit: boolean) {
+    if (done.current) return
+    done.current = true
+    if (commit) onCommit(a, b)
+    else onCancel()
+  }
+  function onKeyDown(e: React.KeyboardEvent) {
+    // Enter в форме настроек отправил бы всю форму.
+    if (e.key === 'Enter') { e.preventDefault(); finish(true) }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false) }
+  }
+  // Фокус между двумя полями одной строки правку не завершает.
+  function onBlur(e: React.FocusEvent) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) finish(true)
+  }
+  const field = cn(FIELD, 'py-0.5 font-mono text-xs')
+  return (
+    <div className="flex flex-1 items-center gap-2" onKeyDown={onKeyDown} onBlur={onBlur}>
+      <input ref={aRef} className={cn(field, invalid && 'border-kind-1')} aria-invalid={invalid} value={a} onChange={(e) => setA(e.target.value)} placeholder={cfg.leftPh} aria-label={`${cfg.edit[0]} ${index + 1}`} spellCheck={false} />
+      <span className="text-text-secondary" aria-hidden>→</span>
+      <input ref={bRef} className={field} value={b} onChange={(e) => setB(e.target.value)} placeholder={cfg.rightPh} aria-label={`${cfg.edit[1]} ${index + 1}`} spellCheck={false} />
+    </div>
+  )
+}
+
+/** Добавление пар: по одной и списком «левое => правое». Попадает в форму, сохраняется общей кнопкой. */
+function PairAdd({ cfg, onAdd }: { cfg: PairCfg; onAdd: (pairs: { left: string; right: string }[]) => { added: number; updated: number } }) {
+  const [left, setLeft] = useState('')
+  const [right, setRight] = useState('')
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const [status, setStatus] = useState('')
+  const leftRef = useRef<HTMLInputElement>(null)
+  const rightRef = useRef<HTMLInputElement>(null)
+
+  const canAdd = left.trim() !== '' && (!cfg.requireRight || right.trim() !== '')
+  function addOne() {
+    if (!canAdd) return
+    onAdd([{ left: left.trim(), right: right.trim() }])
+    setLeft('')
+    setRight('')
+    leftRef.current?.focus()
+  }
+  function addList() {
+    const { pairs, skipped } = parsePairs(text, cfg.requireRight)
+    if (pairs.length === 0) {
+      setStatus(skipped > 0 ? `Пропущено ${cfg.skipNote}: ${skipped}` : 'В списке нет строк')
+      return
+    }
+    const { added, updated } = onAdd(pairs)
+    setStatus(`Добавлено ${added}, обновлено ${updated}` + (skipped > 0 ? `, пропущено ${cfg.skipNote} ${skipped}` : ''))
+    setText('')
+  }
+  // Enter в полях добавления не должен отправлять всю форму настроек.
+  const enter = (fn: () => void) => (e: React.KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); fn() } }
+  const field = cn(FIELD, 'py-1 font-mono text-xs')
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <input ref={leftRef} className={field} value={left} onChange={(e) => setLeft(e.target.value)} onKeyDown={enter(() => rightRef.current?.focus())} placeholder={cfg.leftPh} aria-label={cfg.add[0]} spellCheck={false} />
+        <span className="text-text-secondary" aria-hidden>→</span>
+        <input ref={rightRef} className={field} value={right} onChange={(e) => setRight(e.target.value)} onKeyDown={enter(addOne)} placeholder={cfg.rightPh} aria-label={cfg.add[1]} spellCheck={false} />
+        <Button type="button" onClick={addOne} disabled={!canAdd} className="shrink-0"><Plus size={14} aria-hidden />Добавить</Button>
+      </div>
+
+      <div>
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex items-center gap-1 rounded text-xs font-medium text-text hover:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+          {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}Вставить списком
+        </button>
+        {open && (
+          <div className="mt-2 space-y-2">
+            <textarea className={cn(FIELD, 'min-h-24 font-mono text-xs')} value={text} onChange={(e) => { setText(e.target.value); setStatus('') }} aria-label="Список пар" spellCheck={false} />
+            <p className="text-xs text-text-secondary">{cfg.hint}</p>
+            <div className="flex items-center gap-3">
+              <Button type="button" onClick={addList} disabled={text.trim() === ''}>Добавить из списка</Button>
+              {status && <span role="status" className="text-xs text-text-secondary">{status}</span>}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
