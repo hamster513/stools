@@ -64,12 +64,17 @@ function KbForm({ c }: { c: KbConnectionView }) {
   }, [job.data?.status, job.data?.snapshot_id, navigate])
 
   function patch(p: Partial<typeof form>) {
+    // Старый результат проверки и старая ошибка описывали прежние настройки.
+    test.reset()
+    start.reset()
     setDirty(true)
     setForm((f) => ({ ...f, ...p }))
   }
 
-  const running = jobId !== undefined && job.data?.status === 'running'
-  const stageIndex = job.data ? STAGES.findIndex((s) => s.key === job.data?.stage) : -1
+  // До первого ответа опроса данных ещё нет, но сбор уже запущен: без isLoading кнопка на этот миг включается снова.
+  const running = jobId !== undefined && (job.isLoading || job.data?.status === 'running')
+  // Стадия «done» не входит в STAGES: на готовом сборе подсвечены все шесть.
+  const stageIndex = job.data?.stage === 'done' ? STAGES.length : job.data ? STAGES.findIndex((s) => s.key === job.data?.stage) : -1
   const err = (e: unknown, fallback: string) => (e instanceof ApiRequestError ? e.message : e ? fallback : null)
   const errorMessage = err(save.error, 'Не удалось сохранить') ?? err(test.error, 'Проверка не удалась') ?? err(start.error, 'Сбор не запущен') ?? job.data?.error ?? null
 
@@ -105,7 +110,13 @@ function KbForm({ c }: { c: KbConnectionView }) {
 
       {write && (
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
-          <Button variant="primary" onClick={() => save.mutate(form, { onSuccess: () => setDirty(false) })} loading={save.isPending} disabled={!dirty || !form.host}>
+          <Button variant="primary" onClick={() => save.mutate(form, {
+              // Секреты после сохранения не держим в состоянии: подсказка снова скажет «задан».
+              onSuccess: () => {
+                setDirty(false)
+                setForm((f) => ({ ...f, password: '', client_secret: '' }))
+              },
+            })} loading={save.isPending} disabled={!dirty || !form.host}>
             <Save size={13} aria-hidden /> Сохранить
           </Button>
           <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!c.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
