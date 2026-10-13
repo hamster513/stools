@@ -22,6 +22,7 @@ CATEGORIES: dict[str, str] = {
     "domain": "Настройки домена и леса",
     "trust": "Доверие",
     "pki": "AD CS и сертификаты",
+    "inventory": "Инвентарь",
 }
 
 

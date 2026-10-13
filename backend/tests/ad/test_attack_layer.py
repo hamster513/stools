@@ -12,7 +12,7 @@ from api.modules.attack.layers import LAYERS
 from api.modules.attack.services.attack_bundle import current as current_bundle
 from tests.ad.synthetic import export_bytes
 
-NO_TECHNIQUE = {"DuplicateObjects", "DcCount", "FunctionalLevel"}
+NO_TECHNIQUE = {"DuplicateObjects", "DcCount", "FunctionalLevel", "Clusters"}
 
 
 def test_every_check_maps_to_known_techniques(db_session: Any) -> None:

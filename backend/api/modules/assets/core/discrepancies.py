@@ -18,6 +18,8 @@ from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize
 #: no_network — адрес актива не входит ни в одну описанную сеть; считается по реестру сетей,
 #: а не по наблюдениям, поэтому его добавляет services.assets, а не `discrepancies`.
 CODES = ("stale", "conflict", "no_av", "ad_inactive", "unreachable", "unknown_host", "dns_orphan", "no_network")
+#: Виды `extra.cluster` наблюдения AD, при которых актив — виртуальное имя кластера, а не хост.
+VIRTUAL_CLUSTER_KINDS = ("cluster", "role")
 COMPARED = ("name", "fqdn", "ip")
 FIELD_TITLES = {"name": "имя", "fqdn": "FQDN", "ip": "IP"}
 #: «в VM IP …», «данные VM устарели»
@@ -126,13 +128,15 @@ def discrepancies(
     ip = str(asset.get("ip") or "")
 
     limit = now - dt.timedelta(days=inactive_days)
+    # Учётка кластера и его роль — виртуальные имена, не хосты: у них нет агента, входов и своего адреса.
+    virtual = any(o.source == "ad" and o.extra.get("cluster") in VIRTUAL_CLUSTER_KINDS for o in live)
     # Выключенный компьютер AD не «неактивный» и не «без агента»: он выключен.
     ad = [o for o in live if o.source == "ad" and o.extra.get("enabled")]
     ad_active = any((d := _iso(o.extra.get("last_logon"))) and d >= limit for o in ad)
-    if "ksc" not in sources and (sources & {"scan", "dns", "vm"} or ad_active):
+    if "ksc" not in sources and not virtual and (sources & {"scan", "dns", "vm"} or ad_active):
         out.append(Discrepancy("no_av", "", "", "", "", "нет агента антивируса"))
 
-    if ad:
+    if ad and not virtual:
         logons = [d for d in (_iso(o.extra.get("last_logon")) for o in ad) if d]
         others = [o for o in live if o.source != "ad" and o.seen_at and o.seen_at >= limit]
         if not others and not any(d >= limit for d in logons):
@@ -147,7 +151,7 @@ def discrepancies(
             if o.ip and scanned_networks(o.ip) and scan_alive(o.ip) is False:
                 out.append(Discrepancy("dns_orphan", "dns", "ip", o.ip, ip, "запись DNS без живого хоста"))
                 break
-    else:
+    elif not virtual:
         checked: set[str] = set()
         for o in live:
             if o.source not in ("ksc", "vm", "dns") or not o.ip or o.ip in checked:

@@ -35,7 +35,7 @@ GET   /assets                          q, source_has, source_missing, code, netw
                                        tag, criticality (Critical|High|Medium|Low|none), disc_status,
                                        assignee, overdue, limit≤500 (200), offset
                                        → {total, items, facets|null}
-                                       items: [{id, name, fqdn, domain, ip, os, network: {id, cidr, title,
+                                       items: [{id, cluster: cluster|role|node|null, name, fqdn, domain, ip, os, network: {id, cidr, title,
                                        zone}|null, first_seen, last_seen, criticality, tags, pinned,
                                        sources: [{source, live, fresh, seen_at}], discrepancy_count, codes}]
                                        discrepancy_count, codes — только расхождения с учитываемым статусом
@@ -58,6 +58,10 @@ PATCH /assets/{id}  {criticality?, tags?, note?, network_id?, network_manual?}  
                                        network_id: null, network_manual: false — вернуть расчёт по адресу
 GET   /assets/ids                      те же фильтры, без limit/offset → {total, ids} — выбор «всех по
                                        фильтру» для массового изменения (не больше 50 000)
+DELETE /assets/{id}                    204; 404 — нет; 409 — идёт синхронизация или запись задачи.
+                                       Актив удаляется с наблюдениями; если источник его ещё видит,
+                                       следующая синхронизация создаст его заново
+POST  /assets/bulk-delete  {ids}       → {deleted}; несуществующие id пропускаются
 POST  /assets/bulk  {ids, criticality?, tags_add?, tags_remove?}   → {updated}
                                        критичность и теги у многих активов: теги добавляются и снимаются,
                                        а не заменяются; несуществующие и объединённые id пропускаются;

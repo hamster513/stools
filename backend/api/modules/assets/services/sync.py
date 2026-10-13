@@ -145,6 +145,7 @@ def observations_from_ksc(db: Session) -> Iterator[Observed]:
 def _ad_observations(db: Session, data_dir: Path) -> tuple[list[Observed], bool]:
     """Компьютеры последнего снапшота каждого домена из файла выгрузки; второе — все ли файлы
     прочитаны: без файла домена его компьютеры нельзя считать пропавшими."""
+    from api.modules.ad.core.checks.clusters import cluster_kind
     from api.modules.ad.core.export import ExportFormatError, filetime_to_datetime, load_export_path
     from api.modules.ad.models import AdDomain
     from api.modules.ad.services.snapshots import latest_snapshot, snapshot_path
@@ -173,6 +174,8 @@ def _ad_observations(db: Session, data_dir: Path) -> tuple[list[Observed], bool]
                 extra={
                     "dn": o.dn, "enabled": o.enabled, "last_logon": last.isoformat() if last else None,
                     "os_version": o.operatingSystemVersion or "", "domain_id": domain.id,
+                    # cluster | role — виртуальное имя кластера, не хост; node — узел.
+                    "cluster": cluster_kind(o.spn),
                 },
             ))
     return out, complete

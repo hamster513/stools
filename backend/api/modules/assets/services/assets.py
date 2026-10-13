@@ -410,6 +410,21 @@ def update_manual(db: Session, asset_id: int, values: dict[str, Any]) -> Asset:
     return asset
 
 
+def delete_assets(db: Session, ids: list[int]) -> int:
+    """Удалить активы с наблюдениями; число удалённых. У активов, объединённых в удалённый, ссылка
+    `merged_into` обнуляется; решения по его расхождениям закроет сверка находок как исчезнувшие.
+    Актив, которого источник всё ещё видит, вернётся при следующей синхронизации — удаление не
+    скрывает хост, а чистит реестр от того, чего уже нет."""
+    deleted = 0
+    for start in range(0, len(ids), BULK_CHUNK):
+        chunk = ids[start : start + BULK_CHUNK]
+        for asset in db.execute(select(Asset).where(Asset.id.in_(chunk))).scalars():
+            db.delete(asset)
+            deleted += 1
+    db.flush()
+    return deleted
+
+
 #: Столько id за раз уходит в один запрос массового изменения (параметров у запроса не больше 65 535).
 BULK_CHUNK = 10_000
 
@@ -551,15 +566,25 @@ def _hits(t: Tracked, f: DiscFilter, today: dt.date, *, code: bool = True, statu
 
 
 def _item(asset: Asset, rows: list[AssetObservation], tracked: list[Tracked], network: Network | None, now: dt.datetime,
-          stale_days: int, counted: frozenset[str]) -> dict[str, Any]:
-    """Счётчик и коды расхождений — только с учитываемым статусом: принятый риск не «висит»."""
+          stale_days: int, counted: frozenset[str], cluster: str | None) -> dict[str, Any]:
+    """Счётчик и коды расхождений — только с учитываемым статусом: принятый риск не «висит».
+    `cluster` — cluster | role | node из наблюдения AD: учётка кластера и роль — виртуальные имена."""
     live = [t.d for t in tracked if t.status in counted]
     return {
+        "cluster": cluster,
         "id": asset.id, "name": asset.name, "fqdn": asset.fqdn, "domain": asset.domain, "ip": asset.ip, "os": asset.os,
         "network": _network_view(network), "first_seen": _iso(asset.first_seen), "last_seen": _iso(asset.last_seen),
         "criticality": asset.criticality, "tags": list(asset.tags or []), "pinned": dict(asset.pinned or {}),
         "sources": _sources(rows, now, stale_days), "discrepancy_count": len(live), "codes": sorted({d.code for d in live}, key=CODES.index),
     }
+
+
+def cluster_kinds(db: Session) -> dict[int, str]:
+    """asset_id → cluster | role | node по живым наблюдениям AD (`extra.cluster`) — одним запросом на список."""
+    kind = AssetObservation.extra["cluster"].as_string()
+    return dict(db.execute(
+        select(AssetObservation.asset_id, kind).where(AssetObservation.source.in_(("ad",)), AssetObservation.gone_at.is_(None), kind.is_not(None))
+    ).tuples().all())
 
 
 def _matches_query(asset: Asset, rows: list[AssetObservation], needle: str) -> bool:
@@ -750,8 +775,9 @@ def list_assets(
 
     picked.sort(key=lambda t: (t[0].name_key or normalize_fqdn(t[0].fqdn) or "~", t[0].ip, t[0].id))
     stale_days = int(settings["stale_days"])
+    clusters = cluster_kinds(db)
     page = [
-        _item(asset, rows, tracked, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days, counted)
+        _item(asset, rows, tracked, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days, counted, clusters.get(asset.id))
         for asset, rows, tracked in picked[offset : offset + limit]
     ]
     return page, len(picked), facets
@@ -829,8 +855,9 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
     keys = [finding_key(asset.id, d) for d in found]
     tracked = _tracked(asset.id, found, finding_svc.state_map(db, FINDINGS_MODULE, FINDINGS_SCOPE, keys))
     today = finding_svc.today()
+    cluster = next((str(r.extra["cluster"]) for r in rows if r.source == "ad" and r.gone_at is None and (r.extra or {}).get("cluster")), None)
     return {
-        **_item(asset, rows, tracked, network, now, int(settings["stale_days"]), counted),
+        **_item(asset, rows, tracked, network, now, int(settings["stale_days"]), counted, cluster),
         "network_manual": asset.network_manual, "note": asset.note, "merged_into": asset.merged_into,
         "created_at": _iso(asset.created_at), "updated_at": _iso(asset.updated_at),
         "observations": [

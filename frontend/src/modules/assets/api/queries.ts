@@ -75,13 +75,17 @@ export function useDetachObservation() {
   return useAssetMutation<number>((observationId) => api.post(`/api/assets/observations/${observationId}/detach`))
 }
 
+/** Удалённые карточки не перезапрашиваются (иначе 404 в консоли), а забываются; список и обзор — обновляются. */
+function forgetDeleted(qc: ReturnType<typeof useQueryClient>, ids: number[]) {
+  for (const id of ids) qc.removeQueries({ queryKey: ['assets-asset', id] })
+  for (const key of ['assets-list', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
+}
+
 export function useDeleteAsset() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, number>({
     mutationFn: (id) => api.del(`/api/assets/assets/${id}`),
-    onSuccess: () => {
-      for (const key of ['assets-list', 'assets-asset', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
-    },
+    onSuccess: (_void, id) => forgetDeleted(qc, [id]),
   })
 }
 
@@ -89,9 +93,7 @@ export function useBulkDelete() {
   const qc = useQueryClient()
   return useMutation<{ deleted: number }, ApiRequestError, number[]>({
     mutationFn: (ids) => api.post('/api/assets/assets/bulk-delete', { ids }),
-    onSuccess: () => {
-      for (const key of ['assets-list', 'assets-asset', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
-    },
+    onSuccess: (_result, ids) => forgetDeleted(qc, ids),
   })
 }
 

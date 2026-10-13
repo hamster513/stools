@@ -119,6 +119,37 @@ def test_ids_do_not_compute_discrepancies_unless_filtered_by_code(analyst: TestC
     assert conflict["ids"] == [by_name(analyst, "msk1")["id"]]
 
 
+def test_cluster_kind_in_list_and_card(analyst: TestClient, db_session: Session, app_settings: Any) -> None:
+    """Учётка кластера из AD (SPN MSServerCluster) помечена в списке и карточке и не считается хостом без агента."""
+    from tests.assets.synthetic import computer, load_ad
+
+    now = dt.datetime.now(dt.UTC)
+    cno = {**computer("CLU1$", 1301, last_logon=now - dt.timedelta(days=400), os_name=""), "spn": ["MSServerCluster/clu1", "MSClusterVirtualServer/clu1", "HOST/clu1"]}
+    node = {**computer("N1$", 1302, last_logon=now - dt.timedelta(days=1), os_name="Windows Server 2019 Datacenter"), "spn": ["MSServerClusterMgmtAPI/n1.corp.local", "HOST/n1"]}
+    load_ad(db_session, Path(app_settings.data_dir), [computer("WS01$", 1201, last_logon=now - dt.timedelta(days=3)), cno, node], now)
+    assert analyst.post("/api/assets/sync").status_code == 202
+    clu, n1 = by_name(analyst, "clu1"), by_name(analyst, "n1")
+    assert clu["cluster"] == "cluster" and n1["cluster"] == "node" and by_name(analyst, "ws01")["cluster"] is None
+    assert not {"no_av", "ad_inactive"} & set(clu["codes"])
+    assert "no_av" in n1["codes"]
+    card = analyst.get(f"/api/assets/assets/{clu['id']}").json()
+    assert card["cluster"] == "cluster" and next(o for o in card["observations"] if o["source"] == "ad")["extra"]["cluster"] == "cluster"
+
+
+def test_delete_single_and_bulk(analyst: TestClient) -> None:
+    ws01, srv01, old01 = (by_name(analyst, n)["id"] for n in ("ws01", "srv01", "old01"))
+    assert analyst.delete(f"/api/assets/assets/{ws01}").status_code == 204
+    assert analyst.get(f"/api/assets/assets/{ws01}").status_code == 404
+    assert analyst.delete(f"/api/assets/assets/{ws01}").status_code == 404
+    r = analyst.post("/api/assets/assets/bulk-delete", json={"ids": [srv01, old01, 10**9]})
+    assert r.status_code == 200 and r.json() == {"deleted": 2}, r.text
+    assert analyst.get("/api/assets/assets").json()["total"] == 1
+    assert analyst.post("/api/assets/assets/bulk-delete", json={"ids": []}).status_code == 422
+    # Источник хост всё ещё видит — после синхронизации он возвращается новым активом.
+    assert analyst.post("/api/assets/sync").status_code == 202
+    assert analyst.get("/api/assets/assets").json()["total"] == 4 and by_name(analyst, "srv01")["id"] != srv01
+
+
 def test_bulk_criticality_and_tags(analyst: TestClient) -> None:
     ws01, srv01, msk1 = (by_name(analyst, n)["id"] for n in ("ws01", "srv01", "msk1"))
     assert analyst.patch(f"/api/assets/assets/{ws01}", json={"tags": ["vip", "касса"], "note": "заметка"}).status_code == 200
@@ -281,4 +312,6 @@ def test_auditor_reads_but_cannot_write(analyst: TestClient, client_as: Callable
     assert auditor.post("/api/assets/observations/1/detach").status_code == 403
     assert auditor.get("/api/assets/assets/ids").status_code == 200
     assert auditor.post("/api/assets/assets/bulk", json={"ids": [asset_id], "criticality": "Low"}).status_code == 403
+    assert auditor.delete(f"/api/assets/assets/{asset_id}").status_code == 403
+    assert auditor.post("/api/assets/assets/bulk-delete", json={"ids": [asset_id]}).status_code == 403
     assert auditor.post("/api/assets/sync").status_code == 403

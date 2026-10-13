@@ -37,6 +37,7 @@ from api.modules.assets.services.assets import (
     AssetNotFound,
     asset_detail,
     bulk_update,
+    delete_assets,
     detach_observation,
     discrepancy_keys,
     list_assets,
@@ -97,6 +98,10 @@ class DiscrepancyBulkIn(BaseModel):
     ids: list[int] = Field(min_length=1, max_length=MAX_BULK)
     code: str = Field(max_length=32)
     change: ChangeBody
+
+
+class IdsIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=MAX_BULK)
 
 
 class PinIn(BaseModel):
@@ -229,6 +234,24 @@ def patch_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_db
     if payload.model_fields_set & {"network_id", "network_manual"}:
         reconcile_findings(db, f"сеть актива #{asset_id} изменена вручную")
     return dict(asset_detail(db, asset_id))
+
+
+@router.post("/assets/bulk-delete")
+def bulk_delete(payload: IdsIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, int]:
+    """Удаление вручную: актив с наблюдениями исчезает; если источник его ещё видит — вернётся при синхронизации."""
+    _no_running_sync(db)
+    deleted = delete_assets(db, payload.ids)
+    db.commit()
+    return {"deleted": deleted}
+
+
+@router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_asset(asset_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> Response:
+    _no_running_sync(db)
+    if delete_assets(db, [asset_id]) == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="актив не найден")
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/assets/{asset_id}/pin")
