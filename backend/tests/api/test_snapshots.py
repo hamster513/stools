@@ -106,3 +106,13 @@ def test_reparse_keeps_the_snapshot_when_parsing_fails(
 
     assert auth_client.get(f"/api/siem/snapshots/{snapshot_id}").status_code == 200
     assert auth_client.get(f"/api/siem/rules?snapshot_id={snapshot_id}").json()["total"] > 0
+
+
+def test_file_snapshot_has_no_inventory(auth_client: TestClient, snapshot_id: int) -> None:
+    rule = auth_client.get(f"/api/siem/rules?snapshot_id={snapshot_id}").json()["items"][0]
+    assert rule["installed"] is None and rule["folder_path"] is None and rule["deployment_sets"] == []
+    sets = auth_client.get(f"/api/siem/snapshots/{snapshot_id}/deployment-sets").json()
+    assert sets == {"available": False, "sets": [], "objects_total": 0, "installed": 0, "kb_not_exported": []}
+    row = next(r for r in auth_client.get("/api/siem/snapshots").json() if r["id"] == snapshot_id)
+    assert row["source_type"] == "upload" and row["kb_host"] is None
+    assert auth_client.get("/api/siem/snapshots/999999/deployment-sets").status_code == 404

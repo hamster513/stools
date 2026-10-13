@@ -82,7 +82,6 @@ def test_collect_builds_snapshot_with_inventory(auth_client: TestClient, kb: Fak
     assert not list(get_settings().archive_dir.glob("kb-collect-*"))
 
 
-@pytest.mark.xfail(strict=True, reason="поле installed — задача 6")
 def test_collect_matches_rules_case_insensitively(auth_client: TestClient, kb: FakeKb) -> None:
     job = collect_and_wait(auth_client)
     url = f"/api/siem/rules?snapshot_id={job['snapshot_id']}"
@@ -158,3 +157,24 @@ def test_collect_parse_failure_removes_snapshot_and_inventory(
     assert db_session.query(SiemRuleDeployment).count() == 0
     assert db_session.query(SiemDeploymentSet).count() == 0
     assert not list(get_settings().archive_dir.glob("kb-collect-*"))
+
+
+def test_rules_carry_folder_and_sets(auth_client: TestClient, kb: FakeKb) -> None:
+    job = collect_and_wait(auth_client)
+    sid = job["snapshot_id"]
+    rules = {r["uuid"]: r for r in auth_client.get(f"/api/siem/rules?snapshot_id={sid}").json()["items"]}
+    assert rules[U1]["folder_path"] == "DEMO/HC" and rules[U1]["deployment_sets"] == [INSTALL_SET]
+    assert rules[U2]["installed"] is False and rules[U2]["deployment_sets"] == []
+
+    detail = auth_client.get(f"/api/siem/rules/{U1}?snapshot_id={sid}").json()
+    assert detail["installed"] is True and detail["folder_path"] == "DEMO/HC" and detail["deployment_sets"] == ["install"]
+
+    sets = auth_client.get(f"/api/siem/snapshots/{sid}/deployment-sets").json()
+    assert sets["available"] is True and sets["objects_total"] == 3 and sets["installed"] == 1
+    assert sets["kb_not_exported"] == ["DEMO_HC_002_099_NotExported"]
+    install = next(s for s in sets["sets"] if s["kb_id"] == INSTALL_SET)
+    assert install["name"] == "install" and install["rule_count"] == 1 and install["deployment_statuses"] == {"p1": "Outdated"}
+    assert install["parent_kb_id"] == ROOT
+
+    summary = auth_client.get(f"/api/siem/snapshots/{sid}").json()
+    assert summary["source_type"] == "api" and summary["kb_database"] == "Default"

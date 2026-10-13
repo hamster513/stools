@@ -20,6 +20,7 @@ from api.modules.attack.services.attack_bundle import current as current_bundle
 from api.modules.siem.findings_adapter import MODULE, SCOPE, display_salt, key_of
 from api.modules.siem.services.attack import STATUS_UNMAPPED, markup_by_rule, techniques_of
 from api.modules.siem.services.highlight import spans_for
+from api.modules.siem.services.kb_inventory import deployment_by_rule, rule_fields, set_names
 from api.modules.siem.services.rule_attention import attention_by_rule, group_key
 from api.platform.findings import service as finding_svc
 
@@ -74,6 +75,12 @@ class RuleListItem(BaseModel):
     #: None означает, что открытых находок нет.
     max_severity: str | None = None
     attack: RuleAttack
+    #: Из списка объектов KB (снапшот по API): None — снапшот из файла или
+    #: правило в списке KB не найдено; тогда «не установлено» не утверждается.
+    installed: bool | None = None
+    folder_path: str | None = None
+    #: kb_id наборов установки; имена — в GET /snapshots/{id}/deployment-sets.
+    deployment_sets: list[str] = []
 
 
 class RuleListResponse(BaseModel):
@@ -177,6 +184,7 @@ def list_rules(
 
     markup = markup_by_rule(db)
     attention = attention_by_rule(db, snapshot_id)
+    deployment = deployment_by_rule(db, snapshot_id)
 
     items = [
         RuleListItem(
@@ -195,10 +203,19 @@ def list_rules(
             open_finding_count=attention.get(r.uuid, (0, None))[0],
             max_severity=attention.get(r.uuid, (0, None))[1],
             attack=_attack_of(db, r, markup),
+            **rule_fields(deployment.get(r.uuid.lower())),
         )
         for r in rows
     ]
     return RuleListResponse(total=total, items=items)
+
+
+def _detail_deployment(db: Session, snapshot_id: int, rule_uuid: str) -> dict[str, Any]:
+    """В детали — имена наборов, а не их id: здесь место для слов."""
+    fields = rule_fields(deployment_by_rule(db, snapshot_id).get(rule_uuid.lower()))
+    names = set_names(db, snapshot_id)
+    fields["deployment_sets"] = [names.get(kb_id, kb_id) for kb_id in fields["deployment_sets"]]
+    return fields
 
 
 @router.get("/{rule_uuid}")
@@ -308,6 +325,7 @@ def get_rule(
         "table_writes": table_writes,
         "findings": findings,
         "attack": _attack_of(db, rule, markup_by_rule(db)).model_dump(),
+        **_detail_deployment(db, snapshot_id, rule.uuid),
         "body": rule.body_text,
         # Где в теле сидит каждое замечание. Тело и так показывается
         # целиком, так что подсветка ничего не раскрывает — она отвечает

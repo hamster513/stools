@@ -19,6 +19,7 @@ from api.modules.siem.services.ingest import (
     start_reparse,
     start_upload,
 )
+from api.modules.siem.services.kb_inventory import deployment_sets_view
 from api.modules.siem.services.summary import build_list_item, build_summary
 from api.settings import Settings, get_settings
 
@@ -88,3 +89,15 @@ def get_snapshot(
     if snapshot is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
     return build_summary(db, snapshot)
+
+
+@router.get("/{snapshot_id}/deployment-sets")
+def get_deployment_sets(
+    snapshot_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)
+) -> dict[str, Any]:
+    """Наборы установки и сводка статусов установки снапшота, собранного по API.
+    У снапшота из файла — `available: false` и пустые списки, не ошибка."""
+    snapshot = db.get(Snapshot, snapshot_id)
+    if snapshot is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
+    return deployment_sets_view(db, snapshot)
