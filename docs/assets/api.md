@@ -80,6 +80,15 @@ POST  /assets/{id}/merge  {other_id}   → карточка первого; 409 
                                        задачи — повторите позже»)
 POST  /observations/{id}/detach        → карточка нового актива; 409 — у актива одно наблюдение,
                                        идёт синхронизация или запись результатов скана/DNS
+GET   /racktables                      подключения к JSON API RackTables: [{id, title, url, username,
+                                       password_set, verify_tls, rate_per_s, timeout_ms, enabled,
+                                       schedule_id, last_run_at, schedule}]
+POST  /racktables  {title?, url, username?, password?, verify_tls?, rate_per_s?, timeout_ms?, enabled?}
+PUT   /racktables/{id}                 то же; пустой password — оставить прежний
+DELETE /racktables/{id}                204; расписание удаляется вместе с подключением
+POST  /racktables/{id}/check           {version} — getAPIVersion сохранёнными учётными данными; 502 — ошибка API
+POST  /racktables/{id}/run             202 {job_id}; 409 — идёт другой проход или подключение выключено
+PUT/DELETE /racktables/{id}/schedule   расписание проходов (вид assets/rt)
 GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост модуля не сопоставлен
 ```
 

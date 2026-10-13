@@ -44,7 +44,7 @@ def asset_id(c: TestClient, name: str) -> int:
 def test_overview_counts_match_synthetic(analyst: TestClient) -> None:
     body = analyst.get("/api/assets/overview").json()
     assert body["assets_total"] == 4
-    assert body["by_source"] == {"vm": 2, "ksc": 2, "ad": 3, "scan": 0, "dns": 0}
+    assert body["by_source"] == {"vm": 2, "ksc": 2, "ad": 3, "scan": 0, "dns": 0, "rt": 0}
     # ws01 — нет агента; old01 — неактивный AD; msk1 — VM и KSC расходятся по IP.
     assert body["codes"]["no_av"] == 1 and body["codes"]["ad_inactive"] == 1 and body["codes"]["conflict"] == 1
     # Адреса есть у msk1 и srv01, сетей не описано.

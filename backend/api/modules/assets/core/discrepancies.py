@@ -23,9 +23,9 @@ VIRTUAL_CLUSTER_KINDS = ("cluster", "role")
 COMPARED = ("name", "fqdn", "ip")
 FIELD_TITLES = {"name": "имя", "fqdn": "FQDN", "ip": "IP"}
 #: «в VM IP …», «данные VM устарели»
-WHERE = {"vm": "в VM", "ksc": "в KSC", "ad": "в AD", "scan": "в скане", "dns": "в DNS"}
-WHOSE = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "скана", "dns": "DNS"}
-TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "скан", "dns": "DNS"}
+WHERE = {"vm": "в VM", "ksc": "в KSC", "ad": "в AD", "scan": "в скане", "dns": "в DNS", "rt": "в RackTables"}
+WHOSE = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "скана", "dns": "DNS", "rt": "RackTables"}
+TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "скан", "dns": "DNS", "rt": "RackTables"}
 
 _EPOCH = dt.datetime.min.replace(tzinfo=dt.UTC)
 
@@ -154,7 +154,8 @@ def discrepancies(
     elif not virtual:
         checked: set[str] = set()
         for o in live:
-            if o.source not in ("ksc", "vm", "dns") or not o.ip or o.ip in checked:
+            # Адрес из RackTables, который не отвечает скану, — устаревший инвентарь.
+            if o.source not in ("ksc", "vm", "dns", "rt") or not o.ip or o.ip in checked:
                 continue
             checked.add(o.ip)
             if scanned_networks(o.ip) and scan_alive(o.ip) is False:

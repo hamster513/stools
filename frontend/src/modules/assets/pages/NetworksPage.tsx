@@ -158,7 +158,10 @@ export function NetworksPage() {
               {list.map((n) => (
                 <tr key={n.id} className="border-t border-grid align-top hover:bg-row-hover">
                   <td className="truncate px-3 py-2 font-mono text-text" title={n.cidr}>{n.cidr}</td>
-                  <td className="px-3 py-2 break-words text-text">{n.title || '—'}{n.vlan !== null && <span className="ml-1 text-text-secondary">· VLAN {n.vlan}</span>}</td>
+                  <td className="px-3 py-2 break-words text-text">
+                  {n.title || '—'}{n.vlan !== null && <span className="ml-1 text-text-secondary">· VLAN {n.vlan}</span>}
+                  {n.origin === 'racktables' && <span className="ml-1 rounded border border-grid px-1 text-[11px] text-text-secondary" title="Создана проходом RackTables: название, описание, VLAN и теги обновляет он; зона, площадка и настройки скана — ваши">RackTables</span>}
+                </td>
                   <td className="truncate px-3 py-2 text-text-secondary" title={n.zone ?? undefined}>{n.zone ?? '—'}</td>
                   <td className="truncate px-3 py-2 text-text-secondary" title={n.site || undefined}>{n.site || '—'}</td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums">

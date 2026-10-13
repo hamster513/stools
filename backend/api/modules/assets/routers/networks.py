@@ -153,6 +153,8 @@ class NetworkView(BaseModel):
     last_scan_alive: int | None
     #: False — последний скан шёл в режиме «только порты»; None — сеть не сканировали.
     last_scan_icmp: bool | None
+    #: Пусто — описана вручную; racktables — создана задачей RackTables (название, описание, VLAN и теги обновляет она).
+    origin: str
     created_at: dt.datetime
     updated_at: dt.datetime
     stats: NetworkStats
@@ -173,7 +175,7 @@ def _view(n: Network, stats: dict[str, Any], schedules: dict[int, PlatformSchedu
         tags=list(n.tags or []), scan_enabled=n.scan_enabled, ports=list(n.ports or []), exclude=list(n.exclude or []),
         concurrency=n.concurrency, icmp_timeout_ms=n.icmp_timeout_ms, tcp_timeout_ms=n.tcp_timeout_ms,
         rate_per_s=n.rate_per_s, estimated_seconds=estimated_seconds(n), schedule_id=n.schedule_id,
-        last_scan_at=n.last_scan_at, last_scan_alive=n.last_scan_alive, last_scan_icmp=n.last_scan_icmp, created_at=n.created_at, updated_at=n.updated_at,
+        last_scan_at=n.last_scan_at, last_scan_alive=n.last_scan_alive, last_scan_icmp=n.last_scan_icmp, origin=n.origin, created_at=n.created_at, updated_at=n.updated_at,
         stats=NetworkStats(**stats), schedule=schedule_view(sched) if sched is not None else None,
     )
 

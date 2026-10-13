@@ -15,6 +15,7 @@ import { Field, FIELD, Section } from '@/platform/collector/ui'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { DnsSection } from './settings/DnsSection'
+import { RacktablesSection } from './settings/RacktablesSection'
 import { SyncButton } from './SyncButton'
 
 const SYNC_COLUMNS: ColumnDef[] = [
@@ -230,6 +231,7 @@ export function SettingsPage() {
         <ThresholdsSection />
         <SyncSection />
         <DnsSection />
+        <RacktablesSection />
         <ZonesSection />
       </div>
     </div>

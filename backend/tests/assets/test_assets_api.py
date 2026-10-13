@@ -40,7 +40,7 @@ def by_name(c: TestClient, name: str) -> dict[str, Any]:
 def test_list_filters_and_facets(analyst: TestClient) -> None:
     body = analyst.get("/api/assets/assets").json()
     assert body["total"] == 4 and names(body) == {"msk1", "ws01", "srv01", "old01"}
-    assert body["facets"]["source"] == {"vm": 2, "ksc": 2, "ad": 3, "scan": 0, "dns": 0}
+    assert body["facets"]["source"] == {"vm": 2, "ksc": 2, "ad": 3, "scan": 0, "dns": 0, "rt": 0}
     # no_av — только ws01: old01 давно не входил, это ad_inactive, а не «нет агента».
     assert body["facets"]["code"]["conflict"] == 1 and body["facets"]["code"]["no_av"] == 1
     item = next(i for i in body["items"] if i["name"].lower() == "msk1")

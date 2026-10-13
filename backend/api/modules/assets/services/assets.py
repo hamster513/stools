@@ -37,7 +37,7 @@ from api.platform.findings.models import FindingState
 from api.timeutil import utcnow
 
 DEFAULT_SETTINGS: dict[str, Any] = {"inactive_days": 30, "stale_days": 30, "sync_after_import": True}
-SOURCES = ("vm", "ksc", "ad", "scan", "dns")
+SOURCES = ("vm", "ksc", "ad", "scan", "dns", "rt")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
 #: Фильтр и фасет «хоть одно расхождение».
 ANY_CODE = "any"

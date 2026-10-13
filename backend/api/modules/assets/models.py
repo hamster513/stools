@@ -64,6 +64,9 @@ class Network(Base):
     last_scan_alive: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: Шёл ли последний скан с ICMP; False — «только порты» (ICMP-сокет не открылся), None — не сканировали.
     last_scan_icmp: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: Откуда сеть: пусто — описана вручную, racktables — создана задачей RackTables (origin_key — id сети там).
+    origin: Mapped[str] = mapped_column(String(32), default="", server_default="")
+    origin_key: Mapped[str] = mapped_column(String(64), default="", server_default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
@@ -144,8 +147,29 @@ class AssetDns(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class AssetRacktables(Base):
+    """Подключение к JSON API RackTables: сети и имена адресов → сети Assets и наблюдения `rt`."""
+
+    __tablename__ = "asset_racktables"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    url: Mapped[str] = mapped_column(String(512))
+    username: Mapped[str] = mapped_column(String(255), default="")
+    #: Зашифрован, как пароль подключения AD.
+    password: Mapped[str] = mapped_column(Text, default="")
+    verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
+    rate_per_s: Mapped[int] = mapped_column(Integer, default=10)
+    timeout_ms: Mapped[int] = mapped_column(Integer, default=30000)
+    schedule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("platform_schedule.id", ondelete="SET NULL"), nullable=True,
+    )
+    last_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class AssetJob(JobColumns, Base):
-    """Сканы, DNS-обновления и синхронизация с модулями: kind ∈ scan, dns, sync."""
+    """Сканы, DNS-обновления, проходы RackTables и синхронизация с модулями: kind ∈ scan, dns, rt, sync."""
 
     __tablename__ = "asset_job"
 
