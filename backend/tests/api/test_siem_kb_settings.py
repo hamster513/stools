@@ -4,7 +4,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
+
+from tests.api.fake_kb import FakeKb
 
 BODY = {"host": "mp.corp.local", "username": "svc", "password": "p1", "client_secret": "s1"}
 
@@ -51,3 +54,30 @@ def test_auditor_reads_but_cannot_save(client_as: Callable[[str], TestClient]) -
     auditor = client_as("auditor")
     assert auditor.get("/api/siem/kb").status_code == 200
     assert auditor.put("/api/siem/kb", json=BODY).status_code == 403
+
+
+def test_test_requires_configured_connection(auth_client: TestClient) -> None:
+    assert auth_client.post("/api/siem/kb/test").status_code == 400
+
+
+def test_test_reports_version_and_database(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeKb()
+    monkeypatch.setattr("api.modules.siem.routers.kb.make_client", fake.http_factory)
+    assert auth_client.put("/api/siem/kb", json=BODY).status_code == 200
+    body = auth_client.post("/api/siem/kb/test").json()
+    assert body == {
+        "ok": True, "message": "база знаний 27.1.1234 отвечает, БД контента: Default",
+        "version": "27.1.1234", "database": "Default",
+    }
+    token_form = fake.calls[0].content.decode()
+    assert "password=p1" in token_form and "client_secret=s1" in token_form
+
+
+def test_test_reports_error_class_only(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeKb()
+    fake.token_status = 401
+    monkeypatch.setattr("api.modules.siem.routers.kb.make_client", fake.http_factory)
+    auth_client.put("/api/siem/kb", json=BODY)
+    body = auth_client.post("/api/siem/kb/test").json()
+    assert body["ok"] is False and body["message"] == "вход отклонён"
+    assert "mp.corp.local" not in body["message"]
