@@ -29,6 +29,7 @@ from api.modules.toolbox.models import ToolboxAlias, ToolboxFinding, ToolboxJob
 from api.modules.toolbox.services import scrub
 from api.modules.toolbox.services.scrub import cleanup_handler, get_settings_row, job_dir
 from api.platform.scheduler import PlatformSchedule
+from kbaudit.attack.reference import rows_from_xlsx
 from tests.toolbox.synthetic import EXPORT_JSON, TEXT
 
 API = "/api/toolbox/scrub"
@@ -508,3 +509,31 @@ def test_progress_of_one_big_file_is_in_bytes(auth_client: TestClient, monkeypat
     applied = [s for s in sides if s[0] == "apply"]
     assert applied[-1][1] == applied[-1][2] == len(data)
     assert any(0 < processed < len(data) for _, processed, _, _ in applied)
+
+
+def test_aliases_export_applies_filters_in_both_formats(
+    db_session: Any, auth_client: TestClient, client_as: Callable[[str], TestClient],
+) -> None:
+    """Выгрузка соответствий — с теми же `q` и `kind`, что у списка; старый `export.csv` — тот же CSV."""
+    db_session.add_all([
+        ToolboxAlias(kind="host", real_key="web01", real="web01", alias="host-0001", created_by="analyst", first_job_id=None),
+        ToolboxAlias(kind="host", real_key="db01", real="db01", alias="host-0002", created_by="analyst", first_job_id=None),
+        ToolboxAlias(kind="ip4", real_key="10.0.0.1", real="=10.0.0.1", alias="10.255.0.1", created_by="analyst", first_job_id=None),
+    ])
+    db_session.commit()
+    as_csv = auth_client.get("/api/toolbox/aliases/export", params={"format": "csv", "kind": "host", "q": "web"})
+    assert as_csv.status_code == 200 and "stools-toolbox-aliases-" in as_csv.headers["content-disposition"]
+    rows = list(csv.reader(io.StringIO(as_csv.content.decode("utf-8-sig")), delimiter=";"))
+    assert rows[0] == ["Вид", "Настоящее", "Псевдоним", "Когда", "Кто", "Задание"]
+    assert [r[:3] for r in rows[1:]] == [["host", "web01", "host-0001"]]
+    as_xlsx = auth_client.get("/api/toolbox/aliases/export", params={"format": "xlsx", "kind": "host"})
+    assert [r[1] for r in rows_from_xlsx(as_xlsx.content)[1:]] == ["web01", "db01"]
+    old = auth_client.get("/api/toolbox/aliases/export.csv")
+    old_rows = list(csv.reader(io.StringIO(old.content.decode("utf-8-sig")), delimiter=";"))
+    assert old_rows[0] == rows[0] and len(old_rows) == 1 + 3
+    assert ["ip4", "'=10.0.0.1", "10.255.0.1"] in [r[:3] for r in old_rows]
+    # Отказ аудитору пишется в журнал без строки запроса: в `q` — настоящее значение.
+    auditor = client_as("auditor")
+    assert auditor.get("/api/toolbox/aliases/export", params={"q": "web01"}).status_code == 403
+    last = db_session.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
+    assert last is not None and last.status == 403 and "web01" not in (last.summary or "")

@@ -1,8 +1,6 @@
 """Таблица пар, карточка расчёта, хост, экспорт."""
 from __future__ import annotations
 
-import csv
-import io
 from collections.abc import Iterator
 from typing import Any
 
@@ -42,7 +40,7 @@ from api.modules.vm.services.query import (
 )
 from api.modules.vm.services.settings import load_settings
 from api.modules.vm.services.stats import load_stats
-from api.platform.routers.audit import _csv_safe
+from api.platform.export import Column, export_response
 
 router = APIRouter(tags=["vm"])
 
@@ -242,24 +240,24 @@ def host_detail(host_id: int, db: Session = Depends(get_db), _user: AppUser = De
 
 
 EXPORT_COLUMNS = [
-    ("risk", "Риск"),
-    ("level", "Уровень"),
-    ("hostname", "Хост"),
-    ("ip", "IP"),
-    ("cve_id", "CVE"),
-    ("cvss", "CVSS"),
-    ("cvss_source", "Источник CVSS"),
-    ("epss", "EPSS"),
-    ("exploitdb_type", "Эксплойт"),
-    ("exploits_count", "Эксплойтов"),
-    ("msf_rank", "Metasploit"),
-    ("criticality", "Критичность"),
-    ("zone", "Зона"),
-    ("os_name", "ОС"),
-    ("risk_raw", "Риск (сырой)"),
-    ("status_title", "Статус"),
-    ("assignee", "Исполнитель"),
-    ("due_date", "Срок"),
+    Column("risk", "Риск"),
+    Column("level", "Уровень"),
+    Column("hostname", "Хост"),
+    Column("ip", "IP"),
+    Column("cve_id", "CVE"),
+    Column("cvss", "CVSS"),
+    Column("cvss_source", "Источник CVSS"),
+    Column("epss", "EPSS"),
+    Column("exploitdb_type", "Эксплойт"),
+    Column("exploits_count", "Эксплойтов"),
+    Column("msf_rank", "Metasploit"),
+    Column("criticality", "Критичность"),
+    Column("zone", "Зона"),
+    Column("os_name", "ОС"),
+    Column("risk_raw", "Риск (сырой)"),
+    Column("status_title", "Статус"),
+    Column("assignee", "Исполнитель"),
+    Column("due_date", "Срок"),
 ]
 
 
@@ -267,34 +265,17 @@ EXPORT_COLUMNS = [
 def export_csv(
     f: VulnFilters = Depends(_filters),
     sort: str = Query(default="risk_desc"),
+    fmt: str = Query(default="csv", alias="format"),
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    """CSV с BOM и `;` — так его открывает Excel в русской локали без вопросов. Фильтры — как у
-    списка, по умолчанию открытые пары; последние колонки — статус, исполнитель, срок. Строки (имя хоста,
-    ОС, зона — из выгрузки MaxPatrol) проходят `_csv_safe`: ячейка с =, +, -, @ в начале не станет
-    формулой (аудит L2); числа идут как есть."""
+    """CSV (по умолчанию) или XLSX — api/platform/export.py. Фильтры — как у списка, по умолчанию
+    открытые пары; последние колонки — статус, исполнитель, срок. Строки (имя хоста, ОС, зона — из
+    выгрузки MaxPatrol) в CSV проходят `csv_safe` (аудит L2)."""
 
-    def cell(value: Any) -> Any:
-        if value is None:
-            return ""
-        return _csv_safe(value) if isinstance(value, str) else value
-
-    def gen() -> Iterator[bytes]:
-        buf = io.StringIO()
-        writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
-        writer.writerow([title for _, title in EXPORT_COLUMNS])
-        yield ("﻿" + buf.getvalue()).encode("utf-8")
+    def rows() -> Iterator[dict[str, Any]]:
         today = f.status.day()
         for row in iter_rows(db, f, sort):
-            item = item_with_state(row, today)
-            buf.seek(0)
-            buf.truncate()
-            writer.writerow([cell(item.get(key)) for key, _ in EXPORT_COLUMNS])
-            yield buf.getvalue().encode("utf-8")
+            yield item_with_state(row, today)
 
-    return StreamingResponse(
-        gen(),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="stools-vm-export.csv"'},
-    )
+    return export_response(fmt, EXPORT_COLUMNS, rows(), module="vm", name="vulns")

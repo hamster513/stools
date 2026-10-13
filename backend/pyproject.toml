@@ -44,6 +44,8 @@ api = [
     "dnspython>=2.6",
     # Модуль ToolBox: детекторы секретов.
     "detect-secrets>=1.5",
+    # Экспорт списков в XLSX (api/platform/export.py): книга write-only, потолок строк.
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]
@@ -81,5 +83,5 @@ python_version = "3.13"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["alembic.*", "ijson.*", "ldap3.*", "smbclient.*"]
+module = ["alembic.*", "ijson.*", "ldap3.*", "smbclient.*", "openpyxl.*"]
 ignore_missing_imports = true

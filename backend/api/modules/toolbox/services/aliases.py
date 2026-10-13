@@ -7,14 +7,13 @@
 """
 from __future__ import annotations
 
-import csv
 import dataclasses
-import io
 import re
 from collections.abc import Iterable, Iterator
 from itertools import batched
+from typing import Any
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -163,7 +162,8 @@ class DbAliases:
                 self.owners[(kind, alias.casefold())] = key
 
 
-def list_aliases(db: Session, *, q: str, kind: str | None, limit: int, offset: int) -> tuple[list[ToolboxAlias], int]:
+def _filtered(q: str, kind: str | None) -> Select[tuple[ToolboxAlias]]:
+    """Отбор списка и выгрузки — один, чтобы выгрузилось ровно то, что видно на экране."""
     stmt = select(ToolboxAlias)
     if kind:
         stmt = stmt.where(ToolboxAlias.kind == kind)
@@ -171,6 +171,11 @@ def list_aliases(db: Session, *, q: str, kind: str | None, limit: int, offset: i
         needle = q.lower()
         stmt = stmt.where(or_(func.lower(ToolboxAlias.real).contains(needle, autoescape=True),
                               func.lower(ToolboxAlias.alias).contains(needle, autoescape=True)))
+    return stmt
+
+
+def list_aliases(db: Session, *, q: str, kind: str | None, limit: int, offset: int) -> tuple[list[ToolboxAlias], int]:
+    stmt = _filtered(q, kind)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(stmt.order_by(ToolboxAlias.kind, ToolboxAlias.id).limit(limit).offset(offset)).all()
     return list(rows), int(total)
@@ -184,17 +189,9 @@ def forget_alias(db: Session, alias_id: int) -> None:
     db.commit()
 
 
-def export_csv(db: Session) -> Iterator[str]:
-    """kind,real,alias — с BOM, чтобы Excel узнал UTF-8; построчно, таблица бывает большой."""
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    yield "﻿"
-    writer.writerow(["kind", "real", "alias"])
-    rows = db.execute(select(ToolboxAlias.kind, ToolboxAlias.real, ToolboxAlias.alias)
-                      .order_by(ToolboxAlias.kind, ToolboxAlias.id)).yield_per(1000)
-    for row in rows:
-        writer.writerow(row)
-        yield buf.getvalue()
-        buf.seek(0)
-        buf.truncate()
-    yield buf.getvalue()
+def export_rows(db: Session, *, q: str, kind: str | None) -> Iterator[dict[str, Any]]:
+    """Строки выгрузки по тем же фильтрам, что у списка; партиями — таблица бывает большой."""
+    stmt = _filtered(q, kind).order_by(ToolboxAlias.kind, ToolboxAlias.id)
+    for a in db.scalars(stmt).yield_per(1000):
+        yield {"kind": a.kind, "real": a.real, "alias": a.alias, "created_at": a.created_at,
+               "created_by": a.created_by, "first_job_id": a.first_job_id}

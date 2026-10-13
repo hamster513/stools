@@ -1,24 +1,35 @@
 """Просмотр журнала действий: /api/settings/audit."""
 from __future__ import annotations
 
-import csv
 import datetime as dt
-import io
 from collections.abc import Iterator
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
 from api.db.models import AppUser, AuditEvent
 from api.deps import get_current_user
+from api.platform.export import Column, csv_safe, export_response
 
 router = APIRouter(prefix="/audit", tags=["settings"])
 
-CSV_HEADER = ["время", "пользователь", "роль", "метод", "путь", "код", "ip", "сводка"]
+#: Колонки выгрузки — прежние, по полю на колонку (метод и путь порознь, роль отдельно):
+#: выгрузку разбирают фильтрами Excel, а не читают глазами.
+EXPORT_COLUMNS = [
+    Column("at", "время"),
+    Column("login", "пользователь"),
+    Column("role", "роль"),
+    Column("method", "метод"),
+    Column("path", "путь"),
+    Column("status", "код"),
+    Column("ip", "ip"),
+    Column("summary", "сводка"),
+]
+CSV_HEADER = [c.title for c in EXPORT_COLUMNS]
 
 
 def _query(user_id: int | None, since: dt.datetime | None, until: dt.datetime | None, denied_only: bool) -> Any:
@@ -34,13 +45,8 @@ def _query(user_id: int | None, since: dt.datetime | None, until: dt.datetime | 
     return stmt
 
 
-def _csv_safe(value: object) -> str:
-    """Excel исполняет ячейки, начинающиеся с =, +, -, @: логин из
-    неудачного входа и строка запроса — чужой ввод, экранируем."""
-    text = "" if value is None else str(value)
-    if text and text[0] in "=+-@\t\r":
-        return "'" + text
-    return text
+#: Перенесён в api/platform/export.py; старое имя — на один релиз, для чужих импортов.
+_csv_safe = csv_safe
 
 
 def _item(e: AuditEvent) -> dict[str, Any]:
@@ -67,6 +73,30 @@ def list_events(
     return {"total": total, "items": [_item(e) for e in rows]}
 
 
+def _export_rows(stmt: Any, db: Session) -> Iterator[dict[str, Any]]:
+    for e in db.scalars(stmt).yield_per(500):
+        yield {
+            "at": e.at, "login": e.login, "role": e.role, "method": e.method,
+            "path": e.path, "status": e.status, "ip": e.ip, "summary": e.summary,
+        }
+
+
+@router.get("/export")
+def export(
+    fmt: str = Query(default="csv", alias="format"),
+    user_id: int | None = None,
+    since: dt.datetime | None = None,
+    until: dt.datetime | None = None,
+    denied_only: bool = False,
+    db: Session = Depends(get_db),
+    _user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Журнал за год — это сотни тысяч строк, и собирать их целиком в памяти процесса ради
+    одной выгрузки CSV незачем: события вычитываются партиями, пока ответ уходит."""
+    stmt = _query(user_id, since, until, denied_only).order_by(AuditEvent.id.desc())
+    return export_response(fmt, EXPORT_COLUMNS, _export_rows(stmt, db), module="settings", name="audit")
+
+
 @router.get("/export.csv")
 def export_csv(
     user_id: int | None = None,
@@ -75,37 +105,6 @@ def export_csv(
     denied_only: bool = False,
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
-) -> Response:
-    """CSV для Excel в русской локали: точка с запятой и BOM.
-
-    Журнал за год — это сотни тысяч строк, и собирать их целиком в
-    памяти процесса ради одной выгрузки незачем: отдаём потоком,
-    вычитывая события партиями.
-    """
-    stmt = _query(user_id, since, until, denied_only).order_by(AuditEvent.id.desc())
-
-    def lines() -> Iterator[bytes]:
-        buf = io.StringIO()
-        writer = csv.writer(buf, delimiter=";", lineterminator="\r\n")
-        writer.writerow(CSV_HEADER)
-        yield ("﻿" + buf.getvalue()).encode("utf-8")
-        for e in db.scalars(stmt).yield_per(500):
-            buf.seek(0)
-            buf.truncate()
-            writer.writerow([
-                _csv_safe(e.at.isoformat()),
-                _csv_safe(e.login),
-                _csv_safe(e.role or ""),
-                _csv_safe(e.method),
-                _csv_safe(e.path),
-                _csv_safe(e.status),
-                _csv_safe(e.ip or ""),
-                _csv_safe(e.summary or ""),
-            ])
-            yield buf.getvalue().encode("utf-8")
-
-    return StreamingResponse(
-        lines(),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="audit.csv"'},
-    )
+) -> StreamingResponse:
+    """Старый путь (ссылки и закладки) — тот же CSV, что `/export?format=csv`."""
+    return export("csv", user_id, since, until, denied_only, db, _user)

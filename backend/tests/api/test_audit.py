@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import api.audit as audit_module
 from api.db.models import AuditEvent
 from api.platform.routers.audit import CSV_HEADER
+from kbaudit.attack.reference import rows_from_xlsx
 from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
 
 
@@ -76,6 +77,20 @@ def test_csv_export(auth_client: TestClient) -> None:
     text = response.content.decode("utf-8-sig")
     assert text.splitlines()[0] == "время;пользователь;роль;метод;путь;код;ip;сводка"
     assert "/api/settings/security" in text
+
+
+def test_export_in_both_formats(auth_client: TestClient) -> None:
+    """Новая ручка `/export?format=` — те же колонки и фильтры, что у старой `export.csv`."""
+    auth_client.put("/api/settings/security", json={"session_ttl_hours": 3})
+    as_csv = auth_client.get("/api/settings/audit/export", params={"format": "csv"})
+    assert as_csv.status_code == 200 and as_csv.headers["content-type"].startswith("text/csv")
+    assert as_csv.content.decode("utf-8-sig").splitlines()[0] == ";".join(CSV_HEADER)
+    as_xlsx = auth_client.get("/api/settings/audit/export", params={"format": "xlsx", "denied_only": "false"})
+    assert as_xlsx.status_code == 200 and "stools-settings-audit-" in as_xlsx.headers["content-disposition"]
+    table = rows_from_xlsx(as_xlsx.content)
+    assert table[0] == CSV_HEADER
+    assert any(row[4] == "/api/settings/security" for row in table[1:])
+    assert auth_client.get("/api/settings/audit/export", params={"format": "pdf"}).status_code == 422
 
 
 def test_csv_export_does_not_lose_rows_on_a_long_journal(
@@ -173,7 +188,9 @@ def test_anonymous_failed_login_is_still_recorded(client: TestClient, db_session
     "path",
     [
         "/api/settings/audit/export.csv",
+        "/api/settings/audit/export",
         "/api/vm/export",
+        "/api/toolbox/aliases/export",
         "/api/ksc/snapshots/999/policies/999/contents",
     ],
 )

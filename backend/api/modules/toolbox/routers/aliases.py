@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Iterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response, StreamingResponse
@@ -13,7 +14,8 @@ from api.db.base import get_db, get_sessionmaker
 from api.db.models import ROLE_ADMIN, AppUser
 from api.deps import get_current_user
 from api.modules.toolbox.routers.scrub import require_analyst
-from api.modules.toolbox.services.aliases import export_csv, forget_alias, list_aliases
+from api.modules.toolbox.services.aliases import export_rows, forget_alias, list_aliases
+from api.platform.export import Column, export_response
 from api.rbac import allows
 
 router = APIRouter(prefix="/aliases", tags=["toolbox"])
@@ -52,20 +54,42 @@ def get_aliases(
     return AliasPage(items=[AliasView.model_validate(r, from_attributes=True) for r in rows], total=total)
 
 
-@router.get("/export.csv")
-def export(request: Request, user: AppUser = Depends(get_current_user)) -> StreamingResponse:
+#: Подписи — как в таблице на экране; вид — кодом (host, ip4): по нему выгрузку фильтруют.
+EXPORT_COLUMNS = [
+    Column("kind", "Вид"),
+    Column("real", "Настоящее"),
+    Column("alias", "Псевдоним"),
+    Column("created_at", "Когда"),
+    Column("created_by", "Кто"),
+    Column("first_job_id", "Задание"),
+]
+
+
+@router.get("/export")
+def export(
+    request: Request,
+    fmt: str = Query(default="csv", alias="format"),
+    q: str = "",
+    kind: str | None = None,
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    # Сводка — до проверки роли, как у списка: иначе отказ ушёл бы в журнал со строкой запроса,
+    # а в `q` — настоящее значение.
+    request.state.audit_summary = "таблица соответствий: выгрузка"
     require_analyst(user)
-    request.state.audit_summary = "таблица соответствий выгружена"
 
-    def rows() -> Iterator[str]:
-        # Ответ читается после выхода из ручки: у потока своя сессия, сессия запроса к этому времени закрыта.
+    def rows() -> Iterator[dict[str, Any]]:
+        # CSV читается после выхода из ручки: у потока своя сессия, сессия запроса к этому времени закрыта.
         with get_sessionmaker()() as session:
-            yield from export_csv(session)
+            yield from export_rows(session, q=q, kind=kind)
 
-    return StreamingResponse(
-        rows(), media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="toolbox-aliases.csv"'},
-    )
+    return export_response(fmt, EXPORT_COLUMNS, rows(), module="toolbox", name="aliases")
+
+
+@router.get("/export.csv")
+def export_csv(request: Request, user: AppUser = Depends(get_current_user)) -> StreamingResponse:
+    """Старый путь — тот же CSV, что `/export?format=csv` без фильтров."""
+    return export(request, "csv", "", None, user)
 
 
 @router.delete("/{alias_id}", status_code=status.HTTP_204_NO_CONTENT)
