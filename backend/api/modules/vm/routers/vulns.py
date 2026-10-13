@@ -66,7 +66,7 @@ def _filters(
     risk_expiring: bool = False,
     user: AppUser = Depends(get_current_user),
 ) -> VulnFilters:
-    """Статус пары: `status` — коды через запятую или `all`, по умолчанию — открытые;
+    """Статус пары: `status` — коды повтором ключа (только он — ещё и через запятую) или `all`, по умолчанию — открытые;
     `assignee` — `me`, `none` или логин; `overdue`, `risk_expiring` (спека статусов §5).
     Фасеты `level, criticality, zone, cvss_source, os, assignee` — повтором ключа."""
     try:

@@ -145,7 +145,7 @@ def list_findings(
     db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> FindingListResponse:
-    """По умолчанию — открытые статусы; `status` — коды через запятую или `all`;
+    """По умолчанию — открытые статусы; `status` — коды повтором ключа (или старой строкой через запятую) или `all`;
     `assignee` — `me`, `none` или логин. Фасеты `kind, polarity, object_type, shape, field,
     assignee` — повтором ключа, внутри фасета «или»."""
     who = multi(assignee)

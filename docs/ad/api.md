@@ -34,7 +34,7 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 
 Обзор — по последнему снапшоту. `counted` и у проверки `total`, `by_severity` —
 находки со статусами, которые велено учитывать (`counted.statuses`, настройка
-платформы); список с тем же числом — `findings?severity=…&status=<statuses через запятую>`.
+платформы); список с тем же числом — `findings?severity=…&status=<код>&status=<код>…` (статус повторением ключа).
 У проверки `all` — все её находки, `open` — открытые, `new` — появились в
 этом снапшоте, `resolved` — пропали с предыдущего. `summary` — счётчики
 статусов домена (вместе с отсутствующими в последнем снапшоте).
@@ -95,14 +95,26 @@ ESC10: находка — `StrongCertificateBindingEnforcement` 0 или 1 ли�
 
 ```
 GET  /snapshots/{id}/findings          check, severity, allowlisted, q,
-                                       status (коды через запятую или all; по умолчанию — открытые:
-                                         new, in_work, fixed, reopened; с risk_expiring — risk_accepted),
+                                       status (коды повторением ключа или через запятую, или all;
+                                         по умолчанию — открытые: new, in_work, fixed, reopened;
+                                         с risk_expiring — risk_accepted),
                                        delta (new|same|gone), assignee (логин | me | none),
                                        overdue=true, risk_expiring=true, limit≤1000, offset
                                        → {total, items, facets|null, compared_to, check_titles,
                                           is_latest, statuses_as_of: "today"}
+GET  /snapshots/{id}/findings/export   format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
 GET  /snapshots/{id}/findings/{key}    элемент списка + description, history[{snapshot_id, collected_at}]
 ```
+
+Многозначные фасеты — `check`, `severity`, `delta`, `assignee`, `status`: несколько значений
+повторением ключа (`?severity=High&severity=Critical&delta=new`), внутри фасета — «или», между
+фасетами — «и»; `all` — фильтр не задан (у `status` — любые статусы). Через запятую принимается
+только `status` (старая форма `status=new,in_work`); у остальных `a,b` — одно значение.
+
+Выгрузка `findings/export` — все находки под фильтрами списка в его порядке, любой роли (объявлена
+до карточки `findings/{key}`). CSV — UTF-8 с BOM, `;`, CRLF, потоком; XLSX — не больше 100 000
+строк, после них строка «Выгружены первые 100 000 строк — сузьте фильтры». Колонки — как в таблице
+на экране. Общие правила формата и выгрузки — `docs/api-contract.md`.
 
 Статусы находок — общий механизм платформы: `GET/PUT /api/findings/state`,
 `POST /api/findings/comment`, `POST /api/findings/bulk`, `GET /api/findings/mine`,

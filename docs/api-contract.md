@@ -65,6 +65,34 @@ Management — `/api/vm/…` (см. `docs/vm/api.md`), у модуля Анти�
   (на эталонной — 1093), поэтому клиент обязан догружать страницами,
   а не рассчитывать получить всё разом. Превышение предела — `422`,
   а не молчаливое усечение: усечение выглядело бы как «данные кончились».
+- **Многозначные фильтры списков** (`backend/api/platform/filters.py`).
+  Несколько значений одного фасета передаются повторением ключа:
+  `?kind=1&kind=3&polarity=negation`. Каждое значение берётся как есть и по
+  запятой не делится — ОС, группы и продукты KSC, зоны сами содержат запятые.
+  Внутри фасета — «или», между фасетами — «и». `-` — пустое значение фасета
+  («не задано»: без зоны, без ОС, у тегов KSC — «без тегов»); `all` — фильтр
+  не задан, а у статусов — любой статус. Только `status` (и `disc_status`
+  в Assets) ещё принимает старую форму через запятую `status=new,in_work` —
+  ради старых ссылок и скриптов; у остальных параметров `a,b` — одно
+  значение «a,b». Id-фасеты (`kind` SIEM, `user_id`, `policy_id`, `network_id`)
+  — числа, не число — `422`. Какие параметры многозначные — в описании
+  каждого списка.
+- **Выгрузка списков** (`backend/api/platform/export.py`).
+  `GET <ручка списка>/export?format=csv|xlsx&<те же фильтры>` — весь отбор
+  списка без страницы и в его порядке (`sort`, `order` — у тех списков, где
+  они есть), колонки и подписи — как в таблице на экране. Роль — как у
+  чтения самого списка: в модулях любая, под `/api/settings/users`
+  и `/api/settings/audit` — администратор, в ToolBox — аналитик. `format`
+  по умолчанию `csv`, другое значение — `422`. CSV — UTF-8 с BOM,
+  разделитель `;`, строки CRLF, отдаётся потоком без ограничения числа
+  строк; текст, начинающийся с `= + - @` или таба, — с ведущим апострофом.
+  XLSX — лист «Данные», жирный заголовок с автофильтром, числа и даты —
+  ячейками своего типа (текст вида `=…` или `#N/A` остаётся текстом); не
+  больше **100 000** строк, после них — одна строка «Выгружены первые
+  100 000 строк — сузьте фильтры». Время — в поясе `STOOLS_TZ`, без
+  микросекунд. Имя файла — `stools-<модуль>-<список>-<ГГГГММДД-ЧЧММ>.<csv|xlsx>`
+  (`Content-Disposition` с `filename*`). Каждая выгрузка пишется в журнал
+  действий (шаблон пути `/api/…/export`).
 - Сообщения об ошибках сервера не содержат значений из выгрузки. Текст
   исключения драйвера базы включает запрос вместе с параметрами, то есть
   имена хостов и учётные записи, — наружу отдаётся только класс ошибки.
@@ -155,6 +183,7 @@ PATCH  /api/settings/users/{id}         {display_name?, role?, is_active?}
                                     -> UserView
 DELETE /api/settings/users/{id}         -> 204
 POST   /api/settings/users/{id}/password {password} -> 204
+GET    /api/settings/users/export?format=csv|xlsx -> файл (см. «Выгрузка списков»)
 ```
 
 Нельзя понизить, заблокировать или удалить себя, и нельзя оставить систему
@@ -175,11 +204,16 @@ PUT /api/settings/security  {session_ttl_hours?, idle_timeout_minutes?,
 GET /api/settings/audit?user_id=&since=&until=&denied_only=&page=&page_size=
     -> {total, items: [{id, at, user_id, login, role, method, path, status,
                          ip, summary}]}
-GET /api/settings/audit/export.csv?…   тот же фильтр -> CSV
+GET /api/settings/audit/export?format=csv|xlsx&…   тот же фильтр -> файл
+GET /api/settings/audit/export.csv?…   старый путь (ссылки, закладки) -> тот же CSV
 ```
 
-CSV — с BOM и `;`-разделителем для русского Excel; ячейки, начинающиеся
-с `= + - @` или таба, экранируются кавычкой: значения в журнале — логины
+`user_id` — многозначный: несколько пользователей повторением ключа
+(`?user_id=3&user_id=7`), внутри — «или». Выгрузка — общая «Выгрузка
+списков», новые события сверху; заголовки колонок прежние (`время;
+пользователь; роль; метод; путь; код; ip; сводка`) — их читают внешние
+скрипты. Время — в поясе `STOOLS_TZ`, без микросекунд. Ячейки, начинающиеся
+с `= + - @` или таба, экранируются апострофом: значения в журнале — логины
 и пути из чужого ввода, а не только записи сервиса.
 
 ```
@@ -292,17 +326,25 @@ GET /api/siem/jobs/{id} -> {id, stage, status, progress, error}
 ## Находки
 
 ```
-GET /api/siem/findings?snapshot_id=1&kind=1&polarity=negation&object_type=correlation
-                 &in_table=true&status=new,in_work&assignee=me&overdue=true
+GET /api/siem/findings?snapshot_id=1&kind=1&kind=3&polarity=negation&object_type=correlation
+                 &in_table=true&status=new&status=in_work&assignee=me&overdue=true
                  &risk_expiring=true&key=…&field=src.ip&q=текст
                  &sort=kind&order=asc&limit=100&offset=0
+GET /api/siem/findings/export?format=csv|xlsx&<те же параметры без limit, offset>
 ```
 
+Многозначные (повторением ключа, см. «Общие правила»): `kind` (числа),
+`polarity`, `object_type`, `shape`, `field`, `assignee`, `status`.
 Статусы — общие статусы находок платформы (`new`, `in_work`, `risk_accepted`,
-`false_positive`, `fixed`, `resolved`, `reopened`). `status` — коды через
-запятую или `all`; не задан — открытые (`new`, `in_work`, `fixed`,
+`false_positive`, `fixed`, `resolved`, `reopened`). `status` — коды
+повторением ключа (старая форма через запятую `status=new,in_work` тоже
+принимается) или `all`; не задан — открытые (`new`, `in_work`, `fixed`,
 `reopened`), с `risk_expiring=true` — `risk_accepted`. `assignee` — `me`,
-`none` или логин. `key` — одна находка по ключу (ссылка из «Моих находок»).
+`none` или логины. `key` — одна находка по ключу (ссылка из «Моих находок»).
+
+Выгрузка — весь отбор под теми же фильтрами и `sort`/`order`, любой роли;
+колонки как на экране: «№, Класс, Объект, Поле, Полярность, В списке,
+Статус, Возраст». Значения находок не выгружаются, как и в списке.
 
 Ответ:
 
@@ -400,12 +442,23 @@ GET /api/siem/divergences?snapshot_id=1&limit=100&offset=0
 
 ```
 GET /api/siem/rules?snapshot_id=1&author=DEMO&category=HC&group=002&q=текст
+                 &attention=true&scoped=true&attack=unmapped&limit=500&offset=0
 -> {"total": 187, "items": [{"uuid", "name", "author", "category", "group",
      "rule_id", "origin", "parse_status", "msgid_count", "finding_count",
      "table_reads", "scoped": true}]}
+GET /api/siem/rules/export?format=csv|xlsx&<те же параметры без limit, offset>
 GET /api/siem/rules/{uuid}?snapshot_id=1
 -> подробности: msgids с учётом наследования, зависимости, находки, тело
 ```
+
+Параметры списка однозначные. `attention=true` — только требующие внимания
+(не разобраны или есть открытые находки — как маркировка на экране),
+`scoped=true` — только ограниченные табличным списком, `attack` — статус
+разметки ATT&CK: `suggested | confirmed | unmapped` (`all` или пусто — любой,
+другое — `422`). Эти три отбора раньше делала страница; теперь их делает
+сервер, чтобы выгрузка их применяла. `limit` — до 2000, по умолчанию 500.
+Выгрузка — все отобранные правила по имени, любой роли; колонки «Имя, Автор,
+Категория, msgid, Внимание, ATT&CK, Ограничено»; тело правила не выгружается.
 
 Тело правила отдаётся только по этой ручке и содержит чувствительные данные —
 фронт показывает его по явному раскрытию, не в списке.

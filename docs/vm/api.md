@@ -14,9 +14,10 @@ GET /vulns     q, host, cve, criticality, zone, os, level, exploits, msf,
 GET /vulns/{host_id}/{cve_id}   карточка расчёта: host, cve, risk{множители
                                 с source и substituted}, refs_loaded_at
 GET /hosts/{host_id}            хост и его пары (до 500, по риску)
-GET /export    те же фильтры, что у списка, и так же по умолчанию — только
-               открытые пары (`status=all` — все) → text/csv, BOM, «;»,
-               потоково; последние колонки — Статус, Исполнитель, Срок
+GET /export    format=csv|xlsx (csv), те же фильтры и `sort`, что у списка,
+               и так же по умолчанию — только открытые пары (`status=all` —
+               все) → файл; CSV потоком, XLSX — до 100 000 строк;
+               последние колонки — Статус, Исполнитель, Срок
 GET /overview  счётчики, distribution, findings, top_cves, top_hosts, data{…}
 ```
 
@@ -25,6 +26,19 @@ GET /overview  счётчики, distribution, findings, top_cves, top_hosts, da
 При равных значениях — по паре (`host_id`, `cve_id`): порядок один и тот же в
 каждом запросе, страницы по offset не повторяют и не теряют пар.
 `level`: `low | medium | high | critical` (0–19, 20–39, 40–69, 70–100).
+
+Многозначные фасеты — `level`, `criticality`, `zone`, `cvss_source`, `os`,
+`assignee`, `status`: несколько значений повторением ключа
+(`?level=high&level=critical&os=Windows%20Server%202019%2C%20x64`), значение
+по запятой не делится; внутри фасета — «или», между фасетами — «и».
+Пустое значение («не задано») у `criticality`, `zone`, `os` — маркер `-`
+(`?zone=-&zone=DMZ` — без зоны или DMZ); `all` — фильтр не задан. Через
+запятую принимается только `status` (старая форма `status=new,in_work`).
+Общие правила формата и выгрузки — `docs/api-contract.md`.
+
+Выгрузка `/export` — любой роли, CSV — UTF-8 с BOM, `;`, CRLF; XLSX — не
+больше 100 000 строк и строка «Выгружены первые 100 000 строк — сузьте
+фильтры». Имя файла — `stools-vm-vulns-<ГГГГММДД-ЧЧММ>.<csv|xlsx>`.
 
 ### Статусы пар
 
@@ -37,9 +51,10 @@ MaxPatrol (`SRV01` → `srv01`): ключ другой, решения по пр
 под новым именем — «новые». Символ `|` в имени хоста допустим: ключ
 разбирается справа.
 
-- Список: `status` — коды через запятую или `all`, по умолчанию открытые
-  (`new, in_work, fixed, reopened`; с `risk_expiring` — принятые);
-  `assignee` — `me | none | <логин>`; `overdue`, `risk_expiring` — `true`.
+- Список: `status` — коды повторением ключа (или через запятую) или `all`,
+  по умолчанию открытые (`new, in_work, fixed, reopened`; с `risk_expiring` —
+  принятые); `assignee` — `me | none | <логин>`, несколько — повторением
+  ключа; `overdue`, `risk_expiring` — `true`.
   Строка: `key, status, status_title, assignee, assignee_name, due_date,
   overdue, risk_until, first_seen_at`. Возраста у пар нет: VM не хранит,
   в каком импорте пара появилась (`first_seen_at` — `null`).
@@ -51,7 +66,8 @@ MaxPatrol (`SRV01` → `srv01`): ключ другой, решения по пр
   решали, исчезает без следа: строк для неё не заводится, истории
   «устранена» у неё нет.
 - `POST /api/findings/bulk` с `keys` (≤ 5000) — сразу `{changed}`; с
-  `filter` (те же параметры, что у `/vulns`, без `sort`, `limit`, `offset`)
+  `filter` (те же параметры, что у `/vulns`, без `sort`, `limit`, `offset`;
+  многозначные — JSON-списком, «не задано» — пустой строкой `""` или `-`)
   — 202 `{job_id}`: задача `vm_job` `kind = bulk_status` меняет пары
   кусками по 1000 с общим `bulk_id`, прогресс и отмена — `/jobs/{id}`;
   сделанное до отмены остаётся. Ошибка фильтра или смены, не зависящая от
