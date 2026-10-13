@@ -9,10 +9,21 @@ import { auditCsvUrl, useAudit, useUsers } from '@/platform/settings/api/queries
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ROLE_TITLES, type AuditFilters } from '@/platform/settings/api/types'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const PAGE_SIZE = 50
 
 const CELL = 'py-1.5 pr-3 align-top'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'at', label: 'Время', width: 160 },
+  { key: 'user', label: 'Пользователь', width: 160 },
+  { key: 'request', label: 'Запрос', width: 280 },
+  { key: 'status', label: 'Код', width: 64 },
+  { key: 'ip', label: 'IP', width: 128 },
+  { key: 'summary', label: 'Сводка', width: 240, flex: true },
+]
 
 /** Поле `datetime-local` даёт местное время без зоны — в API уходит UTC. */
 function toIso(local: string): string | undefined {
@@ -47,6 +58,7 @@ export function AuditPage() {
     page_size: PAGE_SIZE,
   }
   const audit = useAudit(filters)
+  const cols = useColumnWidths('settings-audit-columns', COLUMNS)
 
   /** Любая правка отбора возвращает на первую страницу: иначе человек
    *  меняет фильтр и попадает на пустую седьмую. */
@@ -150,43 +162,41 @@ export function AuditPage() {
         />
       ) : (
         <>
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
-                <th className={`${CELL} font-medium`}>Время</th>
-                <th className={`${CELL} font-medium`}>Пользователь</th>
-                <th className={`${CELL} font-medium`}>Запрос</th>
-                <th className={`${CELL} font-medium`}>Код</th>
-                <th className={`${CELL} font-medium`}>IP</th>
-                <th className="py-2 font-medium">Сводка</th>
-              </tr>
-            </thead>
-            <tbody>
-              {audit.data.items.map((e) => (
-                <tr key={e.id} className="border-b border-grid hover:bg-row-hover">
-                  <td className={`${CELL} tabular-nums whitespace-nowrap text-text-secondary`}>
-                    {new Date(e.at).toLocaleString('ru-RU')}
-                  </td>
-                  <td className={CELL}>
-                    <div className="text-text">{e.login}</div>
-                    {e.role && (
-                      <div className="text-[11px] text-text-secondary">{ROLE_TITLES[e.role]}</div>
-                    )}
-                  </td>
-                  <td className={`${CELL} font-mono text-text`}>
-                    <span className="text-text-secondary">{e.method}</span> {e.path}
-                  </td>
-                  <td
-                    className={`${CELL} font-mono tabular-nums ${e.status === 403 ? 'text-kind-1' : 'text-text'}`}
-                  >
-                    {e.status}
-                  </td>
-                  <td className={`${CELL} font-mono text-text-secondary`}>{e.ip ?? '—'}</td>
-                  <td className="py-1.5 text-text-secondary">{e.summary ?? '—'}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs" style={cols.tableStyle}>
+              <ColGroup cols={cols} />
+              <thead>
+                <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
+                  <ResizableHeader cols={cols} className="py-1.5 pr-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {audit.data.items.map((e) => (
+                  <tr key={e.id} className="border-b border-grid hover:bg-row-hover">
+                    <td className={`${CELL} truncate tabular-nums text-text-secondary`}>
+                      {new Date(e.at).toLocaleString('ru-RU')}
+                    </td>
+                    <td className={CELL}>
+                      <div className="truncate text-text" title={e.login}>{e.login}</div>
+                      {e.role && (
+                        <div className="text-[11px] text-text-secondary">{ROLE_TITLES[e.role]}</div>
+                      )}
+                    </td>
+                    <td className={`${CELL} font-mono break-all text-text`}>
+                      <span className="text-text-secondary">{e.method}</span> {e.path}
+                    </td>
+                    <td
+                      className={`${CELL} font-mono tabular-nums ${e.status === 403 ? 'text-kind-1' : 'text-text'}`}
+                    >
+                      {e.status}
+                    </td>
+                    <td className={`${CELL} font-mono break-all text-text-secondary`}>{e.ip ?? '—'}</td>
+                    <td className="py-1.5 break-words text-text-secondary">{e.summary ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           <div className="mt-3 flex items-center gap-2">
             <Button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>

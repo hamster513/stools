@@ -6,6 +6,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef, type ColumnWidths } from '@/platform/table/useColumnWidths'
 import { LockMark } from './RawTab'
 
 function Errors({ errors }: { errors: string[] }) {
@@ -17,7 +19,14 @@ function Errors({ errors }: { errors: string[] }) {
   )
 }
 
-function ProfileBlock({ profile }: { profile: PolicyProfile }) {
+const COLUMNS: ColumnDef[] = [
+  { key: 'path', label: 'Секция · путь', width: 320, flex: true },
+  { key: 'value', label: 'В профиле', width: 240 },
+  { key: 'policy_value', label: 'В политике', width: 240 },
+  { key: 'locked', label: 'Замок', width: 80 },
+]
+
+function ProfileBlock({ profile, cols }: { profile: PolicyProfile; cols: ColumnWidths }) {
   return (
     <details className="rounded border border-grid bg-surface" open>
       <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-text select-none">
@@ -34,28 +43,28 @@ function ProfileBlock({ profile }: { profile: PolicyProfile }) {
         {profile.diff.length === 0 ? (
           <p className="text-xs text-text-secondary">Профиль не задаёт своих настроек.</p>
         ) : (
-          <table className="w-full text-xs">
-            <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-              <tr>
-                <th className="w-2/5 py-1 pr-3 text-left">Секция · путь</th>
-                <th className="py-1 pr-3 text-left">В профиле</th>
-                <th className="py-1 pr-3 text-left">В политике</th>
-                <th className="py-1 pr-1 text-left">Замок</th>
-              </tr>
-            </thead>
-            <tbody>
-              {profile.diff.map((d) => (
-                <tr key={`${d.section}|${d.path}`} className="border-t border-grid align-top">
-                  <td className="py-1.5 pr-3 font-mono break-all text-text"><span className="text-text-secondary">{d.section} · </span>{d.path}</td>
-                  <td className="py-1.5 pr-3 font-mono break-all text-text">{d.value}</td>
-                  <td className={cn('py-1.5 pr-3 font-mono break-all', d.policy_value === null ? 'text-text-secondary italic' : 'text-text')}>
-                    {d.policy_value ?? 'нет в политике'}
-                  </td>
-                  <td className="py-1.5 pr-1 whitespace-nowrap"><LockMark locked={d.locked} /></td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs" style={cols.tableStyle}>
+              <ColGroup cols={cols} />
+              <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+                <tr>
+                  <ResizableHeader cols={cols} className="py-1 pr-3 last:pr-1" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {profile.diff.map((d) => (
+                  <tr key={`${d.section}|${d.path}`} className="border-t border-grid align-top">
+                    <td className="py-1.5 pr-3 font-mono break-all text-text"><span className="text-text-secondary">{d.section} · </span>{d.path}</td>
+                    <td className="py-1.5 pr-3 font-mono break-all text-text">{d.value}</td>
+                    <td className={cn('py-1.5 pr-3 font-mono break-all', d.policy_value === null ? 'text-text-secondary italic' : 'text-text')}>
+                      {d.policy_value ?? 'нет в политике'}
+                    </td>
+                    <td className="py-1.5 pr-1 whitespace-nowrap"><LockMark locked={d.locked} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </details>
@@ -65,6 +74,8 @@ function ProfileBlock({ profile }: { profile: PolicyProfile }) {
 /** Вкладка «Профили»: профили политики по приоритету — включённость, условие активации, отличия от политики. */
 export function ProfilesTab({ snapshotId, policyId }: { snapshotId: number; policyId: number }) {
   const profiles = usePolicyProfiles(snapshotId, policyId)
+  // Одни ширины на все профили: таблицы отличий идут столбиком и должны совпадать.
+  const cols = useColumnWidths('ksc-policy-profiles-columns', COLUMNS)
 
   if (profiles.isLoading) return <FullPageSpinner />
   if (profiles.isError || !profiles.data) {
@@ -81,7 +92,7 @@ export function ProfilesTab({ snapshotId, policyId }: { snapshotId: number; poli
   return (
     <div className="flex flex-col gap-2">
       {items.map((p) => (
-        <ProfileBlock key={`${p.priority}|${p.name}`} profile={p} />
+        <ProfileBlock key={`${p.priority}|${p.name}`} profile={p} cols={cols} />
       ))}
     </div>
   )

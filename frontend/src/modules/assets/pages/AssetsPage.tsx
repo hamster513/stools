@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, FilterX, Search } from 'lucide-react'
+import { ChevronRight, FilterX, Search, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAssetIds, useAssets, useBulkUpdate, useDiscrepancyBulk, useNetworks } from '@/modules/assets/api/queries'
+import { useAssetIds, useAssets, useBulkDelete, useBulkUpdate, useDiscrepancyBulk, useNetworks } from '@/modules/assets/api/queries'
 import {
   ANY_CODE_LABEL,
+  CLUSTER_LABELS,
   CODE_LABELS,
   CODES,
   CRITICALITIES,
@@ -30,12 +31,27 @@ import { cn } from '@/lib/cn'
 import { useRouter, useSearchParams } from '@/lib/router'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { findingFacetChips, statusForFlag, STATUS_OPTIONS, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
 import { useFindingSettings } from '@/platform/findings/queries'
 import { MANUAL_STATUSES, NEEDS_REASON, STATUSES, STATUS_TITLES, type FindingChange, type FindingStatus } from '@/platform/findings/types'
 import { AssetDrawer } from './AssetDrawer'
 
 const ROW_HEIGHT = 40
+
+const LIST_COLUMNS: ColumnDef[] = [
+  { key: 'name', label: 'Имя', width: 240, flex: true },
+  { key: 'ip', label: 'IP', width: 128 },
+  { key: 'network', label: 'Сеть · зона', width: 176 },
+  { key: 'os', label: 'ОС', width: 192 },
+  { key: 'sources', label: 'Источники', width: 160 },
+  { key: 'seen', label: 'Виден', width: 112 },
+  { key: 'discrepancies', label: 'Расхождения', width: 112, align: 'right' },
+  { key: 'open', label: 'Открыть', width: 32, resizable: false },
+]
+// Флажки только у тех, кому можно массово менять: две константы, а не массив в рендере.
+const CHECKED_COLUMNS: ColumnDef[] = [{ key: 'check', label: 'Отметка', width: 32, resizable: false, align: 'center' }, ...LIST_COLUMNS]
 /** Ключ панели фильтров у общих фильтров платформы (useFiltersPanel). */
 const FILTERS_PAGE = 'assets-list'
 
@@ -188,47 +204,43 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, 
 }) {
   const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
   const allChecked = checked !== undefined && items.length > 0 && items.every((a) => checked.has(a.id))
+  const cols = useColumnWidths('assets-list-columns', checked ? CHECKED_COLUMNS : LIST_COLUMNS)
   return (
-    <div ref={parentRef} className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1100px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        {checked && (
-          <div className="flex w-8 shrink-0 items-center justify-center">
-            <input type="checkbox" className="accent-primary" checked={allChecked} onChange={(e) => onCheckAll(e.target.checked)} aria-label="Отметить все загруженные строки" />
-          </div>
-        )}
-        <div className="w-60 shrink-0 px-2 py-2">Имя</div>
-        <div className="w-32 shrink-0 px-2 py-2">IP</div>
-        <div className="w-44 shrink-0 px-2 py-2">Сеть · зона</div>
-        <div className="w-48 shrink-0 px-2 py-2">ОС</div>
-        <div className="w-40 shrink-0 px-2 py-2">Источники</div>
-        <div className="w-28 shrink-0 px-2 py-2">Виден</div>
-        <div className="w-28 shrink-0 px-2 py-2 text-right">Расхождения</div>
+    <div ref={parentRef} data-col-resize-root className="h-full overflow-auto">
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" content={{
+          check: <input type="checkbox" className="accent-primary" checked={allChecked} onChange={(e) => onCheckAll(e.target.checked)} aria-label="Отметить все загруженные строки" />,
+          open: <span className="sr-only">Открыть</span>,
+        }} />
       </div>
       <div style={{ height: totalSize, position: 'relative' }}>
         {rows.map((v) => {
           const a = items[v.index]
           const selected = v.index === selectedIndex
           return (
-            <div key={a.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-full min-w-[1100px] cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+            <div key={a.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 grid w-full cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ ...cols.gridStyle, height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
               {checked && (
                 // Щелчок по флажку не открывает карточку; Shift отмечает диапазон от предыдущего флажка.
-                <div className="flex h-full w-8 shrink-0 items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                <div className="flex h-full items-center justify-center" onClick={(e) => e.stopPropagation()}>
                   <input type="checkbox" className="accent-primary" checked={checked.has(a.id)} onChange={(e) => onCheck(v.index, (e.nativeEvent as MouseEvent).shiftKey)} aria-label={`Отметить ${a.name || a.fqdn || a.ip || `актив #${a.id}`}`} />
                 </div>
               )}
-              <div className="w-60 shrink-0 truncate px-2">
-                <div className="truncate text-text" title={a.name}>{a.name || a.fqdn || a.ip || `актив #${a.id}`}</div>
+              <div className="min-w-0 truncate px-2">
+                <div className="truncate text-text" title={a.name}>
+                  {a.name || a.fqdn || a.ip || `актив #${a.id}`}
+                  {a.cluster && <span className="ml-1.5 rounded border border-grid px-1 font-mono text-[10px] text-text-secondary" title={a.cluster === 'node' ? 'узел кластера Windows' : 'виртуальное имя кластера Windows, не хост'}>{CLUSTER_LABELS[a.cluster]}</span>}
+                </div>
                 <div className="truncate text-[10px] text-text-secondary" title={a.fqdn}>{a.fqdn}</div>
               </div>
-              <div className="w-32 shrink-0 truncate px-2 font-mono text-text-secondary">{a.ip || '—'}</div>
-              <div className="w-44 shrink-0 truncate px-2 text-text-secondary" title={a.network?.title}>{a.network ? `${a.network.cidr}${a.network.zone ? ` · ${a.network.zone}` : ''}` : '—'}</div>
-              <div className="w-48 shrink-0 truncate px-2 text-text-secondary" title={a.os}>{a.os || '—'}</div>
-              <div className="w-40 shrink-0 px-2"><SourceBadges item={a} /></div>
-              <div className="w-28 shrink-0 truncate px-2 text-text-secondary">{day(a.last_seen)}</div>
-              <div className={cn('w-28 shrink-0 truncate px-2 text-right font-mono tabular-nums', a.discrepancy_count > 0 ? 'text-risk-high' : 'text-text-secondary')} title={a.codes.map((c) => CODE_LABELS[c]).join(', ')}>
+              <div className="min-w-0 truncate px-2 font-mono text-text-secondary">{a.ip || '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={a.network?.title}>{a.network ? `${a.network.cidr}${a.network.zone ? ` · ${a.network.zone}` : ''}` : '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={a.os}>{a.os || '—'}</div>
+              <div className="min-w-0 overflow-hidden px-2"><SourceBadges item={a} /></div>
+              <div className="min-w-0 truncate px-2 text-text-secondary">{day(a.last_seen)}</div>
+              <div className={cn('min-w-0 truncate px-2 text-right font-mono tabular-nums', a.discrepancy_count > 0 ? 'text-risk-high' : 'text-text-secondary')} title={a.codes.map((c) => CODE_LABELS[c]).join(', ')}>
                 {a.discrepancy_count}
               </div>
-              <ChevronRight size={14} className="mr-2 ml-auto shrink-0 text-text-secondary/40" aria-hidden />
+              <div className="flex justify-end pr-2"><ChevronRight size={14} className="shrink-0 text-text-secondary/40" aria-hidden /></div>
             </div>
           )
         })}
@@ -284,7 +296,31 @@ function DiscrepancyBulkForm({ ids, facets, code: filterCode }: { ids: number[];
   )
 }
 
-/** Массовое изменение отмеченных активов: критичность и теги (добавить, снять), статус расхождения. Заметка и сеть — только в карточке. */
+/** Удаление отмеченных: подтверждение с числом; актив, которого источник ещё видит, вернётся при синхронизации. */
+function BulkDelete({ ids, onDone }: { ids: number[]; onDone: () => void }) {
+  const remove = useBulkDelete()
+  const [confirm, setConfirm] = useState(false)
+  return (
+    <>
+      <Button variant="ghost" onClick={() => setConfirm(true)} className="text-risk-high"><Trash2 size={13} aria-hidden /> Удалить</Button>
+      {remove.error && <span className="text-kind-1">{remove.error.message}</span>}
+      {confirm && (
+        <div role="dialog" aria-label="Удалить активы" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded border border-grid bg-surface p-4">
+            <div className="mb-2 text-sm font-semibold text-text">Удалить активов: {ids.length}?</div>
+            <p className="mb-4 text-xs text-text-secondary">Активы исчезнут вместе с наблюдениями источников. Те, кого источник всё ещё видит, вернутся при следующей синхронизации — удаление чистит реестр, а не прячет хост.</p>
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setConfirm(false)}>Отмена</Button>
+              <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate(ids, { onSuccess: () => { setConfirm(false); onDone() } })}>Удалить</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+/** Массовое изменение отмеченных активов: критичность и теги (добавить, снять), статус расхождения, удаление. Заметка и сеть — только в карточке. */
 function BulkBar({ ids, total, selectingAll, onSelectAll, onClear, facets, code }: {
   ids: number[]; total: number; selectingAll: boolean; onSelectAll: () => void; onClear: () => void; facets: AssetsFacets | null; code: CodeFilter | undefined
 }) {
@@ -315,6 +351,7 @@ function BulkBar({ ids, total, selectingAll, onSelectAll, onClear, facets, code 
       <input value={remove} onChange={(e) => setRemove(e.target.value)} placeholder="снять теги, через запятую" aria-label="Снять теги" className={cn(INPUT_BASE, 'w-52')} />
       <Button variant="primary" disabled={nothing} loading={bulk.isPending} onClick={apply}>Применить</Button>
       <Button variant="ghost" onClick={onClear}>Снять отметки</Button>
+      <BulkDelete ids={ids} onDone={onClear} />
       {bulk.error && <span className="text-kind-1">{bulk.error.message}</span>}
       {bulk.isSuccess && !bulk.isPending && <span className="text-text-secondary">изменено активов: {bulk.data.updated}</span>}
       <DiscrepancyBulkForm key={code ?? ''} ids={ids} facets={facets} code={code} />

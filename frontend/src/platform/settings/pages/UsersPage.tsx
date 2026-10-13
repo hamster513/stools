@@ -14,6 +14,8 @@ import {
   useUsers,
 } from '@/platform/settings/api/queries'
 import { MIN_PASSWORD, ROLE_TITLES, type UserRow } from '@/platform/settings/api/types'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const ROLES: Role[] = ['admin', 'analyst', 'auditor']
 
@@ -24,6 +26,16 @@ const LAST_ADMIN = 'Последний администратор'
 const FROM_PROVIDER = 'Роль задаётся группами провайдера'
 
 const CELL = 'py-1.5 pr-3'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'login', label: 'Логин', width: 112 },
+  { key: 'name', label: 'Имя', width: 120, flex: true },
+  { key: 'role', label: 'Роль', width: 144 },
+  { key: 'source', label: 'Вход', width: 64 },
+  { key: 'state', label: 'Состояние', width: 104 },
+  { key: 'last_login', label: 'Последний вход', width: 120 },
+  { key: 'actions', label: 'Действия', width: 256, resizable: false, align: 'right' },
+]
 
 /**
  * Учётные записи платформы. Те же две защиты, что и на сервере, но
@@ -51,6 +63,7 @@ export function UsersPage() {
   const [resetFor, setResetFor] = useState<number | null>(null)
   const [resetValue, setResetValue] = useState('')
   const [resetDone, setResetDone] = useState<number | null>(null)
+  const cols = useColumnWidths('settings-users-columns', COLUMNS)
 
   if (users.isLoading) return <FullPageSpinner />
   if (users.isError || !users.data) {
@@ -196,134 +209,131 @@ export function UsersPage() {
         </section>
       )}
 
-      <table className="w-full max-w-5xl text-xs">
-        <thead>
-          <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
-            <th className={`${CELL} font-medium`}>Логин</th>
-            <th className={`${CELL} font-medium`}>Имя</th>
-            <th className={`${CELL} font-medium`}>Роль</th>
-            <th className={`${CELL} font-medium`}>Вход</th>
-            <th className={`${CELL} font-medium`}>Состояние</th>
-            <th className={`${CELL} font-medium`}>Последний вход</th>
-            <th className="py-2 text-right font-medium">Действия</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const why = locked(row)
-            const roleWhy = row.auth_source === 'oidc' ? FROM_PROVIDER : why
-            return (
-              <Fragment key={row.id}>
-                <tr className="border-b border-grid hover:bg-row-hover">
-                  <td className={`${CELL} font-mono text-text`}>{row.login}</td>
-                  <td className={`${CELL} text-text`}>{row.display_name ?? '—'}</td>
-                  <td className={CELL}>
-                    <select
-                      className="rounded border border-border bg-app-bg px-1.5 py-1 text-xs text-text disabled:cursor-not-allowed disabled:opacity-50"
-                      value={row.role}
-                      disabled={roleWhy !== null}
-                      title={roleWhy ?? undefined}
-                      aria-label={`Роль пользователя ${row.login}`}
-                      onChange={(e) =>
-                        patch.mutate({ id: row.id, patch: { role: e.target.value as Role } })
-                      }
-                    >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {ROLE_TITLES[r]}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className={`${CELL} text-text-secondary`}>
-                    {row.auth_source === 'oidc' ? 'FAM' : 'пароль'}
-                  </td>
-                  <td className={CELL}>
-                    <span className={row.is_active ? 'text-kind-accepted' : 'text-kind-1'}>
-                      {row.is_active ? 'активен' : 'заблокирован'}
-                    </span>
-                  </td>
-                  <td className={`${CELL} tabular-nums text-text-secondary`}>
-                    {row.last_login_at
-                      ? new Date(row.last_login_at).toLocaleString('ru-RU')
-                      : 'не входил'}
-                  </td>
-                  <td className="py-1.5">
-                    <div className="flex items-center justify-end gap-1">
-                      {/* У учётки провайдера пароля нет — сбрасывать нечего. */}
-                      {row.auth_source === 'local' && (
-                        <Button variant="ghost" onClick={() => openReset(row.id)}>
-                          <KeyRound size={14} aria-hidden />
-                          сбросить пароль
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        disabled={row.is_active && why !== null}
-                        title={row.is_active ? (why ?? undefined) : undefined}
-                        onClick={() =>
-                          patch.mutate({ id: row.id, patch: { is_active: !row.is_active } })
+      <div className="overflow-x-auto">
+        <table className="w-full max-w-5xl text-xs" style={cols.tableStyle}>
+          <ColGroup cols={cols} />
+          <thead>
+            <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
+              <ResizableHeader cols={cols} className="py-1.5 pr-3" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const why = locked(row)
+              const roleWhy = row.auth_source === 'oidc' ? FROM_PROVIDER : why
+              return (
+                <Fragment key={row.id}>
+                  <tr className="border-b border-grid hover:bg-row-hover">
+                    <td className={`${CELL} font-mono break-all text-text`}>{row.login}</td>
+                    <td className={`${CELL} break-words text-text`}>{row.display_name ?? '—'}</td>
+                    <td className={CELL}>
+                      <select
+                        className="max-w-full rounded border border-border bg-app-bg px-1.5 py-1 text-xs text-text disabled:cursor-not-allowed disabled:opacity-50"
+                        value={row.role}
+                        disabled={roleWhy !== null}
+                        title={roleWhy ?? undefined}
+                        aria-label={`Роль пользователя ${row.login}`}
+                        onChange={(e) =>
+                          patch.mutate({ id: row.id, patch: { role: e.target.value as Role } })
                         }
                       >
-                        {row.is_active ? <Lock size={14} aria-hidden /> : <LockOpen size={14} aria-hidden />}
-                        {row.is_active ? 'заблокировать' : 'разблокировать'}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        disabled={why !== null}
-                        title={why ?? undefined}
-                        onClick={() => removeUser(row)}
-                      >
-                        <Trash2 size={14} aria-hidden />
-                        удалить
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-                {resetFor === row.id && (
-                  <tr className="border-b border-grid bg-surface">
-                    <td colSpan={7} className="px-1 py-2">
-                      <div className="flex flex-wrap items-center justify-end gap-2">
-                        <label className="text-xs text-text-secondary" htmlFor={`pw-${row.id}`}>
-                          Новый пароль для {row.login}, не короче {MIN_PASSWORD} символов
-                        </label>
-                        <div className="w-56">
-                          <input
-                            id={`pw-${row.id}`}
-                            className={FIELD}
-                            type="password"
-                            autoComplete="new-password"
-                            value={resetValue}
-                            onChange={(e) => setResetValue(e.target.value)}
-                          />
-                        </div>
+                        {ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            {ROLE_TITLES[r]}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className={`${CELL} text-text-secondary`}>
+                      {row.auth_source === 'oidc' ? 'FAM' : 'пароль'}
+                    </td>
+                    <td className={CELL}>
+                      <span className={row.is_active ? 'text-kind-accepted' : 'text-kind-1'}>
+                        {row.is_active ? 'активен' : 'заблокирован'}
+                      </span>
+                    </td>
+                    <td className={`${CELL} tabular-nums text-text-secondary`}>
+                      {row.last_login_at
+                        ? new Date(row.last_login_at).toLocaleString('ru-RU')
+                        : 'не входил'}
+                    </td>
+                    <td className="py-1.5">
+                      <div className="flex flex-wrap items-center justify-end gap-1">
+                        {/* У учётки провайдера пароля нет — сбрасывать нечего. */}
+                        {row.auth_source === 'local' && (
+                          <Button variant="ghost" onClick={() => openReset(row.id)}>
+                            <KeyRound size={14} aria-hidden />
+                            сбросить пароль
+                          </Button>
+                        )}
                         <Button
-                          variant="primary"
-                          loading={password.isPending}
-                          disabled={resetValue.length < MIN_PASSWORD}
-                          onClick={() => applyReset(row.id)}
+                          variant="ghost"
+                          disabled={row.is_active && why !== null}
+                          title={row.is_active ? (why ?? undefined) : undefined}
+                          onClick={() =>
+                            patch.mutate({ id: row.id, patch: { is_active: !row.is_active } })
+                          }
                         >
-                          Задать
+                          {row.is_active ? <Lock size={14} aria-hidden /> : <LockOpen size={14} aria-hidden />}
+                          {row.is_active ? 'заблокировать' : 'разблокировать'}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          disabled={why !== null}
+                          title={why ?? undefined}
+                          onClick={() => removeUser(row)}
+                        >
+                          <Trash2 size={14} aria-hidden />
+                          удалить
                         </Button>
                       </div>
                     </td>
                   </tr>
-                )}
-                {resetDone === row.id && (
-                  <tr className="border-b border-grid">
-                    <td colSpan={7} className="px-1 py-2 text-right">
-                      <span className="inline-flex items-center gap-1.5 text-xs text-kind-accepted">
-                        <CheckCircle2 size={14} aria-hidden />
-                        пароль задан, сессии пользователя закрыты
-                      </span>
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+                  {resetFor === row.id && (
+                    <tr className="border-b border-grid bg-surface">
+                      <td colSpan={7} className="px-1 py-2">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <label className="text-xs text-text-secondary" htmlFor={`pw-${row.id}`}>
+                            Новый пароль для {row.login}, не короче {MIN_PASSWORD} символов
+                          </label>
+                          <div className="w-56">
+                            <input
+                              id={`pw-${row.id}`}
+                              className={FIELD}
+                              type="password"
+                              autoComplete="new-password"
+                              value={resetValue}
+                              onChange={(e) => setResetValue(e.target.value)}
+                            />
+                          </div>
+                          <Button
+                            variant="primary"
+                            loading={password.isPending}
+                            disabled={resetValue.length < MIN_PASSWORD}
+                            onClick={() => applyReset(row.id)}
+                          >
+                            Задать
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  {resetDone === row.id && (
+                    <tr className="border-b border-grid">
+                      <td colSpan={7} className="px-1 py-2 text-right">
+                        <span className="inline-flex items-center gap-1.5 text-xs text-kind-accepted">
+                          <CheckCircle2 size={14} aria-hidden />
+                          пароль задан, сессии пользователя закрыты
+                        </span>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
 
       {failure && <p className="mt-3 text-xs text-kind-1">{failure.message}</p>}
     </div>

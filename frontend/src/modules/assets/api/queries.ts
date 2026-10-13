@@ -75,6 +75,26 @@ export function useDetachObservation() {
   return useAssetMutation<number>((observationId) => api.post(`/api/assets/observations/${observationId}/detach`))
 }
 
+export function useDeleteAsset() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/assets/assets/${id}`),
+    onSuccess: () => {
+      for (const key of ['assets-list', 'assets-asset', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
+    },
+  })
+}
+
+export function useBulkDelete() {
+  const qc = useQueryClient()
+  return useMutation<{ deleted: number }, ApiRequestError, number[]>({
+    mutationFn: (ids) => api.post('/api/assets/assets/bulk-delete', { ids }),
+    onSuccess: () => {
+      for (const key of ['assets-list', 'assets-asset', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
+    },
+  })
+}
+
 /** Id всех активов под фильтрами списка — выбор «всех по фильтру», а не только загруженных строк. */
 export function useAssetIds() {
   return useMutation<{ total: number; ids: number[] }, ApiRequestError, AssetsQuery>({

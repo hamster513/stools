@@ -70,8 +70,17 @@ export interface AssetNetwork {
   zone: string | null
 }
 
+/** Признак кластера Windows из наблюдения AD: учётка кластера и роль — виртуальные имена, не хосты. */
+export type ClusterKind = 'cluster' | 'role' | 'node'
+export const CLUSTER_LABELS: Record<ClusterKind, string> = {
+  cluster: 'кластер',
+  role: 'роль кластера',
+  node: 'узел кластера',
+}
+
 export interface AssetItem {
   id: number
+  cluster: ClusterKind | null
   name: string
   fqdn: string
   domain: string

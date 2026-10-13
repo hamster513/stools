@@ -7,8 +7,29 @@ import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { cn } from '@/lib/cn'
+import { ResizeHandle } from '@/platform/table/ResizeHandle'
+import { useColumnWidths, type ColumnDef, type ColumnWidths } from '@/platform/table/useColumnWidths'
 
 const ROW_HEIGHT = 32
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'risk', label: 'Риск', width: 208 },
+  { key: 'host', label: 'Хост', width: 240, flex: true },
+  { key: 'ip', label: 'IP', width: 128 },
+  { key: 'cve', label: 'CVE', width: 144 },
+  { key: 'cvss', label: 'CVSS', width: 96 },
+  { key: 'epss', label: 'EPSS', width: 80 },
+  { key: 'exploit', label: 'Эксплойт', width: 96 },
+  { key: 'msf', label: 'MSF', width: 80 },
+  { key: 'crit', label: 'Крит.', width: 80 },
+  { key: 'zone', label: 'Зона', width: 112 },
+  { key: 'status', label: 'Статус', width: 176 },
+  { key: 'open', label: '', width: 32, resizable: false },
+]
+const WITH_CHECK: ColumnDef[] = [{ key: 'check', label: 'Отметка', width: 32, resizable: false }, ...COLUMNS]
+const SORT_KEYS: Partial<Record<string, VulnSort>> = {
+  risk: 'risk_desc', host: 'host_asc', cve: 'cve_asc', cvss: 'cvss_desc', epss: 'epss_desc', exploit: 'exploits_desc',
+}
 
 interface Props {
   items: VulnItem[]
@@ -25,31 +46,41 @@ interface Props {
   onCheckAll?: (on: boolean) => void
 }
 
+// Свой заголовок вместо ResizableHeader: сортировка по щелчку и aria-sort остаются на ячейке.
 function Th({
   children,
-  className,
   sortKey,
   sort,
   onSort,
+  cols,
+  col,
 }: {
   children: React.ReactNode
-  className: string
   sortKey?: VulnSort
   sort: VulnSort
   onSort: (s: VulnSort) => void
+  cols: ColumnWidths
+  col: ColumnDef
 }) {
-  if (!sortKey) return <div className={cn('px-2 py-2', className)}>{children}</div>
+  const handle = col.resizable !== false && <ResizeHandle cols={cols} col={col.key} label={col.label} />
+  // «сбросить» — в резиновой колонке, пока ширины изменены.
+  const reset = col.flex && cols.customized && (
+    <button type="button" onClick={cols.reset} className="mr-2 shrink-0 rounded font-normal tracking-normal text-text-secondary normal-case hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title="Вернуть ширины колонок по умолчанию">сбросить</button>
+  )
+  if (!sortKey) return <div className="relative flex min-w-0 items-center"><div className="min-w-0 flex-1 px-2 py-2">{children}</div>{reset}{handle}</div>
   const active = sort === sortKey
   return (
-    <div role="columnheader" aria-sort={active ? 'descending' : 'none'} className={className}>
+    <div role="columnheader" aria-sort={active ? 'descending' : 'none'} className="relative flex min-w-0 items-center">
       <button
         type="button"
         onClick={() => onSort(sortKey)}
-        className={cn('flex w-full items-center gap-1 px-2 py-2 text-left uppercase hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active && 'text-text')}
+        className={cn('flex min-w-0 flex-1 items-center gap-1 px-2 py-2 text-left uppercase hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active && 'text-text')}
       >
         {children}
         {active && <ChevronDown size={11} aria-hidden />}
       </button>
+      {reset}
+      {handle}
     </div>
   )
 }
@@ -70,22 +101,14 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
   }, [lastVisible, items.length, onReachEnd])
 
   const allChecked = items.length > 0 && items.every((i) => checked?.has(i.key))
+  const cols = useColumnWidths('vm-vulns-columns', onCheck ? WITH_CHECK : COLUMNS)
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1420px] items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        {onCheck && <div className="w-8 shrink-0 pl-3"><input type="checkbox" aria-label="Отметить все загруженные" checked={allChecked} onChange={(e) => onCheckAll?.(e.target.checked)} /></div>}
-        <Th className="w-52 shrink-0" sortKey="risk_desc" sort={sort} onSort={onSort}>Риск</Th>
-        <Th className="min-w-[240px] flex-1" sortKey="host_asc" sort={sort} onSort={onSort}>Хост</Th>
-        <Th className="w-32 shrink-0" sort={sort} onSort={onSort}>IP</Th>
-        <Th className="w-36 shrink-0" sortKey="cve_asc" sort={sort} onSort={onSort}>CVE</Th>
-        <Th className="w-24 shrink-0" sortKey="cvss_desc" sort={sort} onSort={onSort}>CVSS</Th>
-        <Th className="w-20 shrink-0" sortKey="epss_desc" sort={sort} onSort={onSort}>EPSS</Th>
-        <Th className="w-24 shrink-0" sortKey="exploits_desc" sort={sort} onSort={onSort}>Эксплойт</Th>
-        <Th className="w-20 shrink-0" sort={sort} onSort={onSort}>MSF</Th>
-        <Th className="w-20 shrink-0" sort={sort} onSort={onSort}>Крит.</Th>
-        <Th className="w-28 shrink-0" sort={sort} onSort={onSort}>Зона</Th>
-        <Th className="w-44 shrink-0" sort={sort} onSort={onSort}>Статус</Th>
+    <div ref={parentRef} data-col-resize-root className="h-full overflow-auto">
+      <div className="sticky top-0 z-10 grid items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        {cols.columns.map((c) => c.key === 'check'
+          ? <div key={c.key} className="pl-3"><input type="checkbox" aria-label="Отметить все загруженные" checked={allChecked} onChange={(e) => onCheckAll?.(e.target.checked)} /></div>
+          : <Th key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort}>{c.label}</Th>)}
       </div>
 
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
@@ -101,38 +124,38 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
               })}
               className={cn(
                 ROW_FOCUS,
-                'absolute top-0 left-0 flex w-full min-w-[1420px] cursor-pointer items-center border-b border-grid text-xs',
+                'absolute top-0 left-0 grid w-full cursor-pointer items-center border-b border-grid text-xs',
                 selected ? 'bg-row-selected' : 'hover:bg-row-hover',
               )}
-              style={{ height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}
+              style={{ ...cols.gridStyle, height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}
             >
               {onCheck && (
                 // Галочка не открывает карточку: клик и клавиши до строки не доходят.
-                <div className="w-8 shrink-0 pl-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                <div className="pl-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                   <input type="checkbox" aria-label="Отметить" checked={checked?.has(item.key) ?? false} onChange={() => undefined}
                     onClick={(e) => onCheck(v.index, e.shiftKey)} />
                 </div>
               )}
-              <div className="w-52 shrink-0 px-2"><RiskBadge score={item.risk} level={item.level} /></div>
-              <div className="min-w-[240px] flex-1 truncate px-2 font-mono text-text" title={item.hostname}>{item.hostname}</div>
-              <div className="w-32 shrink-0 truncate px-2 font-mono text-text-secondary">{item.ip}</div>
-              <div className="w-36 shrink-0 px-2 font-mono text-text">{item.cve_id}</div>
-              <div className="w-24 shrink-0 px-2 font-mono tabular-nums text-text-secondary">
+              <div className="min-w-0 overflow-hidden px-2"><RiskBadge score={item.risk} level={item.level} /></div>
+              <div className="min-w-0 truncate px-2 font-mono text-text" title={item.hostname}>{item.hostname}</div>
+              <div className="min-w-0 truncate px-2 font-mono text-text-secondary">{item.ip}</div>
+              <div className="min-w-0 truncate px-2 font-mono text-text">{item.cve_id}</div>
+              <div className="min-w-0 truncate px-2 font-mono tabular-nums text-text-secondary">
                 {item.cvss ?? '—'}
                 {item.cvss !== null && <span className="ml-1 text-[10px]">{CVSS_SOURCE_LABELS[item.cvss_source]}</span>}
               </div>
-              <div className="w-20 shrink-0 px-2 font-mono tabular-nums text-text-secondary">{item.epss === null ? '—' : item.epss.toFixed(3)}</div>
-              <div className="w-24 shrink-0 truncate px-2 text-text-secondary">
+              <div className="min-w-0 truncate px-2 font-mono tabular-nums text-text-secondary">{item.epss === null ? '—' : item.epss.toFixed(3)}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary">
                 {item.exploitdb_type ? <span className="text-risk-high">{item.exploitdb_type} · {item.exploits_count}</span> : '—'}
               </div>
-              <div className="w-20 shrink-0 truncate px-2 text-text-secondary">{item.msf_rank ?? '—'}</div>
-              <div className="w-20 shrink-0 truncate px-2 text-text-secondary">{item.criticality || '—'}</div>
-              <div className="w-28 shrink-0 truncate px-2 text-text-secondary" title={item.zone}>{item.zone || '—'}</div>
-              <div className="flex w-44 shrink-0 items-center gap-1 px-2" title={item.assignee_name ? `исполнитель: ${item.assignee_name}` : undefined}>
+              <div className="min-w-0 truncate px-2 text-text-secondary">{item.msf_rank ?? '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary">{item.criticality || '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={item.zone}>{item.zone || '—'}</div>
+              <div className="flex min-w-0 items-center gap-1 overflow-hidden px-2" title={item.assignee_name ? `исполнитель: ${item.assignee_name}` : undefined}>
                 <StatusBadge status={item.status} />
                 {item.overdue && <span className="text-[11px] text-kind-1" title={`срок ${item.due_date ?? ''}`}>просрочена</span>}
               </div>
-              <ChevronRight size={14} className="mr-2 ml-auto shrink-0 text-text-secondary/40" aria-hidden />
+              <div className="flex justify-end pr-2"><ChevronRight size={14} className="shrink-0 text-text-secondary/40" aria-hidden /></div>
             </div>
           )
         })}

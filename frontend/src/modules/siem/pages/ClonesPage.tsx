@@ -5,7 +5,15 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link, useSearchParams } from '@/lib/router'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { CompareView } from './clones/CompareView'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'a', label: 'Правило A', width: 360 },
+  { key: 'b', label: 'Правило B', width: 360, flex: true },
+  { key: 'similarity', label: 'Похожесть', width: 96, align: 'right' },
+]
 
 /**
  * Клоны правил: список пар и сравнение пары бок о бок.
@@ -19,6 +27,7 @@ export function ClonesPage({ snapshotId }: { snapshotId: number }) {
   const a = params.get('a')
   const b = params.get('b')
   const clones = useClones(snapshotId)
+  const cols = useColumnWidths('siem-clones-columns', COLUMNS)
 
   if (clones.isLoading) return <FullPageSpinner />
   if (clones.isError || !clones.data) {
@@ -53,33 +62,34 @@ export function ClonesPage({ snapshotId }: { snapshotId: number }) {
           description="Ни у одной пары правил сигнатуры не совпадают настолько, чтобы считать их копиями."
         />
       ) : (
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
-              <th className="py-2 pr-3 font-medium">Правило A</th>
-              <th className="py-2 pr-3 font-medium">Правило B</th>
-              <th className="py-2 text-right font-medium">Похожесть</th>
-            </tr>
-          </thead>
-          <tbody>
-            {clones.data.map((c) => {
-              const to = `/siem/snapshots/${snapshotId}/clones?a=${encodeURIComponent(c.rule_a)}&b=${encodeURIComponent(c.rule_b)}`
-              return (
-                <tr key={`${c.rule_a}|${c.rule_b}`} className="border-b border-grid hover:bg-row-hover">
-                  <td className="py-1.5 pr-3 font-mono">
-                    <Link to={to} className="block text-text hover:text-primary">{c.rule_a}</Link>
-                  </td>
-                  <td className="py-1.5 pr-3 font-mono">
-                    <Link to={to} className="block text-text hover:text-primary">{c.rule_b}</Link>
-                  </td>
-                  <td className="py-1.5 text-right font-mono tabular-nums text-text-secondary">
-                    <Link to={to} className="block hover:text-primary">{Math.round(c.similarity * 100)}%</Link>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead>
+              <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
+                <ResizableHeader cols={cols} className="py-2 pr-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {clones.data.map((c) => {
+                const to = `/siem/snapshots/${snapshotId}/clones?a=${encodeURIComponent(c.rule_a)}&b=${encodeURIComponent(c.rule_b)}`
+                return (
+                  <tr key={`${c.rule_a}|${c.rule_b}`} className="border-b border-grid hover:bg-row-hover">
+                    <td className="py-1.5 pr-3 font-mono">
+                      <Link to={to} className="block truncate text-text hover:text-primary" title={c.rule_a}>{c.rule_a}</Link>
+                    </td>
+                    <td className="py-1.5 pr-3 font-mono">
+                      <Link to={to} className="block truncate text-text hover:text-primary" title={c.rule_b}>{c.rule_b}</Link>
+                    </td>
+                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">
+                      <Link to={to} className="block hover:text-primary">{Math.round(c.similarity * 100)}%</Link>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

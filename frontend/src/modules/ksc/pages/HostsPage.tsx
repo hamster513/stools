@@ -19,6 +19,8 @@ import {
 } from '@/modules/ksc/api/types'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { useSearchParams, Link } from '@/lib/router'
@@ -47,11 +49,24 @@ const COMPONENT_STATES: { key: ComponentState; label: string }[] = [
 ]
 const COMPONENT_STATE_LABELS = Object.fromEntries(COMPONENT_STATES.map((c) => [c.key, c.label])) as Record<ComponentState, string>
 
-/** Ширины колонок таблицы хостов в пикселях (классы w-*) — минимальная ширина строки считается из них. */
-const BASE_COLUMNS_WIDTH = 1312
-const TAGS_COLUMN_WIDTH = 192
-/** Стрелка в конце строки: 14 px и отступ 8 px. */
-const CHEVRON_WIDTH = 22
+const HOST: ColumnDef = { key: 'host', label: 'Хост', width: 224, flex: true }
+const GROUP: ColumnDef = { key: 'group', label: 'Группа', width: 160 }
+const TAGS: ColumnDef = { key: 'tags', label: 'Теги', width: 192 }
+const REST: ColumnDef[] = [
+  { key: 'os', label: 'ОС', width: 160 },
+  { key: 'agent', label: 'Агент', width: 128 },
+  { key: 'protection', label: 'Защита', width: 160 },
+  { key: 'bases', label: 'Базы', width: 128 },
+  { key: 'fullscan', label: 'Полный поиск', width: 112 },
+  { key: 'threats', label: 'Угрозы', width: 64, align: 'right' },
+  { key: 'in_ad', label: 'AD', width: 96 },
+  { key: 'findings', label: 'Находок', width: 80, align: 'right' },
+  // Стрелка в конце строки: 14 px и отступ 8 px.
+  { key: 'open', label: '', width: 22, resizable: false },
+]
+// Колонка «Теги» есть, только если теги собирались; ширины обоих вариантов хранятся под одним ключом.
+const COLUMNS = [HOST, GROUP, ...REST]
+const COLUMNS_WITH_TAGS = [HOST, GROUP, TAGS, ...REST]
 const TAGS_SHOWN = 3
 
 function isTypingTarget(el: EventTarget | null): boolean {
@@ -153,52 +168,42 @@ function TagChips({ tags }: { tags: string[] }) {
 
 function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, serverId, tagsCollected }: { items: Host[]; selectedIndex: number; onSelectIndex: (i: number) => void; onOpen: (i: number) => void; onReachEnd?: () => void; serverId: number; tagsCollected: boolean }) {
   const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
-  const minWidth = BASE_COLUMNS_WIDTH + CHEVRON_WIDTH + (tagsCollected ? TAGS_COLUMN_WIDTH : 0)
+  const cols = useColumnWidths('ksc-hosts-columns', tagsCollected ? COLUMNS_WITH_TAGS : COLUMNS)
 
   return (
-    <div ref={parentRef} className="h-full overflow-auto">
-      <div style={{ minWidth }} className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        <div className="w-56 shrink-0 px-2 py-2">Хост</div>
-        <div className="w-40 shrink-0 px-2 py-2">Группа</div>
-        {tagsCollected && <div className="w-48 shrink-0 px-2 py-2">Теги</div>}
-        <div className="w-40 shrink-0 px-2 py-2">ОС</div>
-        <div className="w-32 shrink-0 px-2 py-2">Агент</div>
-        <div className="w-40 shrink-0 px-2 py-2">Защита</div>
-        <div className="w-32 shrink-0 px-2 py-2">Базы</div>
-        <div className="w-28 shrink-0 px-2 py-2">Полный поиск</div>
-        <div className="w-16 shrink-0 px-2 py-2 text-right">Угрозы</div>
-        <div className="w-24 shrink-0 px-2 py-2">AD</div>
-        <div className="w-20 shrink-0 px-2 py-2 text-right">Находок</div>
+    <div ref={parentRef} data-col-resize-root className="h-full overflow-auto">
+      <div style={cols.gridStyle} className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase">
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" />
       </div>
       <div style={{ height: totalSize, position: 'relative' }}>
         {rows.map((v) => {
           const h = items[v.index]
           const selected = v.index === selectedIndex
           return (
-            <div key={h.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-full cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ height: ROW_HEIGHT, minWidth, transform: `translateY(${v.start}px)` }}>
-              <div className="w-56 shrink-0 truncate px-2">
+            <div key={h.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 grid w-full cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ ...cols.gridStyle, height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+              <div className="min-w-0 truncate px-2">
                 <div className="truncate text-text" title={h.name}>{h.name}</div>
                 <div className="truncate text-[10px] text-text-secondary" title={h.fqdn}>{h.fqdn}</div>
               </div>
-              <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.group}>{h.group}</div>
-              {tagsCollected && <div className="w-48 shrink-0 px-2"><TagChips tags={h.tags ?? []} /></div>}
-              <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={h.os}>{h.os}</div>
-              <div className="w-32 shrink-0 truncate px-2 text-text-secondary">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · ${h.agent_version}` : ''}</div>
-              <div className={cn('w-40 shrink-0 truncate px-2', h.protection === 'off' ? 'text-risk-high' : 'text-text-secondary')}>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={h.group}>{h.group}</div>
+              {tagsCollected && <div className="min-w-0 px-2"><TagChips tags={h.tags ?? []} /></div>}
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={h.os}>{h.os}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · ${h.agent_version}` : ''}</div>
+              <div className={cn('min-w-0 truncate px-2', h.protection === 'off' ? 'text-risk-high' : 'text-text-secondary')}>
                 {PROTECTION_LABELS[h.protection]}{h.protection === 'off' ? ` · ${RTP_STATE_LABELS[h.rtp_state] ?? h.rtp_state}` : ''}
               </div>
-              <div className={cn('w-32 shrink-0 truncate px-2', h.bases === 'old' && 'text-risk-high')}>{h.bases_at ? new Date(h.bases_at).toLocaleDateString('ru-RU') : '—'} · {BASES_LABELS[h.bases]}</div>
-              <div className="w-28 shrink-0 truncate px-2 text-text-secondary">{h.last_fullscan_at ? new Date(h.last_fullscan_at).toLocaleDateString('ru-RU') : 'никогда'}</div>
-              <div className={cn('w-16 shrink-0 px-2 text-right font-mono tabular-nums', h.threats > 0 && 'text-risk-high')}>{h.threats}</div>
-              <div className="w-24 shrink-0 truncate px-2 text-text-secondary">{h.in_ad ? IN_AD_LABELS[h.in_ad] : '—'}</div>
-              <div role="presentation" className="w-20 shrink-0 px-2 text-right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}>
+              <div className={cn('min-w-0 truncate px-2', h.bases === 'old' && 'text-risk-high')}>{h.bases_at ? new Date(h.bases_at).toLocaleDateString('ru-RU') : '—'} · {BASES_LABELS[h.bases]}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary">{h.last_fullscan_at ? new Date(h.last_fullscan_at).toLocaleDateString('ru-RU') : 'никогда'}</div>
+              <div className={cn('min-w-0 px-2 text-right font-mono tabular-nums', h.threats > 0 && 'text-risk-high')}>{h.threats}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary">{h.in_ad ? IN_AD_LABELS[h.in_ad] : '—'}</div>
+              <div role="presentation" className="min-w-0 px-2 text-right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}>
                 {h.findings > 0 ? (
                   <Link to={`/ksc/servers/${serverId}/findings?q=${encodeURIComponent(h.name)}`} className="font-mono tabular-nums text-text hover:text-primary">{h.findings}</Link>
                 ) : (
                   <span className="font-mono tabular-nums text-text-secondary">0</span>
                 )}
               </div>
-              <ChevronRight size={14} className="mr-2 ml-auto shrink-0 text-text-secondary/40" aria-hidden />
+              <div className="flex justify-end pr-2"><ChevronRight size={14} className="shrink-0 text-text-secondary/40" aria-hidden /></div>
             </div>
           )
         })}

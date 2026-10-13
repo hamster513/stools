@@ -6,7 +6,21 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
+import { useRouter } from '@/lib/router'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import type { Job } from './types'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'job', label: 'Задача', width: 144 },
+  { key: 'stage', label: 'Стадия', width: 104 },
+  { key: 'status', label: 'Статус', width: 96 },
+  { key: 'progress', label: 'Прогресс', width: 128 },
+  { key: 'message', label: 'Сообщение', width: 160, flex: true },
+  { key: 'started', label: 'Запуск', width: 120 },
+  { key: 'duration', label: 'Длительность', width: 124, align: 'right' },
+  { key: 'actions', label: 'Действие', width: 192, resizable: false },
+]
 
 const STATUS_LABEL: Record<Job['status'], string> = { running: 'идёт', done: 'готово', failed: 'ошибка', cancelled: 'отменена' }
 
@@ -29,8 +43,12 @@ function Progress({ job, total }: { job: Job; total: number }) {
   )
 }
 
-/** Экран «Задачи» модуля: фоновые задачи, идущие — сверху; снятие — тому, кому разрешено, без подтверждения. */
-export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLabels, about, emptyDescription }: {
+/**
+ * Экран «Задачи» модуля: фоновые задачи, идущие — сверху; снятие — тому, кому разрешено, без подтверждения.
+ * Ширины колонок хранятся под `storageKey`, по умолчанию — по модулю из адреса (`/ad/jobs` → `ad-jobs-columns`):
+ * экран общий, а модули помнят ширины порознь.
+ */
+export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLabels, about, emptyDescription, storageKey }: {
   jobs: UseQueryResult<Job[], ApiRequestError>
   cancel: UseMutationResult<void, ApiRequestError, number>
   canCancel: boolean
@@ -38,7 +56,10 @@ export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLa
   stageLabels: Record<string, string>
   about: string
   emptyDescription: string
+  storageKey?: string
 }) {
+  const { path } = useRouter()
+  const cols = useColumnWidths(storageKey ?? `${path.split('/')[1] || 'collector'}-jobs-columns`, COLUMNS)
   if (jobs.isLoading) return <FullPageSpinner />
   if (jobs.isError || !jobs.data) {
     const msg = jobs.error instanceof ApiRequestError ? jobs.error.message : 'Не удалось загрузить задачи'
@@ -54,20 +75,21 @@ export function CollectorJobsPage({ jobs, cancel, canCancel, kindLabels, stageLa
         <EmptyState icon={ListChecks} title="Задач ещё не было" description={emptyDescription} />
       ) : (
         <div className="overflow-x-auto rounded border border-grid">
-          <table className="w-full min-w-[900px] text-xs">
-            <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-              <tr><th className="px-3 py-2 text-left">Задача</th><th className="px-3 py-2 text-left">Стадия</th><th className="px-3 py-2 text-left">Статус</th><th className="w-48 px-3 py-2 text-left">Прогресс</th><th className="px-3 py-2 text-left">Сообщение</th><th className="px-3 py-2 text-left">Запуск</th><th className="px-3 py-2 text-right">Длительность</th><th></th></tr>
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="bg-surface text-[11px] tracking-wide text-text-secondary uppercase">
+              <tr><ResizableHeader cols={cols} className="px-3 py-2" content={{ actions: <span className="sr-only">Действие</span> }} /></tr>
             </thead>
             <tbody>
               {jobs.data.map((j) => (
                 <tr key={j.id} className="border-t border-grid align-top">
-                  <td className="px-3 py-2 text-text"><span className="font-mono text-text-secondary">#{j.id}</span> {kindLabels[j.kind] ?? j.kind}</td>
-                  <td className="px-3 py-2 text-text-secondary">{stageLabels[j.stage] ?? j.stage}</td>
+                  <td className="px-3 py-2 break-words text-text"><span className="font-mono text-text-secondary">#{j.id}</span> {kindLabels[j.kind] ?? j.kind}</td>
+                  <td className="px-3 py-2 break-words text-text-secondary">{stageLabels[j.stage] ?? j.stage}</td>
                   <td className={cn('px-3 py-2', j.status === 'running' && 'text-focus-ring', j.status === 'done' && 'text-kind-accepted', j.status === 'failed' && 'text-kind-1', j.status === 'cancelled' && 'text-text-secondary')}>{STATUS_LABEL[j.status]}</td>
                   <td className="px-3 py-2">{j.status === 'running' && j.total ? <Progress job={j} total={j.total} /> : null}</td>
-                  <td className="max-w-[360px] px-3 py-2 text-text-secondary">{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
-                  <td className="px-3 py-2 whitespace-nowrap text-text-secondary">{new Date(j.started_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} <span className="font-mono">{j.started_by}</span></td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap text-text-secondary">{duration(j)}</td>
+                  <td className="px-3 py-2 break-words text-text-secondary">{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
+                  <td className="px-3 py-2 break-words text-text-secondary">{new Date(j.started_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} <span className="font-mono">{j.started_by}</span></td>
+                  <td className="truncate px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{duration(j)}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     {j.status === 'running' && j.cancel_requested && <span className="text-text-secondary">отменяется…</span>}
                     {/* И после просьбы об отмене: осиротевшую задачу (процесс перезапускался) флаг не остановит, снятие закроет её сразу. */}

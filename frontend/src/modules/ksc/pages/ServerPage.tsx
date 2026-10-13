@@ -9,6 +9,29 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+
+const ADMIN_COLUMNS: ColumnDef[] = [
+  { key: 'account', label: 'Учётка', width: 240, flex: true },
+  { key: 'role', label: 'Роль', width: 200 },
+  { key: 'group', label: 'Группа', width: 240 },
+  { key: 'findings', label: 'Находки', width: 160 },
+]
+const CERT_COLUMNS: ColumnDef[] = [
+  { key: 'function', label: 'Назначение', width: 200 },
+  { key: 'subject', label: 'Субъект', width: 320, flex: true },
+  { key: 'not_after', label: 'Истекает', width: 144 },
+  { key: 'days_left', label: 'Дней осталось', width: 112 },
+  { key: 'findings', label: 'Находки', width: 160 },
+]
+const SECONDARY_COLUMNS: ColumnDef[] = [
+  { key: 'name', label: 'Сервер', width: 240, flex: true },
+  { key: 'address', label: 'Адрес', width: 200 },
+  { key: 'version', label: 'Версия', width: 144 },
+  { key: 'last_connected', label: 'На связи', width: 144 },
+  { key: 'findings', label: 'Находки', width: 160 },
+]
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
@@ -55,34 +78,35 @@ function TwoFactorBlock({ data, serverId }: { data: ServerData; serverId: number
 
 function AdminsBlock({ admins, findings, serverId }: { admins: ServerAdmin[]; findings: ServerData['findings']; serverId: number }) {
   const findingsFor = (account: string) => findings.filter((f) => (f.check === 'KSC_INTERNAL_ADMIN' || f.check === 'KSC_ADMINS') && f.target === account)
+  const cols = useColumnWidths('ksc-server-admins-columns', ADMIN_COLUMNS)
   return (
     <Block title="Администраторы">
       {admins.length === 0 ? (
         <EmptyState icon={ShieldCheck} title="Держателей административных ролей нет" description="В выгрузке нет ролей Main Administrator / Administrator, либо секция не собрана." />
       ) : (
-        <table className="w-full text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-            <tr>
-              <th className="py-1.5 pr-3 text-left">Учётка</th>
-              <th className="py-1.5 pr-3 text-left">Роль</th>
-              <th className="py-1.5 pr-3 text-left">Группа</th>
-              <th className="py-1.5 text-left">Находки</th>
-            </tr>
-          </thead>
-          <tbody>
-            {admins.map((a, i) => (
-              <tr key={`${a.account}-${i}`} className="border-t border-grid align-top">
-                <td className="py-2 pr-3 text-text">
-                  {a.account}
-                  {a.internal && <span className="ml-1.5 rounded border border-grid px-1 py-0.5 text-[10px] text-text-secondary">внутренняя</span>}
-                </td>
-                <td className="py-2 pr-3 text-text-secondary">{a.role}</td>
-                <td className="py-2 pr-3 text-text-secondary">{a.group || '—'}</td>
-                <td className="py-2"><FindingBadges findings={findingsFor(a.account)} serverId={serverId} /></td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+              <tr>
+                <ResizableHeader cols={cols} className="py-1.5 pr-3" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {admins.map((a, i) => (
+                <tr key={`${a.account}-${i}`} className="border-t border-grid align-top">
+                  <td className="py-2 pr-3 break-words text-text">
+                    {a.account}
+                    {a.internal && <span className="ml-1.5 rounded border border-grid px-1 py-0.5 text-[10px] text-text-secondary">внутренняя</span>}
+                  </td>
+                  <td className="py-2 pr-3 break-words text-text-secondary">{a.role}</td>
+                  <td className="py-2 pr-3 break-words text-text-secondary">{a.group || '—'}</td>
+                  <td className="py-2"><FindingBadges findings={findingsFor(a.account)} serverId={serverId} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Block>
   )
@@ -91,33 +115,33 @@ function AdminsBlock({ admins, findings, serverId }: { admins: ServerAdmin[]; fi
 function CertsBlock({ certs, findings, serverId, certDays }: { certs: ServerCert[]; findings: ServerData['findings']; serverId: number; certDays: number }) {
   const findingsFor = (c: ServerCert) => findings.filter((f) => f.check === 'SERVER_CERT' && f.target === `сертификат ${c.function}: ${c.subject}`)
   const daysColor = (days: number) => (days < 0 ? 'text-risk-critical' : days <= certDays ? 'text-risk-high' : 'text-text')
+  const cols = useColumnWidths('ksc-server-certs-columns', CERT_COLUMNS)
   return (
     <Block title="Сертификаты">
       {certs.length === 0 ? (
         <EmptyState icon={ShieldCheck} title="Сертификатов нет" description="Секция не собрана или сервер не отдал ни одного сертификата." />
       ) : (
-        <table className="w-full text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-            <tr>
-              <th className="py-1.5 pr-3 text-left">Назначение</th>
-              <th className="py-1.5 pr-3 text-left">Субъект</th>
-              <th className="py-1.5 pr-3 text-left">Истекает</th>
-              <th className="py-1.5 pr-3 text-left">Дней осталось</th>
-              <th className="py-1.5 text-left">Находки</th>
-            </tr>
-          </thead>
-          <tbody>
-            {certs.map((c) => (
-              <tr key={c.function} className="border-t border-grid align-top">
-                <td className="py-2 pr-3 text-text">{c.function}</td>
-                <td className="py-2 pr-3 font-mono break-all text-text-secondary">{c.subject}</td>
-                <td className="py-2 pr-3 text-text-secondary">{when(c.not_after)}</td>
-                <td className={cn('py-2 pr-3 font-mono tabular-nums', daysColor(c.days_left))}>{c.days_left}</td>
-                <td className="py-2"><FindingBadges findings={findingsFor(c)} serverId={serverId} /></td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+              <tr>
+                <ResizableHeader cols={cols} className="py-1.5 pr-3" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {certs.map((c) => (
+                <tr key={c.function} className="border-t border-grid align-top">
+                  <td className="py-2 pr-3 break-words text-text">{c.function}</td>
+                  <td className="py-2 pr-3 font-mono break-all text-text-secondary">{c.subject}</td>
+                  <td className="py-2 pr-3 text-text-secondary">{when(c.not_after)}</td>
+                  <td className={cn('py-2 pr-3 font-mono tabular-nums', daysColor(c.days_left))}>{c.days_left}</td>
+                  <td className="py-2"><FindingBadges findings={findingsFor(c)} serverId={serverId} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Block>
   )
@@ -125,33 +149,33 @@ function CertsBlock({ certs, findings, serverId, certDays }: { certs: ServerCert
 
 function SecondaryServersBlock({ servers, findings, serverId }: { servers: ServerSecondaryServer[]; findings: ServerData['findings']; serverId: number }) {
   const findingsFor = (s: ServerSecondaryServer) => findings.filter((f) => f.check === 'SECONDARY_SERVER_STALE' && f.target === s.name)
+  const cols = useColumnWidths('ksc-server-secondary-columns', SECONDARY_COLUMNS)
   return (
     <Block title="Подчинённые серверы">
       {servers.length === 0 ? (
         <p className="text-xs text-text-secondary">Подчинённых серверов нет — иерархия из одного сервера, либо секция не собрана.</p>
       ) : (
-        <table className="w-full text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-            <tr>
-              <th className="py-1.5 pr-3 text-left">Сервер</th>
-              <th className="py-1.5 pr-3 text-left">Адрес</th>
-              <th className="py-1.5 pr-3 text-left">Версия</th>
-              <th className="py-1.5 pr-3 text-left">На связи</th>
-              <th className="py-1.5 text-left">Находки</th>
-            </tr>
-          </thead>
-          <tbody>
-            {servers.map((s, i) => (
-              <tr key={`${s.name}-${i}`} className="border-t border-grid align-top">
-                <td className="py-2 pr-3 text-text">{s.name}</td>
-                <td className="py-2 pr-3 font-mono text-text-secondary">{s.address || '—'}</td>
-                <td className="py-2 pr-3 text-text-secondary">{s.version || '—'}</td>
-                <td className="py-2 pr-3 text-text-secondary">{when(s.last_connected)}</td>
-                <td className="py-2"><FindingBadges findings={findingsFor(s)} serverId={serverId} /></td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+              <tr>
+                <ResizableHeader cols={cols} className="py-1.5 pr-3" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {servers.map((s, i) => (
+                <tr key={`${s.name}-${i}`} className="border-t border-grid align-top">
+                  <td className="py-2 pr-3 break-words text-text">{s.name}</td>
+                  <td className="py-2 pr-3 font-mono break-all text-text-secondary">{s.address || '—'}</td>
+                  <td className="py-2 pr-3 break-words text-text-secondary">{s.version || '—'}</td>
+                  <td className="py-2 pr-3 text-text-secondary">{when(s.last_connected)}</td>
+                  <td className="py-2"><FindingBadges findings={findingsFor(s)} serverId={serverId} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Block>
   )

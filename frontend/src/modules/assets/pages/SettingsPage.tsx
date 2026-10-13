@@ -12,8 +12,24 @@ import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
 import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { DnsSection } from './settings/DnsSection'
 import { SyncButton } from './SyncButton'
+
+const SYNC_COLUMNS: ColumnDef[] = [
+  { key: 'source', label: 'Источник', width: 160, flex: true },
+  { key: 'live', label: 'Видит хостов', width: 112, align: 'right' },
+  { key: 'gone', label: 'Пропали', width: 96, align: 'right' },
+  { key: 'seen', label: 'Данные от', width: 144, align: 'right' },
+]
+const ZONE_COLUMNS: ColumnDef[] = [
+  { key: 'name', label: 'Зона', width: 120 },
+  { key: 'title', label: 'Название', width: 160 },
+  { key: 'description', label: 'Описание', width: 240, flex: true },
+  { key: 'networks', label: 'Сетей', width: 80, align: 'right' },
+  { key: 'actions', label: 'Удалить', width: 48, resizable: false },
+]
 
 function message(error: unknown, fallback: string): string {
   return error instanceof ApiRequestError ? error.message : fallback
@@ -104,6 +120,7 @@ function SyncSection() {
   const { write } = useCan()
   const status = useSyncStatus()
   const s = status.data
+  const cols = useColumnWidths('assets-sync-columns', SYNC_COLUMNS)
   return (
     <Section title="Синхронизация с модулями" about="Assets читает хосты VM, последние снапшоты антивируса и выгрузки AD и сопоставляет их с активами. Хосты, которых источник больше не отдаёт, помечаются пропавшими. Время источника — когда он видел хост: у VM это время импорта, у антивируса и AD — время сбора снапшота.">
       {status.isLoading && <Spinner />}
@@ -113,24 +130,27 @@ function SyncSection() {
           <p className="mb-3 text-xs text-text-secondary">
             {s.running_job_id ? <>Идёт синхронизация, <Link to="/assets/jobs" className="underline">задача #{s.running_job_id}</Link>.</> : <>Последняя синхронизация: <span className="text-text">{when(s.last_sync_at)}</span>.</>}
           </p>
-          <table className="mb-3 w-full text-xs">
-            <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-              <tr><th className="py-1.5 pr-3 text-left">Источник</th><th className="py-1.5 pr-3 text-right">Видит хостов</th><th className="py-1.5 pr-3 text-right">Пропали</th><th className="py-1.5 text-right">Данные от</th></tr>
-            </thead>
-            <tbody>
-              {SYNC_SOURCES.map(({ source, title }) => {
-                const row = s.sources[source]
-                return (
-                  <tr key={source} className="border-t border-grid">
-                    <td className="py-2 pr-3 text-text">{title}</td>
-                    <td className="py-2 pr-3 text-right font-mono tabular-nums text-text">{row?.live ?? 0}</td>
-                    <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{row?.gone ?? 0}</td>
-                    <td className="py-2 text-right text-text-secondary">{when(row?.seen_at ?? null)}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+          <div className="mb-3 overflow-x-auto">
+            <table className="w-full text-xs" style={cols.tableStyle}>
+              <ColGroup cols={cols} />
+              <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+                <tr><ResizableHeader cols={cols} className="py-1.5 pr-3" /></tr>
+              </thead>
+              <tbody>
+                {SYNC_SOURCES.map(({ source, title }) => {
+                  const row = s.sources[source]
+                  return (
+                    <tr key={source} className="border-t border-grid">
+                      <td className="truncate py-2 pr-3 text-text" title={title}>{title}</td>
+                      <td className="py-2 pr-3 text-right font-mono tabular-nums text-text">{row?.live ?? 0}</td>
+                      <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{row?.gone ?? 0}</td>
+                      <td className="py-2 pr-3 text-right text-text-secondary">{when(row?.seen_at ?? null)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
       <div className="flex items-center justify-between gap-3">
@@ -149,34 +169,38 @@ function ZonesSection() {
   const create = useCreateZone()
   const remove = useDeleteZone()
   const [form, setForm] = useState({ name: '', title: '', description: '' })
+  const cols = useColumnWidths('assets-zones-columns', ZONE_COLUMNS)
 
   return (
     <Section title="Справочник зон" about="Зона сети — DMZ, внутренняя, гостевая и т. п. По зоне фильтруются активы. Зону, которая задана у сетей, удалить нельзя: сначала смените сетям зону.">
       {zones.isLoading && <Spinner />}
       {zones.isError && <ErrorState message={message(zones.error, 'Не удалось загрузить зоны')} onRetry={() => zones.refetch()} />}
       {zones.data && (
-        <table className="mb-3 w-full text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-            <tr><th className="py-1.5 pr-3 text-left">Зона</th><th className="py-1.5 pr-3 text-left">Название</th><th className="py-1.5 pr-3 text-left">Описание</th><th className="py-1.5 pr-3 text-right">Сетей</th><th /></tr>
-          </thead>
-          <tbody>
-            {zones.data.map((z) => (
-              <tr key={z.name} className="border-t border-grid align-top">
-                <td className="py-2 pr-3 font-mono text-text">{z.name}</td>
-                <td className="py-2 pr-3 text-text">{z.title || '—'}</td>
-                <td className="py-2 pr-3 text-text-secondary">{z.description || '—'}</td>
-                <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{z.networks}</td>
-                <td className="py-2 text-right">
-                  {write && (
-                    <Button variant="ghost" onClick={() => remove.mutate(z.name)} disabled={z.networks > 0} title={z.networks > 0 ? 'зона задана у сетей' : undefined} aria-label={`Удалить зону ${z.name}`}>
-                      <Trash2 size={13} aria-hidden />
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="mb-3 overflow-x-auto">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+              <tr><ResizableHeader cols={cols} className="py-1.5 pr-3" content={{ actions: <span className="sr-only">Удалить</span> }} /></tr>
+            </thead>
+            <tbody>
+              {zones.data.map((z) => (
+                <tr key={z.name} className="border-t border-grid align-top">
+                  <td className="py-2 pr-3 font-mono break-all text-text">{z.name}</td>
+                  <td className="py-2 pr-3 break-words text-text">{z.title || '—'}</td>
+                  <td className="py-2 pr-3 break-words text-text-secondary">{z.description || '—'}</td>
+                  <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{z.networks}</td>
+                  <td className="py-2 text-right">
+                    {write && (
+                      <Button variant="ghost" onClick={() => remove.mutate(z.name)} disabled={z.networks > 0} title={z.networks > 0 ? 'зона задана у сетей' : undefined} aria-label={`Удалить зону ${z.name}`}>
+                        <Trash2 size={13} aria-hidden />
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {remove.error && <p className="mb-2 text-xs text-kind-1">{message(remove.error, 'Зона не удалена')}</p>}
       {write && (

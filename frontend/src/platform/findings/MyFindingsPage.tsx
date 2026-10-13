@@ -10,6 +10,8 @@ import { useRouter } from '@/lib/router'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { MODULES } from '@/platform/modules'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { findingFacetChips, STATUS_OPTIONS, toggleStatus } from './facets'
 import { useMyFindings } from './queries'
 import { StatusBadge } from './StatusBadge'
@@ -30,6 +32,15 @@ const SEVERITY: Record<string, { label: string; className: string }> = {
 
 const CELL = 'py-1.5 pr-3 align-top'
 
+const COLUMNS: ColumnDef[] = [
+  { key: 'module', label: 'Модуль', width: 160 },
+  { key: 'finding', label: 'Находка', width: 320, flex: true },
+  { key: 'severity', label: 'Тяжесть', width: 112 },
+  { key: 'status', label: 'Статус', width: 160 },
+  { key: 'due', label: 'Срок', width: 160 },
+  { key: 'risk', label: 'Риск принят до', width: 128 },
+]
+
 function day(value: string): string {
   return new Date(`${value}T00:00:00`).toLocaleDateString('ru-RU')
 }
@@ -45,6 +56,7 @@ export function MyFindingsPage() {
   const [module, setModule] = useState('')
   const filtersPanel = useFiltersPanel('findings-mine')
   const mine = useMyFindings({ status, module: module || undefined })
+  const cols = useColumnWidths('findings-mine-columns', COLUMNS)
 
   const chips: FilterChip[] = findingFacetChips({ status }, (next) => setStatus(next.status))
   const moduleTitle = MODULE_OPTIONS.find((m) => m.id === module)?.title
@@ -112,53 +124,51 @@ export function MyFindingsPage() {
           }
         />
       ) : (
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
-              <th className={`${CELL} font-medium`}>Модуль</th>
-              <th className={`${CELL} font-medium`}>Находка</th>
-              <th className={`${CELL} font-medium`}>Тяжесть</th>
-              <th className={`${CELL} font-medium`}>Статус</th>
-              <th className={`${CELL} font-medium`}>Срок</th>
-              <th className="py-1.5 font-medium">Риск принят до</th>
-            </tr>
-          </thead>
-          <tbody>
-            {mine.data.map((f) => {
-              const sev = SEVERITY[f.severity.toLowerCase()]
-              return (
-                <tr
-                  key={`${f.module}|${f.scope_id}|${f.key}`}
-                  {...(f.link ? clickableRow(() => navigate(f.link)) : {})}
-                  className={cn('border-b border-grid', f.link && 'cursor-pointer hover:bg-row-hover', ROW_FOCUS)}
-                >
-                  <td className={CELL}>
-                    <span className="inline-flex rounded border border-border px-1.5 py-0.5 text-[11px] whitespace-nowrap text-text-secondary">
-                      {f.module_title}
-                    </span>
-                  </td>
-                  <td className={`${CELL} text-text`}>
-                    {f.title || <span className="font-mono text-text-secondary">{f.key}</span>}
-                    {!f.present && <span className="ml-2 text-[11px] text-text-secondary">нет в свежих данных</span>}
-                  </td>
-                  <td className={cn(CELL, 'whitespace-nowrap', sev?.className ?? 'text-text-secondary')}>
-                    {sev?.label ?? (f.severity || '—')}
-                  </td>
-                  <td className={CELL}>
-                    <StatusBadge status={f.status} />
-                  </td>
-                  <td className={cn(CELL, 'tabular-nums whitespace-nowrap', f.overdue ? 'text-kind-1' : 'text-text')}>
-                    {f.due_date ? day(f.due_date) : '—'}
-                    {f.overdue && <span className="ml-1.5 text-[11px]">просрочено</span>}
-                  </td>
-                  <td className="py-1.5 tabular-nums whitespace-nowrap text-text-secondary">
-                    {f.risk_until ? day(f.risk_until) : '—'}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead>
+              <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
+                <ResizableHeader cols={cols} className="py-1.5 pr-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {mine.data.map((f) => {
+                const sev = SEVERITY[f.severity.toLowerCase()]
+                return (
+                  <tr
+                    key={`${f.module}|${f.scope_id}|${f.key}`}
+                    {...(f.link ? clickableRow(() => navigate(f.link)) : {})}
+                    className={cn('border-b border-grid', f.link && 'cursor-pointer hover:bg-row-hover', ROW_FOCUS)}
+                  >
+                    <td className={CELL}>
+                      <span className="inline-block max-w-full truncate rounded border border-border px-1.5 py-0.5 align-top text-[11px] text-text-secondary" title={f.module_title}>
+                        {f.module_title}
+                      </span>
+                    </td>
+                    <td className={`${CELL} break-words text-text`}>
+                      {f.title || <span className="font-mono text-text-secondary">{f.key}</span>}
+                      {!f.present && <span className="ml-2 text-[11px] text-text-secondary">нет в свежих данных</span>}
+                    </td>
+                    <td className={cn(CELL, 'truncate', sev?.className ?? 'text-text-secondary')}>
+                      {sev?.label ?? (f.severity || '—')}
+                    </td>
+                    <td className={CELL}>
+                      <StatusBadge status={f.status} />
+                    </td>
+                    <td className={cn(CELL, 'tabular-nums', f.overdue ? 'text-kind-1' : 'text-text')}>
+                      {f.due_date ? day(f.due_date) : '—'}
+                      {f.overdue && <span className="ml-1.5 text-[11px]">просрочено</span>}
+                    </td>
+                    <td className="truncate py-1.5 tabular-nums text-text-secondary">
+                      {f.risk_until ? day(f.risk_until) : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )

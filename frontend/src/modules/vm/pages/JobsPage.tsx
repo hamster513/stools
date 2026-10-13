@@ -8,6 +8,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const STATUS_LABEL: Record<Job['status'], string> = {
   running: 'идёт',
@@ -15,6 +17,17 @@ const STATUS_LABEL: Record<Job['status'], string> = {
   failed: 'ошибка',
   cancelled: 'отменена',
 }
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'job', label: 'Задача', width: 144 },
+  { key: 'stage', label: 'Стадия', width: 104 },
+  { key: 'status', label: 'Статус', width: 104 },
+  { key: 'progress', label: 'Прогресс', width: 128 },
+  { key: 'message', label: 'Сообщение', width: 160, flex: true },
+  { key: 'started', label: 'Запуск', width: 120 },
+  { key: 'duration', label: 'Длительность', width: 124, align: 'right' },
+  { key: 'actions', label: 'Действие', width: 136, resizable: false },
+]
 
 function duration(job: Job): string {
   const start = new Date(job.started_at).getTime()
@@ -34,6 +47,7 @@ export function JobsPage() {
   const { write } = useCan()
   const jobs = useJobs()
   const cancel = useCancelJob()
+  const cols = useColumnWidths('vm-jobs-columns', COLUMNS)
 
   if (jobs.isLoading) return <FullPageSpinner />
   if (jobs.isError || !jobs.data) {
@@ -59,26 +73,20 @@ export function JobsPage() {
         />
       ) : (
         <div className="overflow-x-auto rounded border border-grid">
-          <table className="w-full min-w-[900px] text-xs">
-            <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="bg-surface text-[11px] tracking-wide text-text-secondary uppercase">
               <tr>
-                <th className="px-3 py-2 text-left">Задача</th>
-                <th className="px-3 py-2 text-left">Стадия</th>
-                <th className="px-3 py-2 text-left">Статус</th>
-                <th className="w-48 px-3 py-2 text-left">Прогресс</th>
-                <th className="px-3 py-2 text-left">Сообщение</th>
-                <th className="px-3 py-2 text-left">Запуск</th>
-                <th className="px-3 py-2 text-right">Длительность</th>
-                <th className="px-3 py-2"></th>
+                <ResizableHeader cols={cols} className="px-3 py-2" content={{ actions: <span className="sr-only">Действие</span> }} />
               </tr>
             </thead>
             <tbody>
               {jobs.data.map((j) => (
                 <tr key={j.id} className="border-t border-grid align-top">
-                  <td className="px-3 py-2 text-text">
+                  <td className="px-3 py-2 break-words text-text">
                     <span className="font-mono text-text-secondary">#{j.id}</span> {JOB_KIND_LABELS[j.kind] ?? j.kind}
                   </td>
-                  <td className="px-3 py-2 text-text-secondary">{STAGE_LABELS[j.stage] ?? j.stage}</td>
+                  <td className="px-3 py-2 break-words text-text-secondary">{STAGE_LABELS[j.stage] ?? j.stage}</td>
                   <td className="px-3 py-2">
                     <span
                       className={cn(
@@ -106,13 +114,13 @@ export function JobsPage() {
                       <span className="font-mono tabular-nums text-text-secondary">{j.processed ? j.processed.toLocaleString('ru-RU') : ''}</span>
                     )}
                   </td>
-                  <td className="max-w-[320px] px-3 py-2 text-text-secondary">
+                  <td className="px-3 py-2 break-words text-text-secondary">
                     {j.error ? <span className="text-kind-1">{j.error}</span> : j.message}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap text-text-secondary">
+                  <td className="truncate px-3 py-2 text-text-secondary" title={`${when(j.started_at)} ${j.started_by}`}>
                     {when(j.started_at)} <span className="font-mono">{j.started_by}</span>
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums whitespace-nowrap text-text-secondary">{duration(j)}</td>
+                  <td className="truncate px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{duration(j)}</td>
                   <td className="px-3 py-2 text-right">
                     {write && j.status === 'running' && (
                       <Button variant="ghost" onClick={() => cancel.mutate(j.id)} aria-label={`Отменить задачу ${j.id}`}>

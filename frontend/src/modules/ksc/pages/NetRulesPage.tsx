@@ -9,7 +9,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
-import { useColumnWidths } from '@/hooks/useColumnWidths'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { ObjectDrawer } from './objects/ObjectDrawer'
@@ -27,19 +28,18 @@ const actionLabel = (a: string) => a || '—'
 const directionLabel = (d: string) => d || '—'
 
 type Col = 'name' | 'position' | 'action' | 'direction' | 'protocol' | 'local_ports' | 'remote_ports' | 'addresses' | 'enabled' | 'policy'
-const COLUMNS: { key: Col; label: string; width: number }[] = [
+const COLUMNS: ColumnDef<Col>[] = [
   { key: 'name', label: 'Название', width: 240 },
-  { key: 'position', label: '№', width: 48 },
+  { key: 'position', label: '№', width: 48, align: 'right' },
   { key: 'action', label: 'Действие', width: 144 },
   { key: 'direction', label: 'Направление', width: 144 },
   { key: 'protocol', label: 'Протокол', width: 80 },
   { key: 'local_ports', label: 'Локальные порты', width: 112 },
   { key: 'remote_ports', label: 'Удалённые порты', width: 112 },
-  { key: 'addresses', label: 'Адреса', width: 360 },
+  { key: 'addresses', label: 'Адреса', width: 360, flex: true },
   { key: 'enabled', label: 'Включено', width: 80 },
   { key: 'policy', label: 'Политика / профиль', width: 224 },
 ]
-const DEFAULT_WIDTHS = Object.fromEntries(COLUMNS.map((c) => [c.key, c.width])) as Record<Col, number>
 
 /**
  * Строки кликабельны: щелчок или Enter открывают правило в боковой панели; открытое подсвечено. `maybe` — ключи `(policy_id, profile)`
@@ -47,32 +47,25 @@ const DEFAULT_WIDTHS = Object.fromEntries(COLUMNS.map((c) => [c.key, c.width])) 
  * самая содержательная колонка, ей достаётся свободное место справа.
  */
 function Rows({ items, inPolicy, serverId, openRowId, onOpen, maybe }: { items: NetRuleItem[]; inPolicy: boolean; serverId: number; openRowId: number | null; onOpen: (rowId: number) => void; maybe: Set<string> }) {
-  const { width, handleProps, reset, customized } = useColumnWidths<Col>('ksc-net-rules-columns', DEFAULT_WIDTHS)
-  const total = COLUMNS.reduce((sum, c) => sum + width(c.key), 0)
-  const cell = (col: Col, extra?: string) => ({ className: cn(col === 'addresses' ? 'min-w-0 flex-1' : 'shrink-0', 'px-2', extra), style: col === 'addresses' ? { minWidth: width(col) } : { width: width(col) } })
+  const cols = useColumnWidths('ksc-net-rules-columns', COLUMNS)
+  const cell = (extra?: string) => cn('min-w-0 px-2', extra)
   return (
-    <div style={{ minWidth: total }}>
-      <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        {COLUMNS.map((c) => (
-          <div key={c.key} {...cell(c.key, cn('relative py-2', c.key === 'position' && 'text-right'))}>
-            {c.key === 'policy' && inPolicy ? 'Профиль' : c.label}
-            {c.key === 'policy' && customized && <button type="button" onClick={reset} className="ml-2 font-normal normal-case tracking-normal text-text-secondary hover:text-text" title="Вернуть ширины колонок по умолчанию">сбросить</button>}
-            <div {...handleProps(c.key, c.label)} />
-          </div>
-        ))}
+    <div data-col-resize-root>
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" content={inPolicy ? { policy: 'Профиль' } : undefined} resetIn="policy" />
       </div>
       {items.map((r) => (
-        <div key={r.id} {...clickableRow(() => onOpen(r.id))} className={cn(ROW_FOCUS, 'flex cursor-pointer items-start border-b border-grid py-2 text-xs', openRowId === r.id ? 'bg-row-selected' : 'hover:bg-row-hover')}>
-          <div {...cell('name', 'break-words text-text')}>{r.name || '—'}</div>
-          <div {...cell('position', 'text-right font-mono tabular-nums text-text-secondary')}>{r.position}</div>
-          <div {...cell('action', 'text-text-secondary')}>{actionLabel(r.action)}</div>
-          <div {...cell('direction', 'text-text-secondary')}>{directionLabel(r.direction)}</div>
-          <div {...cell('protocol', 'text-text-secondary')}>{r.protocol || '—'}</div>
-          <div {...cell('local_ports', 'font-mono break-all text-text-secondary')}>{r.local_ports || '—'}</div>
-          <div {...cell('remote_ports', 'font-mono break-all text-text-secondary')}>{r.remote_ports || '—'}</div>
-          <div {...cell('addresses', 'font-mono break-all text-text-secondary')}>{r.addresses || '—'}</div>
-          <div {...cell('enabled', 'text-text-secondary')}>{r.enabled ? 'да' : 'нет'}</div>
-          <div {...cell('policy')}><PolicyCell serverId={serverId} policyId={r.policy_id} policyName={r.policy_name} profile={r.profile} inPolicy={inPolicy} />{maybe.has(`${r.policy_id}\u0000${r.profile}`) && <MaybeMark />}</div>
+        <div key={r.id} {...clickableRow(() => onOpen(r.id))} className={cn(ROW_FOCUS, 'grid cursor-pointer items-start border-b border-grid py-2 text-xs', openRowId === r.id ? 'bg-row-selected' : 'hover:bg-row-hover')} style={cols.gridStyle}>
+          <div className={cell('break-words text-text')}>{r.name || '—'}</div>
+          <div className={cell('text-right font-mono tabular-nums text-text-secondary')}>{r.position}</div>
+          <div className={cell('text-text-secondary')}>{actionLabel(r.action)}</div>
+          <div className={cell('text-text-secondary')}>{directionLabel(r.direction)}</div>
+          <div className={cell('text-text-secondary')}>{r.protocol || '—'}</div>
+          <div className={cell('font-mono break-all text-text-secondary')}>{r.local_ports || '—'}</div>
+          <div className={cell('font-mono break-all text-text-secondary')}>{r.remote_ports || '—'}</div>
+          <div className={cell('font-mono break-all text-text-secondary')}>{r.addresses || '—'}</div>
+          <div className={cell('text-text-secondary')}>{r.enabled ? 'да' : 'нет'}</div>
+          <div className={cell()}><PolicyCell serverId={serverId} policyId={r.policy_id} policyName={r.policy_name} profile={r.profile} inPolicy={inPolicy} />{maybe.has(`${r.policy_id}\u0000${r.profile}`) && <MaybeMark />}</div>
         </div>
       ))}
     </div>

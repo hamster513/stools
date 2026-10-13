@@ -10,12 +10,25 @@ import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { aliasesExportUrl, useAliases, useForgetAlias } from '../api/queries'
 import { KIND_LABELS, KIND_ORDER } from '../api/types'
 
 const CELL = 'px-3 py-2 align-top'
 // Секреты в таблицу соответствий не попадают (хранится только их отпечаток), в фильтре их нет.
 const KINDS = KIND_ORDER.filter((k) => k !== 'secret')
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'kind', label: 'Вид', width: 112 },
+  { key: 'real', label: 'Настоящее', width: 224, flex: true },
+  { key: 'alias', label: 'Псевдоним', width: 224 },
+  { key: 'when', label: 'Когда', width: 120 },
+  { key: 'who', label: 'Кто', width: 104 },
+  { key: 'job', label: 'Задание', width: 80 },
+]
+// «Забыть» — только администратору; колонка кнопки без ручки.
+const ADMIN_COLUMNS: ColumnDef[] = [...COLUMNS, { key: 'forget', label: 'Забыть', width: 88, resizable: false }]
 
 function when(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -42,6 +55,7 @@ function AliasesTable() {
   const [kind, setKind] = useState('')
   const aliases = useAliases({ q: q || undefined, kind: kind || undefined })
   const forget = useForgetAlias()
+  const cols = useColumnWidths('toolbox-aliases-columns', admin ? ADMIN_COLUMNS : COLUMNS)
 
   // Поиск уходит на сервер не на каждую букву.
   useEffect(() => {
@@ -102,26 +116,21 @@ function AliasesTable() {
       ) : (
         <>
           <div className="overflow-x-auto rounded border border-grid">
-            <table className="w-full min-w-[900px] text-xs">
-              <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+            <table className="w-full text-xs" style={cols.tableStyle}>
+              <ColGroup cols={cols} />
+              <thead className="bg-surface text-[11px] tracking-wide text-text-secondary uppercase">
                 <tr>
-                  <th className="px-3 py-2 text-left">Вид</th>
-                  <th className="px-3 py-2 text-left">Настоящее</th>
-                  <th className="px-3 py-2 text-left">Псевдоним</th>
-                  <th className="px-3 py-2 text-left">Когда</th>
-                  <th className="px-3 py-2 text-left">Кто</th>
-                  <th className="px-3 py-2 text-left">Задание</th>
-                  {admin && <th className="w-24 px-3 py-2" />}
+                  <ResizableHeader cols={cols} className="px-3 py-2" content={{ forget: <span className="sr-only">Забыть</span> }} />
                 </tr>
               </thead>
               <tbody>
                 {items.map((a) => (
                   <tr key={a.id} className="border-t border-grid hover:bg-row-hover">
-                    <td className={cn(CELL, 'whitespace-nowrap text-text-secondary')}>{KIND_LABELS[a.kind] ?? a.kind}</td>
-                    <td className={cn(CELL, 'max-w-[320px] font-mono break-all text-text')}>{a.real}</td>
-                    <td className={cn(CELL, 'max-w-[320px] font-mono break-all text-text')}>{a.alias}</td>
-                    <td className={cn(CELL, 'whitespace-nowrap text-text-secondary')}>{when(a.created_at)}</td>
-                    <td className={cn(CELL, 'font-mono text-text-secondary')}>{a.created_by}</td>
+                    <td className={cn(CELL, 'truncate text-text-secondary')}>{KIND_LABELS[a.kind] ?? a.kind}</td>
+                    <td className={cn(CELL, 'font-mono break-all text-text')}>{a.real}</td>
+                    <td className={cn(CELL, 'font-mono break-all text-text')}>{a.alias}</td>
+                    <td className={cn(CELL, 'truncate text-text-secondary')}>{when(a.created_at)}</td>
+                    <td className={cn(CELL, 'truncate font-mono text-text-secondary')} title={a.created_by}>{a.created_by}</td>
                     <td className={cn(CELL, 'font-mono')}>
                       {a.first_job_id !== null ? <Link to={`/toolbox/scrub/${a.first_job_id}`} className="text-primary hover:underline">#{a.first_job_id}</Link> : <span className="text-text-secondary">—</span>}
                     </td>

@@ -8,6 +8,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { cn } from '@/lib/cn'
 import { FacetPanel, FacetRow, FacetSection } from './Facets'
@@ -18,32 +20,37 @@ function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
 }
 
+const COLUMNS: ColumnDef[] = [
+  { key: 'type', label: 'Тип', width: 192 },
+  { key: 'name', label: 'Название', width: 220, flex: true },
+  { key: 'product', label: 'Продукт', width: 160 },
+  { key: 'group', label: 'Группа', width: 192 },
+  { key: 'schedule', label: 'Расписание', width: 96, align: 'right' },
+  { key: 'last_run', label: 'Последний запуск', width: 144 },
+  { key: 'ok', label: 'Успех', width: 64, align: 'right' },
+  { key: 'warning', label: 'Предупр.', width: 80, align: 'right' },
+  { key: 'failed', label: 'Провал', width: 64, align: 'right' },
+]
+
 function Table({ items }: { items: TaskListItem[] }) {
+  const cols = useColumnWidths('ksc-tasks-columns', COLUMNS)
   return (
-    <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1212px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        <div className="w-48 shrink-0 px-2 py-2">Тип</div>
-        <div className="min-w-[220px] flex-1 px-2 py-2">Название</div>
-        <div className="w-40 shrink-0 px-2 py-2">Продукт</div>
-        <div className="w-48 shrink-0 px-2 py-2">Группа</div>
-        <div className="w-24 shrink-0 px-2 py-2 text-right">Расписание</div>
-        <div className="w-36 shrink-0 px-2 py-2">Последний запуск</div>
-        <div className="w-16 shrink-0 px-2 py-2 text-right">Успех</div>
-        <div className="w-20 shrink-0 px-2 py-2 text-right">Предупр.</div>
-        <div className="w-16 shrink-0 px-2 py-2 text-right">Провал</div>
+    <div data-col-resize-root className="h-full overflow-auto">
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" />
       </div>
       {items.map((t) => (
-        <div key={t.id} className="flex min-w-[1212px] items-center border-b border-grid py-2 text-xs">
-          <div className="w-48 shrink-0 truncate px-2 text-text" title={t.type}>{t.type}</div>
-          <div className="min-w-[220px] flex-1 truncate px-2 text-text" title={t.name}>{t.name}</div>
-          <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={t.product}>{t.product || '—'}</div>
-          <div className="w-48 shrink-0 truncate px-2 text-text-secondary" title={t.group}>{t.group || 'набор устройств'}</div>
+        <div key={t.id} className="grid items-center border-b border-grid py-2 text-xs" style={cols.gridStyle}>
+          <div className="min-w-0 truncate px-2 text-text" title={t.type}>{t.type}</div>
+          <div className="min-w-0 truncate px-2 text-text" title={t.name}>{t.name}</div>
+          <div className="min-w-0 truncate px-2 text-text-secondary" title={t.product}>{t.product || '—'}</div>
+          <div className="min-w-0 truncate px-2 text-text-secondary" title={t.group}>{t.group || 'набор устройств'}</div>
           {/* Код типа расписания KSC как пришёл: словаря кодов в модуле пока нет. */}
-          <div className="w-24 shrink-0 px-2 text-right font-mono tabular-nums text-text-secondary" title="код типа расписания">{t.schedule}</div>
-          <div className="w-36 shrink-0 truncate px-2 text-text-secondary">{when(t.last_run_at)}</div>
-          <div className="w-16 shrink-0 px-2 text-right font-mono tabular-nums text-text-secondary">{t.ok}</div>
-          <div className={cn('w-20 shrink-0 px-2 text-right font-mono tabular-nums', t.warning > 0 ? 'text-risk-medium' : 'text-text-secondary')}>{t.warning}</div>
-          <div className={cn('w-16 shrink-0 px-2 text-right font-mono tabular-nums', t.failed > 0 ? 'font-medium text-risk-high' : 'text-text-secondary')}>{t.failed}</div>
+          <div className="min-w-0 px-2 text-right font-mono tabular-nums text-text-secondary" title="код типа расписания">{t.schedule}</div>
+          <div className="min-w-0 truncate px-2 text-text-secondary">{when(t.last_run_at)}</div>
+          <div className="min-w-0 px-2 text-right font-mono tabular-nums text-text-secondary">{t.ok}</div>
+          <div className={cn('min-w-0 px-2 text-right font-mono tabular-nums', t.warning > 0 ? 'text-risk-medium' : 'text-text-secondary')}>{t.warning}</div>
+          <div className={cn('min-w-0 px-2 text-right font-mono tabular-nums', t.failed > 0 ? 'font-medium text-risk-high' : 'text-text-secondary')}>{t.failed}</div>
         </div>
       ))}
     </div>

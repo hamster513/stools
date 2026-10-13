@@ -4,11 +4,25 @@ import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
 import { Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { FINDINGS_PAGE_SIZE, useApply, useFindings, useUpdateFindings } from '../api/queries'
 import { KIND_LABELS, type Finding, type FindingsPatch } from '../api/types'
 
 const CELL = 'px-2 py-1.5 align-top'
 const EMPTY: FindingsPatch = { checks: {}, aliases: {}, words: [] }
+
+const CHECK: ColumnDef = { key: 'check', label: 'Заменять', width: 32, resizable: false }
+const VALUE: ColumnDef[] = [
+  { key: 'value', label: 'Значение', width: 280 },
+  { key: 'alias', label: 'Псевдоним', width: 256 },
+  { key: 'count', label: 'Вхождений', width: 96, align: 'right' },
+]
+const CONTEXT: ColumnDef = { key: 'context', label: 'Контекст', width: 320 }
+const FILE: ColumnDef = { key: 'file', label: 'Файл', width: 200, flex: true }
+// Контекст показывается по переключателю — два набора колонок, ширины у них общие (ключ хранения один).
+const COLUMNS: ColumnDef[] = [CHECK, ...VALUE, FILE]
+const COLUMNS_WITH_CONTEXT: ColumnDef[] = [CHECK, ...VALUE, CONTEXT, FILE]
 
 /** Буфер без отправленного: правки, сделанные пока шёл PATCH, остаются несохранёнными. */
 function withoutSent(b: FindingsPatch, sent: FindingsPatch): FindingsPatch {
@@ -38,6 +52,7 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
   // Значения строк с правленым псевдонимом: строки может не быть на экране, а отказ назвать нужно.
   const aliasValues = useRef<Record<number, string>>({})
   const [added, setAdded] = useState<number | null>(null)
+  const cols = useColumnWidths('toolbox-findings-columns', showContexts ? COLUMNS_WITH_CONTEXT : COLUMNS)
 
   // Поиск уходит на сервер не на каждую букву.
   useEffect(() => {
@@ -141,19 +156,15 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
                     <div className="px-3 py-4 text-xs text-text-secondary">{q ? 'Под поиск ничего не попало.' : 'Пусто.'}</div>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[900px] text-xs">
-                        <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+                      <table className="w-full text-xs" style={cols.tableStyle}>
+                        <ColGroup cols={cols} />
+                        <thead className="bg-surface text-[11px] tracking-wide text-text-secondary uppercase">
                           <tr>
-                            <th className={cn(CELL, 'w-8')}>
-                              <input type="checkbox" checked={allOn} disabled={readOnly} aria-label="Все строки на странице" title="Все строки на странице"
+                            <ResizableHeader cols={cols} className={CELL} content={{
+                              check: <input type="checkbox" checked={allOn} disabled={readOnly} aria-label="Все строки на странице" title="Все строки на странице"
                                 ref={(el) => { if (el) el.indeterminate = someOn && !allOn }}
-                                onChange={(e) => { for (const f of rows) setCheck(f, e.target.checked) }} />
-                            </th>
-                            <th className={cn(CELL, 'text-left')}>Значение</th>
-                            <th className={cn(CELL, 'text-left')}>Псевдоним</th>
-                            <th className={cn(CELL, 'text-right')}>Вхождений</th>
-                            {showContexts && <th className={cn(CELL, 'text-left')}>Контекст</th>}
-                            <th className={cn(CELL, 'text-left')}>Файл</th>
+                                onChange={(e) => { for (const f of rows) setCheck(f, e.target.checked) }} />,
+                            }} />
                           </tr>
                         </thead>
                         <tbody>
@@ -164,11 +175,11 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
                             return (
                               <tr key={f.id} className={cn('border-t border-grid', !isChecked(f) && 'text-text-secondary')}>
                                 <td className={CELL}><input type="checkbox" checked={isChecked(f)} disabled={readOnly} onChange={(e) => setCheck(f, e.target.checked)} aria-label={`Заменять ${f.value}`} /></td>
-                                <td className={cn(CELL, 'max-w-[280px] font-mono break-all text-text')}>
+                                <td className={cn(CELL, 'font-mono break-all text-text')}>
                                   {f.value}
                                   {f.auto && <span className="ml-1.5 rounded border border-border px-1 font-sans text-[10px] text-text-secondary" title="Найдено авто-поиском, не по словарю: проверьте, что это значение">авто</span>}
                                 </td>
-                                <td className={cn(CELL, 'w-64')}>
+                                <td className={CELL}>
                                   {editable ? (
                                     <>
                                       <input className={cn(FIELD, 'py-1 font-mono text-xs', aliasValue !== f.alias && 'border-primary', err && 'border-kind-1')} value={aliasValue} onChange={(e) => setAlias(f, e.target.value)} aria-label={`Псевдоним для ${f.value}`} aria-invalid={err ? true : undefined} />
@@ -179,8 +190,8 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
                                   )}
                                 </td>
                                 <td className={cn(CELL, 'text-right font-mono tabular-nums')}>{f.count.toLocaleString('ru-RU')}</td>
-                                {showContexts && <td className={cn(CELL, 'max-w-[320px] truncate font-mono text-text-secondary')} title={f.contexts.join('\n')}>{f.contexts[0] ?? ''}</td>}
-                                <td className={cn(CELL, 'max-w-[200px] truncate text-text-secondary')} title={f.first_file}>{f.first_file}</td>
+                                {showContexts && <td className={cn(CELL, 'truncate font-mono text-text-secondary')} title={f.contexts.join('\n')}>{f.contexts[0] ?? ''}</td>}
+                                <td className={cn(CELL, 'truncate text-text-secondary')} title={f.first_file}>{f.first_file}</td>
                               </tr>
                             )
                           })}

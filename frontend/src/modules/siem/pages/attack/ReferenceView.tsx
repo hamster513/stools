@@ -10,6 +10,8 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 /**
  * Сверка нашей разметки с чужой таблицей «правило → техника».
@@ -62,6 +64,14 @@ const ORDER: ReferenceVerdict[] = [
   'same',
 ]
 
+const COLUMNS: ColumnDef[] = [
+  { key: 'rule', label: 'Правило', width: 320, flex: true },
+  { key: 'ours', label: 'Наша разметка', width: 200 },
+  { key: 'theirs', label: 'Эталон', width: 160 },
+  { key: 'verdict', label: 'Итог', width: 160 },
+  { key: 'actions', label: 'Действие', width: 96, resizable: false },
+]
+
 export function ReferenceView({ snapshotId }: { snapshotId: number }) {
   const compare = useReferenceCompare(snapshotId)
   const apply = useApplyReference()
@@ -69,6 +79,7 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
   // Сама сверка — чтение, и аудитору она нужна целиком; принятие эталона
   // записывает разметку, и для него оно недоступно.
   const { write } = useCan()
+  const cols = useColumnWidths('siem-attack-reference-columns', COLUMNS)
 
   if (compare.isLoading) return <FullPageSpinner />
   if (compare.isError || !compare.data) {
@@ -220,14 +231,11 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
       {/* Высоту не ограничиваем: прокручивается страница целиком.
           `flex-1` внутри прокручиваемой страницы схлопывает блок в ноль. */}
       <div className="overflow-x-auto rounded border border-grid">
-        <table className="w-full border-collapse text-xs">
+        <table className="w-full border-collapse text-xs" style={cols.tableStyle}>
+          <ColGroup cols={cols} />
           <thead className="sticky top-0 bg-surface">
             <tr className="text-left text-text-secondary">
-              <th className="px-2.5 py-2 font-medium">Правило</th>
-              <th className="px-2.5 py-2 font-medium">Наша разметка</th>
-              <th className="px-2.5 py-2 font-medium">Эталон</th>
-              <th className="px-2.5 py-2 font-medium">Итог</th>
-              <th className="px-2.5 py-2 font-medium" />
+              <ResizableHeader cols={cols} className="px-2.5 py-2" content={{ actions: <span className="sr-only">Действие</span> }} />
             </tr>
           </thead>
           <tbody>
@@ -266,14 +274,14 @@ function Row({
   const meta = VERDICT[item.verdict]
   return (
     <tr className="border-t border-grid align-top hover:bg-row-hover">
-      <td className="px-2.5 py-1.5">
+      <td className="px-2.5 py-1.5 break-words">
         <div className="font-mono text-text">{item.name}</div>
         <div className="text-text-secondary">
           <span className="font-mono">{item.source_key}</span>
           {item.note && ` · ${item.note.slice(0, 90)}`}
         </div>
       </td>
-      <td className="px-2.5 py-1.5">
+      <td className="px-2.5 py-1.5 break-words">
         <div className="flex flex-wrap items-center gap-1">
           <AttackStateBadge state={attackDisplayState(item.status, false)} />
           {/* Унаследованная разметка ничего не утверждает об этом правиле,
@@ -282,7 +290,7 @@ function Row({
         </div>
         <div className="mt-0.5 font-mono text-text">{item.ours.join(', ') || '—'}</div>
       </td>
-      <td className="px-2.5 py-1.5 font-mono text-text">
+      <td className="px-2.5 py-1.5 font-mono break-words text-text">
         {item.theirs.join(', ') || '—'}
         {/* Перенос отозванной техники показывается, а не применяется молча. */}
         {item.original.join() !== item.theirs.join() && (
@@ -291,7 +299,7 @@ function Row({
           </div>
         )}
       </td>
-      <td className="px-2.5 py-1.5">
+      <td className="overflow-hidden px-2.5 py-1.5">
         <span
           className={cn('inline-block rounded border px-1.5 py-0.5 whitespace-nowrap', meta.tone)}
           title={meta.hint}

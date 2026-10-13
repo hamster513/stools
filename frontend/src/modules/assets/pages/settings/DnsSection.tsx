@@ -13,6 +13,8 @@ import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
 import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const EMPTY: DnsIn = {
   title: '', mode: 'direct', server: '', ad_connection_id: null, zones: [], forward: true, reverse: true, zone_read: false,
@@ -27,6 +29,15 @@ interface FormState extends Omit<DnsIn, 'zones'> {
 // Пустое числовое поле — NaN: уходит как null, и API отвечает русским текстом о границах.
 const numberOrEmpty = (value: string) => (value === '' ? NaN : Number(value))
 const shown = (value: number) => (Number.isNaN(value) ? '' : value)
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'title', label: 'Название', width: 176 },
+  { key: 'what', label: 'Что делает', width: 240, flex: true },
+  { key: 'last_run', label: 'Последний запуск', width: 144 },
+  { key: 'schedule', label: 'Расписание', width: 200 },
+]
+// Кнопки только у тех, кому можно менять: без них пустая колонка не занимает места.
+const WRITE_COLUMNS: ColumnDef[] = [...COLUMNS, { key: 'actions', label: 'Действие', width: 200, resizable: false }]
 
 function message(error: unknown, fallback: string): string {
   return error instanceof ApiRequestError ? error.message : fallback
@@ -176,6 +187,7 @@ export function DnsSection() {
   // undefined — форма закрыта, null — новый сервер.
   const [editing, setEditing] = useState<DnsServer | null | undefined>(undefined)
   const conns = connections.data ?? []
+  const cols = useColumnWidths('assets-dns-columns', write ? WRITE_COLUMNS : COLUMNS)
 
   return (
     <Section title="DNS" about="Запросы к серверу: A/AAAA по известным именам обновляют IP активов (устаревшие адреса в VM и антивирусе подсвечиваются), PTR по известным адресам даёт имена хостам из скана. Зоны AD читаются через подключение AD с его паузами между запросами: запись без живого хоста видна как расхождение.">
@@ -183,38 +195,37 @@ export function DnsSection() {
       {servers.isError && <ErrorState message={message(servers.error, 'Не удалось загрузить DNS-серверы')} onRetry={() => servers.refetch()} />}
       {editing !== undefined && <DnsForm key={editing?.id ?? 'new'} dns={editing} connections={conns} onDone={() => setEditing(undefined)} />}
       {servers.data && servers.data.length > 0 && (
-        <table className="mb-3 w-full text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-            <tr>
-              <th className="py-1.5 pr-3 text-left">Название</th>
-              <th className="py-1.5 pr-3 text-left">Что делает</th>
-              <th className="py-1.5 pr-3 text-left">Последний запуск</th>
-              <th className="py-1.5 pr-3 text-left">Расписание</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {servers.data.map((d) => (
-              <tr key={d.id} className="border-t border-grid align-top">
-                <td className="py-2 pr-3 text-text">{d.title || '—'}{!d.enabled && <span className="ml-1 text-text-secondary">· выключен</span>}</td>
-                <td className="py-2 pr-3 text-text-secondary">{whatText(d, conns)}</td>
-                <td className="py-2 pr-3 text-text-secondary">{when(d.last_run_at)}</td>
-                <td className="py-2 pr-3 text-text-secondary">{scheduleText(d.schedule)}</td>
-                <td className="py-2">
-                  {write && (
-                    <div className="flex items-start justify-end gap-1 whitespace-nowrap">
-                      <RunButton dns={d} />
-                      <Button variant="ghost" onClick={() => setEditing(d)}>изменить</Button>
-                      <Button variant="ghost" loading={remove.isPending && remove.variables === d.id} onClick={() => remove.mutate(d.id)} aria-label={`Удалить DNS-сервер ${d.title || d.id}`}>
-                        <Trash2 size={13} aria-hidden />
-                      </Button>
-                    </div>
-                  )}
-                </td>
+        <div className="mb-3 overflow-x-auto">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+              <tr>
+                <ResizableHeader cols={cols} className="py-1.5 pr-3" content={{ actions: <span className="sr-only">Действие</span> }} />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {servers.data.map((d) => (
+                <tr key={d.id} className="border-t border-grid align-top">
+                  <td className="py-2 pr-3 break-words text-text">{d.title || '—'}{!d.enabled && <span className="ml-1 text-text-secondary">· выключен</span>}</td>
+                  <td className="py-2 pr-3 break-words text-text-secondary">{whatText(d, conns)}</td>
+                  <td className="py-2 pr-3 text-text-secondary">{when(d.last_run_at)}</td>
+                  <td className="py-2 pr-3 break-words text-text-secondary">{scheduleText(d.schedule)}</td>
+                  {write && (
+                    <td className="py-2">
+                      <div className="flex items-start justify-end gap-1 whitespace-nowrap">
+                        <RunButton dns={d} />
+                        <Button variant="ghost" onClick={() => setEditing(d)}>изменить</Button>
+                        <Button variant="ghost" loading={remove.isPending && remove.variables === d.id} onClick={() => remove.mutate(d.id)} aria-label={`Удалить DNS-сервер ${d.title || d.id}`}>
+                          <Trash2 size={13} aria-hidden />
+                        </Button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {servers.data?.length === 0 && editing === undefined && <p className="mb-3 text-xs text-text-secondary">DNS-серверов ещё нет.</p>}
       {remove.error && <p className="mb-2 text-xs text-kind-1">{message(remove.error, 'DNS-сервер не удалён')}</p>}

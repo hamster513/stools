@@ -17,6 +17,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { LoadMore, PolicyCell, PolicyFacet } from './objects/ObjectsParts'
 import { ChangeValue } from './changes/ChangeValue'
@@ -80,25 +82,30 @@ function SnapshotLine({ snap, all, inPolicy }: { snap: ChangesSnapshot; all: Cha
   )
 }
 
+const COLUMNS: ColumnDef[] = [
+  { key: 'collected', label: 'Сбор', width: 144 },
+  { key: 'kind', label: 'Вид', width: 144 },
+  { key: 'action', label: 'Действие', width: 96 },
+  { key: 'policy', label: 'Политика / профиль', width: 224 },
+  { key: 'where', label: 'Где', width: 288 },
+  { key: 'value', label: 'Значение', width: 280, flex: true },
+]
+
 function Rows({ items, inPolicy, serverId }: { items: ChangeItem[]; inPolicy: boolean; serverId: number }) {
+  const cols = useColumnWidths('ksc-changes-columns', COLUMNS)
   return (
-    <div className="min-w-[1240px]">
-      <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        <div className="w-36 shrink-0 px-2 py-2">Сбор</div>
-        <div className="w-36 shrink-0 px-2 py-2">Вид</div>
-        <div className="w-24 shrink-0 px-2 py-2">Действие</div>
-        <div className="w-56 shrink-0 px-2 py-2">{inPolicy ? 'Профиль' : 'Политика / профиль'}</div>
-        <div className="w-72 shrink-0 px-2 py-2">Где</div>
-        <div className="min-w-[280px] flex-1 px-2 py-2">Значение</div>
+    <div data-col-resize-root>
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" content={inPolicy ? { policy: 'Профиль' } : undefined} />
       </div>
       {items.map((c) => (
-        <div key={c.id} className="flex items-start border-b border-grid py-2 text-xs">
-          <div className="w-36 shrink-0 px-2 text-text-secondary">{when(c.collected_at)}</div>
-          <div className="w-36 shrink-0 px-2 text-text">{CHANGE_KIND_LABELS[c.kind] ?? c.kind}</div>
-          <div className="w-24 shrink-0 px-2 text-text-secondary">{CHANGE_ACTION_LABELS[c.action] ?? c.action}</div>
-          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={c.policy_id} policyName={c.policy_name} profile={c.profile} inPolicy={inPolicy} /></div>
-          <div className="w-72 shrink-0 px-2 font-mono break-all text-text-secondary" title={isRecord(c) ? `ключ ${c.path}` : undefined}>{where(c)}</div>
-          <div className="min-w-[280px] flex-1 px-2"><ChangeValue kind={c.kind} before={c.before} after={c.after} /></div>
+        <div key={c.id} className="grid items-start border-b border-grid py-2 text-xs" style={cols.gridStyle}>
+          <div className="min-w-0 px-2 text-text-secondary">{when(c.collected_at)}</div>
+          <div className="min-w-0 px-2 text-text">{CHANGE_KIND_LABELS[c.kind] ?? c.kind}</div>
+          <div className="min-w-0 px-2 text-text-secondary">{CHANGE_ACTION_LABELS[c.action] ?? c.action}</div>
+          <div className="min-w-0 px-2"><PolicyCell serverId={serverId} policyId={c.policy_id} policyName={c.policy_name} profile={c.profile} inPolicy={inPolicy} /></div>
+          <div className="min-w-0 px-2 font-mono break-all text-text-secondary" title={isRecord(c) ? `ключ ${c.path}` : undefined}>{where(c)}</div>
+          <div className="min-w-0 px-2"><ChangeValue kind={c.kind} before={c.before} after={c.after} /></div>
         </div>
       ))}
     </div>

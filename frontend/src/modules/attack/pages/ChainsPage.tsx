@@ -6,6 +6,16 @@ import { ruWords, tacticLabel, type AttackChain, type ChainStep } from '@/module
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'campaign', label: 'Кампания', width: 256 },
+  { key: 'when', label: 'Когда', width: 144 },
+  { key: 'steps', label: 'Цепочка шагов', width: 420, flex: true },
+  { key: 'blind', label: 'Мимо правил', width: 112 },
+  { key: 'uncovered', label: 'Не закрыто техник', width: 144 },
+]
 
 /**
  * Цепочки реальных кампаний и наши пробелы в них.
@@ -23,6 +33,7 @@ export function ChainsPage() {
   const [open, setOpen] = useState<string | null>(null)
   const [onlyGaps, setOnlyGaps] = useState(true)
   const [onlyExposed, setOnlyExposed] = useState(false)
+  const cols = useColumnWidths('attack-chains-columns', COLUMNS)
 
   if (chains.isLoading) return <FullPageSpinner />
   if (chains.isError || !chains.data) {
@@ -110,14 +121,11 @@ export function ChainsPage() {
         </p>
       ) : (
         <div className="overflow-x-auto rounded border border-grid">
-          <table className="w-full border-collapse text-xs">
+          <table className="w-full border-collapse text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
             <thead className="sticky top-0 bg-surface">
               <tr className="text-left text-text-secondary">
-                <th className="w-64 px-2.5 py-2 font-medium">Кампания</th>
-                <th className="px-2.5 py-2 font-medium">Когда</th>
-                <th className="px-2.5 py-2 font-medium">Цепочка шагов</th>
-                <th className="px-2.5 py-2 font-medium whitespace-nowrap">Мимо правил</th>
-                <th className="px-2.5 py-2 font-medium whitespace-nowrap">Не закрыто техник</th>
+                <ResizableHeader cols={cols} className="px-2.5 py-2" />
               </tr>
             </thead>
             <tbody>
@@ -169,7 +177,7 @@ function Row({
       <tr
         className={cn('border-t border-grid align-top', open ? 'bg-row-selected' : 'hover:bg-row-hover')}
       >
-        <td className="w-64 min-w-[15rem] px-2.5 py-2">
+        <td className="px-2.5 py-2">
           <button
             type="button"
             onClick={onToggle}
@@ -180,7 +188,7 @@ function Row({
             <span className="font-medium text-balance text-text">{chain.name}</span>
           </button>
         </td>
-        <td className="px-2.5 py-2 whitespace-nowrap text-text-secondary">
+        <td className="truncate px-2.5 py-2 text-text-secondary">
           {chain.first_seen?.slice(0, 7) ?? '—'}
           {chain.last_seen && chain.last_seen !== chain.first_seen
             ? ` — ${chain.last_seen.slice(0, 7)}`
@@ -189,19 +197,19 @@ function Row({
         <td className="px-2.5 py-2">
           {/* Полоса шагов с подписями: цвет никогда не единственный
               носитель смысла — под каждым блоком стоит имя тактики. */}
-          <div className="flex min-w-[420px] gap-px">
+          <div className="flex gap-px">
             {chain.steps.map((step) => (
               <Segment key={step.tactic} step={step} />
             ))}
           </div>
         </td>
-        <td className="px-2.5 py-2 whitespace-nowrap">
+        <td className="truncate px-2.5 py-2">
           <span className={chain.blind_steps > 0 ? 'text-actor' : 'text-text-secondary'}>
             {chain.blind_steps}
           </span>
           <span className="text-text-secondary"> из {observable}</span>
         </td>
-        <td className="px-2.5 py-2 whitespace-nowrap text-text-secondary">
+        <td className="truncate px-2.5 py-2 text-text-secondary">
           {chain.uncovered_count} из {chain.technique_count}
         </td>
       </tr>

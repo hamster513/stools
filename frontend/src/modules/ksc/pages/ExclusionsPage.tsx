@@ -15,6 +15,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { ObjectDrawer } from './objects/ObjectDrawer'
@@ -30,36 +32,47 @@ interface Filters {
 
 const kindLabel = (k: string) => EXCLUSION_KIND_LABELS[k] ?? k
 
+const SUMMARY_COLUMNS: ColumnDef[] = [
+  { key: 'policy', label: 'Политика', width: 240, flex: true },
+  { key: 'hosts', label: 'Хостов', width: 80, align: 'right' },
+  { key: 'total', label: 'Всего', width: 80, align: 'right' },
+  { key: 'risky', label: 'Опасных', width: 80, align: 'right' },
+]
+
 /** Сводка по политикам — без фильтров; имя политики ставит фильтр по ней. Неполное содержимое помечено у имени. */
 function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p: { id: number; name: string }) => void }) {
   const kinds = [...new Set(items.flatMap((s) => Object.keys(s.by_kind)))].sort()
+  // Колонки видов зависят от снапшота; ширины всех видов хранятся под одним ключом, по виду.
+  const kindsKey = kinds.join('\u0000')
+  const columns = useMemo(
+    () => [...SUMMARY_COLUMNS, ...kindsKey.split('\u0000').filter(Boolean).map((k): ColumnDef => ({ key: `kind:${k}`, label: kindLabel(k), width: 96, align: 'right' }))],
+    [kindsKey],
+  )
+  const cols = useColumnWidths('ksc-exclusions-summary-columns', columns)
   return (
     <details className="m-4 rounded border border-grid bg-surface">
       <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-text select-none">
         Сводка по политикам <span className="font-normal text-text-secondary">— {items.length}</span>
       </summary>
       <div className="overflow-x-auto px-3 pb-3">
-        <table className="w-full text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+        <table className="w-full text-xs" style={cols.tableStyle}>
+          <ColGroup cols={cols} />
+          <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
             <tr>
-              <th className="py-1 pr-3 text-left">Политика</th>
-              <th className="py-1 pr-3 text-right">Хостов</th>
-              <th className="py-1 pr-3 text-right">Всего</th>
-              <th className="py-1 pr-3 text-right">Опасных</th>
-              {kinds.map((k) => <th key={k} className="py-1 pr-3 text-right">{kindLabel(k)}</th>)}
+              <ResizableHeader cols={cols} className="py-1 pr-3" />
             </tr>
           </thead>
           <tbody>
             {items.map((s) => (
               <tr key={s.policy_id} className="border-t border-grid">
-                <td className="py-1.5 pr-3">
+                <td className="py-1.5 pr-3 break-words">
                   <button type="button" onClick={() => onPick({ id: s.policy_id, name: s.policy_name })} className="text-left text-text hover:text-primary">{s.policy_name}</button>
                   {s.partial && <span className="ml-2 whitespace-nowrap text-risk-medium" title="содержимое политики собрано не полностью — список может быть неполным">собрано не полностью</span>}
                 </td>
-                <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{s.hosts}</td>
-                <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text">{s.total}</td>
-                <td className={s.risky > 0 ? 'py-1.5 pr-3 text-right font-mono tabular-nums text-risk-high' : 'py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary'}>{s.risky}</td>
-                {kinds.map((k) => <td key={k} className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{s.by_kind[k] ?? 0}</td>)}
+                <td className="truncate py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{s.hosts}</td>
+                <td className="truncate py-1.5 pr-3 text-right font-mono tabular-nums text-text">{s.total}</td>
+                <td className={s.risky > 0 ? 'truncate py-1.5 pr-3 text-right font-mono tabular-nums text-risk-high' : 'truncate py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary'}>{s.risky}</td>
+                {kinds.map((k) => <td key={k} className="truncate py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{s.by_kind[k] ?? 0}</td>)}
               </tr>
             ))}
           </tbody>
@@ -69,32 +82,37 @@ function Summary({ items, onPick }: { items: ExclusionSummaryItem[]; onPick: (p:
   )
 }
 
+const COLUMNS: ColumnDef[] = [
+  { key: 'value', label: 'Значение', width: 240, flex: true },
+  { key: 'risk', label: 'Риск', width: 176 },
+  { key: 'kind', label: 'Вид', width: 96 },
+  { key: 'policy', label: 'Политика / профиль', width: 224 },
+  { key: 'components', label: 'Компоненты', width: 192 },
+  { key: 'enabled', label: 'Включено', width: 80 },
+  { key: 'comment', label: 'Комментарий', width: 224 },
+  { key: 'policies', label: 'Политик', width: 112 },
+  { key: 'covered_by', label: 'Перекрыто', width: 192 },
+]
+
 /** Строки кликабельны: щелчок или Enter открывают запись в боковой панели; открытая подсвечена. `maybe` — ключи `(policy_id, profile)` профилей, активацию которых на хосте не определить. */
 function Rows({ items, inPolicy, serverId, openRowId, onOpen, maybe }: { items: ExclusionItem[]; inPolicy: boolean; serverId: number; openRowId: number | null; onOpen: (rowId: number) => void; maybe: Set<string> }) {
+  const cols = useColumnWidths('ksc-exclusions-columns', COLUMNS)
   return (
-    <div className="min-w-[1536px]">
-      <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        <div className="min-w-[240px] flex-1 px-2 py-2">Значение</div>
-        <div className="w-44 shrink-0 px-2 py-2">Риск</div>
-        <div className="w-24 shrink-0 px-2 py-2">Вид</div>
-        <div className="w-56 shrink-0 px-2 py-2">{inPolicy ? 'Профиль' : 'Политика / профиль'}</div>
-        <div className="w-48 shrink-0 px-2 py-2">Компоненты</div>
-        <div className="w-20 shrink-0 px-2 py-2">Включено</div>
-        <div className="w-56 shrink-0 px-2 py-2">Комментарий</div>
-        <div className="w-28 shrink-0 px-2 py-2">Политик</div>
-        <div className="w-48 shrink-0 px-2 py-2">Перекрыто</div>
+    <div data-col-resize-root>
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" content={inPolicy ? { policy: 'Профиль' } : undefined} />
       </div>
       {items.map((e) => (
-        <div key={e.id} {...clickableRow(() => onOpen(e.id))} className={cn(ROW_FOCUS, 'flex cursor-pointer items-start border-b border-grid py-2 text-xs', openRowId === e.id ? 'bg-row-selected' : 'hover:bg-row-hover')}>
-          <div className="min-w-[240px] flex-1 px-2 font-mono break-all text-text">{e.value}</div>
-          <div className="w-44 shrink-0 px-2"><RiskChips risks={e.risks} titles={e.risk_titles} /></div>
-          <div className="w-24 shrink-0 px-2 text-text-secondary">{kindLabel(e.kind)}</div>
-          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={e.policy_id} policyName={e.policy_name} profile={e.profile} inPolicy={inPolicy} />{maybe.has(`${e.policy_id}\u0000${e.profile}`) && <MaybeMark />}</div>
-          <div className="w-48 shrink-0 px-2 text-text-secondary">{e.components.length ? e.components.join(', ') : '—'}</div>
-          <div className="w-20 shrink-0 px-2 text-text-secondary">{e.enabled ? 'да' : 'нет'}</div>
-          <div className="w-56 shrink-0 px-2 break-words text-text-secondary">{e.comment || '—'}</div>
-          <div className={e.policies > 1 ? 'w-28 shrink-0 px-2 text-risk-medium' : 'w-28 shrink-0 px-2 text-text-secondary'}>в {e.policies}</div>
-          <div className="w-48 shrink-0 px-2 font-mono break-all text-text-secondary">{e.covered_by ?? '—'}</div>
+        <div key={e.id} {...clickableRow(() => onOpen(e.id))} className={cn(ROW_FOCUS, 'grid cursor-pointer items-start border-b border-grid py-2 text-xs', openRowId === e.id ? 'bg-row-selected' : 'hover:bg-row-hover')} style={cols.gridStyle}>
+          <div className="min-w-0 px-2 font-mono break-all text-text">{e.value}</div>
+          <div className="min-w-0 px-2"><RiskChips risks={e.risks} titles={e.risk_titles} /></div>
+          <div className="min-w-0 px-2 text-text-secondary">{kindLabel(e.kind)}</div>
+          <div className="min-w-0 px-2"><PolicyCell serverId={serverId} policyId={e.policy_id} policyName={e.policy_name} profile={e.profile} inPolicy={inPolicy} />{maybe.has(`${e.policy_id}\u0000${e.profile}`) && <MaybeMark />}</div>
+          <div className="min-w-0 px-2 text-text-secondary">{e.components.length ? e.components.join(', ') : '—'}</div>
+          <div className="min-w-0 px-2 text-text-secondary">{e.enabled ? 'да' : 'нет'}</div>
+          <div className="min-w-0 px-2 break-words text-text-secondary">{e.comment || '—'}</div>
+          <div className={e.policies > 1 ? 'min-w-0 px-2 text-risk-medium' : 'min-w-0 px-2 text-text-secondary'}>в {e.policies}</div>
+          <div className="min-w-0 px-2 font-mono break-all text-text-secondary">{e.covered_by ?? '—'}</div>
         </div>
       ))}
     </div>
