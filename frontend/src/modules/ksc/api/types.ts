@@ -161,7 +161,7 @@ export interface Host {
 export type ComponentState = 'on' | 'off' | 'other' | 'none'
 
 export interface HostsQuery {
-  /** Многозначные фасеты уходят через запятую (buildQuery): внутри фасета «ИЛИ». */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery): внутри фасета «ИЛИ». */
   group?: string[]
   product?: string[]
   agent?: HostAgent[]
@@ -464,7 +464,7 @@ export interface PolicyCard extends PolicyListItem {
 
 export interface PolicyListQuery {
   q?: string
-  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery). */
   product?: string[]
   active?: boolean
   /** Оценки или `none` — без оценки. */
@@ -534,7 +534,7 @@ export interface TaskListItem {
 
 export interface TasksQuery {
   q?: string
-  /** Типы задач через запятую (buildQuery). */
+  /** Типы задач повторением ключа (buildQuery). */
   type?: string[]
   failed?: boolean
 }
@@ -621,7 +621,7 @@ export const NET_LAYER_LABELS: Record<string, string> = { packet: 'пакетн�
 
 export interface ExclusionsQuery {
   q?: string
-  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery). */
   policy_id?: number[]
   kind?: string[]
   enabled?: boolean
@@ -699,7 +699,7 @@ export interface NetRuleDetail extends NetRuleItem {
 
 export interface NetRulesQuery {
   q?: string
-  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery). */
   policy_id?: number[]
   action?: string[]
   direction?: string[]
@@ -790,7 +790,7 @@ export interface ChangesSnapshot extends ChangesSummary {
 }
 
 export interface ChangesQuery {
-  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery). */
   kind?: ChangeKind[]
   action?: ChangeAction[]
   policy_id?: number[]

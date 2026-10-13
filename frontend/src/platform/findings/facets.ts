@@ -33,13 +33,22 @@ export function toggleValue<T extends string | number>(list: T[] | undefined, v:
   return next.length ? next : undefined
 }
 
+/** Фасеты, которые в старых ссылках приходили одной строкой через запятую (`?status=new,fixed`). */
+const COMMA_COMPAT = ['status', 'disc_status']
+
 /**
- * Значения фасета из ссылки: `?severity=high,critical`. С `allowed` незнакомые
- * значения отбрасываются; пустой выбор и `all` — фильтр не задан.
+ * Значения фасета из ссылки: ключ повторяется (`?severity=high&severity=critical`).
+ * Только у `status`/`disc_status` одно значение с запятой читается и по-старому —
+ * так выглядят прежние ссылки; у остальных запятая — часть значения («DMZ, Moscow»).
+ * С `allowed` незнакомые значения отбрасываются; пустой выбор и `all` — фильтр не задан.
+ *   ?zone=DMZ%2C%20Moscow&zone=core → ['DMZ, Moscow', 'core']
+ *   ?status=new,fixed               → ['new', 'fixed']
  */
-export function listFrom<T extends string = string>(raw: string | null, allowed?: readonly T[]): T[] | undefined {
-  if (!raw || raw === 'all') return undefined
-  const picked = raw.split(',').filter((v): v is T => v !== '' && (!allowed || (allowed as readonly string[]).includes(v)))
+export function listFrom<T extends string = string>(params: URLSearchParams, key: string, allowed?: readonly T[]): T[] | undefined {
+  let raw = params.getAll(key)
+  if (COMMA_COMPAT.includes(key) && raw.length === 1 && raw[0].includes(',')) raw = raw[0].split(',')
+  if (raw.length === 1 && raw[0] === 'all') return undefined
+  const picked = raw.filter((v): v is T => v !== '' && (!allowed || (allowed as readonly string[]).includes(v)))
   return picked.length ? picked : undefined
 }
 
@@ -80,10 +89,10 @@ export function statusForFlag(flag: 'overdue' | 'risk_expiring', status: Finding
   return status?.some((s) => OPEN_STATUSES.includes(s)) ? status : undefined
 }
 
-export function findingFacetParams(f: FindingFacetFilters): Record<string, string | boolean | undefined> {
+export function findingFacetParams(f: FindingFacetFilters): { status?: string[]; assignee?: string[]; overdue?: boolean; risk_expiring?: boolean } {
   return {
-    status: f.status?.join(','),
-    assignee: f.assignee?.join(','),
+    status: f.status,
+    assignee: f.assignee,
     overdue: f.overdue || undefined,
     risk_expiring: f.risk_expiring || undefined,
   }

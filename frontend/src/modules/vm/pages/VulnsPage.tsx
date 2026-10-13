@@ -31,12 +31,10 @@ function isTypingTarget(el: EventTarget | null): boolean {
 
 const SORTS: VulnSort[] = ['risk_desc', 'risk_asc', 'cvss_desc', 'epss_desc', 'exploits_desc', 'host_asc', 'cve_asc']
 
-/** Статусы из ссылки: коды через запятую или `all`; незнакомые коды отбрасываются. */
-function statusesFrom(raw: string | null): FindingStatus[] | undefined {
-  if (!raw) return undefined
-  if (raw === 'all') return [...STATUSES]
-  const picked = raw.split(',').filter((s): s is FindingStatus => (STATUSES as string[]).includes(s))
-  return picked.length ? picked : undefined
+/** Статусы из ссылки: коды (ключ повторяется; старые ссылки — через запятую) или `all`; незнакомые отбрасываются. */
+function statusesFrom(params: URLSearchParams): FindingStatus[] | undefined {
+  if (params.get('status') === 'all') return [...STATUSES]
+  return listFrom<FindingStatus>(params, 'status', STATUSES)
 }
 
 /** Ключ пары `hostname|ip|cve` из ссылки («Мои находки»): CVE и IP — справа, имя — всё остальное. */
@@ -58,16 +56,16 @@ export function VulnsPage() {
   const linked = splitKey(params.get('key'))
   // Адрес задаёт начальные фильтры: сюда ведут ссылки с обзора и из карточки.
   const [filters, setFilters] = useState<VulnFilters>(() => ({
-    level: listFrom<RiskLevel>(params.get('level'), LEVELS),
+    level: listFrom<RiskLevel>(params, 'level', LEVELS),
     // `-` в адресе — «не задано» (пустое значение фасета).
-    zone: fromWire(listFrom(params.get('zone'))),
-    criticality: fromWire(listFrom(params.get('criticality'))),
-    os: fromWire(listFrom(params.get('os'))),
-    cvss_source: listFrom<CvssSource>(params.get('cvss_source'), Object.keys(CVSS_SOURCE_LABELS) as CvssSource[]),
+    zone: fromWire(listFrom(params, 'zone')),
+    criticality: fromWire(listFrom(params, 'criticality')),
+    os: fromWire(listFrom(params, 'os')),
+    cvss_source: listFrom<CvssSource>(params, 'cvss_source', Object.keys(CVSS_SOURCE_LABELS) as CvssSource[]),
     exploits: params.get('exploits') === 'true' ? true : undefined,
     // Пару по ссылке ищут при любом статусе: она могла быть закрыта.
-    status: linked ? [...STATUSES] : statusesFrom(params.get('status')),
-    assignee: listFrom(params.get('assignee')),
+    status: linked ? [...STATUSES] : statusesFrom(params),
+    assignee: listFrom(params, 'assignee'),
     overdue: params.get('overdue') === 'true' || undefined,
     risk_expiring: params.get('risk_expiring') === 'true' || undefined,
   }))
@@ -100,7 +98,7 @@ export function VulnsPage() {
   const listFilter = useMemo<Omit<VulnsQuery, 'limit' | 'offset' | 'sort'>>(() => {
     const { status, assignee, overdue, risk_expiring, ...data } = filters
     return {
-      ...data, status: status?.join(','), assignee, overdue: overdue || undefined, risk_expiring: risk_expiring || undefined,
+      ...data, status, assignee, overdue: overdue || undefined, risk_expiring: risk_expiring || undefined,
       q: q || undefined, cve: cveParam, host_id: hostIdParam,
     }
   }, [filters, q, cveParam, hostIdParam])

@@ -142,15 +142,16 @@ export type FindingDetail<F extends FindingBase> = F & {
   history: { snapshot_id: number; collected_at: string }[]
 }
 
-/** Параметры запроса списка: статус — коды через запятую или `all`; без него — открытые. */
+/** Параметры запроса списка: статус — коды (ключ повторяется) или `all`; без него — открытые. */
 export interface FindingsQuery {
-  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery). */
   check?: string[]
   severity?: Severity[]
   allowlisted?: boolean
   delta?: FindingDelta[]
-  status?: string
-  assignee?: string
+  /** Статусы (ключ повторяется) или `all`; без него — открытые. */
+  status?: string[] | 'all'
+  assignee?: string[]
   overdue?: boolean
   risk_expiring?: boolean
   q?: string

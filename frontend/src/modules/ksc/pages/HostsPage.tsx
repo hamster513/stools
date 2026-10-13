@@ -318,17 +318,17 @@ export function HostsPage({ serverId }: { serverId: number }) {
   const server = servers.data?.find((s) => s.id === serverId)
   const snapshotId = server?.last_snapshot_id ?? undefined
   const [filters, setFilters] = useState<HostFilters>(() => ({
-    group: listFrom(params.get('group')),
-    product: listFrom(params.get('product')),
-    agent: listFrom<HostAgent>(params.get('agent'), Object.keys(AGENT_LABELS) as HostAgent[]),
-    protection: listFrom<HostProtection>(params.get('protection'), Object.keys(PROTECTION_LABELS) as HostProtection[]),
-    bases: listFrom<HostBases>(params.get('bases'), Object.keys(BASES_LABELS) as HostBases[]),
-    in_ad: listFrom(params.get('in_ad')),
-    status: listFrom(params.get('status')),
-    component: listFrom(params.get('component')),
+    group: listFrom(params, 'group'),
+    product: listFrom(params, 'product'),
+    agent: listFrom<HostAgent>(params, 'agent', Object.keys(AGENT_LABELS) as HostAgent[]),
+    protection: listFrom<HostProtection>(params, 'protection', Object.keys(PROTECTION_LABELS) as HostProtection[]),
+    bases: listFrom<HostBases>(params, 'bases', Object.keys(BASES_LABELS) as HostBases[]),
+    in_ad: listFrom(params, 'in_ad'),
+    status: listFrom(params, 'status'),
+    component: listFrom(params, 'component'),
     // Состояние без компонента сервер отвергает (422), поэтому из адреса оно читается только вместе с компонентом.
     component_state: params.get('component') ? COMPONENT_STATES.find((c) => c.key === params.get('component_state'))?.key : undefined,
-    tag: listFrom(params.get('tag')),
+    tag: listFrom(params, 'tag'),
     policy: Number(params.get('policy')) || undefined,
   }))
   const [searchInput, setSearchInput] = useState('')

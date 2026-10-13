@@ -180,14 +180,14 @@ export interface FindingsQuery {
   /** Находки одного правила — вход из инвентаря. */
   object_uuid?: string
   snapshot_id: number
-  /** Многозначные фасеты уходят через запятую (buildQuery): `kind=1,2`. */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery): `kind=1&kind=2`. */
   kind?: FindingKind[]
   polarity?: Polarity[]
   object_type?: ObjectType[]
   in_table?: boolean
   shape?: ShapeFilter[]
-  /** Коды через запятую или `all`; не задан — открытые. */
-  status?: string
+  /** Коды (ключ повторяется) или `all`; не задан — открытые. */
+  status?: string[] | 'all'
   /** `me`, `none` или логин; несколько — «ИЛИ». */
   assignee?: string[]
   overdue?: boolean

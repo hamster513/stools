@@ -67,7 +67,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
       snapshot_id: snapshotId,
       object_uuid: objectUuid,
       ...own,
-      status: status?.join(','),
+      status,
       assignee,
       overdue,
       risk_expiring,

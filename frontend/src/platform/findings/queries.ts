@@ -82,9 +82,9 @@ export function useSaveFindingSettings() {
   })
 }
 
-/** Параметры «Моих находок» — те же у списка и у выгрузки; модули — через запятую. */
+/** Параметры «Моих находок» — те же у списка и у выгрузки; статусы и модули — повторением ключа. */
 export function myFindingsParams(filters: { status?: FindingStatus[]; module?: string[] }) {
-  return { status: filters.status?.join(','), module: filters.module }
+  return { status: filters.status, module: filters.module }
 }
 
 /** «Мои находки»; без статусов сервер отдаёт открытые. */

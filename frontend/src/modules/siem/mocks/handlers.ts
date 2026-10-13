@@ -320,35 +320,36 @@ export const handlers = [
     const p = url.searchParams
 
     type Filters = {
-      kind?: string
-      polarity?: string
-      object_type?: string
+      kind?: string[]
+      polarity?: string[]
+      object_type?: string[]
       in_table?: string
       status?: string
-      field?: string
-      shape?: string
+      field?: string[]
+      shape?: string[]
       object_uuid?: string
       key?: string
       q?: string
     }
-    // Без статуса — открытые, как на сервере; `all` — все.
-    const rawStatus = p.get('status')
-    const statuses = rawStatus === 'all' ? null : (rawStatus ?? 'new,in_work,fixed,reopened').split(',')
+    // Перечислимые фасеты, как на сервере, — повторением ключа (`kind=1&kind=2`), «ИЛИ» внутри фасета.
+    const many = (key: string) => { const v = p.getAll(key); return v.length ? v : undefined }
+    // Без статуса — открытые, как на сервере; `all` — все; статус понимает и старую запись через запятую.
+    const rawStatuses = p.getAll('status').flatMap((s) => s.split(','))
+    const statuses = rawStatuses[0] === 'all' ? null : rawStatuses.length ? rawStatuses : ['new', 'in_work', 'fixed', 'reopened']
     const filters: Filters = {
-      kind: p.get('kind') ?? undefined,
-      polarity: p.get('polarity') ?? undefined,
-      object_type: p.get('object_type') ?? undefined,
+      kind: many('kind'),
+      polarity: many('polarity'),
+      object_type: many('object_type'),
       in_table: p.get('in_table') ?? undefined,
       status: p.get('status') ?? undefined,
-      field: p.get('field') ?? undefined,
-      shape: p.get('shape') ?? undefined,
+      field: many('field'),
+      shape: many('shape'),
       object_uuid: p.get('object_uuid') ?? undefined,
       key: p.get('key') ?? undefined,
       q: p.get('q') ?? undefined,
     }
 
-    // Перечислимые фасеты, как на сервере, — значения через запятую, «ИЛИ» внутри фасета.
-    const oneOf = (raw: string | undefined, value: string) => raw === undefined || raw.split(',').includes(value)
+    const oneOf = (picked: string[] | undefined, value: string) => picked === undefined || picked.includes(value)
 
     function applies(f: (typeof FINDINGS)[number], except: keyof Filters | null): boolean {
       if (filters.kind && except !== 'kind' && !oneOf(filters.kind, f.kind)) return false

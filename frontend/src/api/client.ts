@@ -73,16 +73,19 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 }
 
-/** Значение параметра запроса; список уходит через запятую (`severity=high,critical`) — так сервер читает многозначные фасеты. */
+/**
+ * Значение параметра запроса. Список уходит повторением ключа (`os=Windows%2010&os=Debian`), а не через запятую:
+ * свободные значения (ОС, группа, зона) сами содержат запятые и рвались бы на части.
+ */
 export type QueryValue = string | number | boolean | string[] | number[] | undefined
 
 export function buildQuery(params: Record<string, QueryValue>): string {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === '') continue
-    // Пустой список — фильтр не задан, а не «ничего не подходит».
+    // Пустой список — фильтр не задан, а не «ничего не подходит»; пустая строка внутри списка — законное значение.
     if (Array.isArray(value)) {
-      if (value.length) search.set(key, value.join(','))
+      for (const v of value) search.append(key, String(v))
       continue
     }
     search.set(key, String(value))

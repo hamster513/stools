@@ -88,7 +88,7 @@ export interface VulnsQuery {
   q?: string
   host?: string
   cve?: string
-  /** Многозначные фасеты: в адресе — через запятую (buildQuery), в массовой смене — списком. */
+  /** Многозначные фасеты: в адресе — повторением ключа (buildQuery), в массовой смене — списком. */
   criticality?: string[]
   zone?: string[]
   os?: string[]
@@ -97,8 +97,8 @@ export interface VulnsQuery {
   msf?: boolean
   cvss_source?: CvssSource[]
   host_id?: number
-  /** Коды через запятую или `all`; не задан — открытые. */
-  status?: string
+  /** Коды (ключ повторяется) или `all`; не задан — открытые. */
+  status?: string[] | 'all'
   /** `me`, `none` или логин; несколько — «ИЛИ». */
   assignee?: string[]
   overdue?: boolean

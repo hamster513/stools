@@ -118,7 +118,7 @@ export interface AuditItem {
 }
 
 export interface AuditFilters {
-  /** Пользователи через запятую (buildQuery): «ИЛИ». */
+  /** Пользователи — повторением ключа (buildQuery): «ИЛИ». */
   user_id?: number[]
   /** ISO-строка: поле ввода даёт местное время, в API уходит UTC. */
   since?: string

@@ -119,7 +119,7 @@ export interface AssetsResponse {
 
 export interface AssetsQuery {
   q?: string
-  /** Многозначные фасеты уходят через запятую (buildQuery): внутри фасета «ИЛИ». */
+  /** Многозначные фасеты уходят повторением ключа (buildQuery): внутри фасета «ИЛИ». */
   source_has?: AssetSource[]
   source_missing?: AssetSource[]
   code?: CodeFilter[]
@@ -128,8 +128,8 @@ export interface AssetsQuery {
   port?: number
   tag?: string
   criticality?: (Criticality | 'none')[]
-  /** Статусы расхождений через запятую или `all`; без него — учитываемые в подсчётах. */
-  disc_status?: string
+  /** Статусы расхождений (ключ повторяется); без него — учитываемые в подсчётах. */
+  disc_status?: string[]
   /** Исполнитель расхождения: `me`, `none` или логин; несколько — «ИЛИ». */
   assignee?: string[]
   overdue?: boolean

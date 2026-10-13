@@ -77,13 +77,12 @@ type Filters = Omit<AssetsQuery, 'q' | 'port' | 'tag' | 'disc_status' | 'assigne
 type DiscFilters = Omit<FindingFacetFilters, 'risk_expiring'>
 
 function discFromParams(params: URLSearchParams): DiscFilters {
-  const status = (params.get('disc_status') ?? '').split(',').filter((s): s is FindingStatus => (STATUSES as string[]).includes(s))
-  return { status: status.length ? status : undefined, assignee: listFrom(params.get('assignee')), overdue: params.get('overdue') === 'true' || undefined }
+  return { status: listFrom<FindingStatus>(params, 'disc_status', STATUSES), assignee: listFrom(params, 'assignee'), overdue: params.get('overdue') === 'true' || undefined }
 }
 
-/** Сети из ссылки: номера через запятую; не числа отбрасываются. */
-function networkIdsFrom(raw: string | null): number[] | undefined {
-  const ids = listFrom(raw)?.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+/** Сети из ссылки: номера (ключ повторяется); не числа отбрасываются. */
+function networkIdsFrom(params: URLSearchParams): number[] | undefined {
+  const ids = listFrom(params, 'network_id')?.map(Number).filter((n) => Number.isInteger(n) && n > 0)
   return ids?.length ? ids : undefined
 }
 
@@ -391,12 +390,12 @@ export function AssetsPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
   const [filters, setFilters] = useState<Filters>(() => ({
-    source_has: listFrom<AssetSource>(params.get('source_has'), SOURCES),
-    source_missing: listFrom<AssetSource>(params.get('source_missing'), SOURCES),
-    code: listFrom<CodeFilter>(params.get('code'), ['any', ...CODES]),
-    zone: listFrom(params.get('zone')),
-    criticality: listFrom<Criticality | 'none'>(params.get('criticality'), [...CRITICALITIES, 'none']),
-    network_id: networkIdsFrom(params.get('network_id')),
+    source_has: listFrom<AssetSource>(params, 'source_has', SOURCES),
+    source_missing: listFrom<AssetSource>(params, 'source_missing', SOURCES),
+    code: listFrom<CodeFilter>(params, 'code', ['any', ...CODES]),
+    zone: listFrom(params, 'zone'),
+    criticality: listFrom<Criticality | 'none'>(params, 'criticality', [...CRITICALITIES, 'none']),
+    network_id: networkIdsFrom(params),
   }))
   const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
@@ -418,7 +417,7 @@ export function AssetsPage() {
   const queryArgs = useMemo<AssetsQuery>(
     () => ({
       ...filters, q: q || undefined, port: port ? Number(port) : undefined, tag: tag.trim() || undefined,
-      disc_status: disc.status?.join(','), assignee: disc.assignee, overdue: disc.overdue || undefined,
+      disc_status: disc.status, assignee: disc.assignee, overdue: disc.overdue || undefined,
     }),
     [filters, q, port, tag, disc],
   )

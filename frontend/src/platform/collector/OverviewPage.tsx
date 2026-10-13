@@ -74,7 +74,7 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
   // Плитки severity — по учитываемым статусам (настройка платформы), как и счётчики проверок.
   const bySeverity = o.counted?.by_severity ?? snap.by_severity
   // Ссылка с плитки и карточки — на список с теми же статусами, что в числе: без статуса список показал бы открытые.
-  const countedStatus = o.counted?.statuses.length ? `&status=${o.counted.statuses.join(',')}` : ''
+  const countedStatus = (o.counted?.statuses ?? []).map((s) => `&status=${s}`).join('')
   const summary = o.summary
   const statusTiles = summary ? [
     { label: 'новые', value: summary.by_status.new, to: `${base}?status=new` },

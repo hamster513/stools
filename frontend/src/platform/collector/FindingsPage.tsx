@@ -24,21 +24,19 @@ import { SEVERITIES, SEVERITY_LABELS, type FindingBase, type FindingDelta, type 
 
 const DELTA_LABELS: Record<FindingDelta, string> = { new: 'появились в этом снапшоте', same: 'были и раньше', gone: 'исчезла (нет в последнем снапшоте)' }
 
-/** Статусы из ссылки: коды через запятую или `all`; незнакомые коды отбрасываются. */
-function statusesFrom(raw: string | null): FindingStatus[] | undefined {
-  if (!raw) return undefined
-  if (raw === 'all') return [...STATUSES]
-  const picked = raw.split(',').filter((s): s is FindingStatus => (STATUSES as string[]).includes(s))
-  return picked.length ? picked : undefined
+/** Статусы из ссылки: коды (ключ повторяется; старые ссылки — через запятую) или `all`; незнакомые отбрасываются. */
+function statusesFrom(params: URLSearchParams): FindingStatus[] | undefined {
+  if (params.get('status') === 'all') return [...STATUSES]
+  return listFrom<FindingStatus>(params, 'status', STATUSES)
 }
 
 function filtersFrom(params: URLSearchParams): FindingFilters {
   return {
-    check: listFrom(params.get('check')),
-    severity: listFrom<Severity>(params.get('severity'), SEVERITIES),
-    delta: listFrom<FindingDelta>(params.get('delta'), ['new', 'same', 'gone']),
-    status: statusesFrom(params.get('status')),
-    assignee: listFrom(params.get('assignee')),
+    check: listFrom(params, 'check'),
+    severity: listFrom<Severity>(params, 'severity', SEVERITIES),
+    delta: listFrom<FindingDelta>(params, 'delta', ['new', 'same', 'gone']),
+    status: statusesFrom(params),
+    assignee: listFrom(params, 'assignee'),
     overdue: params.get('overdue') === 'true' || undefined,
     risk_expiring: params.get('risk_expiring') === 'true' || undefined,
   }
