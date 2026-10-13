@@ -8,9 +8,10 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from api.db.base import get_db
 from api.db.models import AppUser, RuleDependency, RuleMsgid, RuleRow, RuleTableRef
@@ -18,9 +19,16 @@ from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
 from api.modules.attack.services.attack_bundle import current as current_bundle
 from api.modules.siem.findings_adapter import MODULE, SCOPE, display_salt, key_of
-from api.modules.siem.services.attack import STATUS_UNMAPPED, markup_by_rule, techniques_of
+from api.modules.siem.services.attack import (
+    STATUS_CONFIRMED,
+    STATUS_SUGGESTED,
+    STATUS_UNMAPPED,
+    markup_by_rule,
+    techniques_of,
+)
 from api.modules.siem.services.highlight import spans_for
 from api.modules.siem.services.rule_attention import attention_by_rule, group_key
+from api.platform.export import Column, export_response
 from api.platform.findings import service as finding_svc
 
 router = APIRouter(prefix="/rules", tags=["rules"])
@@ -136,19 +144,23 @@ def _counts_by_rule(db: Session, snapshot_id: int, model: Any, uuid_col: Any) ->
     return dict(rows)
 
 
-@router.get("", response_model=RuleListResponse)
-def list_rules(
-    snapshot_id: int = Query(...),
-    author: str | None = None,
-    category: str | None = None,
-    group: str | None = None,
-    q: str | None = None,
-    limit: int = Query(default=500, ge=1, le=2000),
-    offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
-    _user: AppUser = Depends(get_current_user),
-) -> RuleListResponse:
-    query = db.query(RuleRow).filter(RuleRow.snapshot_id == snapshot_id)
+ATTACK_STATUSES = (STATUS_SUGGESTED, STATUS_CONFIRMED, STATUS_UNMAPPED)
+
+
+def _needs_attention(r: RuleRow, attention: dict[str, tuple[int, str | None]]) -> bool:
+    """«Требует внимания» — как маркировка на экране (`attentionLevel`): не разобрано или есть открытые находки."""
+    return r.parse_status != "ok" or attention.get(r.uuid, (0, None))[0] > 0
+
+
+def _rules(
+    db: Session, snapshot_id: int, *, author: str | None, category: str | None, group: str | None, q: str | None,
+    attention_only: bool, scoped: bool, attack: str | None,
+) -> tuple[list[RuleRow], dict[str, Any], dict[str, tuple[int, str | None]]]:
+    """Отобранные правила по имени, разметка и внимание по правилу. «Внимание» и статус разметки считаются
+    не в SQL, поэтому отбор — целиком, страница — потом; правил тысячи, тело правила не читается."""
+    if attack not in (None, "", "all", *ATTACK_STATUSES):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус разметки «{attack}»")
+    query = db.query(RuleRow).options(defer(RuleRow.body_text)).filter(RuleRow.snapshot_id == snapshot_id)
     if author:
         query = query.filter(RuleRow.author == author)
     if category:
@@ -157,9 +169,39 @@ def list_rules(
         query = query.filter(RuleRow.type_id_group == group)
     if q:
         query = query.filter(RuleRow.name.ilike(f"%{q}%"))
+    if scoped:
+        query = query.filter(RuleRow.scoped_by_list.is_(True))
+    rows = query.order_by(RuleRow.name).all()
+    markup = markup_by_rule(db)
+    attention = attention_by_rule(db, snapshot_id)
+    if attention_only:
+        rows = [r for r in rows if _needs_attention(r, attention)]
+    if attack and attack != "all":
+        rows = [r for r in rows if (markup[r.uuid].status if r.uuid in markup else STATUS_UNMAPPED) == attack]
+    return rows, markup, attention
 
-    total = query.count()
-    rows = query.order_by(RuleRow.name).offset(offset).limit(limit).all()
+
+@router.get("", response_model=RuleListResponse)
+def list_rules(
+    snapshot_id: int = Query(...),
+    author: str | None = None,
+    category: str | None = None,
+    group: str | None = None,
+    q: str | None = None,
+    attention: bool = False,
+    scoped: bool = False,
+    attack: str | None = None,
+    limit: int = Query(default=500, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _user: AppUser = Depends(get_current_user),
+) -> RuleListResponse:
+    """`attention` — только требующие внимания, `scoped` — только ограниченные списком, `attack` — статус
+    разметки (suggested | confirmed | unmapped): те же отборы, что делает страница, — выгрузка их применяет."""
+    found, markup, attention_map = _rules(db, snapshot_id, author=author, category=category, group=group, q=q,
+                                          attention_only=attention, scoped=scoped, attack=attack)
+    total = len(found)
+    rows = found[offset : offset + limit]
 
     table_reads = _table_reads_by_rule(db, snapshot_id)
     msgid_counts = _counts_by_rule(
@@ -175,9 +217,6 @@ def list_rules(
         .all()  # type: ignore[arg-type]
     )
 
-    markup = markup_by_rule(db)
-    attention = attention_by_rule(db, snapshot_id)
-
     items = [
         RuleListItem(
             uuid=r.uuid,
@@ -192,13 +231,72 @@ def list_rules(
             finding_count=finding_counts.get(r.uuid, 0),
             table_reads=table_reads.get(r.uuid, []),
             scoped=r.scoped_by_list,
-            open_finding_count=attention.get(r.uuid, (0, None))[0],
-            max_severity=attention.get(r.uuid, (0, None))[1],
+            open_finding_count=attention_map.get(r.uuid, (0, None))[0],
+            max_severity=attention_map.get(r.uuid, (0, None))[1],
             attack=_attack_of(db, r, markup),
         )
         for r in rows
     ]
     return RuleListResponse(total=total, items=items)
+
+
+#: Подписи маркировки — как на экране (AttentionBadge); разметка — техники и её статус словами.
+ATTENTION_TITLES = {"unparsed": "Не разобрано", "high": "Разобрать", "medium": "Посмотреть", "clean": "Чисто"}
+ATTACK_TITLES = {STATUS_SUGGESTED: "предложено", STATUS_CONFIRMED: "подтверждено"}
+
+EXPORT_COLUMNS = [
+    Column("name", "Имя"), Column("author", "Автор"), Column("category", "Категория"), Column("msgid", "msgid"),
+    Column("attention", "Внимание"), Column("attack", "ATT&CK"), Column("scoped", "Ограничено"),
+]
+
+
+def _attention_cell(r: RuleRow, attention: dict[str, tuple[int, str | None]]) -> str:
+    count, worst = attention.get(r.uuid, (0, None))
+    if r.parse_status != "ok":
+        level = "unparsed"
+    elif count == 0:
+        level = "clean"
+    else:
+        level = "high" if worst == "high" else "medium"
+    return ATTENTION_TITLES[level] + (f" {count}" if count > 0 else "")
+
+
+def _attack_cell(row: Any) -> str | None:
+    """Техники разметки через запятую и её статус; без разметки — пусто, как «—» на экране."""
+    if row is None:
+        return None
+    ids = [t.technique_id for t in techniques_of(row)]
+    if not ids:
+        return None
+    return f"{', '.join(ids)} ({ATTACK_TITLES.get(row.status, row.status)})"
+
+
+@router.get("/export")
+def export_rules(
+    snapshot_id: int = Query(...),
+    author: str | None = None,
+    category: str | None = None,
+    group: str | None = None,
+    q: str | None = None,
+    attention: bool = False,
+    scoped: bool = False,
+    attack: str | None = None,
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    _user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Правила под теми же отборами, что на странице, в порядке списка (объявлена до `/{rule_uuid}`).
+    Тело правила, как и в списке, не выгружается."""
+    found, markup, attention_map = _rules(db, snapshot_id, author=author, category=category, group=group, q=q,
+                                          attention_only=attention, scoped=scoped, attack=attack)
+    msgids = _counts_by_rule(db, snapshot_id, RuleMsgid, RuleMsgid.rule_uuid)
+    rows = [
+        {"name": r.name, "author": r.author, "category": f"{r.type_id_cat}/{r.type_id_group}", "msgid": msgids.get(r.uuid, 0),
+         "attention": _attention_cell(r, attention_map), "attack": _attack_cell(markup.get(r.uuid)),
+         "scoped": "да" if r.scoped_by_list else "нет"}
+        for r in found
+    ]
+    return export_response(fmt, EXPORT_COLUMNS, rows, module="siem", name="rules")
 
 
 @router.get("/{rule_uuid}")

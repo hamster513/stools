@@ -3,6 +3,7 @@
 расхождений (статусы находок платформы)."""
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from itertools import batched
 from typing import Any, Literal
@@ -17,6 +18,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -53,6 +55,7 @@ from api.modules.assets.services.sync import (
     sync_status,
     try_lock_in_transaction,
 )
+from api.platform.export import Column, export_response
 from api.platform.filters import QueryInts, QueryList, multi, multi_int
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUSES, RoleRequired, TransitionError
@@ -182,6 +185,36 @@ def get_asset_ids(
     """Id всех активов под фильтрами (не больше `MAX_BULK`) — для выбора «всех по фильтру»."""
     ids = matching_ids(db, **filters, login=user.login)
     return {"total": len(ids), "ids": ids[:MAX_BULK]}
+
+
+#: Подписи источников — как на экране (SOURCE_LABELS фронтенда).
+SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "Скан", "dns": "DNS", "rt": "RT"}
+#: Выгрузке нужен весь отбор: страница списка ограничена `MAX_LIMIT`, здесь — нет.
+EXPORT_ALL = 10**9
+
+EXPORT_COLUMNS = [
+    Column("name", "Имя"), Column("ip", "IP"), Column("network", "Сеть"), Column("zone", "Зона"), Column("os", "ОС"),
+    Column("sources", "Источники"), Column("last_seen", "Виден"), Column("discrepancies", "Расхождения"),
+]
+
+
+@router.get("/assets/export")
+def export_assets(
+    filters: dict[str, Any] = Depends(_filters),
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Активы под фильтрами списка, в его порядке — тот же отбор (`list_assets`) без страницы."""
+    items, _total, _facets = list_assets(db, **filters, limit=EXPORT_ALL, offset=0, login=user.login)
+    rows = [
+        {"name": a["name"], "ip": a["ip"], "network": a["network"]["cidr"] if a["network"] else None,
+         "zone": a["network"]["zone"] if a["network"] else None, "os": a["os"],
+         "sources": ", ".join(SOURCE_TITLES.get(src["source"], src["source"]) for src in a["sources"]),
+         "last_seen": dt.datetime.fromisoformat(a["last_seen"]) if a["last_seen"] else None, "discrepancies": a["discrepancy_count"]}
+        for a in items
+    ]
+    return export_response(fmt, EXPORT_COLUMNS, rows, module="assets", name="assets")
 
 
 @router.post("/assets/bulk")

@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,8 +26,9 @@ from api.db.base import get_db
 from api.db.models import AppUser, DivergenceRow
 from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
-from api.modules.siem.findings_adapter import ADAPTER, SCOPE
+from api.modules.siem.findings_adapter import ADAPTER, KIND_TITLES, SCOPE
 from api.modules.siem.services.facets import FindingFilters, FindingQuery, ListRow
+from api.platform.export import Column, export_response
 from api.platform.filters import QueryInts, QueryList, QueryStatus, Values, is_all, multi, multi_int
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES
 
@@ -167,6 +169,54 @@ def list_findings(
     rows = query.page(sort=sort, order=order, limit=limit, offset=offset)
     return FindingListResponse(total=query.total(), items=_items(db, rows), facets=query.facets(),
                                is_latest=query.is_latest, status_keys_broken=query.keys_broken)
+
+
+#: Подписи — как на экране (OBJECT_TYPE_LABELS, POLARITY_LABELS фронтенда); значения находок не выгружаются, как и в списке.
+OBJECT_TYPE_TITLES = {"correlation": "корреляция", "filter": "фильтр", "enrichment": "обогащение"}
+POLARITY_TITLES = {"negation": "отрицание", "assertion": "утверждение"}
+#: Выгрузке нужен весь отбор: страница списка ограничена, здесь — нет.
+EXPORT_ALL = 10**9
+
+EXPORT_COLUMNS = [
+    Column("number", "№"), Column("kind", "Класс"), Column("object", "Объект"), Column("field", "Поле"),
+    Column("polarity", "Полярность"), Column("in_table", "В списке"), Column("status", "Статус"), Column("age", "Возраст"),
+]
+
+
+@router.get("/export")
+def export_findings(
+    snapshot_id: int = Query(...),
+    kind: QueryInts = None,
+    polarity: QueryList = None,
+    object_type: QueryList = None,
+    in_table: bool | None = None,
+    shape: QueryList = None,
+    status_: QueryStatus = None,
+    assignee: QueryList = None,
+    overdue: bool = False,
+    risk_expiring: bool = False,
+    key: str | None = Query(default=None, max_length=128),
+    field: QueryList = None,
+    object_uuid: str | None = None,
+    q: str | None = None,
+    sort: str = "kind",
+    order: str = "asc",
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Находки под фильтрами и сортировкой списка — тот же отбор (`list_findings`) без страницы;
+    «№» — порядковый номер в выгрузке, как на экране."""
+    page = list_findings(snapshot_id, kind, polarity, object_type, in_table, shape, status_, assignee, overdue, risk_expiring,
+                         key, field, object_uuid, q, sort, order, limit=EXPORT_ALL, offset=0, db=db, user=user)
+    rows = [
+        {"number": n, "kind": KIND_TITLES.get(i.kind, str(i.kind)),
+         "object": f"{i.object_name} ({OBJECT_TYPE_TITLES.get(i.object_type, i.object_type)})", "field": i.field,
+         "polarity": POLARITY_TITLES.get(i.polarity, i.polarity), "in_table": "да" if i.in_table else "нет",
+         "status": i.status_title, "age": i.age_days}
+        for n, i in enumerate(page.items, 1)
+    ]
+    return export_response(fmt, EXPORT_COLUMNS, rows, module="siem", name="findings")
 
 
 @router.get("/{finding_id}/detail", response_model=FindingDetail)

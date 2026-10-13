@@ -12,6 +12,7 @@ import logging
 import threading
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from itertools import batched
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -37,7 +38,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import take_slot
 from api.jobs import UPLOAD_INTERRUPTED, JobHandle, active_job, fail_job, run_job, start_job
-from api.platform.filters import Values, is_all, matches, multi
+from api.platform.filters import QueryList, QueryStatus, Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -441,6 +442,23 @@ def finding_filter(
     )
 
 
+def finding_params(
+    check: QueryList = None,
+    severity: QueryList = None,
+    status_: QueryStatus = None,
+    delta: QueryList = None,
+    assignee: QueryList = None,
+    overdue: bool = False,
+    risk_expiring: bool = False,
+    allowlisted: bool | None = None,
+    q: str | None = None,
+    user: AppUser = Depends(get_current_user),
+) -> FindingFilter:
+    """Параметры фильтра одной зависимостью: список и выгрузка находок отбирают одинаково."""
+    return finding_filter(user, check=check, severity=severity, allowlisted=allowlisted, status_=status_, delta=delta,
+                          assignee=assignee, overdue=overdue, risk_expiring=risk_expiring, q=q)
+
+
 def _stub(adapter: SnapshotFindingAdapter, state: FindingState) -> Any:
     """Находка, которой нет ни в одном снапшоте области (вердикт пережил свою находку):
     строка из состояния, подпись — в `target`. В сессию не добавляется."""
@@ -552,6 +570,36 @@ def state_fields(db: Session, adapter: SnapshotFindingAdapter, scope_id: int, ro
     return out
 
 
+def _filtered(rows: Sequence[FindingRow], flt: FindingFilter, today: dt.date, haystack: Callable[[Any], Iterable[str]],
+              sort_key: Callable[[Any], Any]) -> list[FindingRow]:
+    return sorted((r for r in rows if r.finding is not None and _matches(r, flt, today, haystack)),
+                  key=lambda r: (sort_key(r.finding), r.finding.id, r.finding.key))
+
+
+#: Подписи серьёзности — как на экране (SEVERITY_LABELS фронтенда).
+SEVERITY_TITLES = {"Critical": "критический", "High": "высокий", "Medium": "средний", "Low": "низкий", "Info": "справочно"}
+
+
+def finding_export_rows(
+    db: Session, adapter: SnapshotFindingAdapter, scope_id: int, found: FindingSet, flt: FindingFilter, *,
+    haystack: Callable[[Any], Iterable[str]], sort_key: Callable[[Any], Any], check_titles: dict[str, str],
+    extra: Callable[[Any], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Все отобранные находки (без страницы и фасетов) ячейками выгрузки: общие колонки и колонки
+    модуля (`extra`). Поля состояния — пачками: один запрос возраста и имён на тысячу строк."""
+    out: list[dict[str, Any]] = []
+    for chunk in batched(_filtered(found.rows, flt, finding_svc.today(), haystack, sort_key), 1000):
+        for r, fields in zip(chunk, state_fields(db, adapter, scope_id, chunk), strict=True):
+            f, first = r.finding, fields["first_seen_at"]
+            out.append({
+                "severity": SEVERITY_TITLES.get(f.severity, f.severity), "check": check_titles.get(f.check, f.check),
+                "target": f.target, "status": fields["status_title"], "age": fields["age_days"],
+                "assignee": fields["assignee_name"], "first_seen": dt.datetime.fromisoformat(first) if first else None,
+                **extra(f),
+            })
+    return out
+
+
 def findings_page(
     db: Session, adapter: SnapshotFindingAdapter, scope_id: int, found: FindingSet, flt: FindingFilter, cmp_: Comparison, *,
     offset: int, limit: int, haystack: Callable[[Any], Iterable[str]], sort_key: Callable[[Any], Any],
@@ -563,8 +611,7 @@ def findings_page(
     снапшота (`statuses_as_of`); `is_latest` — смотрят ли последний снапшот области."""
     today = finding_svc.today()
     rows = found.rows
-    filtered = sorted((r for r in rows if r.finding is not None and _matches(r, flt, today, haystack)),
-                      key=lambda r: (sort_key(r.finding), r.finding.id, r.finding.key))
+    filtered = _filtered(rows, flt, today, haystack, sort_key)
     facets: dict[str, dict[str, int]] | None = None
     if offset == 0:
         facets = {

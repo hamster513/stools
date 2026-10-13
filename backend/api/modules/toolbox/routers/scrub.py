@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, Literal
 
 from fastapi import (
@@ -20,16 +21,17 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from api.db.base import get_db
+from api.db.base import get_db, get_sessionmaker
 from api.db.models import ROLE_ANALYST, AppUser
 from api.deps import get_current_user
 from api.jobs import make_jobs_router, run_job
 from api.modules.toolbox.models import ToolboxJob
 from api.modules.toolbox.services import scrub
+from api.platform.export import Column, export_response
 from api.rbac import allows
 from api.settings import Settings, get_settings
 
@@ -175,6 +177,44 @@ def list_findings(
         ],
         total=total,
     )
+
+
+#: Подписи видов — как на экране (KIND_LABELS фронтенда); контексты (куски исходного текста) не выгружаются.
+KIND_TITLES = {"ip4": "IPv4", "ip6": "IPv6", "mac": "MAC", "domain": "Домены", "host": "Хосты", "user": "Учётные записи",
+               "sid": "SID", "secret": "Секреты", "word": "Слова"}
+
+EXPORT_COLUMNS = [
+    Column("kind", "Вид"), Column("value", "Значение"), Column("alias", "Псевдоним"), Column("count", "Вхождений"),
+    Column("first_file", "Файл"), Column("checked", "Включено"),
+]
+
+
+@router.get("/jobs/{job_id}/findings/export")
+def export_findings(
+    job_id: int,
+    request: Request,
+    kind: str | None = None,
+    q: str = "",
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Находки задания под фильтрами предпросмотра — только аналитику: в файле настоящие значения целиком,
+    включая секреты. Сводка журнала — до проверки роли, иначе отказ ушёл бы туда со строкой запроса, а в `q` —
+    настоящее значение."""
+    request.state.audit_summary = f"задание #{job_id}: выгрузка находок"
+    require_analyst(user)
+    if db.get(ToolboxJob, job_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="задание не найдено")
+
+    def rows() -> Iterator[dict[str, Any]]:
+        # CSV читается после выхода из ручки: у потока своя сессия.
+        with get_sessionmaker()() as session:
+            for f in scrub.finding_rows(session, job_id, kind=kind, q=q):
+                yield {"kind": KIND_TITLES.get(f.kind, f.kind), "value": f.value, "alias": f.alias, "count": f.count,
+                       "first_file": f.first_file, "checked": "да" if f.checked else "нет"}
+
+    return export_response(fmt, EXPORT_COLUMNS, rows(), module="toolbox", name="findings")
 
 
 @router.patch("/jobs/{job_id}/findings", response_model=FindingsPatched)
