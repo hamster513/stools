@@ -1,4 +1,4 @@
-"""«Мои находки»: `status` и `module` — значения через запятую, внутри фильтра «ИЛИ»; `all` — любые статусы."""
+"""«Мои находки»: `status` и `module` — повтором ключа, внутри фильтра «ИЛИ»; `all` — любые статусы."""
 from __future__ import annotations
 
 import datetime as dt
@@ -13,7 +13,7 @@ from tests.findings.test_api import _as
 from tests.findings.test_mine_and_expiry import _put, second  # noqa: F401 — фикстура второго модуля
 
 
-def _keys(client: TestClient, **params: str) -> list[str]:
+def _keys(client: TestClient, **params: Any) -> list[str]:
     r = client.get("/api/findings/mine", params=params)
     assert r.status_code == 200, r.text
     return sorted(m["key"] for m in r.json())
@@ -29,7 +29,8 @@ def test_two_values_sum_up(app_settings: Any, adapter: FakeAdapter, second: Fake
     _put(analyst, "test", 1, "e", status="risk_accepted", assignee="analyst1", comment="мера",
          risk_until=(today + dt.timedelta(days=5)).isoformat(), title="E")
     one, two = _keys(analyst, **{param: a}), _keys(analyst, **{param: b})
-    both = _keys(analyst, **{param: f"{a},{b}"})
+    both = _keys(analyst, **{param: [a, b]})
     assert one and two and both == sorted(one + two)
     assert _keys(analyst, status="all") == ["a", "c", "d", "e"]
-    assert _keys(analyst, status="all", module="test,test2") == ["a", "c", "d", "e"]
+    assert _keys(analyst, status="all", module=["test", "test2"]) == ["a", "c", "d", "e"]
+    assert _keys(analyst, status="in_work,fixed") == ["a", "c", "d"]  # старая строка статусов

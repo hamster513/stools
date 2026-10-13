@@ -214,20 +214,9 @@ def reconcile_after_import(db: Session, import_id: int) -> None:
 # ---- Массовая смена по фильтру -------------------------------------------------------
 
 
-#: Многозначный параметр фильтра: строкой через запятую, как в `GET /api/vm/vulns`, или списком —
-#: страница может прислать выбранные значения фасета массивом.
+#: Многозначный параметр фильтра: список значений как есть ('' и `-` — «не задано») или одна строка —
+#: одно значение. Через запятую делится только `status`, как в `GET /api/vm/vulns`.
 Multi = str | list[str] | None
-
-
-def _picked(value: Multi) -> frozenset[str] | None:
-    """Список берётся как есть (в нём '' — «не задано»), пустой — фильтр не задан; строка — `multi`."""
-    if isinstance(value, list):
-        return frozenset(value) or None
-    return multi(value)
-
-
-def _joined(value: Multi) -> str | None:
-    return ",".join(value) if isinstance(value, list) else value
 
 
 class BulkFilter(BaseModel):
@@ -255,9 +244,9 @@ class BulkFilter(BaseModel):
 def parse_filter(raw: dict[str, Any], *, login: str) -> VulnFilters:
     """Ошибка — ValueError (в том числе ValidationError): платформа отвечает 422 до запуска задачи."""
     b = BulkFilter.model_validate(raw)
-    sf = status_filter(_joined(b.status), _joined(b.assignee), b.overdue, b.risk_expiring, login=login)
-    return VulnFilters(b.q, b.host, b.cve, _picked(b.criticality), _picked(b.zone), _picked(b.os), _picked(b.level),
-                       b.exploits, b.msf, _picked(b.cvss_source), b.host_id, sf)
+    sf = status_filter(b.status, b.assignee, b.overdue, b.risk_expiring, login=login)
+    return VulnFilters(b.q, b.host, b.cve, multi(b.criticality), multi(b.zone), multi(b.os), multi(b.level),
+                       b.exploits, b.msf, multi(b.cvss_source), b.host_id, sf)
 
 
 def keys_by_filter(db: Session, scope_id: int, raw: dict[str, Any]) -> Iterator[str]:

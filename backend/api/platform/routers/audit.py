@@ -14,7 +14,7 @@ from api.db.base import get_db
 from api.db.models import AppUser, AuditEvent
 from api.deps import get_current_user
 from api.platform.export import Column, csv_safe, export_response
-from api.platform.filters import multi_int
+from api.platform.filters import QueryInts, multi_int
 
 router = APIRouter(prefix="/audit", tags=["settings"])
 
@@ -33,8 +33,8 @@ EXPORT_COLUMNS = [
 CSV_HEADER = [c.title for c in EXPORT_COLUMNS]
 
 
-def _query(user_id: str | None, since: dt.datetime | None, until: dt.datetime | None, denied_only: bool) -> Any:
-    """`user_id` — id пользователей через запятую: внутри фильтра «или» (спека фильтров §1.1)."""
+def _query(user_id: list[int] | None, since: dt.datetime | None, until: dt.datetime | None, denied_only: bool) -> Any:
+    """`user_id` — id пользователей повтором ключа: внутри фильтра «или» (спека фильтров §1.1)."""
     stmt = select(AuditEvent)
     user_ids = multi_int(user_id)
     if user_ids is not None:
@@ -61,7 +61,7 @@ def _item(e: AuditEvent) -> dict[str, Any]:
 
 @router.get("")
 def list_events(
-    user_id: str | None = None,
+    user_id: QueryInts = None,
     since: dt.datetime | None = None,
     until: dt.datetime | None = None,
     denied_only: bool = False,
@@ -87,7 +87,7 @@ def _export_rows(stmt: Any, db: Session) -> Iterator[dict[str, Any]]:
 @router.get("/export")
 def export(
     fmt: str = Query(default="csv", alias="format"),
-    user_id: str | None = None,
+    user_id: QueryInts = None,
     since: dt.datetime | None = None,
     until: dt.datetime | None = None,
     denied_only: bool = False,
@@ -102,7 +102,7 @@ def export(
 
 @router.get("/export.csv")
 def export_csv(
-    user_id: str | None = None,
+    user_id: QueryInts = None,
     since: dt.datetime | None = None,
     until: dt.datetime | None = None,
     denied_only: bool = False,

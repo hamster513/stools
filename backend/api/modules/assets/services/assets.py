@@ -31,7 +31,7 @@ from api.modules.assets.core.matching import (
 )
 from api.modules.assets.models import Asset, AssetObservation, AssetSettings, Network
 from api.modules.assets.services.networks import NetworkList, network_for_ip
-from api.platform.filters import matches, multi
+from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -535,21 +535,26 @@ class DiscFilter:
 
 
 def disc_filter(
-    counted: frozenset[str], *, code: frozenset[str] | None = None, disc_status: str | None = None,
-    assignee: str | None = None, overdue: bool | None = None, login: str = "",
+    counted: frozenset[str], *, code: frozenset[str] | None = None, disc_status: Values = None,
+    assignee: Values = None, overdue: bool | None = None, login: str = "",
 ) -> DiscFilter:
-    """`disc_status` — коды статусов через запятую или `all`; неизвестный статус — ValueError.
-    `assignee` — `me`, `none` и логины через запятую."""
-    statuses = multi(disc_status)
-    if disc_status == "all":
+    """`disc_status` — коды статусов (повтором или через запятую) или `all`; неизвестный статус —
+    ValueError. `assignee` — `me`, `none` и логины."""
+    picked = multi(disc_status, commas=True)
+    # Фильтр по расхождениям включает разобранный статус, а не сырая строка: `disc_status=,` — не задан.
+    by_status = picked is not None or is_all(disc_status)
+    statuses: frozenset[str] | None
+    if is_all(disc_status):
         statuses = None
-    elif statuses is None:
+    elif picked is None:
         statuses = counted
-    elif unknown := statuses - set(STATUSES):
+    elif unknown := picked - set(STATUSES):
         raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown))}")
+    else:
+        statuses = picked
     who = multi(assignee)
     whom = frozenset(login if a == "me" else a for a in who) if who else None
-    return DiscFilter(code, statuses, whom, bool(overdue), active=bool(code or disc_status or whom or overdue))
+    return DiscFilter(code, statuses, whom, bool(overdue), active=bool(code or by_status or whom or overdue))
 
 
 def _hits(t: Tracked, f: DiscFilter, today: dt.date, *, code: bool = True, status: bool = True, overdue: bool = True) -> bool:
@@ -708,7 +713,7 @@ def _disc_split(picked: Picked, f: DiscFilter, states: dict[str, FindingState], 
 
 
 def matching_ids(
-    db: Session, *, code: frozenset[str] | None = None, disc_status: str | None = None, assignee: str | None = None,
+    db: Session, *, code: frozenset[str] | None = None, disc_status: Values = None, assignee: Values = None,
     overdue: bool | None = None, login: str = "", **filters: Any,
 ) -> list[int]:
     """Id всех активов под фильтрами списка — без фасетов и строк, а расхождения считаются,
@@ -730,8 +735,8 @@ def list_assets(
     offset: int = 0,
     now: dt.datetime | None = None,
     code: frozenset[str] | None = None,
-    disc_status: str | None = None,
-    assignee: str | None = None,
+    disc_status: Values = None,
+    assignee: Values = None,
     overdue: bool | None = None,
     login: str = "",
     **filters: Any,

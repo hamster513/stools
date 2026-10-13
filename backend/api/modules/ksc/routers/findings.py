@@ -23,6 +23,7 @@ from api.modules.ksc.core.findings import SEVERITIES, SEVERITY_RANK
 from api.modules.ksc.findings_adapter import ADAPTER
 from api.modules.ksc.models import KscFinding, KscSnapshot
 from api.modules.ksc.services.snapshots import compare
+from api.platform.filters import QueryList, QueryStatus
 
 router = APIRouter(tags=["ksc"])
 
@@ -47,11 +48,11 @@ def _item(f: KscFinding) -> dict[str, Any]:
 @router.get("/snapshots/{snapshot_id}/findings")
 def list_findings(
     snapshot_id: int,
-    check: str | None = None,
-    severity: str | None = None,
-    status_: str | None = Query(default=None, alias="status"),
-    delta: str | None = None,
-    assignee: str | None = None,
+    check: QueryList = None,
+    severity: QueryList = None,
+    status_: QueryStatus = None,
+    delta: QueryList = None,
+    assignee: QueryList = None,
     overdue: bool = False,
     risk_expiring: bool = False,
     allowlisted: bool | None = None,

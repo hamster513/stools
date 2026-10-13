@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement, Subquery
 
 from api.modules.vm.models import VmCve, VmFindingStateRef, VmHost, VmHostCve
-from api.platform.filters import matches, multi
+from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -132,12 +132,12 @@ class StatusFilter:
         return self.today or finding_svc.today()
 
 
-def status_filter(status: str | None, assignee: str | None, overdue: bool | None, risk_expiring: bool | None,
+def status_filter(status: Values, assignee: Values, overdue: bool | None, risk_expiring: bool | None,
                   *, login: str) -> StatusFilter:
-    """Параметры списка, как у других модулей: `status` — коды через запятую или `all`; не задан —
-    открытые, а с «риск истекает» — принятые. `assignee`: `me`, `none` и логины через запятую."""
-    statuses = multi(status)
-    if status == "all":
+    """Параметры списка, как у других модулей: `status` — коды (повтором или через запятую) или `all`;
+    не задан — открытые, а с «риск истекает» — принятые. `assignee`: `me`, `none` и логины."""
+    statuses = multi(status, commas=True)
+    if is_all(status):
         statuses = None
     elif statuses is None:
         statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN

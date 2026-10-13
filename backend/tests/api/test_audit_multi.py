@@ -1,4 +1,4 @@
-"""Журнал действий: `user_id` — id пользователей через запятую, внутри фильтра «ИЛИ»."""
+"""Журнал действий: `user_id` — id пользователей повтором ключа, внутри фильтра «ИЛИ»."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 URL = "/api/settings/audit"
 
 
-def _total(client: TestClient, **params: str) -> int:
+def _total(client: TestClient, **params: object) -> int:
     r = client.get(URL, params={"page_size": "500", **params})
     assert r.status_code == 200, r.text
     return int(r.json()["total"])
@@ -21,7 +21,8 @@ def test_two_users_sum_up(auth_client: TestClient, client_as: Callable[[str], Te
     ids = sorted({i["user_id"] for i in auth_client.get(URL, params={"page_size": "500"}).json()["items"] if i["user_id"]})
     assert len(ids) >= 2, ids
     a, b = str(ids[0]), str(ids[1])
-    assert _total(auth_client, user_id=f"{a},{b}") == _total(auth_client, user_id=a) + _total(auth_client, user_id=b) > 0
-    assert _total(auth_client, user_id="all") == _total(auth_client)
-    assert auth_client.get(URL, params={"user_id": "1,x"}).status_code == 422
-    assert auth_client.get(f"{URL}/export", params={"user_id": f"{a},{b}"}).status_code == 200
+    one, two = _total(auth_client, user_id=a), _total(auth_client, user_id=b)
+    assert one > 0 and two > 0
+    assert _total(auth_client, user_id=[a, b]) == one + two
+    assert auth_client.get(URL, params={"user_id": ["1", "x"]}).status_code == 422
+    assert auth_client.get(f"{URL}/export", params={"user_id": [a, b]}).status_code == 200

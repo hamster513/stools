@@ -22,7 +22,7 @@ from api.modules.ksc.core.policy_model import Exclusion, covered_by
 from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy, KscSnapshot
 from api.modules.ksc.routers.hosts import host_scope
 from api.modules.ksc.services.policy_store import ensure_policy_tables
-from api.platform.filters import matches, multi, multi_int
+from api.platform.filters import QueryInts, QueryList, matches, multi, multi_int
 from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ksc"])
@@ -157,11 +157,11 @@ def _exclusion_item(r: KscExclusion, name: str, policies: int, covered: str | No
 def list_exclusions(
     snapshot_id: int,
     q: str = "",
-    policy_id: str | None = None,
+    policy_id: QueryInts = None,
     profile: str | None = None,
-    kind: str = "",
+    kind: QueryList = None,
     enabled: bool | None = None,
-    dup: str = "",
+    dup: QueryList = None,
     risky: bool | None = None,
     host_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
@@ -170,7 +170,7 @@ def list_exclusions(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Фасеты `policy_id, kind, dup` — значения через запятую, внутри фасета «или»."""
+    """Фасеты `policy_id, kind, dup` — повтором ключа, внутри фасета «или»."""
     _snapshot(db, snapshot_id, settings)
     policy_ids, kinds, dups = multi_int(policy_id), multi(kind), multi(dup)
     for d in sorted(dups or ()):
@@ -270,10 +270,10 @@ def _net_rule_item(r: KscNetRule, name: str) -> dict[str, Any]:
 def list_net_rules(
     snapshot_id: int,
     q: str = "",
-    policy_id: str | None = None,
+    policy_id: QueryInts = None,
     profile: str | None = None,
-    action: str = "",
-    direction: str = "",
+    action: QueryList = None,
+    direction: QueryList = None,
     enabled: bool | None = None,
     host_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
@@ -282,7 +282,7 @@ def list_net_rules(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Фасеты `policy_id, action, direction` — значения через запятую, внутри фасета «или»."""
+    """Фасеты `policy_id, action, direction` — повтором ключа, внутри фасета «или»."""
     _snapshot(db, snapshot_id, settings)
     policy_ids, actions, directions = multi_int(policy_id), multi(action), multi(direction)
     host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind

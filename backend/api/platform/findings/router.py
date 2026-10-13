@@ -32,7 +32,7 @@ from api.audit import changes_summary
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
-from api.platform.filters import multi
+from api.platform.filters import QueryList, QueryStatus, is_all, multi
 from api.platform.findings import service as svc
 from api.platform.findings.adapters import (
     BulkConflict,
@@ -325,13 +325,13 @@ def post_bulk(payload: BulkBody, request: Request, response: Response, backgroun
 
 @router.get("/api/findings/mine", response_model=list[MineItem])
 def get_mine(
-    status_: str = Query(default="", alias="status"), module: str = Query(default="", max_length=128),
+    status_: QueryStatus = None, module: QueryList = None,
     db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
 ) -> list[MineItem]:
     """Находки, назначенные текущему пользователю, из всех модулей: сначала просроченные,
     затем по сроку (без срока — в конце), затем по тяжести. По умолчанию — открытые; `all` — любые,
-    как у списков модулей. `status` и `module` — значения через запятую."""
-    wanted = STATUSES if status_ == "all" else multi(status_) or OPEN
+    как у списков модулей. `status` и `module` — повтором ключа (`status` — ещё и через запятую)."""
+    wanted = STATUSES if is_all(status_) else multi(status_, commas=True) or OPEN
     unknown = set(wanted) - set(STATUSES)
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестные статусы: {', '.join(sorted(unknown))}")

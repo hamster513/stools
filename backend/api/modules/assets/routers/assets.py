@@ -53,7 +53,7 @@ from api.modules.assets.services.sync import (
     sync_status,
     try_lock_in_transaction,
 )
-from api.platform.filters import multi, multi_int
+from api.platform.filters import QueryInts, QueryList, multi, multi_int
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUSES, RoleRequired, TransitionError
 from api.platform.findings.router import ChangeBody
@@ -133,33 +133,33 @@ def _check(value: str | frozenset[str] | None, allowed: tuple[str, ...]) -> None
 
 def _filters(
     q: str | None = None,
-    source_has: str | None = None,
-    source_missing: str | None = None,
-    code: str | None = None,
-    network_id: str | None = None,
-    zone: str | None = None,
+    source_has: QueryList = None,
+    source_missing: QueryList = None,
+    code: QueryList = None,
+    network_id: QueryInts = None,
+    zone: QueryList = None,
     port: int | None = Query(default=None, ge=1, le=65535),
     tag: str | None = None,
-    criticality: str | None = None,
-    disc_status: str | None = None,
-    assignee: str | None = Query(default=None, max_length=255),
+    criticality: QueryList = None,
+    disc_status: QueryList = None,
+    assignee: QueryList = None,
     overdue: bool | None = None,
 ) -> dict[str, Any]:
     """Фильтры списка — одни и те же у страницы списка и у выбора «всех по фильтру». `disc_status`
-    (коды статусов через запятую или `all`), `assignee` (`me`, `none`, логин) и `overdue` — про
-    расхождения: актив подходит, если у него есть расхождение под ними (и под `code`, если он задан).
-    Фасеты `code, source_has, source_missing, criticality, zone, assignee, network_id` — значения
-    через запятую, внутри фасета «или»."""
+    (коды статусов повтором ключа или через запятую, или `all`), `assignee` (`me`, `none`, логины) и
+    `overdue` — про расхождения: актив подходит, если у него есть расхождение под ними (и под `code`,
+    если он задан). Фасеты `code, source_has, source_missing, criticality, zone, assignee, network_id` —
+    повтором ключа, внутри фасета «или»."""
     picked = {"source_has": multi(source_has), "source_missing": multi(source_missing), "code": multi(code),
               "zone": multi(zone), "criticality": multi(criticality)}
     _check(picked["source_has"], SOURCES)
     _check(picked["source_missing"], SOURCES)
     _check(picked["code"], (*CODES, ANY_CODE))
     _check(picked["criticality"], (*CRITICALITY, "none", ""))
-    _check(multi(disc_status), STATUSES)
+    _check(multi(disc_status, commas=True), STATUSES)
     return {
         "q": q, **picked, "network_id": multi_int(network_id), "port": port, "tag": tag,
-        "disc_status": disc_status or None, "assignee": assignee or None, "overdue": overdue,
+        "disc_status": disc_status, "assignee": assignee, "overdue": overdue,
     }
 
 

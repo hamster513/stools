@@ -34,7 +34,7 @@ from api.modules.ksc.models import (
 )
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.settings import load_config
-from api.platform.filters import matches, multi
+from api.platform.filters import QueryList, QueryStatus, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUS_TITLES
 from api.settings import Settings, get_settings
@@ -210,16 +210,16 @@ def _object_counts(db: Session, model: type[KscExclusion | KscNetRule], snapshot
 @router.get("/snapshots/{snapshot_id}/hosts")
 def list_hosts(
     snapshot_id: int,
-    group: str | None = None,
-    product: str | None = None,
-    agent: str | None = None,
-    protection: str | None = None,
-    bases: str | None = None,
-    in_ad: str | None = None,
-    status_: str | None = Query(default=None, alias="status"),
-    component: str | None = None,
+    group: QueryList = None,
+    product: QueryList = None,
+    agent: QueryList = None,
+    protection: QueryList = None,
+    bases: QueryList = None,
+    in_ad: QueryList = None,
+    status_: QueryStatus = None,
+    component: QueryList = None,
     component_state: str | None = None,
-    tag: str | None = None,
+    tag: QueryList = None,
     policy: int | None = None,
     q: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
@@ -228,8 +228,8 @@ def list_hosts(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Фасеты `protection, agent, bases, in_ad, status, component, tag, group, product` — значения
-    через запятую, внутри фасета «или»; `component_state` — одно, к любому из выбранных компонентов."""
+    """Фасеты `protection, agent, bases, in_ad, status, component, tag, group, product` — повтором
+    ключа, внутри фасета «или»; `component_state` — одно, к любому из выбранных компонентов."""
     snap = _snapshot(db, snapshot_id, settings)
     groups, products, agents, protections, bases_, in_ads, statuses, components, tags_ = (
         multi(v) for v in (group, product, agent, protection, bases, in_ad, status_, component, tag))

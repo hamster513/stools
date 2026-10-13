@@ -13,7 +13,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.models import KscChange, KscServer, KscSnapshot
 from api.modules.ksc.services.changes import summary_view
-from api.platform.filters import multi, multi_int
+from api.platform.filters import QueryInts, QueryList, multi, multi_int
 
 router = APIRouter(tags=["ksc"])
 
@@ -23,16 +23,16 @@ MAX_LIMIT = 1000
 @router.get("/servers/{server_id}/changes")
 def list_changes(
     server_id: int,
-    kind: str = "",
-    action: str = "",
-    policy_id: str | None = None,
-    snapshot_id: str | None = None,
+    kind: QueryList = None,
+    action: QueryList = None,
+    policy_id: QueryInts = None,
+    snapshot_id: QueryInts = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Фасеты `kind, action, policy_id, snapshot_id` — значения через запятую, внутри фасета «или»."""
+    """Фасеты `kind, action, policy_id, snapshot_id` — повтором ключа, внутри фасета «или»."""
     kinds, actions, policy_ids, snapshot_ids = multi(kind), multi(action), multi_int(policy_id), multi_int(snapshot_id)
     if db.get(KscServer, server_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="сервер не найден")

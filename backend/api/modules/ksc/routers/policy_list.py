@@ -33,7 +33,7 @@ from api.modules.ksc.routers.policies import task_fields
 from api.modules.ksc.services.grade import GRADES, Grade, policy_findings, policy_grades
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.snapshots import snapshot_path
-from api.platform.filters import matches, multi
+from api.platform.filters import QueryList, matches, multi
 from api.platform.findings.core import STATUS_TITLES
 from api.settings import Settings, get_settings
 
@@ -211,14 +211,14 @@ def _item(p: KscPolicy, idx: ExportIndex | None, grade: tuple[Grade | None, str,
 def get_policy_list(
     snapshot_id: int,
     q: str = "",
-    product: str = "",
+    product: QueryList = None,
     active: bool | None = None,
-    grade: str = "",
+    grade: QueryList = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> PolicyListResponse:
-    """Фасеты `grade, product` — значения через запятую, внутри фасета «или»."""
+    """Фасеты `grade, product` — повтором ключа, внутри фасета «или»."""
     grades_, products = multi(grade), multi(product)
     for g in sorted(grades_ or ()):
         if g not in (*GRADES, "none"):
@@ -365,13 +365,13 @@ def get_policy_profiles(
 def get_tasks(
     snapshot_id: int,
     q: str = "",
-    type: str = "",
+    type: QueryList = None,
     failed: bool = False,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> TasksResponse:
-    """Фасет `type` — значения через запятую, внутри фасета «или»."""
+    """Фасет `type` — повтором ключа, внутри фасета «или»."""
     types = multi(type)
     idx = _index(_snapshot(db, snapshot_id, settings), settings)
     items: list[TaskItem] = []

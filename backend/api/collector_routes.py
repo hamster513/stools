@@ -37,7 +37,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import take_slot
 from api.jobs import UPLOAD_INTERRUPTED, JobHandle, active_job, fail_job, run_job, start_job
-from api.platform.filters import matches, multi
+from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -415,13 +415,13 @@ class FindingFilter:
 
 
 def finding_filter(
-    user: AppUser, *, check: str | None, severity: str | None, allowlisted: bool | None, status_: str | None,
-    delta: str | None, assignee: str | None, overdue: bool, risk_expiring: bool, q: str | None,
+    user: AppUser, *, check: Values, severity: Values, allowlisted: bool | None, status_: Values,
+    delta: Values, assignee: Values, overdue: bool, risk_expiring: bool, q: str | None,
 ) -> FindingFilter:
-    """Параметры списка. `status` — коды через запятую или `all`; не задан — открытые,
-    а с «риск истекает» — принятые: среди открытых такого риска не бывает."""
-    picked = multi(status_)
-    if status_ == "all":
+    """Параметры списка; фасеты — повтором ключа. `status` — коды (повтором или через запятую) или `all`;
+    не задан — открытые, а с «риск истекает» — принятые: среди открытых такого риска не бывает."""
+    picked = multi(status_, commas=True)
+    if is_all(status_):
         statuses = frozenset(STATUSES)
     elif picked is None:
         statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN

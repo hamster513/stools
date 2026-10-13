@@ -41,7 +41,7 @@ from api.modules.vm.services.query import (
 from api.modules.vm.services.settings import load_settings
 from api.modules.vm.services.stats import load_stats
 from api.platform.export import Column, export_response
-from api.platform.filters import multi
+from api.platform.filters import QueryList, QueryStatus, multi
 
 router = APIRouter(tags=["vm"])
 
@@ -52,23 +52,23 @@ def _filters(
     q: str | None = None,
     host: str | None = None,
     cve: str | None = None,
-    criticality: str | None = None,
-    zone: str | None = None,
-    os: str | None = None,
-    level: str | None = None,
+    criticality: QueryList = None,
+    zone: QueryList = None,
+    os: QueryList = None,
+    level: QueryList = None,
     exploits: bool | None = None,
     msf: bool | None = None,
-    cvss_source: str | None = None,
+    cvss_source: QueryList = None,
     host_id: int | None = None,
-    status_: str | None = Query(default=None, alias="status"),
-    assignee: str | None = None,
+    status_: QueryStatus = None,
+    assignee: QueryList = None,
     overdue: bool = False,
     risk_expiring: bool = False,
     user: AppUser = Depends(get_current_user),
 ) -> VulnFilters:
     """Статус пары: `status` — коды через запятую или `all`, по умолчанию — открытые;
     `assignee` — `me`, `none` или логин; `overdue`, `risk_expiring` (спека статусов §5).
-    Фасеты `level, criticality, zone, cvss_source, os, assignee` — значения через запятую."""
+    Фасеты `level, criticality, zone, cvss_source, os, assignee` — повтором ключа."""
     try:
         sf = status_filter(status_, assignee, overdue, risk_expiring, login=user.login)
     except ValueError as exc:

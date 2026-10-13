@@ -27,7 +27,7 @@ from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
 from api.modules.siem.findings_adapter import ADAPTER, SCOPE
 from api.modules.siem.services.facets import FindingFilters, FindingQuery, ListRow
-from api.platform.filters import multi, multi_int
+from api.platform.filters import QueryInts, QueryList, QueryStatus, Values, is_all, multi, multi_int
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES
 
 router = APIRouter(prefix="/findings", tags=["findings"])
@@ -74,12 +74,12 @@ class FindingListResponse(BaseModel):
     status_keys_broken: bool = False
 
 
-def _statuses(raw: str | None, risk_expiring: bool) -> frozenset[str]:
-    """`status` — коды через запятую или `all`; не задан — открытые, а с «риск
+def _statuses(raw: Values, risk_expiring: bool) -> frozenset[str]:
+    """`status` — коды (повтором ключа или через запятую) или `all`; не задан — открытые, а с «риск
     истекает» — принятые: среди открытых такого риска не бывает."""
-    if raw == "all":
+    if is_all(raw):
         return frozenset(STATUSES)
-    picked = multi(raw)
+    picked = multi(raw, commas=True)
     if picked is None:
         return frozenset({"risk_accepted"}) if risk_expiring else OPEN
     unknown = picked - set(STATUSES)
@@ -123,17 +123,17 @@ class FindingDetail(BaseModel):
 @router.get("", response_model=FindingListResponse)
 def list_findings(
     snapshot_id: int = Query(...),
-    kind: str | None = None,
-    polarity: str | None = None,
-    object_type: str | None = None,
+    kind: QueryInts = None,
+    polarity: QueryList = None,
+    object_type: QueryList = None,
     in_table: bool | None = None,
-    shape: str | None = None,
-    status_: str | None = Query(default=None, alias="status"),
-    assignee: str | None = Query(default=None, max_length=255),
+    shape: QueryList = None,
+    status_: QueryStatus = None,
+    assignee: QueryList = None,
     overdue: bool = False,
     risk_expiring: bool = False,
     key: str | None = Query(default=None, max_length=128),
-    field: str | None = None,
+    field: QueryList = None,
     object_uuid: str | None = None,
     q: str | None = None,
     sort: str = "kind",
@@ -145,7 +145,7 @@ def list_findings(
 ) -> FindingListResponse:
     """По умолчанию — открытые статусы; `status` — коды через запятую или `all`;
     `assignee` — `me`, `none` или логин. Фасеты `kind, polarity, object_type, shape, field,
-    assignee` — значения через запятую, внутри фасета «или»."""
+    assignee` — повтором ключа, внутри фасета «или»."""
     who = multi(assignee)
     filters = FindingFilters(
         snapshot_id=snapshot_id,

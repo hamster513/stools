@@ -164,7 +164,8 @@ def _load_rows(db: Session, filters: FindingFilters) -> Loaded:
 def _matches_state(row: StateRow, filters: FindingFilters) -> bool:
     """Фильтры, проверяемые по ключу (`object_uuid|kind|подпись`) и состоянию."""
     uuid, kind, _ = row.key.split("|", 2)
-    if filters.kind is not None and int(kind) not in filters.kind:
+    # Класс в ключе — строка; сравнение строками, чтобы ключ чужого вида не ронял список.
+    if filters.kind is not None and kind not in {str(k) for k in filters.kind}:
         return False
     if filters.object_uuid is not None and uuid != filters.object_uuid:
         return False
