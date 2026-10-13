@@ -65,15 +65,16 @@ def create_user(
 @app.command("reseal-secrets")
 def reseal_secrets() -> None:
     """Зашифровать секреты, сохранённые открытым текстом до обновления:
-    пароли подключений AD и KSC, пароль и client secret MaxPatrol VM, секрет
-    клиента OIDC. Уже зашифрованные не трогаются; значения не печатаются."""
+    пароли подключений AD и KSC, пароль и client secret MaxPatrol VM, пароль и
+    client secret базы знаний SIEM, секрет клиента OIDC. Уже зашифрованные не
+    трогаются; значения не печатаются."""
     from api.modules.ad.models import AdConnection
     from api.modules.ksc.models import KscConnection
 
     if not get_settings().session_secret:
         typer.secho("STOOLS_SESSION_SECRET не задан — шифровать нечем", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-    counts = {"ad": 0, "ksc": 0, "vm": 0, "oidc": 0}
+    counts = {"ad": 0, "ksc": 0, "vm": 0, "siem_kb": 0, "oidc": 0}
     session = get_sessionmaker()()
     try:
         conns: list[tuple[str, AdConnection | KscConnection]] = [
@@ -86,7 +87,11 @@ def reseal_secrets() -> None:
                 conn.password = sealed
                 counts[kind] += 1
         #: Ключ настройки в app_setting, раздел JSON с секретами (None — корень), поля.
-        for kind, section, fields in (("vm", "connection", ("password", "client_secret")), ("oidc", None, ("client_secret",))):
+        for kind, section, fields in (
+            ("vm", "connection", ("password", "client_secret")),
+            ("siem_kb", None, ("password", "client_secret")),
+            ("oidc", None, ("client_secret",)),
+        ):
             row = session.get(AppSetting, kind)
             if row is None or not row.value_json:
                 continue

@@ -1,0 +1,101 @@
+"""Подключение к базе знаний MaxPatrol (PT KB) — в `app_setting['siem_kb']`.
+
+Одно на инсталляцию, по образцу модуля VM: пароль и client secret
+шифруются (api/crypto.py) и расшифровываются только в момент обращения
+к KB (`KbConnection.unsealed`). Наружу отдаётся только признак «задан».
+"""
+from __future__ import annotations
+
+import datetime as dt
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import Session
+
+from api.crypto import decrypt, encrypt, reseal
+from api.db.models import AppSetting
+from api.hosts import validate_host
+from api.llm_settings import read_setting
+
+KB_KEY = "siem_kb"
+SECRET_FIELDS = ("password", "client_secret")
+#: Поля, от которых зависит, куда и под чьим именем уйдут секреты.
+ADDRESS_FIELDS = ("host", "kb_port", "username", "verify_tls")
+SECRETS_AGAIN = "при смене адреса или учётной записи пароль и client secret нужно ввести заново"
+
+
+class KbConnection(BaseModel):
+    host: str = ""
+    kb_port: int = Field(default=8091, ge=1, le=65535)
+    username: str = ""
+    password: str = ""
+    client_secret: str = ""
+    #: Как у VM: MaxPatrol обычно стоит на самоподписанном сертификате.
+    verify_tls: bool = False
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.host.strip() and self.username.strip() and self.password and self.client_secret)
+
+    def unsealed(self) -> KbConnection:
+        """Копия с расшифрованными секретами — для обращения к KB, не для записи."""
+        return self.model_copy(update={f: decrypt(getattr(self, f)) for f in SECRET_FIELDS})
+
+
+class KbConnectionIn(KbConnection):
+    """Подключение из формы: адрес проверяется, пустой — «не настроено»."""
+
+    @field_validator("host")
+    @classmethod
+    def check_host(cls, value: str) -> str:
+        return validate_host(value) if value.strip() else ""
+
+
+class SecretsRequired(ValueError):
+    pass
+
+
+def load_connection(db: Session) -> KbConnection:
+    raw = read_setting(db, KB_KEY)
+    return KbConnection() if raw is None else KbConnection.model_validate_json(raw)
+
+
+def changed_fields(current: KbConnection, incoming: KbConnectionIn) -> list[str]:
+    """Имена изменённых полей для журнала; пустой секрет — «не трогать»."""
+    return [
+        name
+        for name in KbConnection.model_fields
+        if getattr(incoming, name) != getattr(current, name) and (name not in SECRET_FIELDS or getattr(incoming, name))
+    ]
+
+
+def save_connection(db: Session, incoming: KbConnectionIn, login: str | None) -> KbConnection:
+    """Сохранить, оставив прежние секреты, если новые пришли пустыми: форма их
+    не показывает, а значит, и не присылает. Смена адреса или учётной записи
+    без новых секретов отклоняется: прежние на новый адрес не уходят."""
+    current = load_connection(db)
+    address_changed = any(getattr(incoming, f) != getattr(current, f) for f in ADDRESS_FIELDS)
+    secrets_kept = any(getattr(current, f) and not getattr(incoming, f) for f in SECRET_FIELDS)
+    if incoming.host and address_changed and secrets_kept:
+        raise SecretsRequired(SECRETS_AGAIN)
+    merged = KbConnection(**incoming.model_dump())
+    for f in SECRET_FIELDS:
+        new_value = getattr(merged, f)
+        setattr(merged, f, encrypt(new_value) if new_value else reseal(getattr(current, f)))
+    row = db.get(AppSetting, KB_KEY)
+    if row is None:
+        row = AppSetting(key=KB_KEY)
+        db.add(row)
+    row.value_json = merged.model_dump_json()
+    row.updated_at = dt.datetime.now(dt.UTC)
+    row.updated_by = login
+    db.commit()
+    return merged
+
+
+def view(conn: KbConnection) -> dict[str, Any]:
+    out = conn.model_dump(exclude=set(SECRET_FIELDS))
+    out["password_set"] = bool(conn.password)
+    out["client_secret_set"] = bool(conn.client_secret)
+    out["configured"] = conn.configured
+    return out
