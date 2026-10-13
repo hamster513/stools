@@ -8,11 +8,15 @@
  */
 import { delay, http, HttpResponse } from 'msw'
 import type {
+  DeploymentSetsResponse,
   DivergencesResponse,
   FindingsListResponse,
   GraphResponse,
   InstallationProfile,
   JobStatusResponse,
+  KbConnectionUpdate,
+  KbConnectionView,
+  KbTestResponse,
   ProfileSuggestResponse,
   RulesListResponse,
   Settings,
@@ -43,6 +47,8 @@ import {
   TABLE_RANKING,
 } from './data'
 import { FIELDS, TECHNIQUE_CATALOG } from './fixtures'
+
+const KB_CONNECTION: KbConnectionView = { host: 'mp.demo.local', kb_port: 8091, username: 'svc-stools', verify_tls: false, password_set: true, client_secret_set: true, configured: true }
 
 let referenceLoaded: string | null = null
 let sessionActive = false
@@ -85,6 +91,9 @@ const SNAPSHOTS: SnapshotListItem[] = [
     finding_count: FINDINGS.length,
     kb_version: '30.0.6825',
     parsed: true,
+    source_type: 'api',
+    kb_host: 'mp.demo.local',
+    kb_database: 'Default',
   },
   {
     id: PREVIOUS_ID,
@@ -94,6 +103,9 @@ const SNAPSHOTS: SnapshotListItem[] = [
     finding_count: 1108,
     kb_version: '30.0.6702',
     parsed: true,
+    source_type: 'upload',
+    kb_host: null,
+    kb_database: null,
   },
 ]
 
@@ -122,6 +134,9 @@ function buildSummary(id: number): SnapshotSummary {
       id: PREVIOUS_ID,
       created_at: '2026-08-10T08:03:00Z',
       filename: 'knowledgebase_2026_08_10.zip',
+      source_type: 'upload',
+      kb_host: null,
+      kb_database: null,
       rule_count: RULES.length,
       group_count: 44,
       rules_without_code: 0,
@@ -154,6 +169,9 @@ function buildSummary(id: number): SnapshotSummary {
     id: CURRENT_ID,
     created_at: '2026-08-24T09:12:00Z',
     filename: 'knowledgebase_2026_08_24.zip',
+    source_type: 'api',
+    kb_host: 'mp.demo.local',
+    kb_database: 'Default',
     rule_count: RULES.length,
     group_count: 44,
     rules_without_code: 0,
@@ -192,7 +210,7 @@ const STAGE_DURATION_MS = 1400
 
 function jobStatus(job: MockJob): JobStatusResponse {
   if (job.failReason) {
-    return { id: job.id, stage: 'parsing', status: 'failed', progress: 0, error: job.failReason }
+    return { id: job.id, stage: 'parsing', status: 'failed', progress: 0, error: job.failReason, snapshot_id: null }
   }
   const elapsed = Date.now() - job.startedAt
   const stages: { stage: JobStatusResponse['stage']; from: number; to: number }[] = [
@@ -203,13 +221,13 @@ function jobStatus(job: MockJob): JobStatusResponse {
   ]
   const totalDuration = STAGE_DURATION_MS * 4
   if (elapsed >= totalDuration) {
-    return { id: job.id, stage: 'done', status: 'done', progress: 100, error: null }
+    return { id: job.id, stage: 'done', status: 'done', progress: 100, error: null, snapshot_id: CURRENT_ID }
   }
   const stageIndex = Math.min(3, Math.floor(elapsed / STAGE_DURATION_MS))
   const stageElapsed = elapsed - stageIndex * STAGE_DURATION_MS
   const { stage, from, to } = stages[stageIndex]
   const progress = Math.round(from + (to - from) * (stageElapsed / STAGE_DURATION_MS))
-  return { id: job.id, stage, status: 'running', progress, error: null }
+  return { id: job.id, stage, status: 'running', progress, error: null, snapshot_id: CURRENT_ID }
 }
 
 // --- Хеш файла для дедупликации --------------------------------------------
@@ -222,6 +240,18 @@ async function hashFile(file: File): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
+}
+
+const DEMO_SET_IDS = ['set-install', 'set-windows', 'set-linux']
+
+/** Инвентарь KB для мока: снапшот CURRENT_ID «собран по API», остальные — из файла. */
+function kbFields(uuid: string): { installed: boolean | null; folder_path: string | null; deployment_sets: string[] } {
+  const n = parseInt(uuid.slice(-2), 16)
+  return {
+    installed: n % 5 !== 0,
+    folder_path: n % 3 === 0 ? 'PT/Windows' : n % 3 === 1 ? 'PT/Linux' : 'Local/Drafts',
+    deployment_sets: n % 5 !== 0 ? [DEMO_SET_IDS[0], DEMO_SET_IDS[1 + (n % 2)]] : [],
+  }
 }
 
 export const handlers = [
@@ -488,6 +518,7 @@ export const handlers = [
           open_finding_count: attention.open,
           max_severity: attention.worst,
           attack: ruleAttack(r.name),
+          ...kbFields(r.uuid),
         }
       }),
     }
@@ -498,7 +529,7 @@ export const handlers = [
     if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
     const detail = ruleDetail(String(params.uuid))
     if (!detail) return HttpResponse.json({ detail: 'Правило не найдено' }, { status: 404 })
-    return HttpResponse.json(detail)
+    return HttpResponse.json({ ...detail, ...kbFields(String(params.uuid)), deployment_sets: ['install', 'Windows'] })
   }),
 
 
@@ -680,6 +711,60 @@ export const handlers = [
     const body = (await request.json()) as Settings
     SETTINGS.attack = { ...body.attack, attack_version: SETTINGS.attack.attack_version }
     return new HttpResponse(null, { status: 204 })
+  }),
+
+  // --- База знаний по API ---------------------------------------------------
+  http.get('/api/siem/kb', () => {
+    if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
+    return HttpResponse.json(KB_CONNECTION)
+  }),
+
+  http.put('/api/siem/kb', async ({ request }) => {
+    if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
+    const body = (await request.json()) as KbConnectionUpdate
+    KB_CONNECTION.host = body.host
+    KB_CONNECTION.kb_port = body.kb_port
+    KB_CONNECTION.username = body.username
+    KB_CONNECTION.verify_tls = body.verify_tls
+    if (body.password) KB_CONNECTION.password_set = true
+    if (body.client_secret) KB_CONNECTION.client_secret_set = true
+    KB_CONNECTION.configured = Boolean(KB_CONNECTION.host && KB_CONNECTION.username && KB_CONNECTION.password_set && KB_CONNECTION.client_secret_set)
+    return HttpResponse.json(KB_CONNECTION)
+  }),
+
+  http.post('/api/siem/kb/test', () => {
+    if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
+    if (!KB_CONNECTION.configured) return HttpResponse.json({ detail: 'подключение не настроено' }, { status: 400 })
+    const response: KbTestResponse = { ok: true, message: 'база знаний 27.1.1234 отвечает, БД контента: Default', version: '27.1.1234', database: 'Default' }
+    return HttpResponse.json(response)
+  }),
+
+  http.post('/api/siem/kb/collect', () => {
+    if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
+    if (!KB_CONNECTION.configured) return HttpResponse.json({ detail: 'подключение не настроено' }, { status: 400 })
+    const jobId = jobSeq++
+    JOBS.set(jobId, { id: jobId, startedAt: Date.now(), failReason: null })
+    return HttpResponse.json({ job_id: jobId }, { status: 202 })
+  }),
+
+  http.get('/api/siem/snapshots/:id/deployment-sets', ({ params }) => {
+    if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
+    if (Number(params.id) !== CURRENT_ID) {
+      return HttpResponse.json({ available: false, sets: [], objects_total: 0, installed: 0, kb_not_exported: [] })
+    }
+    const installed = RULES.filter((r) => kbFields(r.uuid).installed).length
+    const response: DeploymentSetsResponse = {
+      available: true,
+      objects_total: RULES.length + 2,
+      installed,
+      kb_not_exported: ['DEMO_HC_002_099_Draft', 'DEMO_AC_020_050_Draft'],
+      sets: [
+        { kb_id: 'set-install', parent_kb_id: null, name: 'install', system_name: 'install', general_status: 'Ok', compilation_status: 'Success', deployment_statuses: { main: 'Installed' }, rule_count: installed },
+        { kb_id: 'set-windows', parent_kb_id: 'set-install', name: 'Windows', system_name: 'windows', general_status: 'Ok', compilation_status: 'Success', deployment_statuses: { main: 'Installed' }, rule_count: RULES.filter((r) => kbFields(r.uuid).deployment_sets.includes('set-windows')).length },
+        { kb_id: 'set-linux', parent_kb_id: 'set-install', name: 'Linux', system_name: 'linux', general_status: 'Outdated', compilation_status: 'Success', deployment_statuses: { main: 'Outdated' }, rule_count: RULES.filter((r) => kbFields(r.uuid).deployment_sets.includes('set-linux')).length },
+      ],
+    }
+    return HttpResponse.json(response)
   }),
 
   // --- Клоны и граф -----------------------------------------------------

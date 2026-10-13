@@ -111,6 +111,10 @@ function buildRules(): GeneratedRule[] {
       // здесь заглушка, реальные значения подставляет ruleAttention.
       open_finding_count: 0,
       max_severity: null,
+      // Поля инвентаря KB подставляет обработчик списка (kbFields в handlers.ts).
+      installed: null,
+      folder_path: null,
+      deployment_sets: [],
       body: `event.filter(subject.account.name != null and action == "${slug}")`,
       // индекс сохраняем в имени, дублирующая информация ниже не нужна
     })

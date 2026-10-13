@@ -24,6 +24,7 @@ import type {
   CloneCompare,
   CloneEntry,
   CreateSnapshotResponse,
+  DeploymentSetsResponse,
   DivergencesQuery,
   DivergencesResponse,
   FindingDetail,
@@ -31,6 +32,9 @@ import type {
   FindingsQuery,
   InstallationProfile,
   JobStatusResponse,
+  KbConnectionUpdate,
+  KbConnectionView,
+  KbTestResponse,
   ProfileFieldsResponse,
   ProfilePreview,
   ProfileSuggestResponse,
@@ -227,6 +231,45 @@ export function useUpdateSettings() {
   return useMutation<void, ApiRequestError, UpdateSettingsRequest>({
     mutationFn: (body) => api.put('/api/siem/settings', body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+  })
+}
+
+// --- База знаний по API -----------------------------------------------------
+
+export function useKbConnection() {
+  return useQuery<KbConnectionView, ApiRequestError>({
+    queryKey: ['siem-kb'],
+    queryFn: () => api.get('/api/siem/kb'),
+  })
+}
+
+export function useSaveKbConnection() {
+  const qc = useQueryClient()
+  return useMutation<KbConnectionView, ApiRequestError, KbConnectionUpdate>({
+    mutationFn: (body) => api.put('/api/siem/kb', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['siem-kb'] }),
+  })
+}
+
+export function useTestKb() {
+  return useMutation<KbTestResponse, ApiRequestError, void>({
+    mutationFn: () => api.post('/api/siem/kb/test'),
+  })
+}
+
+export function useStartKbCollect() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, void>({
+    mutationFn: () => api.post('/api/siem/kb/collect'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['snapshots'] }),
+  })
+}
+
+export function useDeploymentSets(snapshotId: number | undefined) {
+  return useQuery<DeploymentSetsResponse, ApiRequestError>({
+    queryKey: ['deployment-sets', snapshotId],
+    queryFn: () => api.get(`/api/siem/snapshots/${snapshotId}/deployment-sets`),
+    enabled: snapshotId !== undefined,
   })
 }
 

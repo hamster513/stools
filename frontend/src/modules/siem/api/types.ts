@@ -36,6 +36,10 @@ export interface SnapshotListItem {
   kb_version: string | null
   /** Разбор завершён хотя бы раз. Активный снапшот — разобранный с наибольшим id. */
   parsed: boolean
+  /** Откуда снапшот: загруженный файл или сбор из базы знаний по API. */
+  source_type: 'upload' | 'api'
+  kb_host: string | null
+  kb_database: string | null
 }
 
 export interface CreateSnapshotResponse {
@@ -90,13 +94,25 @@ export interface SnapshotSummary {
   authors: Record<string, number>
   table_ranking: TableRankingEntry[]
   delta: SnapshotDelta | null
+  /** Откуда снапшот: загруженный файл или сбор из базы знаний по API. */
+  source_type: 'upload' | 'api'
+  kb_host: string | null
+  kb_database: string | null
 }
 
 // ---------------------------------------------------------------------------
 // Задания
 // ---------------------------------------------------------------------------
 
-export type JobStage = 'pending' | 'parsing' | 'analyzing' | 'persisting' | 'done'
+export type JobStage =
+  | 'pending'
+  | 'connecting'
+  | 'listing'
+  | 'exporting'
+  | 'parsing'
+  | 'analyzing'
+  | 'persisting'
+  | 'done'
 export type JobStatus = 'running' | 'done' | 'failed'
 
 export interface JobStatusResponse {
@@ -105,6 +121,7 @@ export interface JobStatusResponse {
   status: JobStatus
   progress: number
   error: string | null
+  snapshot_id: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +277,12 @@ export interface RuleListItem {
   open_finding_count: number
   /** Наибольшая тяжесть среди открытых находок; null — открытых нет. */
   max_severity: FindingSeverity | null
+  /** Установлено ли правило в SIEM по списку объектов базы знаний; null —
+   *  снапшот из файла или правила в списке KB нет. */
+  installed: boolean | null
+  folder_path: string | null
+  /** В списке — kb_id наборов установки, в карточке — их имена. */
+  deployment_sets: string[]
   /** Правило наследует разметку своей группы; может отсутствовать, пока
    *  разметка ATT&CK не запускалась. */
   attack?: RuleAttackInfo
@@ -328,6 +351,12 @@ export interface RuleDetail {
   parse_status: ParseStatus
   scoped: boolean
   title_ru: string | null
+  /** Установлено ли правило в SIEM по списку объектов базы знаний; null —
+   *  снапшот из файла или правила в списке KB нет. */
+  installed: boolean | null
+  folder_path: string | null
+  /** В списке — kb_id наборов установки, в карточке — их имена. */
+  deployment_sets: string[]
   title_en: string | null
   /** Что правило сообщает при срабатывании — из локализации выгрузки. */
   description_ru: string | null
@@ -676,6 +705,51 @@ export interface Settings {
 
 export interface UpdateSettingsRequest {
   attack: AttackSettings
+}
+
+export interface KbConnectionView {
+  host: string
+  kb_port: number
+  username: string
+  verify_tls: boolean
+  password_set: boolean
+  client_secret_set: boolean
+  configured: boolean
+}
+
+export interface KbConnectionUpdate {
+  host: string
+  kb_port: number
+  username: string
+  password: string
+  client_secret: string
+  verify_tls: boolean
+}
+
+export interface KbTestResponse {
+  ok: boolean
+  message: string
+  version: string
+  database: string
+}
+
+export interface DeploymentSetView {
+  kb_id: string
+  parent_kb_id: string | null
+  name: string
+  system_name: string
+  general_status: string
+  compilation_status: string
+  deployment_statuses: Record<string, string>
+  rule_count: number
+}
+
+export interface DeploymentSetsResponse {
+  available: boolean
+  sets: DeploymentSetView[]
+  objects_total: number
+  installed: number
+  kb_not_exported: string[]
 }
 
 // ---------------------------------------------------------------------------
