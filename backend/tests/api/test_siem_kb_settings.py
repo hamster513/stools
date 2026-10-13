@@ -1,6 +1,7 @@
 """Подключение к базе знаний: секреты не показываются, пустые — не затирают прежние."""
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -33,7 +34,8 @@ def test_put_keeps_secrets_when_empty(auth_client: TestClient, db_session: Any) 
 
     db_session.expire_all()
     stored = db_session.get(AppSetting, "siem_kb").value_json
-    assert "p1" not in stored and "s1" not in stored and "enc:v1:" in stored
+    fields = json.loads(stored)
+    assert fields["password"].startswith("enc:v1:") and fields["client_secret"].startswith("enc:v1:")
     unsealed = load_connection(db_session).unsealed()
     assert unsealed.password == "p1" and unsealed.client_secret == "s1"
 

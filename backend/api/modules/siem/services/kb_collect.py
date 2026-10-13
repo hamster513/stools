@@ -16,11 +16,11 @@ import logging
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from api.db.base import get_sessionmaker
-from api.db.models import Job, RuleRow, SiemDeploymentSet, SiemRuleDeployment, Snapshot
+from api.db.models import Job, SiemDeploymentSet, SiemRuleDeployment
 from api.modules.siem.core.kb import (
     ROOT_SET_ID,
     ConnectionLike,
@@ -42,9 +42,6 @@ from api.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-#: Стадии до появления снапшота; по ним же определяется «идёт сбор».
-COLLECT_STAGES = ("connecting", "listing", "exporting")
-
 
 class KbInventory(BaseModel):
     host: str
@@ -58,19 +55,19 @@ class KbInventory(BaseModel):
 
 
 def active_collect(db: Session) -> Job | None:
-    """Идущий сбор: стадии сбора или pending без снапшота (у загрузки файла
-    снапшот есть с первой строки job)."""
+    """Идущий сбор: любая задача с признаком kind='collect' в статусе running — от
+    подключения до конца разбора, чтобы второй сбор не перезаписал инвентарь,
+    пока первый разбирает."""
     return (
         db.query(Job)
-        .filter(Job.status == "running")
-        .filter((Job.stage.in_(COLLECT_STAGES)) | ((Job.stage == "pending") & (Job.snapshot_id.is_(None))))
+        .filter(Job.status == "running", Job.kind == "collect")
         .order_by(Job.id.desc())
         .first()
     )
 
 
 def start_collect(db: Session) -> int:
-    job = Job(stage="pending", status="running", progress=0)
+    job = Job(kind="collect", stage="pending", status="running", progress=0)
     db.add(job)
     db.commit()
     db.refresh(job)
@@ -90,16 +87,17 @@ def _run_collect(db: Session, job_id: int, settings: Settings) -> None:
     job = db.get(Job, job_id)
     if job is None:
         return
-    conn = load_connection(db)
-    settings.archive_dir.mkdir(parents=True, exist_ok=True)
     zip_path = settings.archive_dir / f"kb-collect-{job_id}.zip"
     snapshot_id: int | None = None
     duplicate = False
     collecting = True
     try:
+        conn = load_connection(db)
+        settings.archive_dir.mkdir(parents=True, exist_ok=True)
         inventory = _collect_inventory(db, job, conn.unsealed(), zip_path)
         filename = f"kb-{conn.host}-{inventory.database}-{dt.datetime.now(dt.UTC):%Y%m%d-%H%M}.zip"
         snapshot, duplicate = register_archive(db, settings, zip_path.read_bytes(), filename)
+        # Снапшот, собранный заново по API, считается снапшотом API: источник — последний способ получения.
         snapshot.source_type = "api"
         snapshot.kb_host = conn.host
         snapshot.kb_database = inventory.database
@@ -113,11 +111,14 @@ def _run_collect(db: Session, job_id: int, settings: Settings) -> None:
             db.commit()
         else:
             _run_stages(db, job, snapshot, snapshot.id)
-        stamp_not_exported(db, snapshot, inventory)
-    except Exception as exc:  # любая ошибка проваливает задачу
+    except Exception as exc:  # noqa: BLE001 — любая ошибка проваливает задачу
         db.rollback()
-        logger.exception("сбор из базы знаний провалился")
-        message = public_error(exc) if collecting else _safe_error(exc)
+        if collecting:
+            # Трасса httpx может содержать URL с адресом KB — в журнал только класс ошибки.
+            logger.warning("сбор из базы знаний прерван: %s", type(exc).__name__)
+            message = public_error(exc)
+        else:
+            message = _safe_error(exc)  # пишет трассу в журнал сам
         # Дубликат — рабочий снапшот, его не трогаем; свой недоразобранный — удаляем.
         _fail_job(db, job_id, -1 if duplicate or snapshot_id is None else snapshot_id, message)
     finally:
@@ -176,20 +177,9 @@ def persist_inventory(db: Session, snapshot_id: int, inventory: KbInventory) -> 
         seen.add(o.guid)
         db.add(
             SiemRuleDeployment(
-                snapshot_id=snapshot_id, rule_uuid=o.guid, installed=o.installed, folder_path=o.folder_path,
-                set_ids_json=json.dumps(sets_of.get(o.guid, [])),
+                snapshot_id=snapshot_id, rule_uuid=o.guid, name=o.name, installed=o.installed,
+                folder_path=o.folder_path, set_ids_json=json.dumps(sets_of.get(o.guid, [])),
             )
         )
     db.commit()
 
-
-def stamp_not_exported(db: Session, snapshot: Snapshot, inventory: KbInventory) -> None:
-    """Правила из списка KB, которых нет в экспорте, — отдельным списком в
-    `unresolved_json` (спека §6), а не молча."""
-    present = {u.lower() for u in db.scalars(select(RuleRow.uuid).where(RuleRow.snapshot_id == snapshot.id))}
-    missing = sorted(o.name for o in inventory.objects if o.guid not in present)
-    unresolved = json.loads(snapshot.unresolved_json or "{}")
-    unresolved["kb_not_exported"] = missing
-    snapshot.unresolved_json = json.dumps(unresolved, ensure_ascii=False)
-    db.add(snapshot)
-    db.commit()

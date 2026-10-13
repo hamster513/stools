@@ -145,6 +145,8 @@ class Job(Base):
     progress: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    #: upload — загрузка файла, collect — сбор из базы знаний: см. kb_collect.active_collect.
+    kind: Mapped[str] = mapped_column(String(16), default="upload")
 
 
 # --------------------------------------------------------------------------
@@ -426,6 +428,8 @@ class SiemRuleDeployment(Base):
     rule_uuid: Mapped[str] = mapped_column(String(64), primary_key=True)
     installed: Mapped[bool] = mapped_column(Boolean, default=False)
     folder_path: Mapped[str] = mapped_column(String(1024), default="")
+    #: SystemName объекта KB — чтобы назвать правило, которого нет в выгрузке.
+    name: Mapped[str] = mapped_column(String(255), default="")
     #: [kb_id набора, …]
     set_ids_json: Mapped[str] = mapped_column(Text, default="[]")
 

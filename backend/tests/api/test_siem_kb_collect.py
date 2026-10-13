@@ -73,6 +73,8 @@ def test_collect_builds_snapshot_with_inventory(auth_client: TestClient, kb: Fak
     assert deployment[U1].set_ids_json == f'["{INSTALL_SET}"]'
     assert deployment[U2].installed is False and deployment[U2].set_ids_json == "[]"
     assert U3 in deployment, "объект из списка KB записывается, даже если его нет в экспорте"
+    assert deployment[U3].name == "DEMO_HC_002_099_NotExported"
+    assert sets[ROOT].rule_count == 3
 
     # Экспорт и временный файл после задачи не остаются.
     from api.settings import get_settings
@@ -112,7 +114,47 @@ def test_collect_failure_on_export_leaves_no_snapshot(auth_client: TestClient, k
 def test_collect_refused_while_another_runs(auth_client: TestClient, kb: FakeKb, db_session: Any) -> None:
     from api.db.models import Job
 
-    db_session.add(Job(stage="listing", status="running", progress=15))
+    db_session.add(Job(kind="collect", stage="listing", status="running", progress=15))
     db_session.commit()
     r = auth_client.post("/api/siem/kb/collect")
     assert r.status_code == 409 and "идёт задача" in r.json()["detail"]
+
+
+def test_collect_refused_while_parsing(auth_client: TestClient, kb: FakeKb, db_session: Any) -> None:
+    from api.db.models import Job
+
+    db_session.add(Job(kind="collect", stage="parsing", status="running", progress=45, snapshot_id=None))
+    db_session.commit()
+    assert auth_client.post("/api/siem/kb/collect").status_code == 409
+
+
+def test_interrupted_collect_is_closed_at_startup(auth_client: TestClient, kb: FakeKb, db_session: Any) -> None:
+    from api.db.models import Job
+    from api.jobs import RESTART_ERROR, fail_interrupted_jobs
+
+    old = Job(kind="collect", stage="listing", status="running", progress=15)
+    db_session.add(old)
+    db_session.commit()
+    old_id = old.id
+    fail_interrupted_jobs(db_session)
+    assert auth_client.post("/api/siem/kb/collect").status_code == 202
+    db_session.expire_all()
+    closed = db_session.get(Job, old_id)
+    assert closed.status == "failed" and closed.error == RESTART_ERROR
+
+
+def test_collect_parse_failure_removes_snapshot_and_inventory(
+    auth_client: TestClient, kb: FakeKb, db_session: Any
+) -> None:
+    from api.db.models import SiemDeploymentSet, SiemRuleDeployment
+    from api.settings import get_settings
+
+    kb.export = b"not a zip at all"
+    job = collect_and_wait(auth_client)
+    assert job["status"] == "failed" and job["snapshot_id"] is None, job
+    assert "mp.corp.local" not in job["error"]
+    assert auth_client.get("/api/siem/snapshots").json() == []
+    db_session.expire_all()
+    assert db_session.query(SiemRuleDeployment).count() == 0
+    assert db_session.query(SiemDeploymentSet).count() == 0
+    assert not list(get_settings().archive_dir.glob("kb-collect-*"))

@@ -23,6 +23,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    op.add_column("job", sa.Column("kind", sa.String(16), nullable=False, server_default="upload"))
     op.add_column("snapshot", sa.Column("kb_host", sa.String(255), nullable=True))
     op.add_column("snapshot", sa.Column("kb_database", sa.String(255), nullable=True))
     op.create_table(
@@ -46,11 +47,13 @@ def upgrade() -> None:
         sa.Column("rule_uuid", sa.String(64), primary_key=True),
         sa.Column("installed", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("folder_path", sa.String(1024), nullable=False, server_default=""),
+        sa.Column("name", sa.String(255), nullable=False, server_default=""),
         sa.Column("set_ids_json", sa.Text(), nullable=False, server_default="[]"),
     )
 
 
 def downgrade() -> None:
+    op.drop_column("job", "kind")
     op.drop_table("siem_rule_deployment")
     op.drop_index("ix_siem_deployment_set_snapshot_id", table_name="siem_deployment_set")
     op.drop_table("siem_deployment_set")
