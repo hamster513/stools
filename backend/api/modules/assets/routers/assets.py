@@ -53,6 +53,7 @@ from api.modules.assets.services.sync import (
     sync_status,
     try_lock_in_transaction,
 )
+from api.platform.filters import multi, multi_int
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUSES, RoleRequired, TransitionError
 from api.platform.findings.router import ChangeBody
@@ -124,9 +125,10 @@ def _errors(fn: Any, *args: Any) -> Any:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
 
 
-def _check(value: str | None, allowed: tuple[str, ...]) -> None:
-    if value is not None and value not in allowed:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{value}»")
+def _check(value: str | frozenset[str] | None, allowed: tuple[str, ...]) -> None:
+    for v in sorted({value} if isinstance(value, str) else value or ()):
+        if v not in allowed:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{v}»")
 
 
 def _filters(
@@ -134,7 +136,7 @@ def _filters(
     source_has: str | None = None,
     source_missing: str | None = None,
     code: str | None = None,
-    network_id: int | None = None,
+    network_id: str | None = None,
     zone: str | None = None,
     port: int | None = Query(default=None, ge=1, le=65535),
     tag: str | None = None,
@@ -145,17 +147,18 @@ def _filters(
 ) -> dict[str, Any]:
     """Фильтры списка — одни и те же у страницы списка и у выбора «всех по фильтру». `disc_status`
     (коды статусов через запятую или `all`), `assignee` (`me`, `none`, логин) и `overdue` — про
-    расхождения: актив подходит, если у него есть расхождение под ними (и под `code`, если он задан)."""
-    _check(source_has, SOURCES)
-    _check(source_missing, SOURCES)
-    _check(code, (*CODES, ANY_CODE))
-    _check(criticality, (*CRITICALITY, "none"))
-    if disc_status and disc_status != "all":
-        for s in disc_status.split(","):
-            _check(s, STATUSES)
+    расхождения: актив подходит, если у него есть расхождение под ними (и под `code`, если он задан).
+    Фасеты `code, source_has, source_missing, criticality, zone, assignee, network_id` — значения
+    через запятую, внутри фасета «или»."""
+    picked = {"source_has": multi(source_has), "source_missing": multi(source_missing), "code": multi(code),
+              "zone": multi(zone), "criticality": multi(criticality)}
+    _check(picked["source_has"], SOURCES)
+    _check(picked["source_missing"], SOURCES)
+    _check(picked["code"], (*CODES, ANY_CODE))
+    _check(picked["criticality"], (*CRITICALITY, "none", ""))
+    _check(multi(disc_status), STATUSES)
     return {
-        "q": q, "source_has": source_has, "source_missing": source_missing, "code": code, "network_id": network_id,
-        "zone": zone, "port": port, "tag": tag, "criticality": criticality,
+        "q": q, **picked, "network_id": multi_int(network_id), "port": port, "tag": tag,
         "disc_status": disc_status or None, "assignee": assignee or None, "overdue": overdue,
     }
 

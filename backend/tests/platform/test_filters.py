@@ -41,3 +41,9 @@ def test_matches_empty_value_is_its_own_facet_value() -> None:
     unset = frozenset({"", "high"})
     assert matches(None, unset) and matches("", unset) and matches("high", unset)
     assert not matches("low", unset)
+
+
+def test_multi_dash_is_the_wire_marker_of_the_empty_value() -> None:
+    """Пустое значение в строке через запятую не передать — `-` означает '' («не задано»)."""
+    assert multi("high,-") == frozenset({"high", ""})
+    assert multi("-") == frozenset({""})

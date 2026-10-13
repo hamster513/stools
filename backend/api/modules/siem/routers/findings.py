@@ -27,6 +27,7 @@ from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
 from api.modules.siem.findings_adapter import ADAPTER, SCOPE
 from api.modules.siem.services.facets import FindingFilters, FindingQuery, ListRow
+from api.platform.filters import multi, multi_int
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES
 
 router = APIRouter(prefix="/findings", tags=["findings"])
@@ -76,14 +77,14 @@ class FindingListResponse(BaseModel):
 def _statuses(raw: str | None, risk_expiring: bool) -> frozenset[str]:
     """`status` — коды через запятую или `all`; не задан — открытые, а с «риск
     истекает» — принятые: среди открытых такого риска не бывает."""
-    if not raw:
-        return frozenset({"risk_accepted"}) if risk_expiring else OPEN
     if raw == "all":
         return frozenset(STATUSES)
-    picked = frozenset(s for s in raw.split(",") if s)
+    picked = multi(raw)
+    if picked is None:
+        return frozenset({"risk_accepted"}) if risk_expiring else OPEN
     unknown = picked - set(STATUSES)
-    if unknown or not picked:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown)) or raw}")
+    if unknown:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown))}")
     return picked
 
 
@@ -122,7 +123,7 @@ class FindingDetail(BaseModel):
 @router.get("", response_model=FindingListResponse)
 def list_findings(
     snapshot_id: int = Query(...),
-    kind: int | None = None,
+    kind: str | None = None,
     polarity: str | None = None,
     object_type: str | None = None,
     in_table: bool | None = None,
@@ -143,19 +144,21 @@ def list_findings(
     user: AppUser = Depends(get_current_user),
 ) -> FindingListResponse:
     """По умолчанию — открытые статусы; `status` — коды через запятую или `all`;
-    `assignee` — `me`, `none` или логин."""
+    `assignee` — `me`, `none` или логин. Фасеты `kind, polarity, object_type, shape, field,
+    assignee` — значения через запятую, внутри фасета «или»."""
+    who = multi(assignee)
     filters = FindingFilters(
         snapshot_id=snapshot_id,
-        kind=kind,
-        polarity=polarity,
-        object_type=object_type,
+        kind=multi_int(kind),
+        polarity=multi(polarity),
+        object_type=multi(object_type),
         in_table=in_table,
-        shape=shape,
+        shape=multi(shape),
         statuses=_statuses(status_, risk_expiring),
-        field=field,
+        field=multi(field),
         object_uuid=object_uuid,
         key=key,
-        assignee=user.login if assignee == "me" else (assignee or None),
+        assignee=frozenset(user.login if a == "me" else a for a in who) if who else None,
         overdue=overdue,
         risk_expiring=risk_expiring,
         q=q,

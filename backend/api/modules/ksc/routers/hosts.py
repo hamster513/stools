@@ -34,6 +34,7 @@ from api.modules.ksc.models import (
 )
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.settings import load_config
+from api.platform.filters import matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUS_TITLES
 from api.settings import Settings, get_settings
@@ -227,15 +228,20 @@ def list_hosts(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    """Фасеты `protection, agent, bases, in_ad, status, component, tag, group, product` — значения
+    через запятую, внутри фасета «или»; `component_state` — одно, к любому из выбранных компонентов."""
     snap = _snapshot(db, snapshot_id, settings)
+    groups, products, agents, protections, bases_, in_ads, statuses, components, tags_ = (
+        multi(v) for v in (group, product, agent, protection, bases, in_ad, status_, component, tag))
     checked = (
-        (agent, AGENT), (protection, PROTECTION), (bases, BASES), (in_ad, ("both", "ksc_only")),
-        (status_, ("ok", "warning", "critical")), (component_state, COMPONENT_STATES),
+        (agents, AGENT), (protections, PROTECTION), (bases_, BASES), (in_ads, ("both", "ksc_only")),
+        (statuses, ("ok", "warning", "critical")), ({component_state} if component_state is not None else None, COMPONENT_STATES),
     )
-    for value, allowed in checked:
-        if value is not None and value not in allowed:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{value}»")
-    if component_state and not component:
+    for values, allowed in checked:
+        for value in sorted(values or ()):
+            if value not in allowed:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{value}»")
+    if component_state and not components:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="состояние компонента задаётся вместе с названием компонента")
     cfg = load_config(db)
     per_host = _findings_per_host(db, snap)
@@ -250,30 +256,26 @@ def list_hosts(
     # Хостов у сервера тысячи: фасеты и фильтры считаются в памяти, как находки в AD.
     derived = {h.id: (_agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days)) for h in rows}
 
+    def has_component(h: KscHost, name: str) -> bool:
+        state = comps[h.id].get(component_title(name), "none")
+        # без состояния — хосты, у которых компонент есть
+        return state == component_state if component_state else state != "none"
+
+    def has_tag(own: list[str], t: str) -> bool:
+        # `multi` превращает `-` («без тегов») в '' — прежний смысл тот же.
+        return not own if t in (NO_TAGS, "") else t in own
+
     def keep(h: KscHost) -> bool:
         a, b = derived[h.id]
-        if group and h.group_path != group:
+        if not (matches(h.group_path, groups) and matches(h.product, products) and matches(a, agents)
+                and matches(h.protection, protections) and matches(b, bases_) and matches(h.in_ad, in_ads)
+                and matches(h.status, statuses)):
             return False
-        if product and h.product != product:
+        if components and not any(has_component(h, c) for c in components):
             return False
-        if agent and a != agent:
-            return False
-        if protection and h.protection != protection:
-            return False
-        if bases and b != bases:
-            return False
-        if in_ad and h.in_ad != in_ad:
-            return False
-        if status_ and h.status != status_:
-            return False
-        if component:
-            state = comps[h.id].get(component_title(component), "none")
-            # без состояния — хосты, у которых компонент есть
-            if state != component_state if component_state else state == "none":
-                return False
-        if tag:
+        if tags_:
             own = tags[h.id]
-            if own is None or (bool(own) if tag == NO_TAGS else tag not in own):
+            if own is None or not any(has_tag(own, t) for t in tags_):
                 return False
         if policy is not None and (h.group_id is None or h.group_id not in policy_groups):
             return False

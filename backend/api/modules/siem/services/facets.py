@@ -38,6 +38,7 @@ from api.modules.siem.findings_adapter import (
     last_known,
     view_key,
 )
+from api.platform.filters import matches
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -64,25 +65,26 @@ _SHAPE_VALUES = ["ip", "cidr", "fqdn", SHAPE_PLAIN]
 @dataclass(frozen=True)
 class FindingFilters:
     snapshot_id: int
-    kind: int | None = None
-    polarity: str | None = None
-    object_type: str | None = None
+    #: Многозначные фасеты (спека фильтров §1.1): None — не задан, иначе любое из значений.
+    kind: frozenset[int] | None = None
+    polarity: frozenset[str] | None = None
+    object_type: frozenset[str] | None = None
     in_table: bool | None = None
     #: Форма значения: ip | cidr | fqdn. Отдельно от класса, потому что
     #: сетевое имя, продублированное в списке, попадает в класс 1 и
     #: в классе «IP / CIDR / FQDN» становится невидимым.
-    shape: str | None = None
+    shape: frozenset[str] | None = None
     #: Коды статусов; по умолчанию — открытые.
     statuses: frozenset[str] = OPEN
-    field: str | None = None
+    field: frozenset[str] | None = None
     #: Находки одного объекта. Нужен, чтобы из инвентаря правил открывать
     #: разбор находок ровно по выбранному правилу, а не искать его по имени:
     #: имена правил не уникальны настолько, чтобы на них полагаться.
     object_uuid: str | None = None
     #: Одна находка по ключу — ссылка `?key=` открывает её карточку.
     key: str | None = None
-    #: Логин или `none`; `me` уже заменено логином.
-    assignee: str | None = None
+    #: Логины и `none`; `me` уже заменено логином.
+    assignee: frozenset[str] | None = None
     overdue: bool = False
     risk_expiring: bool = False
     q: str | None = None
@@ -162,7 +164,7 @@ def _load_rows(db: Session, filters: FindingFilters) -> Loaded:
 def _matches_state(row: StateRow, filters: FindingFilters) -> bool:
     """Фильтры, проверяемые по ключу (`object_uuid|kind|подпись`) и состоянию."""
     uuid, kind, _ = row.key.split("|", 2)
-    if filters.kind is not None and kind != str(filters.kind):
+    if filters.kind is not None and int(kind) not in filters.kind:
         return False
     if filters.object_uuid is not None and uuid != filters.object_uuid:
         return False
@@ -170,7 +172,7 @@ def _matches_state(row: StateRow, filters: FindingFilters) -> bool:
         return False
     if filters.key is not None and row.key != filters.key:
         return False
-    if filters.assignee and row.assignee != (None if filters.assignee == "none" else filters.assignee):
+    if not matches(row.assignee or "none", filters.assignee):
         return False
     if filters.overdue and not row.overdue:
         return False
@@ -179,15 +181,11 @@ def _matches_state(row: StateRow, filters: FindingFilters) -> bool:
 
 def _matches(row: ListRow, filters: FindingFilters) -> bool:
     f = row.finding
-    if filters.polarity is not None and f.polarity != filters.polarity:
-        return False
-    if filters.object_type is not None and f.object_type != filters.object_type:
+    if not matches(f.polarity, filters.polarity) or not matches(f.object_type, filters.object_type):
         return False
     if filters.in_table is not None and f.in_table != filters.in_table:
         return False
-    if filters.shape is not None and (f.shape or SHAPE_PLAIN) != filters.shape:
-        return False
-    if filters.field is not None and f.field != filters.field:
+    if not matches(f.shape or SHAPE_PLAIN, filters.shape) or not matches(f.field, filters.field):
         return False
     if filters.q:
         needle = filters.q.strip().lower()

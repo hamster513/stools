@@ -22,6 +22,7 @@ from api.modules.ksc.core.policy_model import Exclusion, covered_by
 from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy, KscSnapshot
 from api.modules.ksc.routers.hosts import host_scope
 from api.modules.ksc.services.policy_store import ensure_policy_tables
+from api.platform.filters import matches, multi, multi_int
 from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ksc"])
@@ -156,7 +157,7 @@ def _exclusion_item(r: KscExclusion, name: str, policies: int, covered: str | No
 def list_exclusions(
     snapshot_id: int,
     q: str = "",
-    policy_id: int | None = None,
+    policy_id: str | None = None,
     profile: str | None = None,
     kind: str = "",
     enabled: bool | None = None,
@@ -169,9 +170,12 @@ def list_exclusions(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    """Фасеты `policy_id, kind, dup` — значения через запятую, внутри фасета «или»."""
     _snapshot(db, snapshot_id, settings)
-    if dup and dup not in DUP:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{dup}»")
+    policy_ids, kinds, dups = multi_int(policy_id), multi(kind), multi(dup)
+    for d in sorted(dups or ()):
+        if d not in DUP:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{d}»")
     host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscExclusion).where(KscExclusion.snapshot_id == snapshot_id)).scalars())
@@ -182,21 +186,24 @@ def list_exclusions(
     covered = _covered(rows)
     needle = q.strip().lower()
 
+    def is_dup(r: KscExclusion, d: str) -> bool:
+        n = len(owners[r.key])
+        return n > 1 if d == "multi" else n == 1 if d == "single" else covered(r) is not None
+
     def keep(r: KscExclusion) -> bool:
-        if policy_id is not None and r.policy_id != policy_id:
+        if policy_ids is not None and r.policy_id not in policy_ids:
             return False
         if profile is not None and r.profile != profile:
             return False
         if host is not None and not host.keep(r.policy_id, r.profile):
             return False
-        if kind and r.kind != kind:
+        if not matches(r.kind, kinds):
             return False
         if enabled is not None and r.enabled != enabled:
             return False
         if risky is not None and bool(_risks(r)) != risky:
             return False
-        n = len(owners[r.key])
-        if (dup == "multi" and n < 2) or (dup == "single" and n != 1) or (dup == "covered" and covered(r) is None):
+        if dups and not any(is_dup(r, d) for d in dups):
             return False
         return not needle or needle in r.value.lower() or needle in r.comment.lower() or needle in _name(policies, r.policy_id).lower()
 
@@ -263,7 +270,7 @@ def _net_rule_item(r: KscNetRule, name: str) -> dict[str, Any]:
 def list_net_rules(
     snapshot_id: int,
     q: str = "",
-    policy_id: int | None = None,
+    policy_id: str | None = None,
     profile: str | None = None,
     action: str = "",
     direction: str = "",
@@ -275,20 +282,22 @@ def list_net_rules(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    """Фасеты `policy_id, action, direction` — значения через запятую, внутри фасета «или»."""
     _snapshot(db, snapshot_id, settings)
+    policy_ids, actions, directions = multi_int(policy_id), multi(action), multi(direction)
     host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id)).scalars())
     needle = q.strip().lower()
 
     def keep(r: KscNetRule) -> bool:
-        if policy_id is not None and r.policy_id != policy_id:
+        if policy_ids is not None and r.policy_id not in policy_ids:
             return False
         if profile is not None and r.profile != profile:
             return False
         if host is not None and not host.keep(r.policy_id, r.profile):
             return False
-        if (action and r.action != action) or (direction and r.direction != direction) or (enabled is not None and r.enabled != enabled):
+        if not matches(r.action, actions) or not matches(r.direction, directions) or (enabled is not None and r.enabled != enabled):
             return False
         return not needle or any(needle in f.lower() for f in (r.name, r.addresses, r.local_ports, r.remote_ports))
 

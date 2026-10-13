@@ -37,6 +37,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import take_slot
 from api.jobs import UPLOAD_INTERRUPTED, JobHandle, active_job, fail_job, run_job, start_job
+from api.platform.filters import matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -395,13 +396,14 @@ class FindingSet:
 
 @dataclass(frozen=True)
 class FindingFilter:
-    check: str | None = None
-    severity: str | None = None
+    #: Многозначные фасеты (спека фильтров §1.1): None — не задан, иначе любое из значений.
+    check: frozenset[str] | None = None
+    severity: frozenset[str] | None = None
     allowlisted: bool | None = None
     statuses: frozenset[str] = OPEN
-    delta: str | None = None
-    #: Логин или `none`; `me` уже заменено логином.
-    assignee: str | None = None
+    delta: frozenset[str] | None = None
+    #: Логины и `none`; `me` уже заменено логином.
+    assignee: frozenset[str] | None = None
     overdue: bool = False
     risk_expiring: bool = False
     q: str | None = None
@@ -418,20 +420,24 @@ def finding_filter(
 ) -> FindingFilter:
     """Параметры списка. `status` — коды через запятую или `all`; не задан — открытые,
     а с «риск истекает» — принятые: среди открытых такого риска не бывает."""
-    if not status_:
-        statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN
-    elif status_ == "all":
+    picked = multi(status_)
+    if status_ == "all":
         statuses = frozenset(STATUSES)
+    elif picked is None:
+        statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN
     else:
-        statuses = frozenset(s for s in status_.split(",") if s)
+        statuses = picked
         unknown = statuses - set(STATUSES)
-        if unknown or not statuses:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown)) or status_}")
-    if delta is not None and delta not in DELTAS:
+        if unknown:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown))}")
+    deltas = multi(delta)
+    if deltas is not None and not deltas <= set(DELTAS):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="неизвестное значение delta")
+    who = multi(assignee)
     return FindingFilter(
-        check=check, severity=severity, allowlisted=allowlisted, statuses=statuses, delta=delta,
-        assignee=user.login if assignee == "me" else (assignee or None), overdue=overdue, risk_expiring=risk_expiring, q=q,
+        check=multi(check), severity=multi(severity), allowlisted=allowlisted, statuses=statuses, delta=deltas,
+        assignee=frozenset(user.login if a == "me" else a for a in who) if who else None,
+        overdue=overdue, risk_expiring=risk_expiring, q=q,
     )
 
 
@@ -496,11 +502,12 @@ def _matches(r: FindingRow, flt: FindingFilter, today: dt.date, haystack: Callab
     """Отбор по фильтрам; `skip` — какие фильтры не применять (фасет считается без своего фильтра).
     Строка без данных находки (`finding is None`) бывает, только когда фильтров по ним нет."""
     f = r.finding
-    if flt.delta and r.delta != flt.delta:
+    if not matches(r.delta, flt.delta):
         return False
     if "status" not in skip and r.status not in flt.statuses:
         return False
-    if "assignee" not in skip and flt.assignee and r.assignee != (None if flt.assignee == "none" else flt.assignee):
+    # Без исполнителя — значение фасета `none`, его можно выбрать вместе с логинами.
+    if "assignee" not in skip and not matches(r.assignee or "none", flt.assignee):
         return False
     if "overdue" not in skip and flt.overdue and not _overdue(r, today):
         return False
@@ -508,9 +515,7 @@ def _matches(r: FindingRow, flt: FindingFilter, today: dt.date, haystack: Callab
         return False
     if f is None:
         return not flt.by_finding
-    if flt.check and f.check != flt.check:
-        return False
-    if flt.severity and f.severity != flt.severity:
+    if not matches(f.check, flt.check) or not matches(f.severity, flt.severity):
         return False
     if flt.allowlisted is not None and f.allowlisted != flt.allowlisted:
         return False

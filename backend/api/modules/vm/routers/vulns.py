@@ -41,6 +41,7 @@ from api.modules.vm.services.query import (
 from api.modules.vm.services.settings import load_settings
 from api.modules.vm.services.stats import load_stats
 from api.platform.export import Column, export_response
+from api.platform.filters import multi
 
 router = APIRouter(tags=["vm"])
 
@@ -66,12 +67,14 @@ def _filters(
     user: AppUser = Depends(get_current_user),
 ) -> VulnFilters:
     """Статус пары: `status` — коды через запятую или `all`, по умолчанию — открытые;
-    `assignee` — `me`, `none` или логин; `overdue`, `risk_expiring` (спека статусов §5)."""
+    `assignee` — `me`, `none` или логин; `overdue`, `risk_expiring` (спека статусов §5).
+    Фасеты `level, criticality, zone, cvss_source, os, assignee` — значения через запятую."""
     try:
         sf = status_filter(status_, assignee, overdue, risk_expiring, login=user.login)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
-    return VulnFilters(q, host, cve, criticality, zone, os, level, exploits, msf, cvss_source, host_id, sf)
+    return VulnFilters(q, host, cve, multi(criticality), multi(zone), multi(os), multi(level), exploits, msf,
+                       multi(cvss_source), host_id, sf)
 
 
 def _with_names(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]]:

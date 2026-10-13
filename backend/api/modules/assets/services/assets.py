@@ -31,6 +31,7 @@ from api.modules.assets.core.matching import (
 )
 from api.modules.assets.models import Asset, AssetObservation, AssetSettings, Network
 from api.modules.assets.services.networks import NetworkList, network_for_ip
+from api.platform.filters import matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -521,46 +522,43 @@ def _tracked(asset_id: int, found: list[Discrepancy], states: dict[str, FindingS
 
 @dataclass(frozen=True)
 class DiscFilter:
-    """Фильтр «есть расхождение под всеми условиями»: код (`any` — любой), статусы (None — любые),
-    исполнитель (логин или `none`), просрочено. Без статусов в запросе — учитываемые
+    """Фильтр «есть расхождение под всеми условиями»: коды (`any` — любой), статусы (None — любые),
+    исполнители (логины и `none`), просрочено. Без статусов в запросе — учитываемые
     (`counted_statuses`): так и до статусов фильтр по коду не видел решённого."""
 
-    code: str | None = None
+    code: frozenset[str] | None = None
     statuses: frozenset[str] | None = None
-    assignee: str | None = None
+    assignee: frozenset[str] | None = None
     overdue: bool = False
     #: Задан ли фильтр по расхождениям вообще; нет — активы не отбираются по ним.
     active: bool = False
 
 
 def disc_filter(
-    counted: frozenset[str], *, code: str | None = None, disc_status: str | None = None,
+    counted: frozenset[str], *, code: frozenset[str] | None = None, disc_status: str | None = None,
     assignee: str | None = None, overdue: bool | None = None, login: str = "",
 ) -> DiscFilter:
-    """`disc_status` — коды статусов через запятую или `all`; неизвестный статус — ValueError."""
-    statuses: frozenset[str] | None
-    if not disc_status:
-        statuses = counted
-    elif disc_status == "all":
+    """`disc_status` — коды статусов через запятую или `all`; неизвестный статус — ValueError.
+    `assignee` — `me`, `none` и логины через запятую."""
+    statuses = multi(disc_status)
+    if disc_status == "all":
         statuses = None
-    else:
-        statuses = frozenset(s for s in disc_status.split(",") if s)
-        unknown = statuses - set(STATUSES)
-        if unknown or not statuses:
-            raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown)) or disc_status}")
-    who = login if assignee == "me" else (assignee or None)
-    return DiscFilter(code or None, statuses, who, bool(overdue), active=bool(code or disc_status or assignee or overdue))
+    elif statuses is None:
+        statuses = counted
+    elif unknown := statuses - set(STATUSES):
+        raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown))}")
+    who = multi(assignee)
+    whom = frozenset(login if a == "me" else a for a in who) if who else None
+    return DiscFilter(code, statuses, whom, bool(overdue), active=bool(code or disc_status or whom or overdue))
 
 
 def _hits(t: Tracked, f: DiscFilter, today: dt.date, *, code: bool = True, status: bool = True, overdue: bool = True) -> bool:
     """Подходит ли расхождение под фильтр; `code`/`status`/`overdue=False` — без этой части (фасеты)."""
-    if code and f.code and f.code != ANY_CODE and t.d.code != f.code:
+    if code and f.code and ANY_CODE not in f.code and t.d.code not in f.code:
         return False
     if status and f.statuses is not None and t.status not in f.statuses:
         return False
-    if f.assignee == "none" and t.assignee is not None:
-        return False
-    if f.assignee not in (None, "none") and t.assignee != f.assignee:
+    if not matches(t.assignee or "none", f.assignee):
         return False
     return not (overdue and f.overdue and not is_overdue(t.status, t.due_date, today))
 
@@ -614,15 +612,17 @@ def _pick(
     now: dt.datetime,
     with_found: bool,
     q: str | None = None,
-    source_has: str | None = None,
-    source_missing: str | None = None,
-    network_id: int | None = None,
-    zone: str | None = None,
+    source_has: frozenset[str] | None = None,
+    source_missing: frozenset[str] | None = None,
+    network_id: frozenset[int] | None = None,
+    zone: frozenset[str] | None = None,
     port: int | None = None,
     tag: str | None = None,
-    criticality: str | None = None,
+    criticality: frozenset[str] | None = None,
 ) -> Picked:
-    """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Расхождения
+    """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Многозначные фильтры —
+    «любое из»: `source_has` — есть хоть один из источников, `source_missing` — нет хоть одного,
+    `criticality` `none` — не задана. Расхождения
     считаются на лету, поэтому фильтры — в памяти; фильтр по расхождениям и их статусам — у
     вызывающего (`DiscFilter`). `with_found=False` — расхождения не считаются и остаются пустыми
     (выбор id для массового изменения без фильтра по расхождениям)."""
@@ -642,18 +642,20 @@ def _pick(
     for asset in assets:
         rows = per_asset[asset.id]
         live = {r.source for r in rows if r.gone_at is None}
-        if source_has and source_has not in live:
+        if source_has and not source_has & live:
             continue
-        if source_missing and source_missing in live:
+        if source_missing and source_missing <= live:
             continue
-        if network_id is not None and asset.network_id != network_id:
+        if network_id is not None and asset.network_id not in network_id:
             continue
         net = networks.get(asset.network_id) if asset.network_id is not None else None
-        if zone and (net is None or net.zone != zone):
+        # '' в наборе (`-` в запросе) — актив без зоны: вне сетей или в сети без зоны.
+        if not matches(net.zone if net is not None else None, zone):
             continue
         if tag and tag not in (asset.tags or []):
             continue
-        if criticality and asset.criticality != ("" if criticality == "none" else criticality):
+        # «Не задана» — `none` (как в фасете) или '' (`-` в запросе, общий знак пустого значения).
+        if criticality is not None and not {asset.criticality or "none", asset.criticality or ""} & criticality:
             continue
         if needle and not _matches_query(asset, rows, needle):
             continue
@@ -706,7 +708,7 @@ def _disc_split(picked: Picked, f: DiscFilter, states: dict[str, FindingState], 
 
 
 def matching_ids(
-    db: Session, *, code: str | None = None, disc_status: str | None = None, assignee: str | None = None,
+    db: Session, *, code: frozenset[str] | None = None, disc_status: str | None = None, assignee: str | None = None,
     overdue: bool | None = None, login: str = "", **filters: Any,
 ) -> list[int]:
     """Id всех активов под фильтрами списка — без фасетов и строк, а расхождения считаются,
@@ -727,7 +729,7 @@ def list_assets(
     limit: int = 200,
     offset: int = 0,
     now: dt.datetime | None = None,
-    code: str | None = None,
+    code: frozenset[str] | None = None,
     disc_status: str | None = None,
     assignee: str | None = None,
     overdue: bool | None = None,

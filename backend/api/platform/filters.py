@@ -10,12 +10,17 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
+#: Пустое значение фасета («не задано») в строке через запятую: пустой элемент неотличим от лишней
+#: запятой, а страница не шлёт '' вовсе. Тот же `-`, что у тегов KSC («без тегов»).
+EMPTY = "-"
+
 
 def multi(value: str | None) -> frozenset[str] | None:
-    """'a,b,,c' → {'a','b','c'}; None, '', 'all' и одни запятые → None (фильтр не задан)."""
+    """'a,b,,c' → {'a','b','c'}; `-` → '' («не задано»); None, '', 'all' и одни запятые → None
+    (фильтр не задан)."""
     if not value or value == "all":
         return None
-    picked = frozenset(v for v in value.split(",") if v)
+    picked = frozenset("" if v == EMPTY else v for v in value.split(",") if v)
     return picked or None
 
 

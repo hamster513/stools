@@ -33,6 +33,7 @@ from api.modules.ksc.routers.policies import task_fields
 from api.modules.ksc.services.grade import GRADES, Grade, policy_findings, policy_grades
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.snapshots import snapshot_path
+from api.platform.filters import matches, multi
 from api.platform.findings.core import STATUS_TITLES
 from api.settings import Settings, get_settings
 
@@ -217,8 +218,11 @@ def get_policy_list(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> PolicyListResponse:
-    if grade and grade not in (*GRADES, "none"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{grade}»")
+    """Фасеты `grade, product` — значения через запятую, внутри фасета «или»."""
+    grades_, products = multi(grade), multi(product)
+    for g in sorted(grades_ or ()):
+        if g not in (*GRADES, "none"):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{g}»")
     snap = _snapshot(db, snapshot_id, settings)
     rows = list(db.execute(select(KscPolicy).where(KscPolicy.snapshot_id == snapshot_id)).scalars())
     # Файл выгрузки нужен только ради замков; без содержимого у политик его не открываем.
@@ -228,9 +232,9 @@ def get_policy_list(
     kept = [
         p for p in rows
         if (not needle or needle in p.name.lower())
-        and (not product or p.product == product)
+        and matches(p.product, products)
         and (active is None or p.active == active)
-        and (not grade or (grades[p.policy_id][0] or "none") == grade)
+        and matches(grades[p.policy_id][0] or "none", grades_)
     ]
     kept.sort(key=lambda p: (not p.active, p.name.lower(), p.policy_id))
     facets: dict[str, dict[str, int]] = {"product": {}, "active": {"true": 0, "false": 0}, "grade": dict.fromkeys((*GRADES, "none"), 0)}
@@ -367,6 +371,8 @@ def get_tasks(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> TasksResponse:
+    """Фасет `type` — значения через запятую, внутри фасета «или»."""
+    types = multi(type)
     idx = _index(_snapshot(db, snapshot_id, settings), settings)
     items: list[TaskItem] = []
     for t in idx.export.tasks:
@@ -381,7 +387,7 @@ def get_tasks(
     kept = [
         i for i in items
         if (not needle or needle in i.name.lower())
-        and (not type or i.type == type)
+        and matches(i.type, types)
         and (not failed or i.failed > 0)
     ]
     kept.sort(key=lambda i: (i.group.lower(), i.name.lower(), i.id))

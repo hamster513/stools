@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement, Subquery
 
 from api.modules.vm.models import VmCve, VmFindingStateRef, VmHost, VmHostCve
+from api.platform.filters import matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -110,10 +111,10 @@ def state_on() -> ColumnElement[bool]:
 
 @dataclass(frozen=True)
 class StatusFilter:
-    """Отбор по статусу пары (спека §5). `statuses=None` — все; `assignee` — логин или `none`."""
+    """Отбор по статусу пары (спека §5). `statuses=None` — все; `assignee` — логины и `none`."""
 
     statuses: frozenset[str] | None = None
-    assignee: str | None = None
+    assignee: frozenset[str] | None = None
     overdue: bool = False
     risk_expiring: bool = False
     #: «Сегодня» для сроков; None — `finding_svc.today()` на момент запроса.
@@ -124,7 +125,7 @@ class StatusFilter:
 
     def keeps_undecided(self) -> bool:
         """Пара без строки состояния — «новая», без исполнителя и сроков — проходит фильтр."""
-        return ((self.statuses is None or "new" in self.statuses) and self.assignee in (None, "none")
+        return ((self.statuses is None or "new" in self.statuses) and (self.assignee is None or "none" in self.assignee)
                 and not self.overdue and not self.risk_expiring)
 
     def day(self) -> dt.date:
@@ -134,19 +135,17 @@ class StatusFilter:
 def status_filter(status: str | None, assignee: str | None, overdue: bool | None, risk_expiring: bool | None,
                   *, login: str) -> StatusFilter:
     """Параметры списка, как у других модулей: `status` — коды через запятую или `all`; не задан —
-    открытые, а с «риск истекает» — принятые. `assignee`: `me`, `none` или логин."""
-    statuses: frozenset[str] | None
-    if not status:
-        statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN
-    elif status == "all":
+    открытые, а с «риск истекает» — принятые. `assignee`: `me`, `none` и логины через запятую."""
+    statuses = multi(status)
+    if status == "all":
         statuses = None
-    else:
-        statuses = frozenset(s for s in status.split(",") if s)
-        unknown = statuses - set(STATUSES)
-        if unknown or not statuses:
-            raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown)) or status}")
-    return StatusFilter(statuses, login if assignee == "me" else (assignee or None), bool(overdue), bool(risk_expiring),
-                        today=finding_svc.today())
+    elif statuses is None:
+        statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN
+    elif unknown := statuses - set(STATUSES):
+        raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown))}")
+    who = multi(assignee)
+    return StatusFilter(statuses, frozenset(login if a == "me" else a for a in who) if who else None,
+                        bool(overdue), bool(risk_expiring), today=finding_svc.today())
 
 
 @dataclass
@@ -154,13 +153,14 @@ class VulnFilters:
     q: str | None = None
     host: str | None = None
     cve: str | None = None
-    criticality: str | None = None
-    zone: str | None = None
-    os: str | None = None
-    level: str | None = None
+    #: Многозначные фасеты (спека фильтров §1.1): None — не задан; '' в наборе — «не задано».
+    criticality: frozenset[str] | None = None
+    zone: frozenset[str] | None = None
+    os: frozenset[str] | None = None
+    level: frozenset[str] | None = None
     exploits: bool | None = None
     msf: bool | None = None
-    cvss_source: str | None = None
+    cvss_source: frozenset[str] | None = None
     host_id: int | None = None
     #: По умолчанию — все статусы: обзор и карточка хоста считают все пары.
     status: StatusFilter = field(default_factory=StatusFilter)
@@ -194,15 +194,27 @@ def status_conditions(sf: StatusFilter) -> list[ColumnElement[bool]]:
     if sf.statuses is not None:
         listed = ST.c.status.in_(sorted(sf.statuses))
         conds.append(or_(ST.c.status.is_(None), listed) if "new" in sf.statuses else listed)
-    if sf.assignee == "none":
-        conds.append(ST.c.assignee.is_(None))
-    elif sf.assignee:
-        conds.append(ST.c.assignee == sf.assignee)
+    if sf.assignee is not None:
+        logins = sorted(sf.assignee - {"none"})
+        parts = [ST.c.assignee.in_(logins)] if logins else []
+        if "none" in sf.assignee:
+            parts.append(ST.c.assignee.is_(None))
+        conds.append(or_(*parts))
     if sf.overdue:
         conds.append(_overdue(sf.day()))
     if sf.risk_expiring:
         conds.append(_expiring(sf.day()))
     return conds
+
+
+def one_of(col: Any, chosen: frozenset[str]) -> ColumnElement[bool]:
+    """Колонка среди выбранных значений; '' — «не задано»: у фасета это и пустая строка, и NULL
+    (фасет показывает NULL как '')."""
+    picked = sorted(chosen - {""})
+    parts = [col.in_(picked)] if picked else []
+    if "" in chosen:
+        parts.append(or_(col == "", col.is_(None)))
+    return or_(*parts)
 
 
 def conditions(f: VulnFilters, *, with_status: bool = True) -> list[ColumnElement[bool]]:
@@ -219,20 +231,21 @@ def conditions(f: VulnFilters, *, with_status: bool = True) -> list[ColumnElemen
     if f.cve:
         conds.append(VmHostCve.cve_id == f.cve.strip().upper())
     if f.criticality is not None:
-        conds.append(VmHost.criticality == f.criticality)
+        conds.append(one_of(VmHost.criticality, f.criticality))
     if f.zone is not None:
-        conds.append(VmHost.zone == f.zone)
-    if f.os:
-        conds.append(VmHost.os_name == f.os)
-    if f.level in LEVEL_BOUNDS:
-        lo, hi = LEVEL_BOUNDS[f.level]
-        conds.append(VmHostCve.risk.between(lo, hi))
+        conds.append(one_of(VmHost.zone, f.zone))
+    if f.os is not None:
+        conds.append(one_of(VmHost.os_name, f.os))
+    # Неизвестные уровни пропускаются, как и раньше одиночный: фильтр из одних таких не задан.
+    bounds = [VmHostCve.risk.between(*LEVEL_BOUNDS[lvl]) for lvl in sorted(f.level or ()) if lvl in LEVEL_BOUNDS]
+    if bounds:
+        conds.append(or_(*bounds))
     if f.exploits is not None:
         conds.append(VmCve.exploits_count > 0 if f.exploits else VmCve.exploits_count == 0)
     if f.msf is not None:
         conds.append(VmCve.msf_modules > 0 if f.msf else VmCve.msf_modules == 0)
-    if f.cvss_source:
-        conds.append(VmCve.cvss_source == f.cvss_source)
+    if f.cvss_source is not None:
+        conds.append(one_of(VmCve.cvss_source, f.cvss_source))
     if f.host_id is not None:
         conds.append(VmHostCve.host_id == f.host_id)
     return conds
@@ -425,7 +438,7 @@ def data_facets(db: Session, f: VulnFilters, cached: dict[str, Any] | None) -> d
 def _passes(sf: StatusFilter, status: str, assignee: str | None, overdue: bool, expiring: bool, *skip: str) -> bool:
     if "status" not in skip and sf.statuses is not None and status not in sf.statuses:
         return False
-    if "assignee" not in skip and sf.assignee and assignee != (None if sf.assignee == "none" else sf.assignee):
+    if "assignee" not in skip and not matches(assignee or "none", sf.assignee):
         return False
     if "overdue" not in skip and sf.overdue and not overdue:
         return False

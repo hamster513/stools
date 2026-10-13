@@ -13,6 +13,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.models import KscChange, KscServer, KscSnapshot
 from api.modules.ksc.services.changes import summary_view
+from api.platform.filters import multi, multi_int
 
 router = APIRouter(tags=["ksc"])
 
@@ -24,13 +25,15 @@ def list_changes(
     server_id: int,
     kind: str = "",
     action: str = "",
-    policy_id: int | None = None,
-    snapshot_id: int | None = None,
+    policy_id: str | None = None,
+    snapshot_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    """Фасеты `kind, action, policy_id, snapshot_id` — значения через запятую, внутри фасета «или»."""
+    kinds, actions, policy_ids, snapshot_ids = multi(kind), multi(action), multi_int(policy_id), multi_int(snapshot_id)
     if db.get(KscServer, server_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="сервер не найден")
     snapshots = list(
@@ -39,14 +42,14 @@ def list_changes(
         ).scalars()
     )
     conditions: list[ColumnElement[bool]] = [KscChange.snapshot_id.in_([s.id for s in snapshots])]
-    if kind:
-        conditions.append(KscChange.kind == kind)
-    if action:
-        conditions.append(KscChange.action == action)
-    if policy_id is not None:
-        conditions.append(KscChange.policy_id == policy_id)
-    if snapshot_id is not None:
-        conditions.append(KscChange.snapshot_id == snapshot_id)
+    if kinds is not None:
+        conditions.append(KscChange.kind.in_(sorted(kinds)))
+    if actions is not None:
+        conditions.append(KscChange.action.in_(sorted(actions)))
+    if policy_ids is not None:
+        conditions.append(KscChange.policy_id.in_(sorted(policy_ids)))
+    if snapshot_ids is not None:
+        conditions.append(KscChange.snapshot_id.in_(sorted(snapshot_ids)))
     total = db.scalar(select(func.count()).select_from(KscChange).where(*conditions)) or 0
     rows = db.execute(
         select(KscChange, KscSnapshot.collected_at).join(KscSnapshot, KscSnapshot.id == KscChange.snapshot_id).where(*conditions)
