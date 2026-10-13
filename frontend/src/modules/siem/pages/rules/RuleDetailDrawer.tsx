@@ -121,6 +121,16 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
                 <dd className="text-text">{data.parse_status === 'ok' ? 'без ошибок' : data.parse_status}</dd>
                 <dt className="text-text-secondary">Ограничено списком</dt>
                 <dd className="text-text">{data.scoped ? 'да' : 'нет'}</dd>
+                {data.installed !== null && (
+                  <>
+                    <dt className="text-text-secondary">В SIEM</dt>
+                    <dd className="text-text">{data.installed ? 'установлено' : 'не установлено'}</dd>
+                    <dt className="text-text-secondary">Папка</dt>
+                    <dd className="font-mono text-text">{data.folder_path ?? '—'}</dd>
+                    <dt className="text-text-secondary">Наборы установки</dt>
+                    <dd className="text-text">{data.deployment_sets.length ? data.deployment_sets.join(', ') : '—'}</dd>
+                  </>
+                )}
               </dl>
 
               {data.attack && (

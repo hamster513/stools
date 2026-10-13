@@ -243,6 +243,8 @@ async function hashFile(file: File): Promise<string> {
 }
 
 const DEMO_SET_IDS = ['set-install', 'set-windows', 'set-linux']
+/** Имена наборов для карточки правила: сервер отдаёт там названия, а не идентификаторы KB. */
+const DEMO_SET_NAMES: Record<string, string> = { 'set-install': 'install', 'set-windows': 'Windows', 'set-linux': 'Linux' }
 
 /** Инвентарь KB для мока: снапшот CURRENT_ID «собран по API», остальные — из файла. */
 function kbFields(uuid: string): { installed: boolean | null; folder_path: string | null; deployment_sets: string[] } {
@@ -252,6 +254,11 @@ function kbFields(uuid: string): { installed: boolean | null; folder_path: strin
     folder_path: n % 3 === 0 ? 'PT/Windows' : n % 3 === 1 ? 'PT/Linux' : 'Local/Drafts',
     deployment_sets: n % 5 !== 0 ? [DEMO_SET_IDS[0], DEMO_SET_IDS[1 + (n % 2)]] : [],
   }
+}
+
+/** Разметка есть только у снапшота по API; у снапшота из файла — пусто, как отдаёт сервер. */
+function kbFieldsFor(uuid: string, snapshotId: number): ReturnType<typeof kbFields> {
+  return snapshotId === CURRENT_ID ? kbFields(uuid) : { installed: null, folder_path: null, deployment_sets: [] }
 }
 
 export const handlers = [
@@ -518,18 +525,19 @@ export const handlers = [
           open_finding_count: attention.open,
           max_severity: attention.worst,
           attack: ruleAttack(r.name),
-          ...kbFields(r.uuid),
+          ...kbFieldsFor(r.uuid, Number(p.get('snapshot_id'))),
         }
       }),
     }
     return HttpResponse.json(response)
   }),
 
-  http.get('/api/siem/rules/:uuid', ({ params }) => {
+  http.get('/api/siem/rules/:uuid', ({ params, request }) => {
     if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
     const detail = ruleDetail(String(params.uuid))
     if (!detail) return HttpResponse.json({ detail: 'Правило не найдено' }, { status: 404 })
-    return HttpResponse.json({ ...detail, ...kbFields(String(params.uuid)), deployment_sets: ['install', 'Windows'] })
+    const kb = kbFieldsFor(String(params.uuid), Number(new URL(request.url).searchParams.get('snapshot_id')))
+    return HttpResponse.json({ ...detail, ...kb, deployment_sets: kb.deployment_sets.map((id) => DEMO_SET_NAMES[id] ?? id) })
   }),
 
 

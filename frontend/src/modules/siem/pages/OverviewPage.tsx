@@ -72,6 +72,7 @@ export function OverviewPage({ snapshotId }: { snapshotId: number }) {
           <h1 className="text-base font-semibold text-text">Обзор</h1>
           <p className="font-mono text-xs text-text-secondary">
             {s.filename} · {new Date(s.created_at).toLocaleString('ru-RU')}
+            {s.source_type === 'api' && ` · API: ${s.kb_host}, БД ${s.kb_database}`}
           </p>
         </div>
         {!s.profile_confirmed && (

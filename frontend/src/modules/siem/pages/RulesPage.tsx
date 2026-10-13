@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { CheckCircle2, ListTree, Search, Sparkles, XCircle } from 'lucide-react'
-import { useRules } from '@/modules/siem/api/queries'
+import { useDeploymentSets, useRules } from '@/modules/siem/api/queries'
 import type { AttackStatus, RuleAttackInfo, RuleListItem } from '@/modules/siem/api/types'
 import { tacticLabel } from '@/modules/siem/api/types'
 import { useSearchParams } from '@/lib/router'
@@ -34,6 +34,11 @@ const ATTACK_FILTERS: { key: AttackStatus | 'all'; label: string }[] = [
   { key: 'unmapped', label: 'не размечено' },
 ]
 
+/** Первый сегмент пути папки KB — уровень, по которому имеет смысл фасет. */
+function folderOf(r: RuleListItem): string {
+  return r.folder_path?.split('/')[0] ?? ''
+}
+
 export function RulesPage({ snapshotId }: { snapshotId: number }) {
   const searchParams = useSearchParams()
   const query = useRules({ snapshot_id: snapshotId, limit: 1000 })
@@ -49,6 +54,14 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
   const [openUuid, setOpenUuid] = useState<string | null>(null)
   const parentRef = useRef<HTMLDivElement>(null)
   const filtersPanel = useFiltersPanel('siem-rules')
+  const sets = useDeploymentSets(snapshotId)
+  // Инвентарь есть только у снапшота, собранного по API: тогда фильтры
+  // установки показываются; у снапшота из файла их нечем заполнить.
+  const hasInventory = sets.data?.available ?? false
+  const setName = (id: string) => sets.data?.sets.find((s) => s.kb_id === id)?.name ?? id
+  const [installedFilter, setInstalledFilter] = useState<'all' | 'yes' | 'no'>('all')
+  const [setFilter, setSetFilter] = useState<string | undefined>()
+  const [folderFilter, setFolderFilter] = useState<string | undefined>()
 
   const allItems = useMemo(() => query.data?.items ?? [], [query.data])
 
@@ -64,6 +77,21 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
     return out
   }, [allItems, author])
 
+  const setFacet = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const r of allItems) for (const id of r.deployment_sets) out[id] = (out[id] ?? 0) + 1
+    return out
+  }, [allItems])
+
+  const folderFacet = useMemo(() => {
+    const out: Record<string, number> = {}
+    for (const r of allItems) {
+      const folder = folderOf(r)
+      if (folder) out[folder] = (out[folder] ?? 0) + 1
+    }
+    return out
+  }, [allItems])
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return allItems.filter((r) => {
@@ -73,10 +101,19 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
       if (onlyAttention && attentionLevel(r.parse_status, r.open_finding_count, r.max_severity) === 'clean')
         return false
       if (attackFilter !== 'all' && (r.attack?.status ?? 'unmapped') !== attackFilter) return false
+      // Фильтры установки действуют только пока у снапшота есть инвентарь: при
+      // переходе на снапшот из файла выбранное значение осталось бы невидимым
+      // и обнулило бы список.
+      if (hasInventory) {
+        if (installedFilter === 'yes' && r.installed !== true) return false
+        if (installedFilter === 'no' && r.installed !== false) return false
+        if (setFilter && !r.deployment_sets.includes(setFilter)) return false
+        if (folderFilter && folderOf(r) !== folderFilter) return false
+      }
       if (needle && !r.name.toLowerCase().includes(needle)) return false
       return true
     })
-  }, [allItems, author, category, onlyScoped, onlyAttention, attackFilter, q])
+  }, [allItems, author, category, onlyScoped, onlyAttention, attackFilter, hasInventory, installedFilter, setFilter, folderFilter, q])
 
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -88,7 +125,7 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
   useEffect(() => {
     virtualizer.scrollToIndex(0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [author, category, onlyScoped, onlyAttention, attackFilter, q])
+  }, [author, category, onlyScoped, onlyAttention, attackFilter, hasInventory, installedFilter, setFilter, folderFilter, q])
 
   const groupsInView = useMemo(() => {
     const out = new Set<string>()
@@ -105,6 +142,9 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
   const chips: FilterChip[] = []
   if (author) chips.push({ label: `автор ${author}`, clear: () => setAuthor(undefined) })
   if (category) chips.push({ label: `категория ${category}`, clear: () => setCategory(undefined) })
+  if (hasInventory && installedFilter !== 'all') chips.push({ label: installedFilter === 'yes' ? 'в SIEM: установлено' : 'в SIEM: не установлено', clear: () => setInstalledFilter('all') })
+  if (hasInventory && setFilter) chips.push({ label: `набор ${setName(setFilter)}`, clear: () => setSetFilter(undefined) })
+  if (hasInventory && folderFilter) chips.push({ label: `папка ${folderFilter}`, clear: () => setFolderFilter(undefined) })
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -207,6 +247,33 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
                   </button>
                 ))}
             </div>
+            {hasInventory && (
+              <>
+                <div className="border-t border-grid px-2 py-3">
+                  <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">В SIEM</div>
+                  {([
+                    ['all', 'все'],
+                    ['yes', 'установлено'],
+                    ['no', 'не установлено'],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setInstalledFilter(key)}
+                      className={cn(
+                        'flex w-full items-center rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
+                        installedFilter === key ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
+                      )}
+                      aria-pressed={installedFilter === key}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <FacetList title="Набор установки" facet={setFacet} value={setFilter} onChange={setSetFilter} label={setName} />
+                <FacetList title="Папка" facet={folderFacet} value={folderFilter} onChange={setFolderFilter} />
+              </>
+            )}
           </div>
         )}
 
@@ -242,6 +309,7 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
                     а название и обоснование — в подробностях. */}
                 <div className="w-56 shrink-0 px-2 py-2">ATT&amp;CK</div>
                 <div className="w-28 shrink-0 px-2 py-2">Ограничено</div>
+                <div className="w-32 shrink-0 px-2 py-2">В SIEM</div>
               </div>
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
                 {virtualizer.getVirtualItems().map((row) => {
@@ -273,6 +341,9 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
                         ) : (
                           <XCircle size={14} className="text-text-secondary/50" aria-label="не ограничено" />
                         )}
+                      </div>
+                      <div className="w-32 shrink-0 px-2">
+                        <InstalledCell installed={rule.installed} />
                       </div>
                     </div>
                   )
@@ -342,5 +413,47 @@ function RuleAttentionCell({ snapshotId, rule }: { snapshotId: number; rule: Rul
     >
       <AttentionBadge level={level} count={rule.open_finding_count} />
     </button>
+  )
+}
+
+/** Метка установки: у снапшота из файла и у правила вне списка KB — прочерк,
+ *  а не «не установлено»: этого никто не утверждал. */
+function InstalledCell({ installed }: { installed: boolean | null }) {
+  if (installed === null) return <span className="text-xs text-text-secondary/60">—</span>
+  return installed ? (
+    <span className="inline-flex items-center gap-1 text-xs text-kind-accepted"><CheckCircle2 size={12} aria-hidden />в SIEM</span>
+  ) : (
+    <span className="inline-flex items-center gap-1 text-xs text-text-secondary"><XCircle size={12} aria-hidden />не установлено</span>
+  )
+}
+
+/** Фасет со счётчиками: клик выбирает значение, повторный — снимает. */
+function FacetList({ title, facet, value, onChange, label }: {
+  title: string
+  facet: Record<string, number>
+  value: string | undefined
+  onChange: (v: string | undefined) => void
+  label?: (key: string) => string
+}) {
+  return (
+    <div className="border-t border-grid px-2 py-3">
+      <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{title}</div>
+      {Object.entries(facet)
+        .sort((a, b) => b[1] - a[1])
+        .map(([key, cnt]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onChange(value === key ? undefined : key)}
+            className={cn(
+              'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
+              value === key ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
+            )}
+          >
+            <span className="truncate">{label ? label(key) : key}</span>
+            <span className="font-mono tabular-nums text-[11px]">{cnt}</span>
+          </button>
+        ))}
+    </div>
   )
 }
