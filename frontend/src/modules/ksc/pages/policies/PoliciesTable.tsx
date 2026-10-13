@@ -7,7 +7,11 @@ import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -100,18 +104,21 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
   function toggle<K extends keyof PolicyFilters>(key: K, value: PolicyFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
   const chips: FilterChip[] = []
-  if (filters.product) chips.push({ label: `продукт ${filters.product}`, clear: () => toggle('product', undefined) })
+  // Чип на каждое выбранное значение: крестик снимает только его.
+  chips.push(...valueChips('Продукт', filters.product, (p) => p, (v) => toggle('product', v)))
   if (filters.active !== undefined) chips.push({ label: filters.active ? 'активные' : 'неактивные', clear: () => toggle('active', undefined) })
-  if (filters.grade) chips.push({ label: `оценка: ${gradeLabel(filters.grade)}`, clear: () => toggle('grade', undefined) })
+  chips.push(...valueChips('Оценка', filters.grade, gradeLabel, (v) => toggle('grade', v)))
 
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить политики' : null
-  const products = Object.entries(facets?.product ?? {}).sort((a, b) => b[1] - a[1])
+  // Продукты считаются по отфильтрованному набору: ушедшие в ноль панель помнит, иначе второй не выбрать.
+  const products = useRememberedFacets(facets ? { product: facetValues(facets.product) } : undefined).product ?? []
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/policy-list/export`, queryArgs)} total={items.length} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Название политики" aria-label="Поиск по названию политики" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -126,7 +133,7 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
           <FacetPanel total={items.length} noun="Политик">
             <FacetSection title="Оценка">
               {GRADE_FILTERS.map((g) => (
-                <FacetRow key={g} active={filters.grade === g} count={facets?.grade?.[g] ?? 0} onClick={() => toggle('grade', filters.grade === g ? undefined : g)}>{gradeLabel(g)}</FacetRow>
+                <FacetRow key={g} active={filters.grade?.includes(g) ?? false} count={facets?.grade?.[g] ?? 0} onClick={() => toggle('grade', toggleValue(filters.grade, g))}>{gradeLabel(g)}</FacetRow>
               ))}
             </FacetSection>
             <FacetSection title="Активность">
@@ -135,8 +142,8 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
               ))}
             </FacetSection>
             <FacetSection title="Продукт">
-              {products.map(([p, n]) => (
-                <FacetRow key={p} active={filters.product === p} count={n} onClick={() => toggle('product', filters.product === p ? undefined : p)}>{p}</FacetRow>
+              {products.map(({ value: p, count }) => (
+                <FacetRow key={p} active={filters.product?.includes(p) ?? false} count={count} onClick={() => toggle('product', toggleValue(filters.product, p))}>{p}</FacetRow>
               ))}
             </FacetSection>
           </FacetPanel>

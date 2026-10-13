@@ -3,10 +3,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, FilterX, Search } from 'lucide-react'
 import { useFindings, useRuleDetail } from '@/modules/siem/api/queries'
 import { FINDING_KIND_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS, type FindingListItem } from '@/modules/siem/api/types'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { BulkBar } from '@/platform/findings/BulkBar'
-import { findingFacetChips } from '@/platform/findings/facets'
+import { findingFacetChips, valueChips } from '@/platform/findings/facets'
 import { useUsersDirectory } from '@/platform/findings/queries'
 import { useMe } from '@/api/auth'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
@@ -141,13 +143,14 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   }
 
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  // Чип на каждое выбранное значение: крестик снимает только его.
   const chips: FilterChip[] = findingFacetChips(filters, (next) => setFilters((prev) => ({ ...prev, ...next })), names)
-  if (filters.kind) chips.push({ label: `класс ${FINDING_KIND_LABELS[filters.kind]}`, clear: () => toggleFilter('kind', undefined) })
-  if (filters.object_type) chips.push({ label: `тип ${OBJECT_TYPE_LABELS[filters.object_type]}`, clear: () => toggleFilter('object_type', undefined) })
-  if (filters.polarity) chips.push({ label: `полярность ${POLARITY_LABELS[filters.polarity]}`, clear: () => toggleFilter('polarity', undefined) })
-  if (filters.shape) chips.push({ label: `форма ${SHAPE_LABELS[filters.shape]}`, clear: () => toggleFilter('shape', undefined) })
+  chips.push(...valueChips('Класс', filters.kind, (k) => FINDING_KIND_LABELS[k], (v) => toggleFilter('kind', v)))
+  chips.push(...valueChips('Тип', filters.object_type, (t) => OBJECT_TYPE_LABELS[t], (v) => toggleFilter('object_type', v)))
+  chips.push(...valueChips('Полярность', filters.polarity, (p) => POLARITY_LABELS[p], (v) => toggleFilter('polarity', v)))
+  chips.push(...valueChips('Форма', filters.shape, (f) => SHAPE_LABELS[f], (v) => toggleFilter('shape', v)))
   if (filters.in_table !== undefined) chips.push({ label: filters.in_table ? 'есть в табличном списке' : 'нет в табличном списке', clear: () => toggleFilter('in_table', undefined) })
-  if (filters.field) chips.push({ label: `поле ${filters.field}`, clear: () => toggleFilter('field', undefined) })
+  chips.push(...valueChips('Поле', filters.field, (f) => f, (v) => toggleFilter('field', v)))
 
   // --- Клавиатура: j/k строки, Enter раскрыть, / поиск, Esc свернуть.
   useEffect(() => {
@@ -212,6 +215,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
           <h1 className="text-sm font-semibold text-text">Находки</h1>
         )}
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref('/api/siem/findings/export', queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative flex-1 max-w-sm">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input

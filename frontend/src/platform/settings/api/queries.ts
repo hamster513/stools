@@ -162,6 +162,6 @@ export function useAudit(filters: AuditFilters) {
 
 /** Ссылка на выгрузку: те же фильтры, но без страницы — выгружается всё
  *  отобранное, а не видимый кусок. */
-export function auditCsvUrl(filters: AuditFilters): string {
-  return `/api/settings/audit/export.csv${buildQuery(selection(filters))}`
+export function auditExportUrl(filters: AuditFilters, format: 'csv' | 'xlsx'): string {
+  return `/api/settings/audit/export${buildQuery({ format, ...selection(filters) })}`
 }

@@ -6,7 +6,11 @@ import type { TaskListItem, TasksQuery } from '@/modules/ksc/api/types'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -70,17 +74,20 @@ export function TasksTable({ snapshotId }: { snapshotId: number }) {
   function toggle<K extends keyof TaskFilters>(key: K, value: TaskFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
   const chips: FilterChip[] = []
-  if (filters.type) chips.push({ label: `тип ${filters.type}`, clear: () => toggle('type', undefined) })
+  // Чип на каждый выбранный тип: крестик снимает только его.
+  chips.push(...valueChips('Тип', filters.type, (t) => t, (v) => toggle('type', v)))
   if (filters.failed) chips.push({ label: 'есть провалы', clear: () => toggle('failed', undefined) })
 
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить задачи' : null
-  const types = Object.entries(query.data?.facets.type ?? {}).sort((a, b) => b[1] - a[1])
+  // Типы считаются по отфильтрованному набору: ушедшие в ноль панель помнит, иначе второй не выбрать.
+  const types = useRememberedFacets(query.data ? { type: facetValues(query.data.facets.type) } : undefined).type ?? []
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/tasks/export`, queryArgs)} total={items.length} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Название задачи" aria-label="Поиск по названию задачи" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -96,8 +103,8 @@ export function TasksTable({ snapshotId }: { snapshotId: number }) {
               <FacetRow active={filters.failed === true} onClick={() => toggle('failed', filters.failed ? undefined : true)}>есть провалы</FacetRow>
             </FacetSection>
             <FacetSection title="Тип">
-              {types.map(([t, n]) => (
-                <FacetRow key={t} active={filters.type === t} count={n} onClick={() => toggle('type', filters.type === t ? undefined : t)}>{t}</FacetRow>
+              {types.map(({ value: t, count }) => (
+                <FacetRow key={t} active={filters.type?.includes(t) ?? false} count={count} onClick={() => toggle('type', toggleValue(filters.type, t))}>{t}</FacetRow>
               ))}
             </FacetSection>
           </FacetPanel>

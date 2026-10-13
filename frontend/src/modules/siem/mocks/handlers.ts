@@ -347,15 +347,18 @@ export const handlers = [
       q: p.get('q') ?? undefined,
     }
 
+    // Перечислимые фасеты, как на сервере, — значения через запятую, «ИЛИ» внутри фасета.
+    const oneOf = (raw: string | undefined, value: string) => raw === undefined || raw.split(',').includes(value)
+
     function applies(f: (typeof FINDINGS)[number], except: keyof Filters | null): boolean {
-      if (filters.kind && except !== 'kind' && f.kind !== filters.kind) return false
-      if (filters.polarity && except !== 'polarity' && f.polarity !== filters.polarity) return false
-      if (filters.object_type && except !== 'object_type' && f.object_type !== filters.object_type) return false
+      if (filters.kind && except !== 'kind' && !oneOf(filters.kind, f.kind)) return false
+      if (filters.polarity && except !== 'polarity' && !oneOf(filters.polarity, f.polarity)) return false
+      if (filters.object_type && except !== 'object_type' && !oneOf(filters.object_type, f.object_type)) return false
       if (filters.in_table && except !== 'in_table' && String(f.in_table) !== filters.in_table) return false
       if (statuses && except !== 'status' && !statuses.includes(findingStatus(f.id))) return false
       if (filters.key && f.key !== filters.key) return false
-      if (filters.field && except !== 'field' && f.field !== filters.field) return false
-      if (filters.shape && except !== 'shape' && (f.shape ?? 'plain') !== filters.shape) return false
+      if (filters.field && except !== 'field' && !oneOf(filters.field, f.field)) return false
+      if (filters.shape && except !== 'shape' && !oneOf(filters.shape, f.shape ?? 'plain')) return false
       if (filters.object_uuid && except !== 'object_uuid' && f.object_uuid !== filters.object_uuid)
         return false
       if (filters.q && except !== 'q') {

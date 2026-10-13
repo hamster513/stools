@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link, useRouter, useSearchParams } from '@/lib/router'
+import { ExportButton } from '@/platform/filters/ExportButton'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { NetworkForm } from './NetworkForm'
@@ -129,7 +130,10 @@ export function NetworksPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-4 flex items-start gap-3">
         <div>
-          <h1 className="text-base font-semibold text-text">Сети</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-base font-semibold text-text">Сети</h1>
+            <ExportButton href={(fmt) => `/api/assets/networks/export?format=${fmt}`} total={list.length} />
+          </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Актив привязывается к самой узкой сети, содержащей его адрес; в карточке актива сеть можно задать вручную. Пересечение сетей допустимо.
           </p>

@@ -144,10 +144,11 @@ export type FindingDetail<F extends FindingBase> = F & {
 
 /** Параметры запроса списка: статус — коды через запятую или `all`; без него — открытые. */
 export interface FindingsQuery {
-  check?: string
-  severity?: Severity
+  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  check?: string[]
+  severity?: Severity[]
   allowlisted?: boolean
-  delta?: FindingDelta
+  delta?: FindingDelta[]
   status?: string
   assignee?: string
   overdue?: boolean
@@ -159,10 +160,10 @@ export interface FindingsQuery {
 
 /** Фильтры страницы находок, которые попадают в фасеты. */
 export interface FindingFilters extends FindingFacetFilters {
-  check?: string
-  severity?: Severity
+  check?: string[]
+  severity?: Severity[]
   allowlisted?: boolean
-  delta?: FindingDelta
+  delta?: FindingDelta[]
 }
 
 /** Расписание задачи планировщика (скан сети, DNS, синхронизация, сбор по подключению); окно — местное время пояса STOOLS_TZ (`tz`). */

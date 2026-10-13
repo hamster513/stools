@@ -13,7 +13,11 @@ import {
 } from '@/modules/ksc/api/types'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -21,12 +25,14 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { ObjectDrawer } from './objects/ObjectDrawer'
 import { LoadMore, MaybeMark, ObjectsEmpty, PartialNote, PolicyCell, PolicyFacet, RiskChips, SnapshotSection, UndescribedNote, UndeterminedNote } from './objects/ObjectsParts'
+import { togglePolicy, type PickedPolicy } from './objects/policyFilter'
 
+/** Политика, вид и дубли — мультивыбор («ИЛИ» внутри фасета). */
 interface Filters {
-  policy?: { id: number; name: string }
-  kind?: string
+  policy?: PickedPolicy[]
+  kind?: string[]
   enabled?: boolean
-  dup?: ExclusionDup
+  dup?: ExclusionDup[]
   risky?: boolean
 }
 
@@ -133,7 +139,7 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
   const q = useDebouncedValue(searchInput, 250)
   const filtersPanel = useFiltersPanel('ksc-exclusions')
   const args = useMemo(
-    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, kind: filters.kind, enabled: filters.enabled, dup: filters.dup, risky: filters.risky, host_id: hostId }),
+    () => ({ q: q || undefined, policy_id: policyId !== undefined ? [policyId] : filters.policy?.map((p) => p.id), kind: filters.kind, enabled: filters.enabled, dup: filters.dup, risky: filters.risky, host_id: hostId }),
     [q, policyId, filters, hostId],
   )
   const query = useExclusions(snapshotId, args)
@@ -141,14 +147,17 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
   const first = pages[0]
   const items = pages.flatMap((p) => p.items)
   const facets = first?.facets
+  // Виды считаются по отфильтрованному набору: ушедшие в ноль панель помнит, иначе второй вид не выбрать.
+  const kinds = useRememberedFacets(facets ? { kind: facetValues(facets.kind, false) } : undefined).kind ?? []
 
   function set<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
+  // Чип на каждое выбранное значение: крестик снимает только его.
   const chips: FilterChip[] = []
-  if (!inPolicy && filters.policy) chips.push({ label: `политика ${filters.policy.name}`, clear: () => set('policy', undefined) })
-  if (filters.kind) chips.push({ label: `вид ${kindLabel(filters.kind)}`, clear: () => set('kind', undefined) })
+  if (!inPolicy) chips.push(...(filters.policy ?? []).map((p) => ({ label: `Политика: ${p.name}`, clear: () => set('policy', togglePolicy(filters.policy, p)) })))
+  chips.push(...valueChips('Вид', filters.kind, kindLabel, (v) => set('kind', v)))
   if (filters.enabled !== undefined) chips.push({ label: filters.enabled ? 'включённые' : 'выключенные', clear: () => set('enabled', undefined) })
-  if (filters.dup) chips.push({ label: EXCLUSION_DUP_LABELS[filters.dup], clear: () => set('dup', undefined) })
+  chips.push(...valueChips('Дубли', filters.dup, (d) => EXCLUSION_DUP_LABELS[d], (v) => set('dup', v)))
   if (filters.risky !== undefined) chips.push({ label: filters.risky ? 'опасные' : 'без риска', clear: () => set('risky', undefined) })
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить исключения' : null
@@ -169,6 +178,7 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/exclusions/export`, args)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder={inPolicy ? 'Значение, комментарий' : 'Значение, комментарий, политика'} aria-label="Поиск исключений" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -180,15 +190,15 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && (
           <FacetPanel total={first?.total ?? 0} noun="Исключений">
-            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={facets?.policy} selected={filters.policy?.id} onSelect={(p) => set('policy', p)} />}
+            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={facets?.policy} selected={filters.policy?.map((p) => p.id)} onToggle={(p) => set('policy', togglePolicy(filters.policy, p))} />}
             <FacetSection title="Риск">
               {([true, false] as const).map((v) => (
                 <FacetRow key={String(v)} active={filters.risky === v} count={facets?.risky?.[v ? 'true' : 'false']} onClick={() => set('risky', filters.risky === v ? undefined : v)}>{v ? 'опасные' : 'без риска'}</FacetRow>
               ))}
             </FacetSection>
             <FacetSection title="Вид">
-              {Object.entries(facets?.kind ?? {}).map(([k, n]) => (
-                <FacetRow key={k} active={filters.kind === k} count={n} onClick={() => set('kind', filters.kind === k ? undefined : k)}>{kindLabel(k)}</FacetRow>
+              {kinds.map(({ value: k, count }) => (
+                <FacetRow key={k} active={filters.kind?.includes(k) ?? false} count={count} onClick={() => set('kind', toggleValue(filters.kind, k))}>{kindLabel(k)}</FacetRow>
               ))}
             </FacetSection>
             <FacetSection title="Включено">
@@ -198,7 +208,7 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
             </FacetSection>
             <FacetSection title="Дубли и перекрытия">
               {(Object.keys(EXCLUSION_DUP_LABELS) as ExclusionDup[]).map((d) => (
-                <FacetRow key={d} active={filters.dup === d} count={facets?.dup[d]} onClick={() => set('dup', filters.dup === d ? undefined : d)}>{EXCLUSION_DUP_LABELS[d]}</FacetRow>
+                <FacetRow key={d} active={filters.dup?.includes(d) ?? false} count={facets?.dup[d]} onClick={() => set('dup', toggleValue(filters.dup, d))}>{EXCLUSION_DUP_LABELS[d]}</FacetRow>
               ))}
             </FacetSection>
           </FacetPanel>
@@ -211,7 +221,7 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
               {!inPolicy && items.length > 0 && <UndescribedNote codes={undescribed} what="исключения" />}
               <UndeterminedNote items={undetermined} />
               {inPolicy ? partial && <PartialNote bar /> : <PartialNote bar names={summary.filter((s) => s.partial).map((s) => s.policy_name)} />}
-              {!inPolicy && summary.length > 0 && <Summary items={summary} onPick={(p) => set('policy', p)} />}
+              {!inPolicy && summary.length > 0 && <Summary items={summary} onPick={(p) => set('policy', togglePolicy(filters.policy, p))} />}
               {items.length === 0 ? (
                 <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={undescribed} hasFilters={hasFilters} what="исключения" none={hostId === undefined ? 'Исключений нет' : 'На хост исключения не действуют'} nothing="Ни одно исключение не подходит под фильтры." />
               ) : (

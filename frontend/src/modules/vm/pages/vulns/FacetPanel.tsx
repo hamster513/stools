@@ -2,12 +2,15 @@ import type { ReactNode } from 'react'
 import type { CvssSource, RiskLevel, VulnsFacets, VulnsQuery } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS, LEVEL_LABELS, LEVELS } from '@/modules/vm/api/types'
 import { LEVEL_TEXT } from '@/modules/vm/components/RiskBadge'
-import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
+import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleValue, type FindingFacetFilters } from '@/platform/findings/facets'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
 import { cn } from '@/lib/cn'
 
 export type VulnFilters = Pick<VulnsQuery, 'level' | 'criticality' | 'zone' | 'os' | 'exploits' | 'msf' | 'cvss_source'> & FindingFacetFilters
 
 const CRITICALITIES = ['Critical', 'High', 'Medium', 'Low', 'None', '']
+
+const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
 
 function Row({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
   return (
@@ -18,6 +21,8 @@ function Row({ active, count, onClick, children }: { active: boolean; count: num
         'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
         active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
+        // Значение, ушедшее в ноль под другими фильтрами, приглушено, но выбирается.
+        !active && !count && 'opacity-60',
       )}
       aria-pressed={active}
     >
@@ -48,15 +53,24 @@ interface Props {
 
 /**
  * Фасеты считаются на сервере по всей выборке — счётчики не плывут при прокрутке.
- * Статус пары — мультивыбор; пока ничего не выбрано, показываются открытые.
- * Счётчики статусов и исполнителей — без своего фильтра.
+ * Каждый фасет — мультивыбор («ИЛИ» внутри, «И» между фасетами); пока статус не
+ * выбран, показываются открытые. Счётчики статусов и исполнителей — без своего
+ * фильтра, остальные — по отфильтрованному набору: ушедшие в ноль значения
+ * панель помнит (useRememberedFacets).
  */
 export function FacetPanel({ facets, filters, onToggle, total, myLogin, names }: Props) {
-  const zones = Object.entries(facets?.zone ?? {}).sort((a, b) => b[1] - a[1])
-  const oses = Object.entries(facets?.os ?? {}).sort((a, b) => b[1] - a[1])
-  const crits = CRITICALITIES.filter((c) => (facets?.criticality[c] ?? 0) > 0 || filters.criticality === c)
-  const assignees = Object.entries(facets?.assignee ?? {}).filter(([login]) => login !== 'none' && login !== myLogin).sort((a, b) => b[1] - a[1])
-  const pickAssignee = (value: string) => onToggle('assignee', filters.assignee === value ? undefined : value)
+  const remembered = useRememberedFacets(facets ? {
+    zone: facetValues(facets.zone), os: facetValues(facets.os), assignee: facetValues(facets.assignee),
+    criticality: facetValues(facets.criticality).filter((c) => c.count > 0),
+  } : undefined)
+  const zones = remembered.zone ?? []
+  const oses = remembered.os ?? []
+  // Критичности — в своём порядке; показываются виденные хоть раз и выбранные.
+  const seenCrits = new Set((remembered.criticality ?? []).map((c) => c.value))
+  const crits = CRITICALITIES.filter((c) => seenCrits.has(c) || has(filters.criticality, c))
+  const assignees = (remembered.assignee ?? []).filter((a) => a.value !== 'none' && a.value !== myLogin)
+  const pick = <K extends 'level' | 'criticality' | 'zone' | 'os' | 'cvss_source' | 'assignee'>(key: K, value: string) =>
+    onToggle(key, toggleValue(filters[key] as string[] | undefined, value) as VulnFilters[K])
 
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
@@ -73,10 +87,10 @@ export function FacetPanel({ facets, filters, onToggle, total, myLogin, names }:
       </Section>
 
       <Section title="Исполнитель">
-        <Row active={filters.assignee === 'me'} count={myLogin ? facets?.assignee[myLogin] : undefined} onClick={() => pickAssignee('me')}>{ASSIGNEE_SPECIAL.me}</Row>
-        <Row active={filters.assignee === 'none'} count={facets?.assignee.none} onClick={() => pickAssignee('none')}>{ASSIGNEE_SPECIAL.none}</Row>
-        {assignees.map(([login, n]) => (
-          <Row key={login} active={filters.assignee === login} count={n} onClick={() => pickAssignee(login)}>{names.get(login) ?? login}</Row>
+        <Row active={has(filters.assignee, 'me')} count={myLogin ? facets?.assignee[myLogin] : undefined} onClick={() => pick('assignee', 'me')}>{ASSIGNEE_SPECIAL.me}</Row>
+        <Row active={has(filters.assignee, 'none')} count={facets?.assignee.none} onClick={() => pick('assignee', 'none')}>{ASSIGNEE_SPECIAL.none}</Row>
+        {assignees.map(({ value: login, count }) => (
+          <Row key={login} active={has(filters.assignee, login)} count={count} onClick={() => pick('assignee', login)}>{names.get(login) ?? login}</Row>
         ))}
       </Section>
 
@@ -87,7 +101,7 @@ export function FacetPanel({ facets, filters, onToggle, total, myLogin, names }:
 
       <Section title="Риск">
         {LEVELS.map((l: RiskLevel) => (
-          <Row key={l} active={filters.level === l} count={facets?.level[l]} onClick={() => onToggle('level', filters.level === l ? undefined : l)}>
+          <Row key={l} active={has(filters.level, l)} count={facets?.level[l]} onClick={() => pick('level', l)}>
             <span className={LEVEL_TEXT[l]}>{LEVEL_LABELS[l]}</span>
           </Row>
         ))}
@@ -95,15 +109,15 @@ export function FacetPanel({ facets, filters, onToggle, total, myLogin, names }:
 
       <Section title="Критичность хоста">
         {crits.map((c) => (
-          <Row key={c || 'empty'} active={filters.criticality === c} count={facets?.criticality[c]} onClick={() => onToggle('criticality', filters.criticality === c ? undefined : c)}>
+          <Row key={c || 'empty'} active={has(filters.criticality, c)} count={facets?.criticality[c]} onClick={() => pick('criticality', c)}>
             {c || <span className="italic">не задана</span>}
           </Row>
         ))}
       </Section>
 
       <Section title="Зона">
-        {zones.map(([z, n]) => (
-          <Row key={z || 'empty'} active={filters.zone === z} count={n} onClick={() => onToggle('zone', filters.zone === z ? undefined : z)}>
+        {zones.map(({ value: z, count }) => (
+          <Row key={z || 'empty'} active={has(filters.zone, z)} count={count} onClick={() => pick('zone', z)}>
             {z || <span className="italic">без зоны</span>}
           </Row>
         ))}
@@ -120,15 +134,15 @@ export function FacetPanel({ facets, filters, onToggle, total, myLogin, names }:
 
       <Section title="Источник CVSS">
         {(Object.keys(CVSS_SOURCE_LABELS) as CvssSource[]).map((s) => (
-          <Row key={s} active={filters.cvss_source === s} count={facets?.cvss_source[s]} onClick={() => onToggle('cvss_source', filters.cvss_source === s ? undefined : s)}>
+          <Row key={s} active={has(filters.cvss_source, s)} count={facets?.cvss_source[s]} onClick={() => pick('cvss_source', s)}>
             {CVSS_SOURCE_LABELS[s]}
           </Row>
         ))}
       </Section>
 
       <Section title="ОС">
-        {oses.map(([os, n]) => (
-          <Row key={os || 'empty'} active={filters.os === os} count={n} onClick={() => onToggle('os', filters.os === os ? undefined : os)}>
+        {oses.map(({ value: os, count }) => (
+          <Row key={os || 'empty'} active={has(filters.os, os)} count={count} onClick={() => pick('os', os)}>
             {os || <span className="italic">не определена</span>}
           </Row>
         ))}

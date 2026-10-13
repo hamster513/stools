@@ -157,8 +157,14 @@ export function useForgetAlias() {
   })
 }
 
-export function aliasesExportUrl(): string {
-  return `${ALIASES}/export.csv`
+/** Выгрузка таблицы соответствий с тем же поиском и видом, что на экране. */
+export function aliasesExportUrl(query: AliasesQuery, format: 'csv' | 'xlsx'): string {
+  return `${ALIASES}/export${buildQuery({ format, ...query })}`
+}
+
+/** Выгрузка находок задания (все группы) с тем же поиском, что на экране; контексты не выгружаются. */
+export function findingsExportUrl(id: number, q: string, format: 'csv' | 'xlsx'): string {
+  return `${BASE}/jobs/${id}/findings/export${buildQuery({ format, q: q || undefined })}`
 }
 
 export function useToolboxSettings(enabled = true) {

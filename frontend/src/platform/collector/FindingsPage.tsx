@@ -12,12 +12,14 @@ import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useMe } from '@/api/auth'
 import { useCan } from '@/lib/can'
 import { BulkBar } from '@/platform/findings/BulkBar'
-import { findingFacetChips, findingFacetParams } from '@/platform/findings/facets'
+import { findingFacetChips, findingFacetParams, listFrom, valueChips } from '@/platform/findings/facets'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { useUsersDirectory } from '@/platform/findings/queries'
 import { STATUSES, type FindingStatus } from '@/platform/findings/types'
 import { FacetPanel } from './FacetPanel'
 import type { FindingsTableProps } from './FindingsTable'
-import { SEVERITY_LABELS, type FindingBase, type FindingDelta, type FindingFilters, type FindingsQuery, type FindingsResponse, type Severity } from './types'
+import { SEVERITIES, SEVERITY_LABELS, type FindingBase, type FindingDelta, type FindingFilters, type FindingsQuery, type FindingsResponse, type Severity } from './types'
 
 const DELTA_LABELS: Record<FindingDelta, string> = { new: 'появились в этом снапшоте', same: 'были и раньше', gone: 'исчезла (нет в последнем снапшоте)' }
 
@@ -30,13 +32,12 @@ function statusesFrom(raw: string | null): FindingStatus[] | undefined {
 }
 
 function filtersFrom(params: URLSearchParams): FindingFilters {
-  const delta = params.get('delta')
   return {
-    check: params.get('check') ?? undefined,
-    severity: (params.get('severity') as Severity | null) ?? undefined,
-    delta: delta === 'new' || delta === 'same' || delta === 'gone' ? delta : undefined,
+    check: listFrom(params.get('check')),
+    severity: listFrom<Severity>(params.get('severity'), SEVERITIES),
+    delta: listFrom<FindingDelta>(params.get('delta'), ['new', 'same', 'gone']),
     status: statusesFrom(params.get('status')),
-    assignee: params.get('assignee') ?? undefined,
+    assignee: listFrom(params.get('assignee')),
     overdue: params.get('overdue') === 'true' || undefined,
     risk_expiring: params.get('risk_expiring') === 'true' || undefined,
   }
@@ -111,11 +112,12 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
   }
   function changed() { setChecked(new Set()); setAnchor(null); onChanged() }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  // Чип на каждое выбранное значение: крестик снимает только его.
   const chips: FilterChip[] = findingFacetChips(filters, (next) => setFilters((prev) => ({ ...prev, ...next })), names)
-  if (filters.delta) chips.push({ label: DELTA_LABELS[filters.delta], clear: () => toggle('delta', undefined) })
-  if (filters.severity) chips.push({ label: `severity ${SEVERITY_LABELS[filters.severity]}`, clear: () => toggle('severity', undefined) })
+  chips.push(...valueChips('Снапшот', filters.delta, (d) => DELTA_LABELS[d], (v) => toggle('delta', v)))
+  chips.push(...valueChips('Severity', filters.severity, (s) => SEVERITY_LABELS[s], (v) => toggle('severity', v)))
   if (filters.allowlisted !== undefined) chips.push({ label: filters.allowlisted ? 'в allowlist (понижено до Low)' : 'не в allowlist', clear: () => toggle('allowlisted', undefined) })
-  if (filters.check) chips.push({ label: `проверка ${first?.check_titles[filters.check] ?? filters.check}`, clear: () => toggle('check', undefined) })
+  chips.push(...valueChips('Проверка', filters.check, (c) => first?.check_titles[c] ?? c, (v) => toggle('check', v)))
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -143,6 +145,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
         <h1 className="text-sm font-semibold text-text">Находки</h1>
         <span className="font-mono text-xs text-text-secondary">снапшот #{snapshotId}</span>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/${module}/snapshots/${snapshotId}/findings/export`, queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder={searchPlaceholder} className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />

@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
+import { useRememberedFacets } from '@/platform/filters/useRememberedFacets'
 import { FacetRow, FacetSection } from '../policies/Facets'
 
 /** Раздел сервера, которому нужен последний снапшот: заголовок с номером снапшота и содержимое. */
@@ -28,25 +29,28 @@ export function SnapshotSection({ serverId, title, children }: { serverId: numbe
 }
 
 /**
- * Фасет «Политика»: имена — из списка политик снапшота. С `counts` — только политики с записями и их число,
- * без `counts` — все политики снапшота без счётчика (у журнала изменений фасета по политике нет).
+ * Фасет «Политика» — мультивыбор: строка переключает политику (`onToggle`). Имена — из списка политик снапшота.
+ * С `counts` — политики с записями и их число; ушедшие в ноль под другими фильтрами остаются приглушёнными
+ * (useRememberedFacets), иначе вторую политику не выбрать. Без `counts` — все политики снапшота без счётчика
+ * (у журнала изменений фасета по политике нет).
  */
-export function PolicyFacet({ snapshotId, counts, selected, onSelect }: {
+export function PolicyFacet({ snapshotId, counts, selected, onToggle }: {
   snapshotId: number | undefined
-  counts?: Record<string, number>
-  selected: number | undefined
-  onSelect: (policy: { id: number; name: string } | undefined) => void
+  counts?: Record<string, number> | null
+  selected: number[] | undefined
+  onToggle: (policy: { id: number; name: string }) => void
 }) {
   const list = usePolicyList(snapshotId, {})
   const names = new Map((list.data?.items ?? []).map((p) => [p.id, p.name]))
-  const rows = counts
-    ? Object.entries(counts).map(([id, n]) => ({ id: Number(id), name: names.get(Number(id)) ?? `#${id}`, n }))
+  const remembered = useRememberedFacets(counts ? { policy: Object.entries(counts).map(([value, count]) => ({ value, count })) } : undefined).policy
+  const rows = remembered
+    ? remembered.map(({ value, count }) => ({ id: Number(value), name: names.get(Number(value)) ?? `#${value}`, n: count as number | undefined }))
     : (list.data?.items ?? []).map((p) => ({ id: p.id, name: p.name, n: undefined }))
   rows.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
   return (
     <FacetSection title="Политика">
       {rows.map((r) => (
-        <FacetRow key={r.id} active={selected === r.id} count={r.n} onClick={() => onSelect(selected === r.id ? undefined : { id: r.id, name: r.name })}>{r.name}</FacetRow>
+        <FacetRow key={r.id} active={selected?.includes(r.id) ?? false} count={r.n} onClick={() => onToggle({ id: r.id, name: r.name })}>{r.name}</FacetRow>
       ))}
       {rows.length === 0 && <span className="px-2 text-xs text-text-secondary">нет</span>}
     </FacetSection>

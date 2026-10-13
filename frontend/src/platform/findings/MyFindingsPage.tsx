@@ -2,18 +2,19 @@ import { useState } from 'react'
 import { ListChecks } from 'lucide-react'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
-import { Field, FIELD } from '@/components/ui/Field'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { cn } from '@/lib/cn'
 import { useRouter } from '@/lib/router'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { MODULES } from '@/platform/modules'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { findingFacetChips, STATUS_OPTIONS, toggleStatus } from './facets'
-import { useMyFindings } from './queries'
+import { findingFacetChips, STATUS_OPTIONS, toggleStatus, toggleValue, valueChips } from './facets'
+import { myFindingsParams, useMyFindings } from './queries'
 import { StatusBadge } from './StatusBadge'
 import type { FindingStatus } from './types'
 
@@ -53,14 +54,14 @@ function day(value: string): string {
 export function MyFindingsPage() {
   const { navigate } = useRouter()
   const [status, setStatus] = useState<FindingStatus[] | undefined>()
-  const [module, setModule] = useState('')
+  const [module, setModule] = useState<string[] | undefined>()
   const filtersPanel = useFiltersPanel('findings-mine')
-  const mine = useMyFindings({ status, module: module || undefined })
+  const mine = useMyFindings({ status, module })
   const cols = useColumnWidths('findings-mine-columns', COLUMNS)
 
+  // Чип на каждое выбранное значение: крестик снимает только его.
   const chips: FilterChip[] = findingFacetChips({ status }, (next) => setStatus(next.status))
-  const moduleTitle = MODULE_OPTIONS.find((m) => m.id === module)?.title
-  if (module) chips.push({ label: `Модуль: ${moduleTitle ?? module}`, clear: () => setModule('') })
+  chips.push(...valueChips('Модуль', module, (id) => MODULE_OPTIONS.find((m) => m.id === id)?.title ?? id, setModule))
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto p-6">
@@ -69,6 +70,7 @@ export function MyFindingsPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-base font-semibold text-text">Мои находки</h1>
             <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+            <ExportButton href={exportHref('/api/findings/mine/export', myFindingsParams({ status, module }))} total={mine.data?.length} disabled={mine.isLoading} />
           </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Находки всех модулей, где исполнитель — вы. Без фильтра статуса — открытые; сначала
@@ -96,16 +98,18 @@ export function MyFindingsPage() {
             </div>
             <span className="mt-1 block text-xs text-text-secondary">Ничего не выбрано — открытые.</span>
           </fieldset>
-          <Field label="Модуль">
-            <select className={FIELD} value={module} onChange={(e) => setModule(e.target.value)}>
-              <option value="">все</option>
+          <fieldset>
+            <legend className="mb-1 block text-xs font-medium text-text">Модуль</legend>
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
               {MODULE_OPTIONS.map((m) => (
-                <option key={m.id} value={m.id}>
+                <label key={m.id} className="flex items-center gap-1.5 text-xs text-text">
+                  <input type="checkbox" checked={module?.includes(m.id) ?? false} onChange={() => setModule((v) => toggleValue(v, m.id))} />
                   {m.title}
-                </option>
+                </label>
               ))}
-            </select>
-          </Field>
+            </div>
+            <span className="mt-1 block text-xs text-text-secondary">Ничего не выбрано — все модули.</span>
+          </fieldset>
         </div>
       )}
 

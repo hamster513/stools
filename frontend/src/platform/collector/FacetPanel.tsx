@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react'
-import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus } from '@/platform/findings/facets'
-import { SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type FindingBase, type FindingFilters, type FindingsResponse } from './types'
+import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleValue } from '@/platform/findings/facets'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type FindingBase, type FindingDelta, type FindingFilters, type FindingsResponse } from './types'
 import { cn } from '@/lib/cn'
 
+/** Строка — переключатель значения в мультивыборе; значение, ушедшее в ноль, приглушено, но выбирается. */
 function Row({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
   return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')}>
+    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text', !active && !count && 'opacity-60')}>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>
     </button>
@@ -23,9 +25,11 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 }
 
 /**
- * Фасеты находок модуля-сборщика. Статус — мультивыбор; пока ничего не
- * выбрано, сервер показывает открытые. Счётчики статусов и исполнителей
- * считаются без своего фильтра.
+ * Фасеты находок модуля-сборщика. Каждый фасет — мультивыбор («ИЛИ» внутри,
+ * «И» между фасетами); пока статус не выбран, сервер показывает открытые.
+ * Счётчики статусов и исполнителей считаются без своего фильтра, остальные —
+ * по отфильтрованному набору: проверки и исполнители, ушедшие в ноль, панель
+ * помнит (useRememberedFacets).
  */
 export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, names }: {
   facets: FindingsResponse<FindingBase>['facets']
@@ -36,9 +40,12 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
   myLogin: string | undefined
   names: Map<string, string>
 }) {
-  const checks = Object.entries(facets?.check ?? {}).sort((a, b) => b[1] - a[1])
-  const assignees = Object.entries(facets?.assignee ?? {}).filter(([login]) => login !== 'none' && login !== myLogin).sort((a, b) => b[1] - a[1])
-  const pickAssignee = (value: string) => onToggle('assignee', filters.assignee === value ? undefined : value)
+  const remembered = useRememberedFacets(facets ? { check: facetValues(facets.check), assignee: facetValues(facets.assignee) } : undefined)
+  const checks = remembered.check ?? []
+  const assignees = (remembered.assignee ?? []).filter((a) => a.value !== 'none' && a.value !== myLogin)
+  const pick = <K extends 'check' | 'severity' | 'delta' | 'assignee'>(key: K, value: string) =>
+    onToggle(key, toggleValue(filters[key] as string[] | undefined, value) as FindingFilters[K])
+  const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Находок <span className="font-mono tabular-nums text-text">{total}</span></div>
@@ -50,10 +57,10 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
         ))}
       </Section>
       <Section title="Исполнитель">
-        <Row active={filters.assignee === 'me'} count={myLogin ? facets?.assignee[myLogin] : undefined} onClick={() => pickAssignee('me')}>{ASSIGNEE_SPECIAL.me}</Row>
-        <Row active={filters.assignee === 'none'} count={facets?.assignee.none} onClick={() => pickAssignee('none')}>{ASSIGNEE_SPECIAL.none}</Row>
-        {assignees.map(([login, n]) => (
-          <Row key={login} active={filters.assignee === login} count={n} onClick={() => pickAssignee(login)}>{names.get(login) ?? login}</Row>
+        <Row active={has(filters.assignee, 'me')} count={myLogin ? facets?.assignee[myLogin] : undefined} onClick={() => pick('assignee', 'me')}>{ASSIGNEE_SPECIAL.me}</Row>
+        <Row active={has(filters.assignee, 'none')} count={facets?.assignee.none} onClick={() => pick('assignee', 'none')}>{ASSIGNEE_SPECIAL.none}</Row>
+        {assignees.map(({ value: login, count }) => (
+          <Row key={login} active={has(filters.assignee, login)} count={count} onClick={() => pick('assignee', login)}>{names.get(login) ?? login}</Row>
         ))}
       </Section>
       <Section title="Сроки">
@@ -61,12 +68,13 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
         <Row active={filters.risk_expiring === true} count={facets?.flags.risk_expiring} onClick={() => { if (!filters.risk_expiring) onToggle('status', statusForFlag('risk_expiring', filters.status)); onToggle('risk_expiring', filters.risk_expiring ? undefined : true) }}>риск истекает (≤ 30 дней)</Row>
       </Section>
       <Section title="Снапшот">
-        <Row active={filters.delta === 'new'} count={facets?.delta.new} onClick={() => onToggle('delta', filters.delta === 'new' ? undefined : 'new')}>появились в этом снапшоте</Row>
-        <Row active={filters.delta === 'gone'} count={facets?.delta.gone} onClick={() => onToggle('delta', filters.delta === 'gone' ? undefined : 'gone')}>исчезла (нет в последнем снапшоте)</Row>
+        {(['new', 'gone'] as FindingDelta[]).map((d) => (
+          <Row key={d} active={has(filters.delta, d)} count={facets?.delta[d]} onClick={() => pick('delta', d)}>{d === 'new' ? 'появились в этом снапшоте' : 'исчезла (нет в последнем снапшоте)'}</Row>
+        ))}
       </Section>
       <Section title="Severity">
         {SEVERITIES.map((s) => (
-          <Row key={s} active={filters.severity === s} count={facets?.severity[s]} onClick={() => onToggle('severity', filters.severity === s ? undefined : s)}><span className={SEVERITY_TEXT[s]}>{SEVERITY_LABELS[s]}</span></Row>
+          <Row key={s} active={has(filters.severity, s)} count={facets?.severity[s]} onClick={() => pick('severity', s)}><span className={SEVERITY_TEXT[s]}>{SEVERITY_LABELS[s]}</span></Row>
         ))}
       </Section>
       <Section title="Allowlist">
@@ -74,8 +82,8 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
         <Row active={filters.allowlisted === false} count={facets?.allowlisted.no} onClick={() => onToggle('allowlisted', filters.allowlisted === false ? undefined : false)}>не в allowlist</Row>
       </Section>
       <Section title="Проверка">
-        {checks.map(([code, n]) => (
-          <Row key={code} active={filters.check === code} count={n} onClick={() => onToggle('check', filters.check === code ? undefined : code)}>{titles[code] ?? code}</Row>
+        {checks.map(({ value: code, count }) => (
+          <Row key={code} active={has(filters.check, code)} count={count} onClick={() => pick('check', code)}>{titles[code] ?? code}</Row>
         ))}
       </Section>
     </div>

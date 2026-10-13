@@ -15,6 +15,8 @@ import { cn } from '@/lib/cn'
 import { AttentionBadge, attentionLevel } from '@/modules/siem/components/ui/AttentionBadge'
 import { RuleDetailDrawer } from './rules/RuleDetailDrawer'
 import { useRouter } from '@/lib/router'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
@@ -124,6 +126,16 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Инвентарь правил</h1>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        {/* Список фильтруется здесь, на клиенте, а выгрузку собирает сервер: ему уходят все те же отборы,
+            включая «внимание», «ограничено» и разметку ATT&CK. */}
+        <ExportButton
+          href={exportHref('/api/siem/rules/export', {
+            snapshot_id: snapshotId, author, category, q: q.trim() || undefined,
+            attention: onlyAttention || undefined, scoped: onlyScoped || undefined, attack: attackFilter === 'all' ? undefined : attackFilter,
+          })}
+          total={filtered.length}
+          disabled={query.isLoading}
+        />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input

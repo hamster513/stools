@@ -4,9 +4,10 @@ import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
 import { Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
+import { ExportButton } from '@/platform/filters/ExportButton'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { FINDINGS_PAGE_SIZE, useApply, useFindings, useUpdateFindings } from '../api/queries'
+import { FINDINGS_PAGE_SIZE, findingsExportUrl, useApply, useFindings, useUpdateFindings } from '../api/queries'
 import { KIND_LABELS, type Finding, type FindingsPatch } from '../api/types'
 
 const CELL = 'px-2 py-1.5 align-top'
@@ -131,6 +132,8 @@ export function FindingsPreview({ id, readOnly, showContexts }: { id: number; re
           <Search size={14} className="pointer-events-none absolute top-2 left-2.5 text-text-secondary" aria-hidden />
           <input className={cn(FIELD, 'pl-8')} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по значению" aria-label="Поиск по значению" />
         </label>
+        {/* Выгрузка — с настоящими значениями, она аналитику (как и контексты); группы выгружаются все. */}
+        {showContexts && <ExportButton href={(fmt) => findingsExportUrl(id, q, fmt)} total={groups.reduce((n, g) => n + g.total, 0)} />}
         {!readOnly && <WordsForm disabled={update.isPending} word={word} setWord={setWord} onSubmit={addWord} words={buffer.words} remove={(w) => setBuffer((b) => ({ ...b, words: b.words.filter((x) => x !== w) }))} />}
       </div>
 

@@ -29,11 +29,14 @@ import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useRouter, useSearchParams } from '@/lib/router'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { findingFacetChips, statusForFlag, STATUS_OPTIONS, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
+import { findingFacetChips, listFrom, statusForFlag, STATUS_OPTIONS, toggleStatus, toggleValue, valueChips, type FindingFacetFilters } from '@/platform/findings/facets'
 import { useFindingSettings } from '@/platform/findings/queries'
 import { MANUAL_STATUSES, NEEDS_REASON, STATUSES, STATUS_TITLES, type FindingChange, type FindingStatus } from '@/platform/findings/types'
 import { AssetDrawer } from './AssetDrawer'
@@ -75,8 +78,18 @@ type DiscFilters = Omit<FindingFacetFilters, 'risk_expiring'>
 
 function discFromParams(params: URLSearchParams): DiscFilters {
   const status = (params.get('disc_status') ?? '').split(',').filter((s): s is FindingStatus => (STATUSES as string[]).includes(s))
-  return { status: status.length ? status : undefined, assignee: params.get('assignee') ?? undefined, overdue: params.get('overdue') === 'true' || undefined }
+  return { status: status.length ? status : undefined, assignee: listFrom(params.get('assignee')), overdue: params.get('overdue') === 'true' || undefined }
 }
+
+/** Сети из ссылки: номера через запятую; не числа отбрасываются. */
+function networkIdsFrom(raw: string | null): number[] | undefined {
+  const ids = listFrom(raw)?.map(Number).filter((n) => Number.isInteger(n) && n > 0)
+  return ids?.length ? ids : undefined
+}
+
+type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'zone' | 'network_id'
+
+const has = <T extends string | number>(list: readonly T[] | undefined, value: T) => list?.includes(value) ?? false
 
 function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
@@ -86,10 +99,13 @@ function day(iso: string | null): string {
   return iso ? new Date(iso).toLocaleDateString('ru-RU') : '—'
 }
 
-/** `noCount` — у строки нет счётчика (например, «мои»: сервер его не считает). */
+/**
+ * Строка — переключатель значения в мультивыборе. `noCount` — у строки нет счётчика (например, «мои»: сервер его не
+ * считает); значение, ушедшее в ноль под другими фильтрами, приглушено, но выбирается.
+ */
 function FacetRow({ active, count, onClick, children, noCount }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode; noCount?: boolean }) {
   return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')}>
+    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text', !active && !noCount && !count && 'opacity-60')}>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {!noCount && <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>}
     </button>
@@ -120,15 +136,18 @@ function FacetPanel({ facets, filters, onToggle, disc, onDisc, total, port, onPo
   tag: string
   onTag: (v: string) => void
 }) {
-  const zones = Object.entries(facets?.zone ?? {}).sort((a, b) => b[1] - a[1])
+  // Зоны считаются по отфильтрованному набору: ушедшие в ноль панель помнит, иначе вторую зону не выбрать.
+  const zones = useRememberedFacets(facets ? { zone: facetValues(facets.zone) } : undefined).zone ?? []
   const networks = useNetworks()
+  const pick = <K extends MultiKey>(key: K, value: NonNullable<Filters[K]>[number]) =>
+    onToggle(key, toggleValue(filters[key] as (typeof value)[] | undefined, value) as Filters[K])
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Активов <span className="font-mono tabular-nums text-text">{total}</span></div>
       <FacetSection title="Расхождения">
-        <FacetRow active={filters.code === 'any'} count={facets?.code.any} onClick={() => onToggle('code', filters.code === 'any' ? undefined : 'any')}>{ANY_CODE_LABEL}</FacetRow>
+        <FacetRow active={has(filters.code, 'any')} count={facets?.code.any} onClick={() => pick('code', 'any')}>{ANY_CODE_LABEL}</FacetRow>
         {CODES.map((c) => (
-          <FacetRow key={c} active={filters.code === c} count={facets?.code[c]} onClick={() => onToggle('code', filters.code === c ? undefined : c)}>{CODE_LABELS[c]}</FacetRow>
+          <FacetRow key={c} active={has(filters.code, c)} count={facets?.code[c]} onClick={() => pick('code', c)}>{CODE_LABELS[c]}</FacetRow>
         ))}
       </FacetSection>
       {/* Без выбранного статуса считаются и фильтруются расхождения с учитываемым статусом. */}
@@ -136,36 +155,41 @@ function FacetPanel({ facets, filters, onToggle, disc, onDisc, total, port, onPo
         {STATUS_OPTIONS.map((o) => (
           <FacetRow key={o.value} active={disc.status?.includes(o.value) ?? false} count={facets?.disc_status[o.value]} onClick={() => onDisc({ ...disc, status: toggleStatus(disc.status, o.value) })}>{o.label}</FacetRow>
         ))}
-        <FacetRow active={disc.assignee === 'me'} count={undefined} noCount onClick={() => onDisc({ ...disc, assignee: disc.assignee === 'me' ? undefined : 'me' })}>мои</FacetRow>
+        <FacetRow active={has(disc.assignee, 'me')} count={undefined} noCount onClick={() => onDisc({ ...disc, assignee: toggleValue(disc.assignee, 'me') })}>мои</FacetRow>
         <FacetRow active={disc.overdue ?? false} count={facets?.disc_overdue} onClick={() => onDisc(disc.overdue ? { ...disc, overdue: undefined } : { ...disc, overdue: true, status: statusForFlag('overdue', disc.status) })}>просроченные</FacetRow>
       </FacetSection>
       <FacetSection title="Источник есть">
         {SOURCES.map((s) => (
-          <FacetRow key={s} active={filters.source_has === s} count={facets?.source[s]} onClick={() => onToggle('source_has', filters.source_has === s ? undefined : s)}>{SOURCE_LABELS[s]}</FacetRow>
+          <FacetRow key={s} active={has(filters.source_has, s)} count={facets?.source[s]} onClick={() => pick('source_has', s)}>{SOURCE_LABELS[s]}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Источника нет">
         {SOURCES.map((s) => (
-          <FacetRow key={s} active={filters.source_missing === s} count={facets ? total - facets.source[s] : undefined} onClick={() => onToggle('source_missing', filters.source_missing === s ? undefined : s)}>{SOURCE_LABELS[s]}</FacetRow>
+          <FacetRow key={s} active={has(filters.source_missing, s)} count={facets ? total - facets.source[s] : undefined} onClick={() => pick('source_missing', s)}>{SOURCE_LABELS[s]}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Критичность">
         {([...CRITICALITIES, 'none'] as const).map((c) => (
-          <FacetRow key={c} active={filters.criticality === c} count={facets?.criticality[c]} onClick={() => onToggle('criticality', filters.criticality === c ? undefined : c)}>{CRITICALITY_LABELS[c]}</FacetRow>
+          <FacetRow key={c} active={has(filters.criticality, c)} count={facets?.criticality[c]} onClick={() => pick('criticality', c)}>{CRITICALITY_LABELS[c]}</FacetRow>
         ))}
       </FacetSection>
       {zones.length > 0 && (
         <FacetSection title="Зона">
-          {zones.map(([z, n]) => (
-            <FacetRow key={z} active={filters.zone === z} count={n} onClick={() => onToggle('zone', filters.zone === z ? undefined : z)}>{z}</FacetRow>
+          {zones.map(({ value: z, count }) => (
+            <FacetRow key={z} active={has(filters.zone, z)} count={count} onClick={() => pick('zone', z)}>{z}</FacetRow>
           ))}
         </FacetSection>
       )}
       <FacetSection title="Сеть, открытый порт и тег">
+        {/* Сетей сотни — выбранные показаны строками-переключателями, новая добавляется из списка. */}
+        {(filters.network_id ?? []).map((id) => {
+          const n = networks.data?.find((x) => x.id === id)
+          return <FacetRow key={id} active count={undefined} noCount onClick={() => pick('network_id', id)}>{n ? `${n.cidr}${n.title ? ` — ${n.title}` : ''}` : `#${id}`}</FacetRow>
+        })}
         <div className="flex flex-col gap-1.5 px-2">
-          <select value={filters.network_id ?? ''} onChange={(e) => onToggle('network_id', e.target.value ? Number(e.target.value) : undefined)} aria-label="Сеть" className={INPUT}>
-            <option value="">все сети</option>
-            {(networks.data ?? []).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}</option>)}
+          <select value="" onChange={(e) => { if (e.target.value) pick('network_id', Number(e.target.value)) }} aria-label="Сеть" className={INPUT}>
+            <option value="">{filters.network_id ? 'добавить сеть…' : 'все сети'}</option>
+            {(networks.data ?? []).filter((n) => !has(filters.network_id, n.id)).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}</option>)}
           </select>
           <input value={port} onChange={(e) => onPort(e.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="порт, например 3389" aria-label="Открытый порт" className={INPUT} />
           <input value={tag} onChange={(e) => onTag(e.target.value)} placeholder="тег" aria-label="Тег" className={INPUT} />
@@ -367,12 +391,12 @@ export function AssetsPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
   const [filters, setFilters] = useState<Filters>(() => ({
-    source_has: (params.get('source_has') as AssetSource | null) ?? undefined,
-    source_missing: (params.get('source_missing') as AssetSource | null) ?? undefined,
-    code: (params.get('code') as CodeFilter | null) ?? undefined,
-    zone: params.get('zone') ?? undefined,
-    criticality: (params.get('criticality') as Criticality | 'none' | null) ?? undefined,
-    network_id: params.get('network_id') ? Number(params.get('network_id')) : undefined,
+    source_has: listFrom<AssetSource>(params.get('source_has'), SOURCES),
+    source_missing: listFrom<AssetSource>(params.get('source_missing'), SOURCES),
+    code: listFrom<CodeFilter>(params.get('code'), ['any', ...CODES]),
+    zone: listFrom(params.get('zone')),
+    criticality: listFrom<Criticality | 'none'>(params.get('criticality'), [...CRITICALITIES, 'none']),
+    network_id: networkIdsFrom(params.get('network_id')),
   }))
   const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
@@ -420,13 +444,15 @@ export function AssetsPage() {
   }
   function checkAll(on: boolean) { setChecked(on ? new Set(items.map((a) => a.id)) : new Set()); lastChecked.current = null }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки обзора не должен действовать незаметно.
-  const chips: FilterChip[] = []
-  if (filters.code) chips.push({ label: filters.code === 'any' ? ANY_CODE_LABEL : CODE_LABELS[filters.code], clear: () => toggle('code', undefined) })
-  if (filters.source_has) chips.push({ label: `есть в ${SOURCE_LABELS[filters.source_has]}`, clear: () => toggle('source_has', undefined) })
-  if (filters.source_missing) chips.push({ label: `нет в ${SOURCE_LABELS[filters.source_missing]}`, clear: () => toggle('source_missing', undefined) })
-  if (filters.criticality) chips.push({ label: `критичность ${CRITICALITY_LABELS[filters.criticality]}`, clear: () => toggle('criticality', undefined) })
-  if (filters.zone) chips.push({ label: `зона ${filters.zone}`, clear: () => toggle('zone', undefined) })
-  if (filters.network_id !== undefined) chips.push({ label: `сеть ${networks.data?.find((n) => n.id === filters.network_id)?.cidr ?? `#${filters.network_id}`}`, clear: () => toggle('network_id', undefined) })
+  // Чип на каждое выбранное значение: крестик снимает только его.
+  const chips: FilterChip[] = [
+    ...valueChips('Расхождения', filters.code, (c) => (c === 'any' ? ANY_CODE_LABEL : CODE_LABELS[c]), (v) => toggle('code', v)),
+    ...valueChips('Источник есть', filters.source_has, (s) => SOURCE_LABELS[s], (v) => toggle('source_has', v)),
+    ...valueChips('Источника нет', filters.source_missing, (s) => SOURCE_LABELS[s], (v) => toggle('source_missing', v)),
+    ...valueChips('Критичность', filters.criticality, (c) => CRITICALITY_LABELS[c], (v) => toggle('criticality', v)),
+    ...valueChips('Зона', filters.zone, (z) => z, (v) => toggle('zone', v)),
+    ...valueChips('Сеть', filters.network_id, (id) => networks.data?.find((n) => n.id === id)?.cidr ?? `#${id}`, (v) => toggle('network_id', v)),
+  ]
   if (portInput) chips.push({ label: `порт ${portInput}`, clear: () => setPortInput('') })
   if (tagInput.trim()) chips.push({ label: `тег ${tagInput.trim()}`, clear: () => setTagInput('') })
   chips.push(...findingFacetChips(disc, setDisc).map((c) => ({ ...c, label: `расхождения · ${c.label.toLowerCase()}` })))
@@ -459,6 +485,7 @@ export function AssetsPage() {
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Активы</h1>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref('/api/assets/assets/export', queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, FQDN, IP, ОС… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -471,7 +498,7 @@ export function AssetsPage() {
         {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           {write && checked.size > 0 && (
-            <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)} facets={first?.facets ?? null} code={filters.code}
+            <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)} facets={first?.facets ?? null} code={filters.code?.length === 1 ? filters.code[0] : undefined}
               onSelectAll={() => allIds.mutate(queryArgs, { onSuccess: (r) => setChecked(new Set(r.ids)) })} />
           )}
           <div className="min-h-0 flex-1">

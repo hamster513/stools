@@ -17,7 +17,11 @@ import {
   type HostsQuery,
   type HostsResponse,
 } from '@/modules/ksc/api/types'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { listFrom, toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -48,6 +52,11 @@ const COMPONENT_STATES: { key: ComponentState; label: string }[] = [
   { key: 'none', label: 'нет компонента' },
 ]
 const COMPONENT_STATE_LABELS = Object.fromEntries(COMPONENT_STATES.map((c) => [c.key, c.label])) as Record<ComponentState, string>
+const KSC_STATUS_LABELS: Record<string, string> = { ok: 'ок', warning: 'предупреждение', critical: 'критично' }
+
+type MultiKey = 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'tag'
+
+const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
 
 const HOST: ColumnDef = { key: 'host', label: 'Хост', width: 224, flex: true }
 const GROUP: ColumnDef = { key: 'group', label: 'Группа', width: 160 }
@@ -77,54 +86,65 @@ function HostFacetPanel({ facets, filters, onToggle, onComponent, tagsCollected,
   facets: HostsResponse['facets']
   filters: HostFilters
   onToggle: <K extends keyof HostFilters>(key: K, value: HostFilters[K]) => void
-  onComponent: (name: string | undefined) => void
+  onComponent: (names: string[] | undefined) => void
   tagsCollected: boolean
   total: number
 }) {
-  const groups = Object.entries(facets?.group ?? {}).sort((a, b) => b[1] - a[1])
-  const products = Object.entries(facets?.product ?? {}).sort((a, b) => b[1] - a[1])
-  const hasAd = Object.keys(facets?.in_ad ?? {}).length > 0
-  // Выбранный компонент остаётся в списке, даже если под «нет компонента» его не осталось ни у одного хоста.
+  // Счётчики считаются по отфильтрованному набору: значения, ушедшие в ноль, панель помнит — иначе второе не выбрать.
+  // Компонент остаётся в списке, даже если под «нет компонента» его не осталось ни у одного хоста.
   const componentFacet = facets?.component ?? {}
-  const components = Object.keys(componentFacet).concat(filters.component && !(filters.component in componentFacet) ? [filters.component] : [])
-    .sort((a, b) => (componentFacet[b]?.off ?? 0) - (componentFacet[a]?.off ?? 0) || a.localeCompare(b, 'ru'))
-  const tags = Object.entries(facets?.tag ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'))
+  const remembered = useRememberedFacets(facets ? {
+    group: facetValues(facets.group),
+    product: facetValues(facets.product),
+    in_ad: facetValues(facets.in_ad),
+    tag: Object.entries(facets.tag ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).map(([value, count]) => ({ value, count })),
+    component: Object.keys(componentFacet).sort((a, b) => (componentFacet[b]?.off ?? 0) - (componentFacet[a]?.off ?? 0) || a.localeCompare(b, 'ru'))
+      .map((value) => ({ value, count: componentFacet[value]?.off ?? 0 })),
+  } : undefined)
+  const groups = remembered.group ?? []
+  const products = remembered.product ?? []
+  const inAd = remembered.in_ad ?? []
+  const tags = remembered.tag ?? []
+  const components = (remembered.component ?? []).map((c) => c.value)
+  for (const c of filters.component ?? []) if (!components.includes(c)) components.push(c)
+  const pick = <K extends MultiKey>(key: K, value: string) => onToggle(key, toggleValue(filters[key] as string[] | undefined, value) as HostFilters[K])
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Хостов <span className="font-mono tabular-nums text-text">{total}</span></div>
       <FacetSection title="Защита">
         {(Object.keys(PROTECTION_LABELS) as HostProtection[]).map((p) => (
-          <FacetRow key={p} active={filters.protection === p} count={facets?.protection[p] ?? 0} onClick={() => onToggle('protection', filters.protection === p ? undefined : p)}>{PROTECTION_LABELS[p]}</FacetRow>
+          <FacetRow key={p} active={has(filters.protection, p)} count={facets?.protection[p] ?? 0} onClick={() => pick('protection', p)}>{PROTECTION_LABELS[p]}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Агент">
         {(Object.keys(AGENT_LABELS) as HostAgent[]).map((a) => (
-          <FacetRow key={a} active={filters.agent === a} count={facets?.agent[a] ?? 0} onClick={() => onToggle('agent', filters.agent === a ? undefined : a)}>{AGENT_LABELS[a]}</FacetRow>
+          <FacetRow key={a} active={has(filters.agent, a)} count={facets?.agent[a] ?? 0} onClick={() => pick('agent', a)}>{AGENT_LABELS[a]}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Базы">
         {(Object.keys(BASES_LABELS) as HostBases[]).map((b) => (
-          <FacetRow key={b} active={filters.bases === b} count={facets?.bases[b] ?? 0} onClick={() => onToggle('bases', filters.bases === b ? undefined : b)}>{BASES_LABELS[b]}</FacetRow>
+          <FacetRow key={b} active={has(filters.bases, b)} count={facets?.bases[b] ?? 0} onClick={() => pick('bases', b)}>{BASES_LABELS[b]}</FacetRow>
         ))}
       </FacetSection>
-      {hasAd && (
+      {inAd.length > 0 && (
         <FacetSection title="AD">
-          {Object.entries(facets?.in_ad ?? {}).map(([k, n]) => (
-            <FacetRow key={k} active={filters.in_ad === k} count={n} onClick={() => onToggle('in_ad', filters.in_ad === k ? undefined : k)}>{IN_AD_LABELS[k] ?? k}</FacetRow>
+          {inAd.map(({ value: k, count }) => (
+            <FacetRow key={k} active={has(filters.in_ad, k)} count={count} onClick={() => pick('in_ad', k)}>{IN_AD_LABELS[k] ?? k}</FacetRow>
           ))}
         </FacetSection>
       )}
       <FacetSection title="Статус KSC">
         {(['ok', 'warning', 'critical'] as const).map((s) => (
-          <FacetRow key={s} active={filters.status === s} count={facets?.status[s] ?? 0} onClick={() => onToggle('status', filters.status === s ? undefined : s)}>{s === 'ok' ? 'ок' : s === 'warning' ? 'предупреждение' : 'критично'}</FacetRow>
+          <FacetRow key={s} active={has(filters.status, s)} count={facets?.status[s] ?? 0} onClick={() => pick('status', s)}>{KSC_STATUS_LABELS[s]}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Компонент защиты">
         <div className="mb-1 px-2 text-[10px] text-text-secondary">число — хостов, где компонент не работает</div>
         {components.map((name) => (
           <div key={name}>
-            <FacetRow active={filters.component === name} count={componentFacet[name]?.off ?? 0} onClick={() => onComponent(filters.component === name ? undefined : name)}>{name}</FacetRow>
-            {filters.component === name && (
+            <FacetRow active={has(filters.component, name)} count={componentFacet[name]?.off ?? 0} onClick={() => onComponent(toggleValue(filters.component, name))}>{name}</FacetRow>
+            {/* Состояние одно на все выбранные компоненты; число у состояния — по этому компоненту. */}
+            {has(filters.component, name) && (
               <div className="mt-0.5 mb-1 ml-3 flex flex-col gap-0.5 border-l border-grid pl-1">
                 {COMPONENT_STATES.map(({ key, label }) => (
                   <FacetRow key={key} active={filters.component_state === key} count={key === 'none' ? '—' : componentFacet[name]?.[key] ?? 0} onClick={() => onToggle('component_state', filters.component_state === key ? undefined : key)}>{label}</FacetRow>
@@ -136,20 +156,20 @@ function HostFacetPanel({ facets, filters, onToggle, onComponent, tagsCollected,
       </FacetSection>
       {tagsCollected && facets?.tag && (
         <FacetSection title="Тег">
-          <FacetRow active={filters.tag === '-'} onClick={() => onToggle('tag', filters.tag === '-' ? undefined : '-')}>без тегов</FacetRow>
-          {tags.map(([t, n]) => (
-            <FacetRow key={t} active={filters.tag === t} count={n} onClick={() => onToggle('tag', filters.tag === t ? undefined : t)}>{t}</FacetRow>
+          <FacetRow active={has(filters.tag, '-')} onClick={() => pick('tag', '-')}>без тегов</FacetRow>
+          {tags.map(({ value: t, count }) => (
+            <FacetRow key={t} active={has(filters.tag, t)} count={count} onClick={() => pick('tag', t)}>{t}</FacetRow>
           ))}
         </FacetSection>
       )}
       <FacetSection title="Группа">
-        {groups.map(([g, n]) => (
-          <FacetRow key={g} active={filters.group === g} count={n} onClick={() => onToggle('group', filters.group === g ? undefined : g)}>{g}</FacetRow>
+        {groups.map(({ value: g, count }) => (
+          <FacetRow key={g} active={has(filters.group, g)} count={count} onClick={() => pick('group', g)}>{g}</FacetRow>
         ))}
       </FacetSection>
       <FacetSection title="Продукт">
-        {products.map(([p, n]) => (
-          <FacetRow key={p} active={filters.product === p} count={n} onClick={() => onToggle('product', filters.product === p ? undefined : p)}>{p}</FacetRow>
+        {products.map(({ value: p, count }) => (
+          <FacetRow key={p} active={has(filters.product, p)} count={count} onClick={() => pick('product', p)}>{p}</FacetRow>
         ))}
       </FacetSection>
     </div>
@@ -289,17 +309,17 @@ export function HostsPage({ serverId }: { serverId: number }) {
   const server = servers.data?.find((s) => s.id === serverId)
   const snapshotId = server?.last_snapshot_id ?? undefined
   const [filters, setFilters] = useState<HostFilters>(() => ({
-    group: params.get('group') ?? undefined,
-    product: params.get('product') ?? undefined,
-    agent: (params.get('agent') as HostFilters['agent']) ?? undefined,
-    protection: (params.get('protection') as HostFilters['protection']) ?? undefined,
-    bases: (params.get('bases') as HostFilters['bases']) ?? undefined,
-    in_ad: params.get('in_ad') ?? undefined,
-    status: params.get('status') ?? undefined,
-    component: params.get('component') ?? undefined,
+    group: listFrom(params.get('group')),
+    product: listFrom(params.get('product')),
+    agent: listFrom<HostAgent>(params.get('agent'), Object.keys(AGENT_LABELS) as HostAgent[]),
+    protection: listFrom<HostProtection>(params.get('protection'), Object.keys(PROTECTION_LABELS) as HostProtection[]),
+    bases: listFrom<HostBases>(params.get('bases'), Object.keys(BASES_LABELS) as HostBases[]),
+    in_ad: listFrom(params.get('in_ad')),
+    status: listFrom(params.get('status')),
+    component: listFrom(params.get('component')),
     // Состояние без компонента сервер отвергает (422), поэтому из адреса оно читается только вместе с компонентом.
     component_state: params.get('component') ? COMPONENT_STATES.find((c) => c.key === params.get('component_state'))?.key : undefined,
-    tag: params.get('tag') ?? undefined,
+    tag: listFrom(params.get('tag')),
     policy: Number(params.get('policy')) || undefined,
   }))
   const [searchInput, setSearchInput] = useState('')
@@ -320,20 +340,24 @@ export function HostsPage({ serverId }: { serverId: number }) {
   const selected: Host | null = items[selectedIndex] ?? null
 
   function toggle<K extends keyof HostFilters>(key: K, value: HostFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
-  function setComponent(name: string | undefined) { setFilters((prev) => ({ ...prev, component: name, component_state: undefined })) }
+  // Состояние без компонента сервер отвергает (422): снят последний компонент — снимается и состояние.
+  function setComponent(names: string[] | undefined) { setFilters((prev) => ({ ...prev, component: names, component_state: names ? prev.component_state : undefined })) }
   function clearAll() { setFilters({}); setSearchInput('') }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
-  const chips: FilterChip[] = []
-  if (filters.protection) chips.push({ label: `защита ${PROTECTION_LABELS[filters.protection]}`, clear: () => toggle('protection', undefined) })
-  if (filters.agent) chips.push({ label: `агент ${AGENT_LABELS[filters.agent]}`, clear: () => toggle('agent', undefined) })
-  if (filters.bases) chips.push({ label: `базы ${BASES_LABELS[filters.bases]}`, clear: () => toggle('bases', undefined) })
-  if (filters.in_ad) chips.push({ label: `AD ${IN_AD_LABELS[filters.in_ad] ?? filters.in_ad}`, clear: () => toggle('in_ad', undefined) })
-  if (filters.status) chips.push({ label: `статус KSC ${({ ok: 'ок', warning: 'предупреждение', critical: 'критично' } as Record<string, string>)[filters.status] ?? filters.status}`, clear: () => toggle('status', undefined) })
-  if (filters.component) chips.push({ label: `компонент ${filters.component}${filters.component_state ? ` · ${COMPONENT_STATE_LABELS[filters.component_state]}` : ''}`, clear: () => setComponent(undefined) })
-  if (filters.tag) chips.push({ label: filters.tag === '-' ? 'без тегов' : `тег ${filters.tag}`, clear: () => toggle('tag', undefined) })
+  // Чип на каждое выбранное значение: крестик снимает только его.
+  const chips: FilterChip[] = [
+    ...valueChips('Защита', filters.protection, (p) => PROTECTION_LABELS[p], (v) => toggle('protection', v)),
+    ...valueChips('Агент', filters.agent, (a) => AGENT_LABELS[a], (v) => toggle('agent', v)),
+    ...valueChips('Базы', filters.bases, (b) => BASES_LABELS[b], (v) => toggle('bases', v)),
+    ...valueChips('AD', filters.in_ad, (k) => IN_AD_LABELS[k] ?? k, (v) => toggle('in_ad', v)),
+    ...valueChips('Статус KSC', filters.status, (s) => KSC_STATUS_LABELS[s] ?? s, (v) => toggle('status', v)),
+    ...valueChips('Компонент', filters.component, (c) => c, setComponent),
+  ]
+  if (filters.component_state) chips.push({ label: `Состояние компонента: ${COMPONENT_STATE_LABELS[filters.component_state]}`, clear: () => toggle('component_state', undefined) })
+  chips.push(...valueChips('Тег', filters.tag, (t) => (t === '-' ? 'без тегов' : t), (v) => toggle('tag', v)))
   if (filters.policy) chips.push({ label: `политика #${filters.policy}${policyName ? ` · ${policyName}` : ''}`, clear: () => toggle('policy', undefined) })
-  if (filters.group) chips.push({ label: `группа ${filters.group}`, clear: () => toggle('group', undefined) })
-  if (filters.product) chips.push({ label: `продукт ${filters.product}`, clear: () => toggle('product', undefined) })
+  chips.push(...valueChips('Группа', filters.group, (g) => g, (v) => toggle('group', v)))
+  chips.push(...valueChips('Продукт', filters.product, (p) => p, (v) => toggle('product', v)))
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -368,6 +392,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
         <h1 className="text-sm font-semibold text-text">Хосты</h1>
         <span className="font-mono text-xs text-text-secondary">снапшот #{snapshotId}</span>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/hosts/export`, queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, IP, ОС… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />

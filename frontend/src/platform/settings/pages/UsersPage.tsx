@@ -16,6 +16,7 @@ import {
 import { MIN_PASSWORD, ROLE_TITLES, type UserRow } from '@/platform/settings/api/types'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+import { ExportButton } from '@/platform/filters/ExportButton'
 
 const ROLES: Role[] = ['admin', 'analyst', 'auditor']
 
@@ -138,7 +139,10 @@ export function UsersPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">Пользователи</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-base font-semibold text-text">Пользователи</h1>
+            <ExportButton href={(fmt) => `/api/settings/users/export?format=${fmt}`} total={users.data?.length} disabled={users.isLoading} />
+          </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Администратор настраивает продукт и заводит учётки, аналитик работает с выгрузками и
             разметкой, аудитор всё видит и ничего не меняет.

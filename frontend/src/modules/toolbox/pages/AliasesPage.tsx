@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { BookKey, Download, Lock, Search } from 'lucide-react'
+import { BookKey, Lock, Search } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -8,6 +8,7 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
+import { ExportButton } from '@/platform/filters/ExportButton'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
@@ -81,6 +82,7 @@ function AliasesTable() {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-base font-semibold text-text">Соответствия</h1>
             <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+            <ExportButton href={(fmt) => aliasesExportUrl({ q: q || undefined, kind: kind || undefined }, fmt)} total={total} disabled={aliases.isLoading} />
             <div className="relative">
               <Search size={13} className="pointer-events-none absolute top-1/2 left-2 -translate-y-1/2 text-text-secondary" aria-hidden />
               <input className={cn(FIELD, 'w-64 py-1 pl-7 text-xs')} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Значение или псевдоним" aria-label="Поиск по значению и псевдониму" spellCheck={false} />
@@ -88,9 +90,6 @@ function AliasesTable() {
           </div>
           <p className="mt-1 max-w-2xl text-xs text-text-secondary">Какому настоящему значению соответствует какой псевдоним. По этой таблице работает обратный перевод.</p>
         </div>
-        <a href={aliasesExportUrl()} download className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-sm text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
-          <Download size={14} aria-hidden />Экспорт csv
-        </a>
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </div>
 

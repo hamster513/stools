@@ -161,18 +161,20 @@ export interface Host {
 export type ComponentState = 'on' | 'off' | 'other' | 'none'
 
 export interface HostsQuery {
-  group?: string
-  product?: string
-  agent?: HostAgent
-  protection?: HostProtection
-  bases?: HostBases
-  in_ad?: string
-  status?: string
-  /** Название компонента защиты; без `component_state` — хосты, у которых он есть. */
-  component?: string
+  /** Многозначные фасеты уходят через запятую (buildQuery): внутри фасета «ИЛИ». */
+  group?: string[]
+  product?: string[]
+  agent?: HostAgent[]
+  protection?: HostProtection[]
+  bases?: HostBases[]
+  in_ad?: string[]
+  status?: string[]
+  /** Названия компонентов защиты; без `component_state` — хосты, у которых он есть. */
+  component?: string[]
+  /** Одно состояние — для выбранных компонентов. */
   component_state?: ComponentState
-  /** Тег; `-` — хосты без тегов. */
-  tag?: string
+  /** Теги; `-` — хосты без тегов. */
+  tag?: string[]
   /** Хосты групп, где действует политика. */
   policy?: number
   q?: string
@@ -462,10 +464,11 @@ export interface PolicyCard extends PolicyListItem {
 
 export interface PolicyListQuery {
   q?: string
-  product?: string
+  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  product?: string[]
   active?: boolean
-  /** Оценка или `none` — без оценки. */
-  grade?: PolicyGrade | 'none'
+  /** Оценки или `none` — без оценки. */
+  grade?: (PolicyGrade | 'none')[]
 }
 
 export interface PolicyListResponse {
@@ -531,7 +534,8 @@ export interface TaskListItem {
 
 export interface TasksQuery {
   q?: string
-  type?: string
+  /** Типы задач через запятую (buildQuery). */
+  type?: string[]
   failed?: boolean
 }
 
@@ -617,10 +621,11 @@ export const NET_LAYER_LABELS: Record<string, string> = { packet: 'пакетн�
 
 export interface ExclusionsQuery {
   q?: string
-  policy_id?: number
-  kind?: string
+  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  policy_id?: number[]
+  kind?: string[]
   enabled?: boolean
-  dup?: ExclusionDup
+  dup?: ExclusionDup[]
   /** true — с рисками, false — без. */
   risky?: boolean
   /** Записи, действующие на хост: его политик и активных на нём профилей. */
@@ -694,9 +699,10 @@ export interface NetRuleDetail extends NetRuleItem {
 
 export interface NetRulesQuery {
   q?: string
-  policy_id?: number
-  action?: string
-  direction?: string
+  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  policy_id?: number[]
+  action?: string[]
+  direction?: string[]
   enabled?: boolean
   /** Записи, действующие на хост: его политик и активных на нём профилей. */
   host_id?: string
@@ -784,10 +790,11 @@ export interface ChangesSnapshot extends ChangesSummary {
 }
 
 export interface ChangesQuery {
-  kind?: ChangeKind
-  action?: ChangeAction
-  policy_id?: number
-  snapshot_id?: number
+  /** Многозначные фасеты уходят через запятую (buildQuery). */
+  kind?: ChangeKind[]
+  action?: ChangeAction[]
+  policy_id?: number[]
+  snapshot_id?: number[]
   limit?: number
   offset?: number
 }

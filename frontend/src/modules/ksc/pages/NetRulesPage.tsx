@@ -7,7 +7,11 @@ import { useNetRules } from '@/modules/ksc/api/queries'
 import type { NetRuleItem } from '@/modules/ksc/api/types'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -15,11 +19,13 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { ObjectDrawer } from './objects/ObjectDrawer'
 import { LoadMore, MaybeMark, ObjectsEmpty, PartialNote, PartialPoliciesNote, PolicyCell, PolicyFacet, SnapshotSection, UndescribedNote, UndeterminedNote } from './objects/ObjectsParts'
+import { togglePolicy, type PickedPolicy } from './objects/policyFilter'
 
+/** Политика, действие и направление — мультивыбор («ИЛИ» внутри фасета). */
 interface Filters {
-  policy?: { id: number; name: string }
-  action?: string
-  direction?: string
+  policy?: PickedPolicy[]
+  action?: string[]
+  direction?: string[]
   enabled?: boolean
 }
 
@@ -86,7 +92,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
   const q = useDebouncedValue(searchInput, 250)
   const filtersPanel = useFiltersPanel('ksc-net-rules')
   const args = useMemo(
-    () => ({ q: q || undefined, policy_id: policyId ?? filters.policy?.id, action: filters.action, direction: filters.direction, enabled: filters.enabled, host_id: hostId }),
+    () => ({ q: q || undefined, policy_id: policyId !== undefined ? [policyId] : filters.policy?.map((p) => p.id), action: filters.action, direction: filters.direction, enabled: filters.enabled, host_id: hostId }),
     [q, policyId, filters, hostId],
   )
   const query = useNetRules(snapshotId, args)
@@ -95,12 +101,15 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
   const items = pages.flatMap((p) => p.items)
   const facets = first?.facets
 
+  // Счётчики считаются по отфильтрованному набору: ушедшие в ноль значения панель помнит, иначе второе не выбрать.
+  const remembered = useRememberedFacets(facets ? { action: facetValues(facets.action, false), direction: facetValues(facets.direction, false) } : undefined)
   function set<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
+  // Чип на каждое выбранное значение: крестик снимает только его.
   const chips: FilterChip[] = []
-  if (!inPolicy && filters.policy) chips.push({ label: `политика ${filters.policy.name}`, clear: () => set('policy', undefined) })
-  if (filters.action) chips.push({ label: `действие ${actionLabel(filters.action)}`, clear: () => set('action', undefined) })
-  if (filters.direction) chips.push({ label: `направление ${directionLabel(filters.direction)}`, clear: () => set('direction', undefined) })
+  if (!inPolicy) chips.push(...(filters.policy ?? []).map((p) => ({ label: `Политика: ${p.name}`, clear: () => set('policy', togglePolicy(filters.policy, p)) })))
+  chips.push(...valueChips('Действие', filters.action, actionLabel, (v) => set('action', v)))
+  chips.push(...valueChips('Направление', filters.direction, directionLabel, (v) => set('direction', v)))
   if (filters.enabled !== undefined) chips.push({ label: filters.enabled ? 'включённые' : 'выключенные', clear: () => set('enabled', undefined) })
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить сетевые правила' : null
@@ -120,6 +129,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/net-rules/export`, args)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Название, адрес, порт" aria-label="Поиск сетевых правил" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -131,15 +141,15 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && (
           <FacetPanel total={first?.total ?? 0} noun="Правил">
-            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={facets?.policy} selected={filters.policy?.id} onSelect={(p) => set('policy', p)} />}
+            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={facets?.policy} selected={filters.policy?.map((p) => p.id)} onToggle={(p) => set('policy', togglePolicy(filters.policy, p))} />}
             <FacetSection title="Действие">
-              {Object.entries(facets?.action ?? {}).map(([a, n]) => (
-                <FacetRow key={a} active={filters.action === a} count={n} onClick={() => set('action', filters.action === a ? undefined : a)}>{actionLabel(a)}</FacetRow>
+              {(remembered.action ?? []).map(({ value: a, count }) => (
+                <FacetRow key={a} active={filters.action?.includes(a) ?? false} count={count} onClick={() => set('action', toggleValue(filters.action, a))}>{actionLabel(a)}</FacetRow>
               ))}
             </FacetSection>
             <FacetSection title="Направление">
-              {Object.entries(facets?.direction ?? {}).map(([d, n]) => (
-                <FacetRow key={d} active={filters.direction === d} count={n} onClick={() => set('direction', filters.direction === d ? undefined : d)}>{directionLabel(d)}</FacetRow>
+              {(remembered.direction ?? []).map(({ value: d, count }) => (
+                <FacetRow key={d} active={filters.direction?.includes(d) ?? false} count={count} onClick={() => set('direction', toggleValue(filters.direction, d))}>{directionLabel(d)}</FacetRow>
               ))}
             </FacetSection>
             <FacetSection title="Включено">

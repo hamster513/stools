@@ -119,18 +119,19 @@ export interface AssetsResponse {
 
 export interface AssetsQuery {
   q?: string
-  source_has?: AssetSource
-  source_missing?: AssetSource
-  code?: CodeFilter
-  network_id?: number
-  zone?: string
+  /** Многозначные фасеты уходят через запятую (buildQuery): внутри фасета «ИЛИ». */
+  source_has?: AssetSource[]
+  source_missing?: AssetSource[]
+  code?: CodeFilter[]
+  network_id?: number[]
+  zone?: string[]
   port?: number
   tag?: string
-  criticality?: Criticality | 'none'
+  criticality?: (Criticality | 'none')[]
   /** Статусы расхождений через запятую или `all`; без него — учитываемые в подсчётах. */
   disc_status?: string
-  /** Исполнитель расхождения: `me`, `none` или логин. */
-  assignee?: string
+  /** Исполнитель расхождения: `me`, `none` или логин; несколько — «ИЛИ». */
+  assignee?: string[]
   overdue?: boolean
 }
 

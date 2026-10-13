@@ -16,8 +16,9 @@ const SMALL = cn(FIELD, 'w-auto py-1 text-xs')
  * «не менять»; исполнителя и срок можно и очистить. «Выбрать всё по фильтру»
  * показывается, только если модуль передал `onSelectAll`. Если модуль передал
  * `filter` (выбрано всё по фильтру), уходит фильтр, а не ключи: модуль с
- * фоновой задачей отвечает `{job_id}` — его получает `onJob`. Без права записи
- * полосы нет.
+ * фоновой задачей отвечает `{job_id}` — его получает `onJob`. Многозначные
+ * фасеты в `filter` — списками (VM: `level: ['high', 'critical']`), как их
+ * держит страница. Без права записи полосы нет.
  */
 export function BulkBar({ module, scopeId, keys, total, onSelectAll, filter, onJob, onDone, onClear }: {
   module: string

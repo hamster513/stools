@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Download, FilterX, Search, X } from 'lucide-react'
+import { FilterX, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useMe } from '@/api/auth'
-import { exportUrl, useCancelJob, useHost, useJob, useVulns } from '@/modules/vm/api/queries'
+import { useCancelJob, useHost, useJob, useVulns } from '@/modules/vm/api/queries'
 import { AssetLink } from '@/modules/assets/AssetLink'
-import { CVSS_SOURCE_LABELS, LEVEL_LABELS, type RiskLevel, type VulnItem, type VulnSort, type VulnsQuery } from '@/modules/vm/api/types'
+import { CVSS_SOURCE_LABELS, LEVEL_LABELS, LEVELS, type CvssSource, type RiskLevel, type VulnItem, type VulnSort, type VulnsQuery } from '@/modules/vm/api/types'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { BulkBar } from '@/platform/findings/BulkBar'
-import { findingFacetChips } from '@/platform/findings/facets'
+import { findingFacetChips, listFrom, valueChips } from '@/platform/findings/facets'
 import { useUsersDirectory } from '@/platform/findings/queries'
 import { STATUSES, type FindingStatus } from '@/platform/findings/types'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
@@ -55,14 +57,14 @@ export function VulnsPage() {
   const linked = splitKey(params.get('key'))
   // Адрес задаёт начальные фильтры: сюда ведут ссылки с обзора и из карточки.
   const [filters, setFilters] = useState<VulnFilters>(() => ({
-    level: (params.get('level') as RiskLevel | null) ?? undefined,
-    zone: params.get('zone') ?? undefined,
-    criticality: params.get('criticality') ?? undefined,
-    cvss_source: (params.get('cvss_source') as VulnFilters['cvss_source']) ?? undefined,
+    level: listFrom<RiskLevel>(params.get('level'), LEVELS),
+    zone: listFrom(params.get('zone')),
+    criticality: listFrom(params.get('criticality')),
+    cvss_source: listFrom<CvssSource>(params.get('cvss_source'), Object.keys(CVSS_SOURCE_LABELS) as CvssSource[]),
     exploits: params.get('exploits') === 'true' ? true : undefined,
     // Пару по ссылке ищут при любом статусе: она могла быть закрыта.
     status: linked ? [...STATUSES] : statusesFrom(params.get('status')),
-    assignee: params.get('assignee') ?? undefined,
+    assignee: listFrom(params.get('assignee')),
     overdue: params.get('overdue') === 'true' || undefined,
     risk_expiring: params.get('risk_expiring') === 'true' || undefined,
   }))
@@ -140,15 +142,15 @@ export function VulnsPage() {
     for (const key of ['vm-vulns', 'vm-overview']) qc.invalidateQueries({ queryKey: [key] })
   }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
-  // Пустая строка — тоже значение фильтра («не задана», «без зоны»).
+  // Чип на каждое значение; пустая строка — тоже значение фильтра («не задана», «без зоны»).
   const chips: FilterChip[] = findingFacetChips(filters, (next) => setFilters((prev) => ({ ...prev, ...next })), names)
-  if (filters.level) chips.push({ label: `риск ${LEVEL_LABELS[filters.level]}`, clear: () => toggle('level', undefined) })
-  if (filters.criticality !== undefined) chips.push({ label: `критичность ${filters.criticality || 'не задана'}`, clear: () => toggle('criticality', undefined) })
-  if (filters.zone !== undefined) chips.push({ label: filters.zone ? `зона ${filters.zone}` : 'без зоны', clear: () => toggle('zone', undefined) })
+  chips.push(...valueChips('Риск', filters.level, (l) => LEVEL_LABELS[l], (v) => toggle('level', v)))
+  chips.push(...valueChips('Критичность', filters.criticality, (c) => c || 'не задана', (v) => toggle('criticality', v)))
+  chips.push(...valueChips('Зона', filters.zone, (z) => z || 'без зоны', (v) => toggle('zone', v)))
   if (filters.exploits) chips.push({ label: 'есть эксплойт в ExploitDB', clear: () => toggle('exploits', undefined) })
   if (filters.msf) chips.push({ label: 'есть модуль Metasploit', clear: () => toggle('msf', undefined) })
-  if (filters.cvss_source) chips.push({ label: `источник CVSS ${CVSS_SOURCE_LABELS[filters.cvss_source]}`, clear: () => toggle('cvss_source', undefined) })
-  if (filters.os !== undefined) chips.push({ label: `ОС ${filters.os || 'не определена'}`, clear: () => toggle('os', undefined) })
+  chips.push(...valueChips('Источник CVSS', filters.cvss_source, (c) => CVSS_SOURCE_LABELS[c], (v) => toggle('cvss_source', v)))
+  chips.push(...valueChips('ОС', filters.os, (o) => o || 'не определена', (v) => toggle('os', v)))
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -176,6 +178,7 @@ export function VulnsPage() {
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Уязвимости</h1>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref('/api/vm/export', queryArgs)} total={query.data?.pages[0]?.total} disabled={query.isLoading} />
         {cveParam && (
           <span className="inline-flex items-center gap-1 rounded border border-grid px-2 py-0.5 font-mono text-xs text-text">
             {cveParam}
@@ -204,13 +207,6 @@ export function VulnsPage() {
             <FilterX size={13} aria-hidden /> Сбросить
           </button>
         )}
-        <a
-          href={exportUrl(queryArgs)}
-          className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          title="Скачать CSV по текущему фильтру, по умолчанию — открытые"
-        >
-          <Download size={13} aria-hidden /> CSV
-        </a>
         <div className="font-mono text-xs tabular-nums text-text-secondary">
           {query.data ? (items.length < total ? `${items.length.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}` : total.toLocaleString('ru-RU')) : '…'}
         </div>

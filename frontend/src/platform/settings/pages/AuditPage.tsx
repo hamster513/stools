@@ -1,12 +1,14 @@
 import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Download, ScrollText } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ScrollText } from 'lucide-react'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Button } from '@/components/ui/Button'
-import { auditCsvUrl, useAudit, useUsers } from '@/platform/settings/api/queries'
+import { auditExportUrl, useAudit, useUsers } from '@/platform/settings/api/queries'
+import { ExportButton } from '@/platform/filters/ExportButton'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ROLE_TITLES, type AuditFilters } from '@/platform/settings/api/types'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
@@ -42,7 +44,7 @@ function localLabel(local: string): string {
 export function AuditPage() {
   const users = useUsers()
 
-  const [userId, setUserId] = useState('')
+  const [userIds, setUserIds] = useState<number[] | undefined>()
   const [since, setSince] = useState('')
   const [until, setUntil] = useState('')
   const [deniedOnly, setDeniedOnly] = useState(false)
@@ -50,7 +52,7 @@ export function AuditPage() {
   const filtersPanel = useFiltersPanel('settings-audit')
 
   const filters: AuditFilters = {
-    user_id: userId === '' ? undefined : Number(userId),
+    user_id: userIds,
     since: toIso(since),
     until: toIso(until),
     denied_only: deniedOnly ? true : undefined,
@@ -68,11 +70,11 @@ export function AuditPage() {
   }
 
   // Что выбрано, пока отбор свёрнут.
-  const chips: FilterChip[] = []
-  if (userId !== '') {
-    const u = users.data?.find((x) => String(x.id) === userId)
-    chips.push({ label: `пользователь ${u ? (u.display_name ? `${u.display_name} (${u.login})` : u.login) : `#${userId}`}`, clear: () => change(() => setUserId('')) })
-  }
+  // Чип на каждого выбранного пользователя: крестик снимает только его.
+  const chips: FilterChip[] = valueChips('Пользователь', userIds, (id) => {
+    const u = users.data?.find((x) => x.id === id)
+    return u ? (u.display_name ? `${u.display_name} (${u.login})` : u.login) : `#${id}`
+  }, (next) => change(() => setUserIds(next)))
   if (since !== '') chips.push({ label: `с ${localLabel(since)}`, clear: () => change(() => setSince('')) })
   if (until !== '') chips.push({ label: `по ${localLabel(until)}`, clear: () => change(() => setUntil('')) })
   if (deniedOnly) chips.push({ label: 'только отказы', clear: () => change(() => setDeniedOnly(false)) })
@@ -87,39 +89,30 @@ export function AuditPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-base font-semibold text-text">Журнал действий</h1>
             <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+            <ExportButton href={(fmt) => auditExportUrl(filters, fmt)} total={audit.data?.total} disabled={audit.isLoading} />
           </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Изменяющие запросы и отказы по правам. Записи хранятся столько, сколько задано в
             разделе «Безопасность».
           </p>
         </div>
-        <a
-          href={auditCsvUrl(filters)}
-          download
-          className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-sm font-medium text-text hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-        >
-          <Download size={14} aria-hidden />
-          Скачать CSV
-        </a>
       </div>
 
       {!filtersPanel.open && chips.length > 0 && <div className="mb-4 flex"><FilterChips chips={chips} /></div>}
       {filtersPanel.open && (
         <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Пользователь">
-            <select
-              className={FIELD}
-              value={userId}
-              onChange={(e) => change(() => setUserId(e.target.value))}
-            >
-              <option value="">все</option>
+          <fieldset>
+            <legend className="mb-1 block text-xs font-medium text-text">Пользователь</legend>
+            {/* Несколько пользователей — «ИЛИ»; ничего не отмечено — все. */}
+            <div className="flex max-h-32 flex-col gap-1 overflow-y-auto">
               {(users.data ?? []).map((u) => (
-                <option key={u.id} value={u.id}>
+                <label key={u.id} className="flex items-center gap-1.5 text-xs text-text">
+                  <input type="checkbox" checked={userIds?.includes(u.id) ?? false} onChange={() => change(() => setUserIds((v) => toggleValue(v, u.id)))} />
                   {u.display_name ? `${u.display_name} (${u.login})` : u.login}
-                </option>
+                </label>
               ))}
-            </select>
-          </Field>
+            </div>
+          </fieldset>
           <Field label="С">
             <input
               className={FIELD}
