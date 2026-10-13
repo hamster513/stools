@@ -26,6 +26,7 @@ from api.modules.siem.core.kb import (
     ConnectionLike,
     KbClient,
     KbDeploymentSet,
+    KbError,
     KbObject,
     make_client,
     public_error,
@@ -111,11 +112,15 @@ def _run_collect(db: Session, job_id: int, settings: Settings) -> None:
             db.commit()
         else:
             _run_stages(db, job, snapshot, snapshot.id)
-    except Exception as exc:  # noqa: BLE001 — любая ошибка проваливает задачу
+    except Exception as exc:  # любая ошибка проваливает задачу
         db.rollback()
         if collecting:
-            # Трасса httpx может содержать URL с адресом KB — в журнал только класс ошибки.
-            logger.warning("сбор из базы знаний прерван: %s", type(exc).__name__)
+            if isinstance(exc, KbError):
+                # Трасса httpx может содержать URL с адресом KB — в журнал только класс ошибки.
+                logger.warning("сбор из базы знаний прерван: %s", type(exc).__name__)
+            else:
+                # Не ошибка KB (БД, диск, секрет): адреса в трассе нет, а без неё первый живой сбой не разобрать.
+                logger.exception("сбор из базы знаний прерван не на стороне KB")
             message = public_error(exc)
         else:
             message = _safe_error(exc)  # пишет трассу в журнал сам

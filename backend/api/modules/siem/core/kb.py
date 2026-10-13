@@ -251,7 +251,9 @@ class KbClient:
         )
 
     def correlation_objects(self, db: str, group_id: str | None = None) -> Iterator[KbObject]:
-        """Объекты типа Correlation постранично; `group_id` — состав набора установки."""
+        """Объекты типа Correlation постранично; `group_id` — состав набора установки.
+
+        Страницы читаются до первой пустой — сервер может отдавать меньше `take`, чем просили."""
         skip = 0
         while True:
             body = {
@@ -271,9 +273,9 @@ class KbClient:
                     folder_path=str(i.get("FolderPath") or "").replace("\\", "/"), origin_id=str(i.get("OriginId") or ""),
                     installed=str(i.get("DeploymentStatus") or "").lower() == "installed",
                 )
-            if len(rows) < PAGE_SIZE:
+            if not rows:
                 return
-            skip += PAGE_SIZE
+            skip += len(rows)
 
     def export_all(self, db: str, to_path: Path, on_bytes: Callable[[int], None] | None = None) -> int:
         """Экспорт базы в формате kb потоком в файл; возвращает число байт.

@@ -46,8 +46,18 @@ def test_objects_are_paged_and_folder_path_normalised() -> None:
     assert len(objs) == 501
     assert objs[0].folder_path == "PT/Windows" and objs[0].installed is False and objs[1].installed is True
     assert objs[0].guid == "00000000-0000-0000-0000-000000000000" and objs[0].short_id == "Rule_0"
-    assert [c.url.path for c in fake.calls].count("/api-studio/siem/objects/list") == 2
+    # 500 + 1 + пустая страница: конец листинга определяется только пустой страницей.
+    assert [c.url.path for c in fake.calls].count("/api-studio/siem/objects/list") == 3
+    fake.calls.clear()
     assert len(list(_client(fake).correlation_objects(DB, group_id=INSTALL_SET))) == 3
+    assert [c.url.path for c in fake.calls].count("/api-studio/siem/objects/list") == 2
+
+
+def test_server_capped_page_size_does_not_truncate() -> None:
+    fake = FakeKb()
+    fake.page_cap = 100
+    assert len(list(_client(fake).correlation_objects(DB))) == 501
+    assert [c.url.path for c in fake.calls].count("/api-studio/siem/objects/list") == 7
 
 
 def test_objects_list_without_rows_is_a_clear_error() -> None:

@@ -1,6 +1,7 @@
 """Сбор правил из базы знаний по API: инвентарь, экспорт, конвейер разбора."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -107,6 +108,20 @@ def test_collect_failure_on_export_leaves_no_snapshot(auth_client: TestClient, k
     job = collect_and_wait(auth_client)
     assert job["status"] == "failed" and job["snapshot_id"] is None
     assert job["error"] == "ошибка сервера (HTTP 500)"
+    assert auth_client.get("/api/siem/snapshots").json() == []
+
+
+def test_non_kb_failure_is_logged_with_traceback(
+    auth_client: TestClient, kb: FakeKb, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("api.modules.siem.services.kb_collect.persist_inventory", boom)
+    with caplog.at_level(logging.WARNING, logger="api.modules.siem.services.kb_collect"):
+        job = collect_and_wait(auth_client)
+    assert job["status"] == "failed" and job["error"] == "ошибка сервера"
+    assert any(r.exc_info and "не на стороне KB" in r.getMessage() for r in caplog.records)
     assert auth_client.get("/api/siem/snapshots").json() == []
 
 

@@ -49,6 +49,8 @@ class FakeKb:
         self.forbidden = False
         self.export_status = 200
         self.calls: list[httpx.Request] = []
+        #: Потолок строк на страницу: настоящий сервер может отдавать меньше `take`.
+        self.page_cap: int | None = None
 
     def http_factory(self, conn: Any, timeout: float = 60.0) -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(self.handler))
@@ -81,7 +83,8 @@ class FakeKb:
             if group and group != ROOT:
                 allowed = set(self.members.get(group, []))
                 rows = [o for o in rows if o["Id"] in allowed]
-            return httpx.Response(200, json={"Rows": rows[body["skip"] : body["skip"] + body["take"]]})
+            take = body["take"] if self.page_cap is None else min(body["take"], self.page_cap)
+            return httpx.Response(200, json={"Rows": rows[body["skip"] : body["skip"] + take]})
         if p == "/api/siem/export/kbpackage":
             assert request.url.params["contentMode"] == "deploymentSet" and request.url.params["groupId"] == ROOT
             assert request.url.params["contentDatabase"] == DB
