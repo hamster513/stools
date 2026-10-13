@@ -16,7 +16,7 @@ from api.modules.siem.core.kb import (
     public_error,
 )
 from api.modules.siem.services.kb_settings import KbConnection
-from tests.api.fake_kb import DB, INSTALL_SET, FakeKb
+from tests.api.fake_kb import DB, INSTALL_SET, FakeKb, kb_object
 
 CONN = KbConnection(host="mp.corp.local", username="svc", password="pw", client_secret="sec")
 
@@ -83,6 +83,55 @@ def test_export_over_limit_is_refused(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(kb_mod, "EXPORT_LIMIT", 10)
     with pytest.raises(KbError, match="больше лимита"):
         _client(FakeKb()).export_all(DB, tmp_path / "kb.zip")
+
+
+def test_non_json_body_is_a_clear_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/connect/token":
+            return httpx.Response(200, json={"access_token": "tok"})
+        return httpx.Response(200, content=b"<html>login</html>")
+
+    client = KbClient(CONN, httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(KbShapeError, match="не JSON") as exc_info:
+        client.databases()
+    assert public_error(exc_info.value) == "ответ KB не JSON"
+
+
+def test_export_failure_leaves_no_partial_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(kb_mod, "EXPORT_LIMIT", 10)
+    out = tmp_path / "kb.zip"
+    with pytest.raises(KbError):
+        _client(FakeKb()).export_all(DB, out)
+    assert not out.exists()
+
+
+def test_export_write_failure_is_a_client_error(tmp_path: Path) -> None:
+    out = tmp_path / "no-such-dir" / "kb.zip"
+    with pytest.raises(KbError, match="не удалось записать экспорт — ") as exc_info:
+        _client(FakeKb()).export_all(DB, out)
+    assert str(tmp_path) not in str(exc_info.value)
+    assert "записать" in public_error(exc_info.value)
+
+
+def test_guid_lowercased_and_installed_case_insensitive() -> None:
+    obj = kb_object("ABCDEF00-0000-0000-0000-000000000ABC", "R", installed=True)
+    obj["DeploymentStatus"] = "INSTALLED"
+    (got,) = _client(FakeKb(objects=[obj])).correlation_objects(DB)
+    assert got.guid == "abcdef00-0000-0000-0000-000000000abc" and got.installed is True
+
+
+def test_deploy_stats_non_numeric_counters_are_zero() -> None:
+    fake = FakeKb()
+    original = fake.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api-studio/siem/deploy/stats":
+            return httpx.Response(200, json={"Installed": "n/a", "NotInstalled": [1], "Outdated": 7})
+        return original(request)
+
+    client = KbClient(CONN, httpx.Client(transport=httpx.MockTransport(handler)))
+    stats = client.deploy_stats(DB)
+    assert (stats.installed, stats.not_installed, stats.outdated) == (0, 0, 7)
 
 
 def test_public_error_classes() -> None:

@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -112,6 +113,14 @@ def _text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _int(value: Any) -> int:
+    """Счётчик из ответа KB; не число — ноль, а не падение разбора."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _statuses(value: Any) -> dict[str, str]:
     """`DeploymentStatuses`: словарь «конвейер → статус» или список объектов."""
     if isinstance(value, dict):
@@ -147,7 +156,10 @@ class KbClient:
             raise KbError(f"KB: {exc}") from exc
 
     def _json(self, r: httpx.Response) -> Any:
-        return json.loads(self._body(r))
+        try:
+            return json.loads(self._body(r))
+        except ValueError as exc:  # JSONDecodeError и UnicodeDecodeError: страница входа, пустой ответ
+            raise KbShapeError("ответ KB не JSON") from exc
 
     def token(self) -> str:
         if self._token:
@@ -234,8 +246,8 @@ class KbClient:
         if not isinstance(stats, dict):
             return KbDeployStats()
         return KbDeployStats(
-            installed=int(stats.get("Installed") or 0), not_installed=int(stats.get("NotInstalled") or 0),
-            outdated=int(stats.get("Outdated") or 0),
+            installed=_int(stats.get("Installed")), not_installed=_int(stats.get("NotInstalled")),
+            outdated=_int(stats.get("Outdated")),
         )
 
     def correlation_objects(self, db: str, group_id: str | None = None) -> Iterator[KbObject]:
@@ -264,10 +276,14 @@ class KbClient:
             skip += PAGE_SIZE
 
     def export_all(self, db: str, to_path: Path, on_bytes: Callable[[int], None] | None = None) -> int:
-        """Экспорт базы в формате kb потоком в файл; возвращает число байт."""
+        """Экспорт базы в формате kb потоком в файл; возвращает число байт.
+
+        При любой ошибке (отказ KB, обрыв, лимит, сбой записи) частичный файл
+        удаляется: на диске остаётся либо целая выгрузка, либо ничего."""
         params = {"contentMode": "deploymentSet", "groupId": ROOT_SET_ID, "contentDatabase": db}
         url = f"{self.base}/api/siem/export/kbpackage"
         size = 0
+        done = False
         try:
             with self.http.stream("GET", url, headers=self._headers(db), params=params, timeout=600.0) as r:
                 if r.status_code != 200:
@@ -280,8 +296,15 @@ class KbClient:
                         out.write(chunk)
                         if on_bytes is not None:
                             on_bytes(size)
+            done = True
         except httpx.HTTPError as exc:
             raise KbError(f"экспорт прерван — {exc.__class__.__name__}") from exc
+        except OSError as exc:  # путь в тексте не нужен: он внутренний
+            raise KbError(f"не удалось записать экспорт — {exc.__class__.__name__}") from exc
+        finally:
+            if not done:
+                with contextlib.suppress(OSError):
+                    to_path.unlink(missing_ok=True)
         return size
 
 
@@ -298,6 +321,6 @@ def public_error(exc: BaseException) -> str:
         return LOGIN_REJECTED
     if code == 403:
         return NO_RIGHTS
-    if isinstance(exc, KbError) and code is None and "лимита" in str(exc):
+    if isinstance(exc, KbError) and code is None and ("лимита" in str(exc) or "записать" in str(exc)):
         return str(exc)
     return server_error(code)
