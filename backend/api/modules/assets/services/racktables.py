@@ -24,7 +24,15 @@ from api.modules.assets.core.dns import RateLimiter
 from api.modules.assets.core.matching import Observed, normalize_name
 from api.modules.assets.core.racktables import Client, RtAddress, RtError, RtNetwork, narrowest
 from api.modules.assets.findings_adapter import reconcile as reconcile_findings
-from api.modules.assets.models import Asset, AssetJob, AssetObservation, AssetRacktables, Network
+from api.modules.assets.models import (
+    EXTERNAL_ZONE,
+    Asset,
+    AssetJob,
+    AssetObservation,
+    AssetRacktables,
+    AssetZone,
+    Network,
+)
 from api.modules.assets.services.assets import apply_observation, recompute
 from api.modules.assets.services.networks import load_networks, reassign_assets
 from api.modules.assets.services.sync import sync_lock
@@ -175,10 +183,13 @@ def _collect(run: _Run, api: Client) -> None:
     run.networks = narrowest(api.networks())
     run.answered += 1
     run.counts["networks"] = len(run.networks)
-    total = len(run.networks)
+    # Контейнеры шире /16 в Assets не создаются, а запрос адресов по ним — самый тяжёлый для базы RackTables
+    # (диапазон на миллионы адресов); их адреса почти всегда лежат в дочерних сетях.
+    asked = [n for n in run.networks if not n.too_wide]
+    total = len(asked)
     run.phase("addresses", total, f"адреса сетей: {total} · {estimate(total, run.cfg.rate_per_s)}")
     seen: set[str] = set()
-    for i, network in enumerate(run.networks, 1):
+    for i, network in enumerate(asked, 1):
         got = run.addresses(api, network)
         for a in got or []:
             # Адрес родительской сети повторяет адрес дочерней: остаётся самая узкая (сети идут от узких).
@@ -195,6 +206,8 @@ def _upsert_networks(db: Session, run: _Run) -> None:
     описанные вручную с тем же CIDR не трогаются, шире /16 пропускаются."""
     mine = {n.origin_key: n for n in db.execute(select(Network).where(Network.origin == ORIGIN)).scalars()}
     by_cidr = {n.cidr: n for n in db.execute(select(Network)).scalars()}
+    # Сеть с публичными адресами получает зону External при создании (если зону не удалили из справочника).
+    external_zone = EXTERNAL_ZONE if db.get(AssetZone, EXTERNAL_ZONE) is not None else None
     for net in run.networks:
         if net.too_wide:
             run.counts["networks_wide"] += 1
@@ -204,7 +217,7 @@ def _upsert_networks(db: Session, run: _Run) -> None:
             run.counts["networks_manual"] += 1
             continue
         if row is None:
-            row = Network(cidr=net.cidr, origin=ORIGIN, origin_key=net.rt_id, scan_enabled=False)
+            row = Network(cidr=net.cidr, origin=ORIGIN, origin_key=net.rt_id, scan_enabled=False, zone=external_zone if net.external else None)
             db.add(row)
             by_cidr[net.cidr] = row
             run.counts["networks_new"] += 1

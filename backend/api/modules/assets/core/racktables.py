@@ -43,6 +43,11 @@ class RtNetwork:
         net = ipaddress.ip_network(self.cidr)
         return net.version == 4 and net.prefixlen < MAX_PREFIX
 
+    @property
+    def external(self) -> bool:
+        """Публичные адреса: не RFC1918, не 100.64/10, не link-local и не служебные."""
+        return ipaddress.ip_network(self.cidr).is_global
+
 
 @dataclass(slots=True)
 class RtAddress:

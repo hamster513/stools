@@ -21,7 +21,9 @@ from api.jobs import JobColumns
 DEFAULT_PORTS = [22, 80, 135, 139, 443, 445, 3389]
 
 #: Предустановленные зоны; справочник правится, это лишь стартовый набор миграции.
-DEFAULT_ZONES = ("DMZ", "Internal", "Guest", "Management", "Industrial")
+#: External — сети с публичными адресами; её получают такие сети из RackTables.
+DEFAULT_ZONES = ("DMZ", "Internal", "Guest", "Management", "Industrial", "External")
+EXTERNAL_ZONE = "External"
 
 JSONType = JSON().with_variant(JSONB(), "postgresql")
 

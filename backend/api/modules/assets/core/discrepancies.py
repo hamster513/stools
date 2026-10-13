@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import ipaddress
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -78,6 +79,13 @@ def _iso(value: Any) -> dt.datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
 
 
+def _is_global(ip: str) -> bool | None:
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return None
+
+
 def _field_discrepancies(asset: dict[str, Any], live: list[Observed], stale_days: int) -> list[Discrepancy]:
     out: list[Discrepancy] = []
     threshold = dt.timedelta(days=stale_days)
@@ -95,6 +103,9 @@ def _field_discrepancies(asset: dict[str, Any], live: list[Observed], stale_days
             value = getattr(o, name)
             mine = _norm(name, value)
             if not mine or mine == reference or (name == "ip" and reference in {normalize_ip(x) for x in o.ips}):
+                continue
+            # Публичный и частный адрес одного хоста — NAT, а не разногласие: сравниваются адреса одной области.
+            if name == "ip" and _is_global(mine) != _is_global(reference):
                 continue
             title = FIELD_TITLES[name]
             ref_text = f"{TITLES[ref.source]}, {_day(ref.seen_at)}" if ref else "закреплено вручную"

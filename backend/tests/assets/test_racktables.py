@@ -16,7 +16,14 @@ from api.modules.assets.core.racktables import (
     parse_addresses,
     parse_networks,
 )
-from api.modules.assets.models import Asset, AssetObservation, AssetRacktables, Network
+from api.modules.assets.models import (
+    EXTERNAL_ZONE,
+    Asset,
+    AssetObservation,
+    AssetRacktables,
+    AssetZone,
+    Network,
+)
 from api.modules.assets.services import racktables as rt_service
 from api.platform.scheduler import tick
 from tests.assets.fake_racktables import FakeRacktables, address_cell, network_cell
@@ -33,6 +40,8 @@ def rt() -> Iterator[FakeRacktables]:
         fake.add_network("10", "10.10.0.0/24", "MSK1: VM Servers (vlan294)", vlan="294", tags=["prod"], comment="серверы")
         fake.add_network("11", "10.10.0.0/16", "MSK1: all", kidc=1)
         fake.add_network("12", "10.0.0.0/8", "RFC1918")
+        fake.add_network("13", "8.8.4.0/29", "ISP: public block")
+        fake.add_address("8.8.4.2", "srv01")  # внешний адрес того же хоста (NAT)
         fake.add_address("10.10.0.11", "srv01.corp.local", comment="файловый")
         fake.add_address("10.10.0.12", "ws01")
         fake.add_address("10.10.0.13")  # только IP — не переносится
@@ -80,22 +89,27 @@ def test_parse_networks_and_addresses() -> None:
 
 
 def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:
+    if db_session.get(AssetZone, EXTERNAL_ZONE) is None:
+        db_session.add(AssetZone(name=EXTERNAL_ZONE, title=EXTERNAL_ZONE, description=""))
+        db_session.commit()
     conn = connect(analyst, rt)
     assert analyst.post(f"/api/assets/racktables/{conn['id']}/check").json() == {"version": "1.3.3"}
     job = run(analyst, conn["id"])
     assert job["status"] == "done", job
-    assert "сетей 3 · новых 2" in job["message"] and "имён адресов 3" in job["message"] and "шире /16 пропущено 1" in job["message"]
-    # 1 запрос версии + 1 список сетей + по одному на сеть.
+    assert "сетей 4 · новых 3" in job["message"] and "имён адресов 4" in job["message"] and "шире /16 пропущено 1" in job["message"]
+    # По одному запросу на сеть; у контейнера /8 адреса не запрашиваются.
     assert [c["func"] for c in rt.calls].count("getIPAddressList") == 3
 
     nets = {n.cidr: n for n in db_session.execute(select(Network)).scalars()}
-    assert set(nets) == {"10.10.0.0/24", "10.10.0.0/16"}
+    assert set(nets) == {"10.10.0.0/24", "10.10.0.0/16", "8.8.4.0/29"}
+    # Публичная сеть — в зоне External, частные — без зоны.
+    assert nets["8.8.4.0/29"].zone == "External" and nets["10.10.0.0/24"].zone is None
     n24 = nets["10.10.0.0/24"]
     assert (n24.title, n24.vlan, n24.tags, n24.description, n24.origin, n24.origin_key, n24.scan_enabled) == ("MSK1: VM Servers (vlan294)", 294, ["prod"], "серверы", "racktables", "10", False)
-    assert [n["origin"] for n in analyst.get("/api/assets/networks").json()] == ["racktables", "racktables"]
+    assert [n["origin"] for n in analyst.get("/api/assets/networks").json()] == ["racktables"] * 3
 
     obs = {o.source_key: o for o in db_session.execute(select(AssetObservation).where(AssetObservation.source == "rt")).scalars()}
-    assert set(obs) == {"10.10.0.11", "10.10.0.12", "10.10.5.5"}
+    assert set(obs) == {"10.10.0.11", "10.10.0.12", "10.10.5.5", "8.8.4.2"}
     srv = obs["10.10.0.11"]
     assert (srv.name, srv.fqdn, srv.domain, srv.extra["comment"], srv.extra["network"], srv.extra["vlan"]) == ("srv01", "srv01.corp.local", "corp.local", "файловый", "10.10.0.0/24", 294)
     # Адрес из /16, которого нет в /24, относится к /16.
@@ -104,6 +118,8 @@ def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeR
     items = analyst.get("/api/assets/assets", params={"q": "srv01"}).json()["items"]
     assert items[0]["network"]["cidr"] == "10.10.0.0/24" and [s["source"] for s in items[0]["sources"]] == ["rt"]
     assert "no_av" not in items[0]["codes"] and "unknown_host" not in items[0]["codes"]
+    # Внешний адрес srv01 сошёлся с тем же активом по имени и не стал расхождением по IP.
+    assert items[0]["ip"] == "10.10.0.11" and "conflict" not in items[0]["codes"] and len(items) == 1
 
 
 def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:
@@ -121,7 +137,7 @@ def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient,
     rt.add_address("10.10.0.12")
     rt.addresses = [a for a in rt.addresses if a["ip_address"] != "10.10.0.11"]
     job = run(analyst, conn["id"])
-    assert job["status"] == "done" and "обновлено 1" in job["message"] and "пропало 2" in job["message"], job
+    assert job["status"] == "done" and "обновлено 2" in job["message"] and "пропало 2" in job["message"], job
     db_session.expire_all()
     wide = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/16")).scalar_one()
     assert (wide.title, wide.vlan) == ("MSK1: campus", 10)

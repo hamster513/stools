@@ -186,6 +186,15 @@ def test_dns_orphan_negative() -> None:
     assert "dns_orphan" not in codes(run([rec, ad(0, 3, name="GONE")], scanned=lambda ip: True, alive=lambda ip: False))
 
 
+def test_public_and_private_ip_are_not_a_conflict() -> None:
+    """Внешний адрес из RackTables при внутреннем в KSC — NAT, не расхождение; два внутренних — расхождение."""
+    rt_public = Observed(source="rt", source_key="8.8.4.10", name="srv01", ip="8.8.4.10", seen_at=days_ago(0))
+    ksc = Observed(source="ksc", source_key="1:h-srv01", name="SRV01", ip="10.10.0.11", seen_at=days_ago(0))
+    assert not codes(run([ksc, rt_public])) & {"conflict", "stale"}
+    rt_private = Observed(source="rt", source_key="10.10.0.99", name="srv01", ip="10.10.0.99", seen_at=days_ago(0))
+    assert "conflict" in codes(run([ksc, rt_private]))
+
+
 def test_cluster_virtual_names_are_not_hosts() -> None:
     """Учётка кластера и роль (виртуальные имена) не дают no_av, ad_inactive и unreachable; узел — обычный хост."""
     def ad_obj(kind: str, name: str, last_logon: float | None) -> Observed:
