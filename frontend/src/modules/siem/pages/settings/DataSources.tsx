@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
+import { KbSource } from './KbSource'
 import { SnapshotUpload } from './SnapshotUpload'
 
 /**
@@ -34,6 +35,7 @@ export function DataSources() {
   const { write } = useCan()
   return (
     <>
+      <KbSource />
       {write && <SnapshotUpload />}
       <ReferenceSource />
       <p className="text-xs text-text-secondary">
