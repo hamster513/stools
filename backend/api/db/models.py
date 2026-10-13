@@ -175,6 +175,10 @@ class Snapshot(Base):
     #: У снапшотов до 02.10.2026 пусто.
     parser_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     profile_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Снапшот, собранный из базы знаний по API (source_type='api'): адрес
+    #: сервера (без учётки) и имя БД контента. У снапшотов из файла пусто.
+    kb_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    kb_database: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     #: Производные числа сводки (см. api/services/summary.py) — пересчитываются
     #: при загрузке и при смене профиля, не при каждом GET.
@@ -381,6 +385,49 @@ class DivergenceRow(Base):
     hardcoded_in: Mapped[str] = mapped_column(String(255))
     affected_rules_json: Mapped[str] = mapped_column(Text, default="[]")
     blast_radius: Mapped[int] = mapped_column(Integer, default=0)
+
+
+# --------------------------------------------------------------------------
+# Инвентарь базы знаний по API: наборы установки и статус установки правил
+# --------------------------------------------------------------------------
+
+
+class SiemDeploymentSet(Base):
+    """Набор установки базы знаний на момент сбора снапшота (спека §6)."""
+
+    __tablename__ = "siem_deployment_set"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("snapshot.id", ondelete="CASCADE"), index=True)
+    kb_id: Mapped[str] = mapped_column(String(64))
+    parent_kb_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    system_name: Mapped[str] = mapped_column(String(255), default="")
+    general_status: Mapped[str] = mapped_column(String(64), default="")
+    compilation_status: Mapped[str] = mapped_column(String(64), default="")
+    #: {конвейер: статус} — как отдала KB, без толкования.
+    deployment_statuses_json: Mapped[str] = mapped_column(Text, default="{}")
+    #: Правил корреляции в составе набора.
+    rule_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    __table_args__ = (UniqueConstraint("snapshot_id", "kb_id", name="uq_siem_deployment_set"),)
+
+
+class SiemRuleDeployment(Base):
+    """Статус установки правила в SIEM, папка и наборы — из списка объектов KB.
+
+    Правило без строки здесь у снапшота из API — «есть в выгрузке, нет в
+    списке объектов KB»: API отдаёт `installed = null`.
+    """
+
+    __tablename__ = "siem_rule_deployment"
+
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("snapshot.id", ondelete="CASCADE"), primary_key=True)
+    rule_uuid: Mapped[str] = mapped_column(String(64), primary_key=True)
+    installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    folder_path: Mapped[str] = mapped_column(String(1024), default="")
+    #: [kb_id набора, …]
+    set_ids_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 # --------------------------------------------------------------------------
