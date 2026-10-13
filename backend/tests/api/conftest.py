@@ -291,6 +291,20 @@ def upload_and_wait(auth_client: TestClient, data: bytes, filename: str = "kb.zi
     return body
 
 
+def collect_and_wait(auth_client: TestClient) -> dict[str, Any]:
+    """Запускает сбор из базы знаний и дожидается конца задачи: фон в TestClient
+    выполняется синхронно, цикл — подстраховка."""
+    response = auth_client.post("/api/siem/kb/collect")
+    assert response.status_code == 202, response.text
+    job_id = response.json()["job_id"]
+    job = auth_client.get(f"/api/siem/jobs/{job_id}").json()
+    attempts = 0
+    while job["status"] == "running" and attempts < 200:
+        job = auth_client.get(f"/api/siem/jobs/{job_id}").json()
+        attempts += 1
+    return dict(job)
+
+
 @pytest.fixture
 def snapshot_id(auth_client: TestClient, kb_zip_bytes: bytes) -> int:
     body = upload_and_wait(auth_client, kb_zip_bytes)

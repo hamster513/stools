@@ -20,6 +20,7 @@ class JobResponse(BaseModel):
     status: str
     progress: int
     error: str | None = None
+    snapshot_id: int | None = None
 
 
 @router.get("/{job_id}", response_model=JobResponse)

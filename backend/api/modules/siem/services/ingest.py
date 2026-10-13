@@ -29,8 +29,12 @@ from kbaudit.report import build_report
 logger = logging.getLogger(__name__)
 
 #: Стадии в порядке прохождения, с "чек-поинтом" прогресса каждой — контракт
-#: не требует точных чисел, только рост от 0 до 100.
-_STAGE_PROGRESS = {"pending": 0, "parsing": 20, "analyzing": 55, "persisting": 85, "done": 100}
+#: не требует точных чисел, только рост от 0 до 100. Первые три — только у
+#: сбора из базы знаний по API (kb_collect.py), загрузка файла их не проходит.
+_STAGE_PROGRESS = {
+    "pending": 0, "connecting": 5, "listing": 15, "exporting": 35,
+    "parsing": 45, "analyzing": 60, "persisting": 85, "done": 100,
+}
 
 
 class UploadResult(BaseModel):
@@ -43,29 +47,18 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def start_upload(db: Session, settings: Settings, data: bytes, filename: str) -> UploadResult:
-    """Синхронная часть: сохранить архив, создать snapshot(0) + job(pending).
-
-    Фактический разбор выполняет `process_upload` в фоне (см. роутер
-    snapshots.py, который передаёт эту функцию в BackgroundTasks).
-    """
+def register_archive(db: Session, settings: Settings, data: bytes, filename: str) -> tuple[Snapshot, bool]:
+    """Снапшот по содержимому архива: существующий (sha256 совпал) — как есть,
+    новый — с сохранённым архивом и пустым профилем. Второй элемент — «дубликат».
+    Строку job не создаёт: у загрузки файла и у сбора по API она своя."""
     sha256 = _sha256(data)
     existing = db.query(Snapshot).filter_by(sha256=sha256).one_or_none()
     if existing is not None:
-        job = (
-            db.query(Job)
-            .filter_by(snapshot_id=existing.id)
-            .order_by(Job.id.desc())
-            .first()
-        )
-        job_id = job.id if job is not None else _record_synthetic_done_job(db, existing.id)
-        return UploadResult(job_id=job_id, snapshot_id=existing.id, duplicate=True)
-
+        return existing, True
     settings.archive_dir.mkdir(parents=True, exist_ok=True)
     archive_path = settings.archive_dir / f"{sha256}.zip"
     if not archive_path.exists():
         archive_path.write_bytes(data)
-
     snapshot = Snapshot(
         sha256=sha256,
         filename=filename,
@@ -75,6 +68,25 @@ def start_upload(db: Session, settings: Settings, data: bytes, filename: str) ->
     db.add(snapshot)
     db.flush()
     db.add(SnapshotProfile(snapshot_id=snapshot.id, profile_json="{}"))
+    return snapshot, False
+
+
+def start_upload(db: Session, settings: Settings, data: bytes, filename: str) -> UploadResult:
+    """Синхронная часть: сохранить архив, создать snapshot(0) + job(pending).
+
+    Фактический разбор выполняет `process_upload` в фоне (см. роутер
+    snapshots.py, который передаёт эту функцию в BackgroundTasks).
+    """
+    snapshot, duplicate = register_archive(db, settings, data, filename)
+    if duplicate:
+        job = (
+            db.query(Job)
+            .filter_by(snapshot_id=snapshot.id)
+            .order_by(Job.id.desc())
+            .first()
+        )
+        job_id = job.id if job is not None else _record_synthetic_done_job(db, snapshot.id)
+        return UploadResult(job_id=job_id, snapshot_id=snapshot.id, duplicate=True)
     job = Job(snapshot_id=snapshot.id, stage="pending", status="running", progress=0)
     db.add(job)
     db.commit()

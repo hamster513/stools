@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -13,6 +13,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import take_slot
 from api.modules.siem.core.kb import KbClient, make_client, public_error
+from api.modules.siem.services.kb_collect import active_collect, process_collect, start_collect
 from api.modules.siem.services.kb_settings import (
     KbConnectionIn,
     SecretsRequired,
@@ -78,3 +79,22 @@ def test_connection(db: Session = Depends(get_db), user: AppUser = Depends(get_c
         version=version,
         database=database.name,
     )
+
+
+class JobStarted(BaseModel):
+    job_id: int
+
+
+@router.post("/collect", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
+def collect(
+    background_tasks: BackgroundTasks, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+) -> JobStarted:
+    """Сбор из базы знаний в фоне: инвентарь, экспорт, разбор. Одновременно — один."""
+    if not load_connection(db).configured:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=NOT_CONFIGURED)
+    running = active_collect(db)
+    if running is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, дождитесь её")
+    job_id = start_collect(db)
+    background_tasks.add_task(process_collect, job_id)
+    return JobStarted(job_id=job_id)

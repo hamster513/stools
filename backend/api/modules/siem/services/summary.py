@@ -46,6 +46,9 @@ def build_list_item(snapshot: Snapshot) -> dict[str, Any]:
         "rule_count": snapshot.rule_count,
         "finding_count": snapshot.finding_count,
         "kb_version": snapshot.kb_version,
+        "source_type": snapshot.source_type,
+        "kb_host": snapshot.kb_host,
+        "kb_database": snapshot.kb_database,
     }
 
 
@@ -55,6 +58,9 @@ def build_summary(db: Session, snapshot: Snapshot) -> dict[str, Any]:
         "id": snapshot.id,
         "created_at": snapshot.created_at,
         "filename": snapshot.filename,
+        "source_type": snapshot.source_type,
+        "kb_host": snapshot.kb_host,
+        "kb_database": snapshot.kb_database,
         "rule_count": snapshot.rule_count,
         "group_count": snapshot.group_count,
         "rules_without_code": snapshot.rules_without_code,
