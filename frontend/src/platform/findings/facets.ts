@@ -43,6 +43,22 @@ export function listFrom<T extends string = string>(raw: string | null, allowed?
   return picked.length ? picked : undefined
 }
 
+/**
+ * «Не задано» — пустое значение фасета («без зоны», критичность «не задана») —
+ * в адресе передаётся маркером `-`: пустой элемент списка `a,,b` сервер
+ * отбрасывает, и фильтр молча терялся бы. В состоянии страницы и в теле
+ * массовой смены (JSON-список) значение остаётся пустой строкой.
+ *   toWire(['core', ''])   → ['core', '-']
+ *   fromWire(['core', '-']) → ['core', '']
+ */
+export const UNSET_WIRE = '-'
+export function toWire(list: string[] | undefined): string[] | undefined {
+  return list?.map((v) => (v === '' ? UNSET_WIRE : v))
+}
+export function fromWire(list: string[] | undefined): string[] | undefined {
+  return list?.map((v) => (v === UNSET_WIRE ? '' : v))
+}
+
 /** Переключить статус; пустой выбор — снова умолчание (открытые). */
 export function toggleStatus(current: FindingStatus[] | undefined, status: FindingStatus): FindingStatus[] | undefined {
   return toggleValue(current, status)

@@ -32,7 +32,7 @@ import { useRouter, useSearchParams } from '@/lib/router'
 import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
-import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { facetValues, useRememberedFacets, type FacetValue } from '@/platform/filters/useRememberedFacets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -105,7 +105,7 @@ function day(iso: string | null): string {
  */
 function FacetRow({ active, count, onClick, children, noCount }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode; noCount?: boolean }) {
   return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text', !active && !noCount && !count && 'opacity-60')}>
+    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text', !active && !noCount && count === 0 && 'opacity-60')}>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {!noCount && <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>}
     </button>
@@ -124,8 +124,10 @@ function FacetSection({ title, children }: { title: string; children: ReactNode 
 const INPUT_BASE = 'rounded border border-border bg-app-bg px-2 py-1 text-xs text-text placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const INPUT = `w-full ${INPUT_BASE}`
 
-function FacetPanel({ facets, filters, onToggle, disc, onDisc, total, port, onPort, tag, onTag }: {
+function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, port, onPort, tag, onTag }: {
   facets: AssetsFacets | null
+  /** Зоны, которые панель уже показывала (ушедшие в ноль — с 0); считает страница, чтобы память жила, пока панель закрыта. */
+  zones: FacetValue[]
   filters: Filters
   onToggle: <K extends keyof Filters>(key: K, value: Filters[K]) => void
   disc: DiscFilters
@@ -136,8 +138,6 @@ function FacetPanel({ facets, filters, onToggle, disc, onDisc, total, port, onPo
   tag: string
   onTag: (v: string) => void
 }) {
-  // Зоны считаются по отфильтрованному набору: ушедшие в ноль панель помнит, иначе вторую зону не выбрать.
-  const zones = useRememberedFacets(facets ? { zone: facetValues(facets.zone) } : undefined).zone ?? []
   const networks = useNetworks()
   const pick = <K extends MultiKey>(key: K, value: NonNullable<Filters[K]>[number]) =>
     onToggle(key, toggleValue(filters[key] as (typeof value)[] | undefined, value) as Filters[K])
@@ -426,6 +426,9 @@ export function AssetsPage() {
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const first = query.data?.pages[0]
   const total = first?.total ?? 0
+  // Зоны считаются по отфильтрованному набору: ушедшие в ноль страница помнит (не панель — та по умолчанию закрыта
+  // и при закрытии забывала бы), иначе вторую зону не выбрать.
+  const zones = useRememberedFacets(first?.facets ? { zone: facetValues(first.facets.zone) } : undefined).zone ?? []
   // Новый фильтр — другой список: курсор в начало, отметки сняты.
   useEffect(() => { setSelectedIndex(0); setChecked(new Set()); lastChecked.current = null }, [queryArgs])
   const selected: AssetItem | null = items[selectedIndex] ?? null
@@ -495,7 +498,7 @@ export function AssetsPage() {
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} zones={zones} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           {write && checked.size > 0 && (
             <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)} facets={first?.facets ?? null} code={filters.code?.length === 1 ? filters.code[0] : undefined}

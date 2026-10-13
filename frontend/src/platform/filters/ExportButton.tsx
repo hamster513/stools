@@ -19,6 +19,9 @@ export function ExportButton({ href, total, disabled }: { href: (fmt: 'csv' | 'x
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
 
+  // Пока список грузится, выгрузка недоступна; меню закрывается, чтобы не открыться само после загрузки.
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+
   useEffect(() => {
     if (!open) return
     function onPointer(e: PointerEvent) { if (!root.current?.contains(e.target as Node)) setOpen(false) }

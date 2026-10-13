@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react'
 import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleValue } from '@/platform/findings/facets'
-import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 import { SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type FindingBase, type FindingDelta, type FindingFilters, type FindingsResponse } from './types'
 import { cn } from '@/lib/cn'
 
 /** Строка — переключатель значения в мультивыборе; значение, ушедшее в ноль, приглушено, но выбирается. */
 function Row({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
   return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text', !active && !count && 'opacity-60')}>
+    <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text', !active && count === 0 && 'opacity-60')}>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count ?? 0}</span>
     </button>
@@ -29,10 +29,12 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
  * «И» между фасетами); пока статус не выбран, сервер показывает открытые.
  * Счётчики статусов и исполнителей считаются без своего фильтра, остальные —
  * по отфильтрованному набору: проверки и исполнители, ушедшие в ноль, панель
- * помнит (useRememberedFacets).
+ * помнит: `remembered` считает страница (useRememberedFacets), чтобы память
+ * жила, пока панель закрыта.
  */
-export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, names }: {
+export function FacetPanel({ facets, remembered, titles, filters, onToggle, total, myLogin, names }: {
   facets: FindingsResponse<FindingBase>['facets']
+  remembered: Partial<Record<'check' | 'assignee', FacetValue[]>>
   titles: Record<string, string>
   filters: FindingFilters
   onToggle: <K extends keyof FindingFilters>(key: K, value: FindingFilters[K]) => void
@@ -40,7 +42,6 @@ export function FacetPanel({ facets, titles, filters, onToggle, total, myLogin, 
   myLogin: string | undefined
   names: Map<string, string>
 }) {
-  const remembered = useRememberedFacets(facets ? { check: facetValues(facets.check), assignee: facetValues(facets.assignee) } : undefined)
   const checks = remembered.check ?? []
   const assignees = (remembered.assignee ?? []).filter((a) => a.value !== 'none' && a.value !== myLogin)
   const pick = <K extends 'check' | 'severity' | 'delta' | 'assignee'>(key: K, value: string) =>

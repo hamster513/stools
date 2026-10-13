@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
-import { useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 import { FacetRow, FacetSection } from '../policies/Facets'
 
 /** Раздел сервера, которому нужен последний снапшот: заголовок с номером снапшота и содержимое. */
@@ -31,20 +31,19 @@ export function SnapshotSection({ serverId, title, children }: { serverId: numbe
 /**
  * Фасет «Политика» — мультивыбор: строка переключает политику (`onToggle`). Имена — из списка политик снапшота.
  * С `counts` — политики с записями и их число; ушедшие в ноль под другими фильтрами остаются приглушёнными
- * (useRememberedFacets), иначе вторую политику не выбрать. Без `counts` — все политики снапшота без счётчика
- * (у журнала изменений фасета по политике нет).
+ * (страница держит их через useRememberedFacets: память живёт, пока панель закрыта), иначе вторую политику не
+ * выбрать. Без `counts` — все политики снапшота без счётчика (у журнала изменений фасета по политике нет).
  */
 export function PolicyFacet({ snapshotId, counts, selected, onToggle }: {
   snapshotId: number | undefined
-  counts?: Record<string, number> | null
+  counts?: FacetValue[]
   selected: number[] | undefined
   onToggle: (policy: { id: number; name: string }) => void
 }) {
   const list = usePolicyList(snapshotId, {})
   const names = new Map((list.data?.items ?? []).map((p) => [p.id, p.name]))
-  const remembered = useRememberedFacets(counts ? { policy: Object.entries(counts).map(([value, count]) => ({ value, count })) } : undefined).policy
-  const rows = remembered
-    ? remembered.map(({ value, count }) => ({ id: Number(value), name: names.get(Number(value)) ?? `#${value}`, n: count as number | undefined }))
+  const rows = counts
+    ? counts.map(({ value, count }) => ({ id: Number(value), name: names.get(Number(value)) ?? `#${value}`, n: count as number | undefined }))
     : (list.data?.items ?? []).map((p) => ({ id: p.id, name: p.name, n: undefined }))
   rows.sort((a, b) => a.name.localeCompare(b.name, 'ru'))
   return (

@@ -8,10 +8,11 @@ import { AssetLink } from '@/modules/assets/AssetLink'
 import { CVSS_SOURCE_LABELS, LEVEL_LABELS, LEVELS, type CvssSource, type RiskLevel, type VulnItem, type VulnSort, type VulnsQuery } from '@/modules/vm/api/types'
 import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { BulkBar } from '@/platform/findings/BulkBar'
-import { findingFacetChips, listFrom, valueChips } from '@/platform/findings/facets'
+import { findingFacetChips, fromWire, listFrom, toWire, valueChips } from '@/platform/findings/facets'
 import { useUsersDirectory } from '@/platform/findings/queries'
 import { STATUSES, type FindingStatus } from '@/platform/findings/types'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
@@ -58,8 +59,10 @@ export function VulnsPage() {
   // Адрес задаёт начальные фильтры: сюда ведут ссылки с обзора и из карточки.
   const [filters, setFilters] = useState<VulnFilters>(() => ({
     level: listFrom<RiskLevel>(params.get('level'), LEVELS),
-    zone: listFrom(params.get('zone')),
-    criticality: listFrom(params.get('criticality')),
+    // `-` в адресе — «не задано» (пустое значение фасета).
+    zone: fromWire(listFrom(params.get('zone'))),
+    criticality: fromWire(listFrom(params.get('criticality'))),
+    os: fromWire(listFrom(params.get('os'))),
     cvss_source: listFrom<CvssSource>(params.get('cvss_source'), Object.keys(CVSS_SOURCE_LABELS) as CvssSource[]),
     exploits: params.get('exploits') === 'true' ? true : undefined,
     // Пару по ссылке ищут при любом статусе: она могла быть закрыта.
@@ -101,11 +104,19 @@ export function VulnsPage() {
       q: q || undefined, cve: cveParam, host_id: hostIdParam,
     }
   }, [filters, q, cveParam, hostIdParam])
-  const queryArgs = useMemo(() => ({ ...listFilter, sort }), [listFilter, sort])
+  // В адрес списка и выгрузки «не задано» уходит маркером `-`; массовая смена получает listFilter как есть — JSON-список с ''.
+  const queryArgs = useMemo(() => ({
+    ...listFilter, criticality: toWire(listFilter.criticality), zone: toWire(listFilter.zone), os: toWire(listFilter.os), sort,
+  }), [listFilter, sort])
   const query = useVulns(queryArgs)
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const facets = query.data?.pages[0]?.facets ?? undefined
   const total = query.data?.pages[0]?.total ?? 0
+  // Память фасетов — на странице, а не в панели: панель по умолчанию закрыта и при закрытии забывала бы значения.
+  const remembered = useRememberedFacets(facets ? {
+    zone: facetValues(facets.zone), os: facetValues(facets.os), assignee: facetValues(facets.assignee),
+    criticality: facetValues(facets.criticality).filter((c) => c.count > 0),
+  } : undefined)
 
   useEffect(() => { setSelectedIndex(0); setChecked(new Set()); setAnchor(null); setAllByFilter(false) }, [queryArgs])
   // Массовая смена закончилась — список и карточки уже другие (useJob обновляет данные модуля).
@@ -239,7 +250,7 @@ export function VulnsPage() {
       )}
 
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={facets} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}
+        {filtersPanel.open && <FacetPanel facets={facets} remembered={remembered} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}

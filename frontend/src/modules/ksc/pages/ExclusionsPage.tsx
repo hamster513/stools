@@ -148,7 +148,8 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
   const items = pages.flatMap((p) => p.items)
   const facets = first?.facets
   // Виды считаются по отфильтрованному набору: ушедшие в ноль панель помнит, иначе второй вид не выбрать.
-  const kinds = useRememberedFacets(facets ? { kind: facetValues(facets.kind, false) } : undefined).kind ?? []
+  const remembered = useRememberedFacets(facets ? { kind: facetValues(facets.kind, false), policy: facetValues(facets.policy, false) } : undefined)
+  const kinds = remembered.kind ?? []
 
   function set<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
@@ -190,7 +191,7 @@ export function ExclusionsTable({ snapshotId, serverId, policyId, partial = fals
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && (
           <FacetPanel total={first?.total ?? 0} noun="Исключений">
-            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={facets?.policy} selected={filters.policy?.map((p) => p.id)} onToggle={(p) => set('policy', togglePolicy(filters.policy, p))} />}
+            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={remembered.policy} selected={filters.policy?.map((p) => p.id)} onToggle={(p) => set('policy', togglePolicy(filters.policy, p))} />}
             <FacetSection title="Риск">
               {([true, false] as const).map((v) => (
                 <FacetRow key={String(v)} active={filters.risky === v} count={facets?.risky?.[v ? 'true' : 'false']} onClick={() => set('risky', filters.risky === v ? undefined : v)}>{v ? 'опасные' : 'без риска'}</FacetRow>

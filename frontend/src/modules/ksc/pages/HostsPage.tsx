@@ -20,7 +20,7 @@ import {
 import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
-import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { facetValues, useRememberedFacets, type FacetValue } from '@/platform/filters/useRememberedFacets'
 import { listFrom, toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
@@ -82,8 +82,25 @@ function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
 }
 
-function HostFacetPanel({ facets, filters, onToggle, onComponent, tagsCollected, total }: {
+type HostRemembered = Partial<Record<'group' | 'product' | 'in_ad' | 'tag' | 'component', FacetValue[]>>
+
+/** Значения перечислимых фасетов ответа для useRememberedFacets; у компонента число — хостов, где он не работает. */
+function hostFacetValues(facets: NonNullable<HostsResponse['facets']>) {
+  const componentFacet = facets.component ?? {}
+  return {
+    group: facetValues(facets.group),
+    product: facetValues(facets.product),
+    in_ad: facetValues(facets.in_ad),
+    tag: Object.entries(facets.tag ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).map(([value, count]) => ({ value, count })),
+    component: Object.keys(componentFacet).sort((a, b) => (componentFacet[b]?.off ?? 0) - (componentFacet[a]?.off ?? 0) || a.localeCompare(b, 'ru'))
+      .map((value) => ({ value, count: componentFacet[value]?.off ?? 0 })),
+  }
+}
+
+function HostFacetPanel({ facets, remembered, filters, onToggle, onComponent, tagsCollected, total }: {
   facets: HostsResponse['facets']
+  /** Значения, которые панель уже показывала; считает страница, чтобы память жила, пока панель закрыта. */
+  remembered: HostRemembered
   filters: HostFilters
   onToggle: <K extends keyof HostFilters>(key: K, value: HostFilters[K]) => void
   onComponent: (names: string[] | undefined) => void
@@ -93,14 +110,6 @@ function HostFacetPanel({ facets, filters, onToggle, onComponent, tagsCollected,
   // Счётчики считаются по отфильтрованному набору: значения, ушедшие в ноль, панель помнит — иначе второе не выбрать.
   // Компонент остаётся в списке, даже если под «нет компонента» его не осталось ни у одного хоста.
   const componentFacet = facets?.component ?? {}
-  const remembered = useRememberedFacets(facets ? {
-    group: facetValues(facets.group),
-    product: facetValues(facets.product),
-    in_ad: facetValues(facets.in_ad),
-    tag: Object.entries(facets.tag ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).map(([value, count]) => ({ value, count })),
-    component: Object.keys(componentFacet).sort((a, b) => (componentFacet[b]?.off ?? 0) - (componentFacet[a]?.off ?? 0) || a.localeCompare(b, 'ru'))
-      .map((value) => ({ value, count: componentFacet[value]?.off ?? 0 })),
-  } : undefined)
   const groups = remembered.group ?? []
   const products = remembered.product ?? []
   const inAd = remembered.in_ad ?? []
@@ -336,6 +345,8 @@ export function HostsPage({ serverId }: { serverId: number }) {
   const first = query.data?.pages[0]
   const total = first?.total ?? 0
   const tagsCollected = first?.tags_collected ?? false
+  // Память фасетов — на странице, а не в панели: панель по умолчанию закрыта и при закрытии забывала бы значения.
+  const remembered: HostRemembered = useRememberedFacets(first?.facets ? hostFacetValues(first.facets) : undefined)
   useEffect(() => setSelectedIndex(0), [queryArgs, snapshotId])
   const selected: Host | null = items[selectedIndex] ?? null
 
@@ -402,7 +413,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <HostFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} onComponent={setComponent} tagsCollected={tagsCollected} total={total} />}
+        {filtersPanel.open && <HostFacetPanel facets={first?.facets ?? null} remembered={remembered} filters={filters} onToggle={toggle} onComponent={setComponent} tagsCollected={tagsCollected} total={total} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}

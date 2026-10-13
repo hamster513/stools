@@ -3,7 +3,7 @@ import type { CvssSource, RiskLevel, VulnsFacets, VulnsQuery } from '@/modules/v
 import { CVSS_SOURCE_LABELS, LEVEL_LABELS, LEVELS } from '@/modules/vm/api/types'
 import { LEVEL_TEXT } from '@/modules/vm/components/RiskBadge'
 import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleValue, type FindingFacetFilters } from '@/platform/findings/facets'
-import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 import { cn } from '@/lib/cn'
 
 export type VulnFilters = Pick<VulnsQuery, 'level' | 'criticality' | 'zone' | 'os' | 'exploits' | 'msf' | 'cvss_source'> & FindingFacetFilters
@@ -22,7 +22,7 @@ function Row({ active, count, onClick, children }: { active: boolean; count: num
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
         active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
         // Значение, ушедшее в ноль под другими фильтрами, приглушено, но выбирается.
-        !active && !count && 'opacity-60',
+        !active && count === 0 && 'opacity-60',
       )}
       aria-pressed={active}
     >
@@ -44,6 +44,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 
 interface Props {
   facets: VulnsFacets | undefined
+  remembered: Partial<Record<'zone' | 'os' | 'assignee' | 'criticality', FacetValue[]>>
   filters: VulnFilters
   onToggle: <K extends keyof VulnFilters>(key: K, value: VulnFilters[K]) => void
   total: number
@@ -56,13 +57,10 @@ interface Props {
  * Каждый фасет — мультивыбор («ИЛИ» внутри, «И» между фасетами); пока статус не
  * выбран, показываются открытые. Счётчики статусов и исполнителей — без своего
  * фильтра, остальные — по отфильтрованному набору: ушедшие в ноль значения
- * панель помнит (useRememberedFacets).
+ * панель помнит: `remembered` считает страница (useRememberedFacets), чтобы
+ * память жила, пока панель закрыта.
  */
-export function FacetPanel({ facets, filters, onToggle, total, myLogin, names }: Props) {
-  const remembered = useRememberedFacets(facets ? {
-    zone: facetValues(facets.zone), os: facetValues(facets.os), assignee: facetValues(facets.assignee),
-    criticality: facetValues(facets.criticality).filter((c) => c.count > 0),
-  } : undefined)
+export function FacetPanel({ facets, remembered, filters, onToggle, total, myLogin, names }: Props) {
   const zones = remembered.zone ?? []
   const oses = remembered.os ?? []
   // Критичности — в своём порядке; показываются виденные хоть раз и выбранные.

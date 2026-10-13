@@ -5,6 +5,7 @@ import { useFindings, useRuleDetail } from '@/modules/siem/api/queries'
 import { FINDING_KIND_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS, type FindingListItem } from '@/modules/siem/api/types'
 import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { BulkBar } from '@/platform/findings/BulkBar'
@@ -102,7 +103,11 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   const first = query.data?.pages[0]
   // Соли ключей нет: статусы не сопоставить, и менять их нельзя — решение легло бы на чужой ключ.
   const keysBroken = first?.status_keys_broken === true
-  const fieldFacet = facets?.field
+  // Память фасетов — на странице, а не в панели: панель по умолчанию закрыта и при закрытии забывала бы значения.
+  const remembered = useRememberedFacets(facets ? {
+    field: facetValues(facets.field).slice(0, 12),
+    assignee: facetValues(facets.assignee),
+  } : undefined)
 
   useEffect(() => {
     setSelectedIndex(0)
@@ -259,7 +264,7 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
       )}
 
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={facets} fieldFacet={fieldFacet} filters={filters} onToggle={toggleFilter} total={total} myLogin={me.data?.login} names={names} />}
+        {filtersPanel.open && <FacetPanel facets={facets} remembered={remembered} filters={filters} onToggle={toggleFilter} total={total} myLogin={me.data?.login} names={names} />}
 
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}

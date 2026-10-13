@@ -15,6 +15,7 @@ import { BulkBar } from '@/platform/findings/BulkBar'
 import { findingFacetChips, findingFacetParams, listFrom, valueChips } from '@/platform/findings/facets'
 import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
 import { useUsersDirectory } from '@/platform/findings/queries'
 import { STATUSES, type FindingStatus } from '@/platform/findings/types'
 import { FacetPanel } from './FacetPanel'
@@ -94,6 +95,8 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const first = query.data?.pages[0]
   const total = first?.total ?? 0
+  // Память фасетов — на странице, а не в панели: панель по умолчанию закрыта и при закрытии забывала бы значения.
+  const remembered = useRememberedFacets(first?.facets ? { check: facetValues(first.facets.check), assignee: facetValues(first.facets.assignee) } : undefined)
   useEffect(() => { setSelectedIndex(0); setChecked(new Set()); setAnchor(null) }, [queryArgs, snapshotId])
   const selected: F | null = items[selectedIndex] ?? null
 
@@ -158,7 +161,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
       {first && !first.is_latest && <div className="shrink-0 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text-secondary">Статусы показаны на сегодня, находки — на дату снапшота</div>}
       {write && <BulkBar module={module} scopeId={scopeId} keys={[...checked]} total={total} onDone={changed} onClear={() => setChecked(new Set())} />}
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} titles={first?.check_titles ?? {}} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} remembered={remembered} titles={first?.check_titles ?? {}} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}

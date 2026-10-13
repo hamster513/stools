@@ -10,7 +10,7 @@ import { OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS } from '@/modules/sie
 import { cn } from '@/lib/cn'
 import { KindBadge } from '@/modules/siem/components/ui/KindBadge'
 import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleValue, type FindingFacetFilters } from '@/platform/findings/facets'
-import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 
 /** Статус, исполнитель и сроки — общие фасеты статусов находок платформы. Перечислимые фасеты — мультивыбор. */
 export interface HygieneFilters extends FindingFacetFilters {
@@ -28,7 +28,8 @@ const has = (list: readonly string[] | undefined, value: string) => list?.includ
 
 interface FacetPanelProps {
   facets: FindingsFacets | undefined
-  fieldFacet: Record<string, number> | undefined
+  /** Поля и исполнители, которые панель уже показывала; считает страница (useRememberedFacets), чтобы память жила, пока панель закрыта. */
+  remembered: Partial<Record<'field' | 'assignee', FacetValue[]>>
   filters: HygieneFilters
   onToggle: <K extends keyof HygieneFilters>(key: K, value: HygieneFilters[K]) => void
   total: number
@@ -57,7 +58,7 @@ function Row({
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
         active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
         // Значение, ушедшее в ноль под другими фильтрами, приглушено, но выбирается.
-        !active && !count && 'opacity-60',
+        !active && count === 0 && 'opacity-60',
       )}
       aria-pressed={active}
     >
@@ -91,13 +92,9 @@ const SHAPES = [
 
 const POLARITIES: Polarity[] = ['negation', 'assertion']
 
-export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLogin, names }: FacetPanelProps) {
+export function FacetPanel({ facets, remembered, filters, onToggle, total, myLogin, names }: FacetPanelProps) {
   // Счётчики считаются по отфильтрованному набору: поля и исполнители, ушедшие
   // в ноль, панель помнит, иначе второе значение было бы не выбрать.
-  const remembered = useRememberedFacets(facets ? {
-    field: facetValues(fieldFacet).slice(0, 12),
-    assignee: facetValues(facets.assignee),
-  } : undefined)
   const topFields = remembered.field ?? []
   const assignees = (remembered.assignee ?? []).filter((a) => a.value !== 'none' && a.value !== myLogin)
   const pick = <K extends MultiKey>(key: K, value: string) =>

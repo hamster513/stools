@@ -11,7 +11,7 @@ import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
-import { toggleValue, valueChips } from '@/platform/findings/facets'
+import { toggleValue, toWire, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -91,8 +91,9 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
   const [searchInput, setSearchInput] = useState('')
   const q = useDebouncedValue(searchInput, 250)
   const filtersPanel = useFiltersPanel('ksc-net-rules')
+  // Действие и направление «—» (пустые) уходят в адрес маркером `-`, иначе сервер отбросил бы пустой элемент списка.
   const args = useMemo(
-    () => ({ q: q || undefined, policy_id: policyId !== undefined ? [policyId] : filters.policy?.map((p) => p.id), action: filters.action, direction: filters.direction, enabled: filters.enabled, host_id: hostId }),
+    () => ({ q: q || undefined, policy_id: policyId !== undefined ? [policyId] : filters.policy?.map((p) => p.id), action: toWire(filters.action), direction: toWire(filters.direction), enabled: filters.enabled, host_id: hostId }),
     [q, policyId, filters, hostId],
   )
   const query = useNetRules(snapshotId, args)
@@ -102,7 +103,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
   const facets = first?.facets
 
   // Счётчики считаются по отфильтрованному набору: ушедшие в ноль значения панель помнит, иначе второе не выбрать.
-  const remembered = useRememberedFacets(facets ? { action: facetValues(facets.action, false), direction: facetValues(facets.direction, false) } : undefined)
+  const remembered = useRememberedFacets(facets ? { action: facetValues(facets.action, false), direction: facetValues(facets.direction, false), policy: facetValues(facets.policy, false) } : undefined)
   function set<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
   // Чип на каждое выбранное значение: крестик снимает только его.
@@ -141,7 +142,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && (
           <FacetPanel total={first?.total ?? 0} noun="Правил">
-            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={facets?.policy} selected={filters.policy?.map((p) => p.id)} onToggle={(p) => set('policy', togglePolicy(filters.policy, p))} />}
+            {!inPolicy && <PolicyFacet snapshotId={snapshotId} counts={remembered.policy} selected={filters.policy?.map((p) => p.id)} onToggle={(p) => set('policy', togglePolicy(filters.policy, p))} />}
             <FacetSection title="Действие">
               {(remembered.action ?? []).map(({ value: a, count }) => (
                 <FacetRow key={a} active={filters.action?.includes(a) ?? false} count={count} onClick={() => set('action', toggleValue(filters.action, a))}>{actionLabel(a)}</FacetRow>
