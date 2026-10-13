@@ -27,7 +27,7 @@ from fastapi import HTTPException, status
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.cell.cell import ERROR_CODES, ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
@@ -109,9 +109,9 @@ def _xlsx_cell(sheet: Any, value: Any, tz: ZoneInfo) -> Any:
         return value
     # Управляющие символы (бывают в логах и выгрузках) openpyxl отвергает исключением.
     text = ILLEGAL_CHARACTERS_RE.sub("", str(value))
-    if text.startswith("="):
+    if text.startswith("=") or text in ERROR_CODES:
         cell = WriteOnlyCell(sheet, value=text)
-        cell.data_type = "s"  # иначе openpyxl запишет формулу
+        cell.data_type = "s"  # иначе openpyxl запишет формулу или ячейку-ошибку (#N/A)
         return cell
     return text
 

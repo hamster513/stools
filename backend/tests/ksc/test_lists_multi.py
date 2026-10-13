@@ -73,6 +73,9 @@ def test_hosts_all_and_bad_values(auth_client: TestClient, snap: int) -> None:
     _check(auth_client, url, "tag", "-", "VIP")  # «без тегов» и тег — вместе
     assert len(_items(auth_client, url, tag="-")) == 12  # `-` по-прежнему «без тегов»
     assert auth_client.get(url, params={"protection": ["on", "bogus"]}).status_code == 422
+    # Статус хоста, как и статусы находок, понимает старую строку через запятую.
+    a, b = _top_two(auth_client, url, "status")
+    assert _items(auth_client, url, status=f"{a},{b}") == _items(auth_client, url, status=[a, b])
     # Состояние — одно, к любому из выбранных компонентов.
     a, b = _top_two(auth_client, url, "component")
     off = _items(auth_client, url, component=[a, b], component_state="off")

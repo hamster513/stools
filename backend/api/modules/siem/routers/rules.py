@@ -291,7 +291,7 @@ def export_rules(
                                           attention_only=attention, scoped=scoped, attack=attack)
     msgids = _counts_by_rule(db, snapshot_id, RuleMsgid, RuleMsgid.rule_uuid)
     rows = [
-        {"name": r.name, "author": r.author, "category": f"{r.type_id_cat}/{r.type_id_group}", "msgid": msgids.get(r.uuid, 0),
+        {"name": r.name, "author": r.author, "category": f"{r.type_id_cat or ''}/{r.type_id_group or ''}", "msgid": msgids.get(r.uuid, 0),
          "attention": _attention_cell(r, attention_map), "attack": _attack_cell(markup.get(r.uuid)),
          "scoped": "да" if r.scoped_by_list else "нет"}
         for r in found

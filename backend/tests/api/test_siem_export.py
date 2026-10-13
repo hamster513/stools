@@ -70,3 +70,12 @@ def test_rules_filters_match_screen(auth_client: TestClient, client_as: Callable
     cells = {r[0]: r for r in rows[1:]}
     assert cells[attention[0]][4].split()[0] in {"Не разобрано", "Разобрать", "Посмотреть"}
     assert client_as("auditor").get(url, params={"snapshot_id": rules_snap}).status_code == 200
+
+
+def test_rules_without_category_print_slash(auth_client: TestClient, rules_snap: int, db_session: Any) -> None:
+    """Категория и группа не заданы — «/», как на экране, а не «None/None»."""
+    db_session.execute(update(RuleRow).where(RuleRow.snapshot_id == rules_snap, RuleRow.name == "DEMO_HC_002_031_Extra")
+                       .values(type_id_cat=None, type_id_group=None))
+    db_session.commit()
+    rows = csv_rows(auth_client, "/api/siem/rules/export", snapshot_id=rules_snap)
+    assert {r[0]: r[2] for r in rows[1:]}["DEMO_HC_002_031_Extra"] == "/"

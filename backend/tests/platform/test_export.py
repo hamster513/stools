@@ -110,6 +110,15 @@ def test_xlsx_drops_characters_excel_forbids() -> None:
     assert rows_from_xlsx(body(response))[1] == ["abc"]
 
 
+@pytest.mark.parametrize("code", ["#N/A", "#REF!", "#VALUE!", "#DIV/0!", "#NAME?", "#NUM!", "#NULL!"])
+def test_xlsx_keeps_error_code_strings_as_text(code: str) -> None:
+    """Строка, равная коду ошибки Excel, — текст: иначе openpyxl запишет ячейку-ошибку."""
+    data = body(export_response("xlsx", [Column("name", "Имя")], iter([{"name": code}]), module="m", name="n"))
+    sheet = openpyxl.load_workbook(io.BytesIO(data)).active
+    assert sheet is not None and sheet["A2"].data_type == "s" and sheet["A2"].value == code
+    assert rows_from_xlsx(data)[1] == [code]
+
+
 def test_xlsx_stops_at_the_cap_with_a_note() -> None:
     rows = ({"name": f"h{i}"} for i in range(XLSX_MAX_ROWS + 1))
     response = export_response("xlsx", [Column("name", "Имя")], rows, module="vm", name="vulns")

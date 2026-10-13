@@ -231,10 +231,13 @@ def list_hosts(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Фасеты `protection, agent, bases, in_ad, status, component, tag, group, product` — повтором
-    ключа, внутри фасета «или»; `component_state` — одно, к любому из выбранных компонентов."""
+    ключа, внутри фасета «или» (`status` — ещё и через запятую); `component_state` — одно, к любому из выбранных
+    компонентов."""
     snap = _snapshot(db, snapshot_id, settings)
-    groups, products, agents, protections, bases_, in_ads, statuses, components, tags_ = (
-        multi(v) for v in (group, product, agent, protection, bases, in_ad, status_, component, tag))
+    groups, products, agents, protections, bases_, in_ads, components, tags_ = (
+        multi(v) for v in (group, product, agent, protection, bases, in_ad, component, tag))
+    # Статус, как и статусы находок, понимает и старую строку через запятую (`status=ok,warning`).
+    statuses = multi(status_, commas=True)
     checked = (
         (agents, AGENT), (protections, PROTECTION), (bases_, BASES), (in_ads, ("both", "ksc_only")),
         (statuses, ("ok", "warning", "critical")), ({component_state} if component_state is not None else None, COMPONENT_STATES),

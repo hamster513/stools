@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.modules.ksc.core.policy_model import EXTRACTORS
+from api.modules.ksc.models import KscChange
+from api.modules.ksc.routers.changes import _where
 from tests.export_check import check_export, csv_rows
 from tests.ksc.synthetic import build_export
 from tests.ksc.test_api import upload
@@ -63,6 +65,12 @@ def test_hosts_cells_mirror_screen(auth_client: TestClient, snap: int) -> None:
     agents = {r[4].split(" · ")[0] for r in rows[1:]}
     assert agents <= {"нет агента", "молчит", "на связи"} and agents
     assert all(" · " in r[6] for r in rows[1:])  # базы: дата · свежесть
+
+
+def test_changes_where_without_exclusion_kind() -> None:
+    """Вид исключения не записан — пусто, а не «None»."""
+    change = KscChange(kind="exclusion", section="", path="")
+    assert _where(change, None, {"value": "C:\\tmp\\a.exe"}) == ": C:\\tmp\\a.exe"
 
 
 def test_changes(auth_client: TestClient, client_as: Callable[[str], TestClient]) -> None:

@@ -36,7 +36,7 @@ import { facetValues, useRememberedFacets, type FacetValue } from '@/platform/fi
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { findingFacetChips, listFrom, statusForFlag, STATUS_OPTIONS, toggleStatus, toggleValue, valueChips, type FindingFacetFilters } from '@/platform/findings/facets'
+import { findingFacetChips, fromWire, listFrom, statusForFlag, STATUS_OPTIONS, toggleStatus, toggleValue, toWire, valueChips, type FindingFacetFilters } from '@/platform/findings/facets'
 import { useFindingSettings } from '@/platform/findings/queries'
 import { MANUAL_STATUSES, NEEDS_REASON, STATUSES, STATUS_TITLES, type FindingChange, type FindingStatus } from '@/platform/findings/types'
 import { AssetDrawer } from './AssetDrawer'
@@ -393,7 +393,7 @@ export function AssetsPage() {
     source_has: listFrom<AssetSource>(params, 'source_has', SOURCES),
     source_missing: listFrom<AssetSource>(params, 'source_missing', SOURCES),
     code: listFrom<CodeFilter>(params, 'code', ['any', ...CODES]),
-    zone: listFrom(params, 'zone'),
+    zone: fromWire(listFrom(params, 'zone')),
     criticality: listFrom<Criticality | 'none'>(params, 'criticality', [...CRITICALITIES, 'none']),
     network_id: networkIdsFrom(params),
   }))
@@ -416,7 +416,7 @@ export function AssetsPage() {
 
   const queryArgs = useMemo<AssetsQuery>(
     () => ({
-      ...filters, q: q || undefined, port: port ? Number(port) : undefined, tag: tag.trim() || undefined,
+      ...filters, zone: toWire(filters.zone), q: q || undefined, port: port ? Number(port) : undefined, tag: tag.trim() || undefined,
       disc_status: disc.status, assignee: disc.assignee, overdue: disc.overdue || undefined,
     }),
     [filters, q, port, tag, disc],

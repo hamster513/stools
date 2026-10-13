@@ -112,7 +112,7 @@ def _where(c: KscChange, before: Any, after: Any) -> str:
     record = after if after is not None else before
     if c.kind in ("exclusion", "net_rule") and isinstance(record, dict):
         if c.kind == "exclusion":
-            kind = str(record.get("kind"))
+            kind = record.get("kind") or ""
             text = f"{EXCLUSION_KIND_TITLES.get(kind, kind)}: {record.get('value') or ''}"
         else:
             text = str(record.get("name") or "")
