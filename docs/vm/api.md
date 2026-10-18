@@ -108,14 +108,16 @@ POST /recalculate               {job_id} | 409
 ## Настройки
 
 ```
-GET  /settings   {connection{host, username, verify_tls, os_exclude, pdql_extra,
-                  limit, password_set, client_secret_set, configured},
+GET  /settings   {connection{host, verify_tls, os_exclude, pdql_extra,
+                  limit, api_token_set, configured},
                   weights, threshold, attack_min_risk,
                   defaults{weights, threshold, attack_min_risk}}
-PUT  /settings   {connection{…, password, client_secret}, weights, threshold,
+PUT  /settings   {connection{…, api_token}, weights, threshold,
                   attack_min_risk}
-                 пустой пароль/секрет — оставить прежние
-POST /settings/test-vm   {ok, message}   токен и PDQL limit(1)
+                 пустой api_token — оставить прежний; смена host/verify_tls без
+                 нового токена — 422. Токен — персональный API-токен MaxPatrol
+                 (pat_…), уходит как Bearer; логин, пароль и client secret не нужны
+POST /settings/test-vm   {ok, message}   PDQL limit(1) под токеном
 GET  /zones      [{name, internet_access, confidential_data, marked, hosts}]
 PUT  /zones      [{name, internet_access, confidential_data}] → 204
 ```

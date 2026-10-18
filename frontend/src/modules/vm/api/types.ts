@@ -208,13 +208,12 @@ export interface Weights {
 
 export interface ConnectionView {
   host: string
-  username: string
   verify_tls: boolean
   os_exclude: string[]
   pdql_extra: string
   limit: number
-  password_set: boolean
-  client_secret_set: boolean
+  /** Персональный API-токен MaxPatrol задан; само значение наружу не отдаётся. */
+  api_token_set: boolean
   configured: boolean
 }
 
@@ -229,9 +228,8 @@ export interface SettingsView {
 export interface SettingsUpdate {
   connection: {
     host: string
-    username: string
-    password: string
-    client_secret: string
+    /** Пусто — оставить прежний токен. */
+    api_token: string
     verify_tls: boolean
     os_exclude: string[]
     pdql_extra: string

@@ -8,10 +8,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import U1, U2, _build_kb_zip, collect_and_wait
-from tests.api.fake_kb import INSTALL_SET, ROOT, FakeKb, kb_object
+from tests.api.fake_kb import INSTALL_SET, ROOT, TOKEN, FakeKb, kb_object
 from tests.export_check import csv_rows
 
-BODY = {"host": "mp.corp.local", "username": "svc", "password": "p1", "client_secret": "s1"}
+BODY = {"host": "mp.corp.local", "api_token": TOKEN}
 U3 = "333ffb49-bb9e-4ee4-9262-6754b7ee28d5"
 
 

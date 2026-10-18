@@ -50,12 +50,12 @@ function KbForm({ c }: { c: KbConnectionView }) {
   const [jobId, setJobId] = useState<number | undefined>(undefined)
   const job = useJobStatus(jobId, { enabled: jobId !== undefined })
 
-  const [form, setForm] = useState({ host: c.host, kb_port: c.kb_port, username: c.username, password: '', client_secret: '', verify_tls: c.verify_tls })
+  const [form, setForm] = useState({ host: c.host, kb_port: c.kb_port, api_token: '', verify_tls: c.verify_tls })
   const [dirty, setDirty] = useState(false)
   useEffect(() => {
-    setForm({ host: c.host, kb_port: c.kb_port, username: c.username, password: '', client_secret: '', verify_tls: c.verify_tls })
+    setForm({ host: c.host, kb_port: c.kb_port, api_token: '', verify_tls: c.verify_tls })
     setDirty(false)
-  }, [c.host, c.kb_port, c.username, c.verify_tls])
+  }, [c.host, c.kb_port, c.verify_tls])
 
   useEffect(() => {
     if (job.data?.status === 'done' && job.data.snapshot_id !== null) {
@@ -81,23 +81,17 @@ function KbForm({ c }: { c: KbConnectionView }) {
   return (
     <Section
       title="База знаний по API"
-      about="Правила корреляции забираются из базы знаний MaxPatrol: наборы установки и статус установки каждого правила — из списка объектов, тела правил — экспортом в формате kb, который разбирается как загруженный файл. Только чтение. Пароль и client secret хранятся в базе и наружу не показываются: пустое поле при сохранении оставляет прежнее значение."
+      about="Правила корреляции забираются из базы знаний MaxPatrol: наборы установки и статус установки каждого правила — из списка объектов, тела правил — экспортом в формате kb, который разбирается как загруженный файл. Только чтение. Персональный API-токен MaxPatrol хранится в базе и наружу не показывается: пустое поле при сохранении оставляет прежнее значение."
     >
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Сервер MaxPatrol" hint="Имя или адрес Core без https://; токен берётся на порту 3334">
+        <Field label="Сервер MaxPatrol" hint="Имя или адрес Core без https://">
           <input className={FIELD} value={form.host} onChange={(e) => patch({ host: e.target.value })} placeholder="mp.corp.local" spellCheck={false} disabled={!write} />
         </Field>
         <Field label="Порт базы знаний" hint="Обычно 8091">
           <input className={FIELD} type="number" min={1} max={65535} value={form.kb_port} onChange={(e) => patch({ kb_port: Number(e.target.value) })} disabled={!write} />
         </Field>
-        <Field label="Логин">
-          <input className={FIELD} value={form.username} onChange={(e) => patch({ username: e.target.value })} autoComplete="off" spellCheck={false} disabled={!write} />
-        </Field>
-        <Field label="Пароль" hint={c.password_set ? 'задан; введите, чтобы заменить' : 'не задан'}>
-          <input className={FIELD} type="password" value={form.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" disabled={!write} />
-        </Field>
-        <Field label="Client secret" hint={c.client_secret_set ? 'задан; введите, чтобы заменить' : 'не задан; тот же, что у подключения к MaxPatrol VM'}>
-          <input className={FIELD} type="password" value={form.client_secret} onChange={(e) => patch({ client_secret: e.target.value })} autoComplete="new-password" disabled={!write} />
+        <Field label="API-токен" hint={c.api_token_set ? 'задан; введите, чтобы заменить' : 'не задан. Персональный токен доступа MaxPatrol (pat_…); выпускается в консоли управления; подойдёт тот же, что у подключения к MaxPatrol VM'}>
+          <input className={FIELD} type="password" value={form.api_token} onChange={(e) => patch({ api_token: e.target.value })} autoComplete="new-password" spellCheck={false} disabled={!write} />
         </Field>
         <div className="flex flex-col justify-end pb-1">
           <label className="flex items-center gap-2 text-xs text-text">
@@ -111,10 +105,10 @@ function KbForm({ c }: { c: KbConnectionView }) {
       {write && (
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
           <Button variant="primary" onClick={() => save.mutate(form, {
-              // Секреты после сохранения не держим в состоянии: подсказка снова скажет «задан».
+              // Токен после сохранения не держим в состоянии: подсказка снова скажет «задан».
               onSuccess: () => {
                 setDirty(false)
-                setForm((f) => ({ ...f, password: '', client_secret: '' }))
+                setForm((f) => ({ ...f, api_token: '' }))
               },
             })} loading={save.isPending} disabled={!dirty || !form.host}>
             <Save size={13} aria-hidden /> Сохранить

@@ -11,14 +11,13 @@ from api.modules.siem.core.kb import (
     ROOT_SET_ID,
     KbClient,
     KbError,
-    KbLoginError,
     KbShapeError,
     public_error,
 )
 from api.modules.siem.services.kb_settings import KbConnection
-from tests.api.fake_kb import DB, INSTALL_SET, FakeKb, kb_object
+from tests.api.fake_kb import DB, INSTALL_SET, TOKEN, FakeKb, kb_object
 
-CONN = KbConnection(host="mp.corp.local", username="svc", password="pw", client_secret="sec")
+CONN = KbConnection(host="mp.corp.local", api_token=TOKEN)
 
 
 def _client(fake: FakeKb) -> KbClient:
@@ -62,8 +61,6 @@ def test_server_capped_page_size_does_not_truncate() -> None:
 
 def test_objects_list_without_rows_is_a_clear_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/connect/token":
-            return httpx.Response(200, json={"access_token": "tok"})
         return httpx.Response(200, json={"Items": []})
 
     client = KbClient(CONN, httpx.Client(transport=httpx.MockTransport(handler)))
@@ -97,8 +94,6 @@ def test_export_over_limit_is_refused(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_non_json_body_is_a_clear_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/connect/token":
-            return httpx.Response(200, json={"access_token": "tok"})
         return httpx.Response(200, content=b"<html>login</html>")
 
     client = KbClient(CONN, httpx.Client(transport=httpx.MockTransport(handler)))
@@ -145,11 +140,14 @@ def test_deploy_stats_non_numeric_counters_are_zero() -> None:
 
 
 def test_public_error_classes() -> None:
-    bad_secret = FakeKb()
-    bad_secret.token_status = 400
-    with pytest.raises(KbLoginError) as login_exc:
-        _client(bad_secret).token()
-    assert public_error(login_exc.value) == LOGIN_REJECTED
+    unauthorized = FakeKb()
+    unauthorized.unauthorized = True
+    with pytest.raises(KbError) as login_exc:
+        _client(unauthorized).databases()
+    assert login_exc.value.status == 401 and public_error(login_exc.value) == LOGIN_REJECTED
+    with pytest.raises(KbError, match="не задан") as empty_exc:
+        KbClient(KbConnection(host="mp.corp.local"), httpx.Client()).token()
+    assert public_error(empty_exc.value) == LOGIN_REJECTED
 
     forbidden = FakeKb()
     forbidden.forbidden = True
@@ -161,7 +159,7 @@ def test_public_error_classes() -> None:
         raise httpx.ConnectError("boom")
 
     with pytest.raises(KbError) as link_exc:
-        KbClient(CONN, httpx.Client(transport=httpx.MockTransport(down))).token()
+        KbClient(CONN, httpx.Client(transport=httpx.MockTransport(down))).databases()
     assert public_error(link_exc.value) == NO_LINK
     assert "mp.corp.local" not in public_error(link_exc.value)
 

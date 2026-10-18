@@ -49,7 +49,7 @@ class TestResponse(BaseModel):
     database: str = ""
 
 
-NOT_CONFIGURED = "подключение не настроено: нужны адрес, логин, пароль и client secret"
+NOT_CONFIGURED = "подключение не настроено: нужны адрес и API-токен"
 
 
 @router.post("/test", response_model=TestResponse)

@@ -11,42 +11,41 @@ def test_defaults_and_secrets_hidden(auth_client: TestClient) -> None:
     body = r.json()
     assert body["threshold"] == 70
     assert body["weights"]["exploitdb"]["remote"] == 1.3
-    assert body["connection"]["password_set"] is False
-    assert "password" not in body["connection"]
+    assert body["connection"]["api_token_set"] is False
+    assert "api_token" not in body["connection"]
     assert body["defaults"]["threshold"] == 70
 
 
 def test_put_keeps_secrets_when_empty(auth_client: TestClient) -> None:
     first = {
-        "connection": {"host": "vm.local", "username": "u", "password": "p1", "client_secret": "s1"},
+        "connection": {"host": "vm.local", "api_token": "t1"},
         "weights": {},
         "threshold": 60,
     }
     r = auth_client.put("/api/vm/settings", json=first)
     assert r.status_code == 200, r.text
-    assert r.json()["connection"]["password_set"] is True
+    assert r.json()["connection"]["api_token_set"] is True
     assert r.json()["threshold"] == 60
 
-    second = {"connection": {"host": "vm.local", "username": "u", "password": "", "client_secret": "", "pdql_extra": "Host.OsName != 'x'"}, "weights": {}, "threshold": 65}
+    second = {"connection": {"host": "vm.local", "api_token": "", "pdql_extra": "Host.OsName != 'x'"}, "weights": {}, "threshold": 65}
     r = auth_client.put("/api/vm/settings", json=second)
     assert r.status_code == 200, r.text
     assert r.json()["connection"]["pdql_extra"] == "Host.OsName != 'x'" and r.json()["threshold"] == 65
-    assert r.json()["connection"]["password_set"] is True
-    assert r.json()["connection"]["client_secret_set"] is True
+    assert r.json()["connection"]["api_token_set"] is True
 
     from api.db.base import get_sessionmaker
     from api.modules.vm.services.settings import load_settings
 
     with get_sessionmaker()() as db:
         s = load_settings(db).connection.unsealed()
-        assert s.password == "p1" and s.client_secret == "s1"
+        assert s.api_token == "t1"
 
 
 def test_put_keeps_attack_threshold_when_absent(auth_client: TestClient) -> None:
     """Формы подключения и весов порога матрицы не присылают — и не трогают его."""
     assert auth_client.put("/api/vm/settings", json={"attack_min_risk": 0}).json()["attack_min_risk"] == 0
 
-    connection_only = {"connection": {"host": "vm.local", "username": "u", "password": "p1"}, "weights": {}, "threshold": 60}
+    connection_only = {"connection": {"host": "vm.local", "api_token": "t1"}, "weights": {}, "threshold": 60}
     r = auth_client.put("/api/vm/settings", json=connection_only)
     assert r.status_code == 200, r.text
     assert r.json()["attack_min_risk"] == 0
@@ -70,8 +69,8 @@ def test_zones_roundtrip(auth_client: TestClient) -> None:
     ]
 
 
-FIRST = {"connection": {"host": "vm.local", "username": "u", "password": "p1", "client_secret": "s1"}, "weights": {}, "threshold": 60}
-SECRET_AGAIN = "при смене адреса или учётной записи пароль нужно ввести заново"
+FIRST = {"connection": {"host": "vm.local", "api_token": "t1"}, "weights": {}, "threshold": 60}
+SECRET_AGAIN = "при смене адреса API-токен нужно ввести заново"
 
 
 def _stored_connection() -> Any:
@@ -95,13 +94,13 @@ def _raw_setting() -> dict[str, Any]:
 def test_secrets_are_encrypted_at_rest(auth_client: TestClient) -> None:
     assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
     conn = _raw_setting()["connection"]
-    assert conn["password"].startswith("enc:v1:") and conn["client_secret"].startswith("enc:v1:")
-    assert _stored_connection().password == "p1"
+    assert conn["api_token"].startswith("enc:v1:")
+    assert _stored_connection().api_token == "t1"
 
 
 def test_legacy_plaintext_secrets_are_used_and_reencrypted(auth_client: TestClient, monkeypatch: Any) -> None:
-    """Пароль и секрет из старой базы уходят в MaxPatrol как есть и
-    шифруются при следующем сохранении настроек."""
+    """Токен из старой базы уходит в MaxPatrol как есть и шифруется при
+    следующем сохранении настроек."""
     import json
 
     import httpx
@@ -110,12 +109,10 @@ def test_legacy_plaintext_secrets_are_used_and_reencrypted(auth_client: TestClie
     from api.db.models import AppSetting
     from api.modules.vm.routers import settings as router
 
-    forms: list[dict[str, str]] = []
+    auths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/connect/token":
-            forms.append(dict(httpx.QueryParams(request.content.decode())))
-            return httpx.Response(200, json={"access_token": "t"})
+        auths.append(request.headers["Authorization"])
         return httpx.Response(403)
 
     monkeypatch.setattr(router, "make_client", lambda conn, timeout=60.0: httpx.Client(transport=httpx.MockTransport(handler)))
@@ -123,53 +120,60 @@ def test_legacy_plaintext_secrets_are_used_and_reencrypted(auth_client: TestClie
     with get_sessionmaker()() as db:
         row = db.get(AppSetting, "vm")
         value = json.loads(row.value_json)
-        value["connection"]["password"], value["connection"]["client_secret"] = "p1", "s1"
+        value["connection"]["api_token"] = "t1"
         row.value_json = json.dumps(value)
         db.commit()
     auth_client.post("/api/vm/settings/test-vm")
-    keep = {**FIRST, "connection": {**FIRST["connection"], "password": "", "client_secret": ""}}
+    keep = {**FIRST, "connection": {**FIRST["connection"], "api_token": ""}}
     assert auth_client.put("/api/vm/settings", json=keep).status_code == 200
     conn = _raw_setting()["connection"]
-    assert conn["password"].startswith("enc:v1:") and conn["client_secret"].startswith("enc:v1:")
+    assert conn["api_token"].startswith("enc:v1:")
     auth_client.post("/api/vm/settings/test-vm")
-    assert [(f["password"], f["client_secret"]) for f in forms] == [("p1", "s1"), ("p1", "s1")]
+    assert auths == ["Bearer t1", "Bearer t1"]
 
 
 def test_address_change_requires_secrets(auth_client: TestClient) -> None:
     assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
-    keep = {"host": "vm.local", "username": "u", "password": "", "client_secret": ""}
-    for change in ({"host": "evil.local"}, {"username": "other"}, {"verify_tls": True},
-                   {"host": "evil.local", "password": "p2"}, {"host": "evil.local", "client_secret": "s2"}):
+    keep = {"host": "vm.local", "api_token": ""}
+    for change in ({"host": "evil.local"}, {"verify_tls": True}):
         r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**keep, **change}})
         assert r.status_code == 422, (change, r.text)
         assert r.json()["detail"] == SECRET_AGAIN
     stored = _stored_connection()
-    assert (stored.host, stored.username, stored.password, stored.client_secret) == ("vm.local", "u", "p1", "s1")
-    r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**keep, "host": "vm2.local", "password": "p2", "client_secret": "s2"}})
+    assert (stored.host, stored.api_token) == ("vm.local", "t1")
+    r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**keep, "host": "vm2.local", "api_token": "t2"}})
     assert r.status_code == 200 and r.json()["connection"]["host"] == "vm2.local"
-    stored = _stored_connection()
-    assert (stored.password, stored.client_secret) == ("p2", "s2")
+    assert _stored_connection().api_token == "t2"
 
 
 def test_other_changes_keep_secrets(auth_client: TestClient) -> None:
     assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
-    r = auth_client.put("/api/vm/settings", json={**FIRST, "threshold": 50, "connection": {**FIRST["connection"], "password": "", "client_secret": "", "limit": 10}})
+    r = auth_client.put("/api/vm/settings", json={**FIRST, "threshold": 50, "connection": {**FIRST["connection"], "api_token": "", "limit": 10}})
     assert r.status_code == 200, r.text
     stored = _stored_connection()
-    assert (stored.password, stored.client_secret, stored.limit) == ("p1", "s1", 10)
+    assert (stored.api_token, stored.limit) == ("t1", 10)
 
 
 def test_host_must_be_name_or_ip(auth_client: TestClient) -> None:
     for bad in ("10.0.0.5/x?y", "https://vm.local", "vm.local:3334", "u@vm.local", "vm local"):
         r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**FIRST["connection"], "host": bad}})
         assert r.status_code == 422 and "адрес сервера: только имя или IP" in r.text, bad
-    empty = {**FIRST, "connection": {"host": "", "username": "", "password": "", "client_secret": ""}}
+    empty = {**FIRST, "connection": {"host": "", "api_token": ""}}
     assert auth_client.put("/api/vm/settings", json=empty).status_code == 200
 
 
-def test_test_vm_error_names_only_the_cause(auth_client: TestClient) -> None:
-    body = {**FIRST, "connection": {**FIRST["connection"], "host": "127.0.0.1"}}
-    assert auth_client.put("/api/vm/settings", json=body).status_code == 200
+def test_test_vm_error_names_only_the_cause(auth_client: TestClient, monkeypatch: Any) -> None:
+    """Сервер недоступен — «нет связи», без адреса. Транспорт подменяется: на машине разработчика
+    порт 443 может отвечать чем угодно."""
+    import httpx
+
+    from api.modules.vm.routers import settings as router
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr(router, "make_client", lambda conn, timeout=60.0: httpx.Client(transport=httpx.MockTransport(down)))
+    assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
     assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "нет связи"}
 
 
@@ -181,20 +185,17 @@ def test_test_vm_errors_are_generic_classes(auth_client: TestClient, monkeypatch
     answers: dict[str, httpx.Response] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/connect/token":
-            return answers.get("token") or httpx.Response(200, json={"access_token": "t"})
         return answers.get("pdql") or httpx.Response(200, json={"token": "e"})
 
     monkeypatch.setattr(router, "make_client", lambda conn, timeout=60.0: httpx.Client(transport=httpx.MockTransport(handler)))
     assert auth_client.put("/api/vm/settings", json=FIRST).status_code == 200
-    answers["token"] = httpx.Response(400, json={"error": "invalid_grant"})
+    answers["pdql"] = httpx.Response(401, json={"error": "invalid_token"})
     assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "вход отклонён"}
-    answers["token"] = httpx.Response(200, json={"access_token": "t"})
     answers["pdql"] = httpx.Response(500, text="внутренний текст сервера")
     assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "ошибка сервера (HTTP 500)"}
     answers["pdql"] = httpx.Response(403)
     assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "нет прав"}
-    answers["token"] = httpx.Response(200, text="не json")
+    answers["pdql"] = httpx.Response(200, text="не json")
     assert auth_client.post("/api/vm/settings/test-vm").json() == {"ok": False, "message": "ошибка сервера"}
 
 
@@ -235,12 +236,12 @@ def test_put_summary_lists_changed_fields(auth_client: TestClient, db_session: A
     from api.db.models import AuditEvent
 
     auth_client.put("/api/vm/settings", json=FIRST)
-    auth_client.put("/api/vm/settings", json={**FIRST, "threshold": 65, "connection": {**FIRST["connection"], "host": "vm2.local", "password": "p2", "client_secret": "s2"}})
-    auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**FIRST["connection"], "host": "vm3.local", "password": "", "client_secret": ""}})
+    auth_client.put("/api/vm/settings", json={**FIRST, "threshold": 65, "connection": {**FIRST["connection"], "host": "vm2.local", "api_token": "t2"}})
+    auth_client.put("/api/vm/settings", json={**FIRST, "connection": {**FIRST["connection"], "host": "vm3.local", "api_token": ""}})
     db_session.expire_all()
     events = [e for e in db_session.query(AuditEvent).order_by(AuditEvent.id) if e.path == "/api/vm/settings"]
     assert [(e.status, e.summary) for e in events][1:] == [
-        (200, "изменено: host, password, client_secret, threshold"),
+        (200, "изменено: host, api_token, threshold"),
         (422, "изменено: host, threshold"),
     ]
-    assert all("vm" not in (e.summary or "") and "p2" not in (e.summary or "") for e in events)
+    assert all("vm" not in (e.summary or "") and "t2" not in (e.summary or "") for e in events)

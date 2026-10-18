@@ -21,9 +21,7 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
 
   const [form, setForm] = useState({
     host: c.host,
-    username: c.username,
-    password: '',
-    client_secret: '',
+    api_token: '',
     verify_tls: c.verify_tls,
     os_exclude: c.os_exclude.join(', '),
     pdql_extra: c.pdql_extra,
@@ -31,9 +29,9 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
   })
   const [dirty, setDirty] = useState(false)
   useEffect(() => {
-    setForm({ host: c.host, username: c.username, password: '', client_secret: '', verify_tls: c.verify_tls, os_exclude: c.os_exclude.join(', '), pdql_extra: c.pdql_extra, limit: c.limit })
+    setForm({ host: c.host, api_token: '', verify_tls: c.verify_tls, os_exclude: c.os_exclude.join(', '), pdql_extra: c.pdql_extra, limit: c.limit })
     setDirty(false)
-  }, [c.host, c.username, c.verify_tls, c.os_exclude, c.pdql_extra, c.limit])
+  }, [c.host, c.verify_tls, c.os_exclude, c.pdql_extra, c.limit])
 
   function patch(p: Partial<typeof form>) {
     setDirty(true)
@@ -57,20 +55,14 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
   return (
     <Section
       title="Подключение к MaxPatrol VM"
-      about="Хосты, их ОС, критичность, зона и список CVE запрашиваются PDQL-запросом через API и приходят CSV-экспортом. Пароль и client secret хранятся в базе и наружу не показываются: пустое поле при сохранении оставляет прежнее значение."
+      about="Хосты, их ОС, критичность, зона и список CVE запрашиваются PDQL-запросом через API и приходят CSV-экспортом. Персональный API-токен MaxPatrol хранится в базе и наружу не показывается: пустое поле при сохранении оставляет прежнее значение."
     >
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Хост" hint="Имя или адрес без https://; токен берётся на порту 3334">
+        <Field label="Хост" hint="Имя или адрес без https://">
           <input className={FIELD} value={form.host} onChange={(e) => patch({ host: e.target.value })} placeholder="vm.corp.local" spellCheck={false} disabled={!write} />
         </Field>
-        <Field label="Логин">
-          <input className={FIELD} value={form.username} onChange={(e) => patch({ username: e.target.value })} autoComplete="off" spellCheck={false} disabled={!write} />
-        </Field>
-        <Field label="Пароль" hint={c.password_set ? 'задан; введите, чтобы заменить' : 'не задан'}>
-          <input className={FIELD} type="password" value={form.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" disabled={!write} />
-        </Field>
-        <Field label="Client secret" hint={c.client_secret_set ? 'задан; введите, чтобы заменить' : 'не задан'}>
-          <input className={FIELD} type="password" value={form.client_secret} onChange={(e) => patch({ client_secret: e.target.value })} autoComplete="new-password" disabled={!write} />
+        <Field label="API-токен" hint={c.api_token_set ? 'задан; введите, чтобы заменить' : 'не задан. Персональный токен доступа MaxPatrol (pat_…); выпускается в консоли управления'}>
+          <input className={FIELD} type="password" value={form.api_token} onChange={(e) => patch({ api_token: e.target.value })} autoComplete="new-password" spellCheck={false} disabled={!write} />
         </Field>
         <Field label="Исключить ОС" hint="Через запятую; попадают в filter(Host.OsName != …)">
           <input className={FIELD} value={form.os_exclude} onChange={(e) => patch({ os_exclude: e.target.value })} spellCheck={false} disabled={!write} />

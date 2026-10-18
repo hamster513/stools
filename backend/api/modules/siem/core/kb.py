@@ -1,7 +1,7 @@
 """Клиент базы знаний MaxPatrol (PT KB), только чтение (спека §2, §4).
 
-Токен — у Core на порту 3334, как у модуля VM, со scope `ptkb.api`; база
-знаний на своём порту принимает тот же Bearer. HTTP-клиент передаётся
+Авторизация — персональный API-токен MaxPatrol как Bearer, как у модуля
+VM; база знаний на своём порту принимает его напрямую. HTTP-клиент передаётся
 снаружи, чтобы тесты подменяли транспорт, а не сеть. Адреса и тела
 ответов в тексты ошибок не попадают — наружу уходит класс причины
 (`public_error`).
@@ -35,7 +35,6 @@ from api.limits import MAX_API_RESPONSE, SIEM_UPLOAD, ResponseTooLarge, read_lim
 
 #: Корневой набор установки «Все объекты»: экспорт по нему — вся база.
 ROOT_SET_ID = "00000000-0000-0000-0000-000000000001"
-TOKEN_PORT = 3334
 PAGE_SIZE = 500
 #: Экспорт не больше того, что принимает загрузка файла.
 EXPORT_LIMIT = SIEM_UPLOAD
@@ -44,9 +43,7 @@ EXPORT_LIMIT = SIEM_UPLOAD
 class ConnectionLike(Protocol):
     host: str
     kb_port: int
-    username: str
-    password: str
-    client_secret: str
+    api_token: str
     verify_tls: bool
 
 
@@ -57,9 +54,6 @@ class KbError(Exception):
         super().__init__(message)
         self.status = status
 
-
-class KbLoginError(KbError):
-    """Токен не выдан: логин, пароль или client secret не приняты."""
 
 
 class KbShapeError(KbError):
@@ -138,7 +132,6 @@ class KbClient:
     def __init__(self, conn: ConnectionLike, http: httpx.Client) -> None:
         self.conn = conn
         self.http = http
-        self._token: str | None = None
 
     @property
     def _host(self) -> str:
@@ -162,30 +155,10 @@ class KbClient:
             raise KbShapeError("ответ KB не JSON") from exc
 
     def token(self) -> str:
-        if self._token:
-            return self._token
-        url = f"https://{self._host}:{TOKEN_PORT}/connect/token"
-        data = {
-            "username": self.conn.username,
-            "password": self.conn.password,
-            "client_id": "mpx",
-            "client_secret": self.conn.client_secret,
-            "grant_type": "password",
-            "response_type": "code id_token token",
-            "scope": "authorization offline_access mpx.api ptkb.api",
-        }
-        try:
-            with self.http.stream("POST", url, data=data) as r:
-                if r.status_code != 200:
-                    raise KbLoginError(f"токен не выдан: HTTP {r.status_code}", r.status_code)
-                body = self._json(r)
-        except httpx.HTTPError as exc:
-            raise KbError(f"нет связи с Core:{TOKEN_PORT} — {exc.__class__.__name__}") from exc
-        token = body.get("access_token") if isinstance(body, dict) else None
+        token = self.conn.api_token.strip()
         if not token:
-            raise KbLoginError("ответ без access_token — проверьте client secret")
-        self._token = str(token)
-        return self._token
+            raise KbError("API-токен не задан", 401)
+        return token
 
     def _headers(self, db: str | None = None) -> dict[str, str]:
         headers = {"Authorization": f"Bearer {self.token()}"}
@@ -317,8 +290,6 @@ def public_error(exc: BaseException) -> str:
     if isinstance(exc.__cause__, httpx.HTTPError) or isinstance(exc, httpx.HTTPError):
         return TLS_FAILED if is_tls_error(exc) else NO_LINK
     code = exc.status if isinstance(exc, KbError) else None
-    if isinstance(exc, KbLoginError) and code in (None, 400, 401):
-        return LOGIN_REJECTED
     if code == 401:
         return LOGIN_REJECTED
     if code == 403:

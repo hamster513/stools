@@ -1,8 +1,9 @@
 """Подключение к базе знаний MaxPatrol (PT KB) — в `app_setting['siem_kb']`.
 
-Одно на инсталляцию, по образцу модуля VM: пароль и client secret
-шифруются (api/crypto.py) и расшифровываются только в момент обращения
-к KB (`KbConnection.unsealed`). Наружу отдаётся только признак «задан».
+Одно на инсталляцию, по образцу модуля VM: персональный API-токен
+MaxPatrol шифруется (api/crypto.py) и расшифровывается только в момент
+обращения к KB (`KbConnection.unsealed`). Наружу отдаётся только признак
+«задан».
 """
 from __future__ import annotations
 
@@ -18,24 +19,23 @@ from api.hosts import validate_host
 from api.llm_settings import read_setting
 
 KB_KEY = "siem_kb"
-SECRET_FIELDS = ("password", "client_secret")
-#: Поля, от которых зависит, куда и под чьим именем уйдут секреты.
-ADDRESS_FIELDS = ("host", "kb_port", "username", "verify_tls")
-SECRETS_AGAIN = "при смене адреса или учётной записи пароль и client secret нужно ввести заново"
+SECRET_FIELDS = ("api_token",)
+#: Поля, от которых зависит, куда уйдёт токен.
+ADDRESS_FIELDS = ("host", "kb_port", "verify_tls")
+SECRETS_AGAIN = "при смене адреса API-токен нужно ввести заново"
 
 
 class KbConnection(BaseModel):
     host: str = ""
     kb_port: int = Field(default=8091, ge=1, le=65535)
-    username: str = ""
-    password: str = ""
-    client_secret: str = ""
+    #: Персональный токен доступа (pat_…), выпускается в консоли управления MaxPatrol.
+    api_token: str = ""
     #: Как у VM: MaxPatrol обычно стоит на самоподписанном сертификате.
     verify_tls: bool = False
 
     @property
     def configured(self) -> bool:
-        return bool(self.host.strip() and self.username.strip() and self.password and self.client_secret)
+        return bool(self.host.strip() and self.api_token)
 
     def unsealed(self) -> KbConnection:
         """Копия с расшифрованными секретами — для обращения к KB, не для записи."""
@@ -95,7 +95,6 @@ def save_connection(db: Session, incoming: KbConnectionIn, login: str | None) ->
 
 def view(conn: KbConnection) -> dict[str, Any]:
     out = conn.model_dump(exclude=set(SECRET_FIELDS))
-    out["password_set"] = bool(conn.password)
-    out["client_secret_set"] = bool(conn.client_secret)
+    out["api_token_set"] = bool(conn.api_token)
     out["configured"] = conn.configured
     return out

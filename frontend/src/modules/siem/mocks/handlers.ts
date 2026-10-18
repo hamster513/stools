@@ -48,7 +48,7 @@ import {
 } from './data'
 import { FIELDS, TECHNIQUE_CATALOG } from './fixtures'
 
-const KB_CONNECTION: KbConnectionView = { host: 'mp.demo.local', kb_port: 8091, username: 'svc-stools', verify_tls: false, password_set: true, client_secret_set: true, configured: true }
+const KB_CONNECTION: KbConnectionView = { host: 'mp.demo.local', kb_port: 8091, verify_tls: false, api_token_set: true, configured: true }
 
 let referenceLoaded: string | null = null
 let sessionActive = false
@@ -736,11 +736,9 @@ export const handlers = [
     const body = (await request.json()) as KbConnectionUpdate
     KB_CONNECTION.host = body.host
     KB_CONNECTION.kb_port = body.kb_port
-    KB_CONNECTION.username = body.username
     KB_CONNECTION.verify_tls = body.verify_tls
-    if (body.password) KB_CONNECTION.password_set = true
-    if (body.client_secret) KB_CONNECTION.client_secret_set = true
-    KB_CONNECTION.configured = Boolean(KB_CONNECTION.host && KB_CONNECTION.username && KB_CONNECTION.password_set && KB_CONNECTION.client_secret_set)
+    if (body.api_token) KB_CONNECTION.api_token_set = true
+    KB_CONNECTION.configured = Boolean(KB_CONNECTION.host && KB_CONNECTION.api_token_set)
     return HttpResponse.json(KB_CONNECTION)
   }),
 

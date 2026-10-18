@@ -65,8 +65,8 @@ def create_user(
 @app.command("reseal-secrets")
 def reseal_secrets() -> None:
     """Зашифровать секреты, сохранённые открытым текстом до обновления:
-    пароли подключений AD и KSC, пароль и client secret MaxPatrol VM, пароль и
-    client secret базы знаний SIEM, секрет клиента OIDC. Уже зашифрованные не
+    пароли подключений AD и KSC, API-токены MaxPatrol VM и базы знаний SIEM,
+    секрет клиента OIDC. Уже зашифрованные не
     трогаются; значения не печатаются."""
     from api.modules.ad.models import AdConnection
     from api.modules.ksc.models import KscConnection
@@ -88,8 +88,8 @@ def reseal_secrets() -> None:
                 counts[kind] += 1
         #: Ключ настройки в app_setting, раздел JSON с секретами (None — корень), поля.
         for kind, section, fields in (
-            ("vm", "connection", ("password", "client_secret")),
-            ("siem_kb", None, ("password", "client_secret")),
+            ("vm", "connection", ("api_token",)),
+            ("siem_kb", None, ("api_token",)),
             ("oidc", None, ("client_secret",)),
         ):
             row = session.get(AppSetting, kind)

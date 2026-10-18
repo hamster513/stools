@@ -1,7 +1,8 @@
 """Клиент MaxPatrol VM (спека §2, §5).
 
-Три шага, как в первой итерации: токен по паролю на порту 3334, PDQL в
-`assets_grid` за токеном экспорта, CSV по этому токену. HTTP-клиент
+Два шага: PDQL в `assets_grid` за токеном экспорта, CSV по этому токену.
+Авторизация — персональный API-токен MaxPatrol как Bearer, без обмена
+пароля на токен. HTTP-клиент
 передаётся снаружи, чтобы тесты подменяли транспорт, а не сеть.
 """
 from __future__ import annotations
@@ -19,9 +20,7 @@ from api.limits import MAX_API_RESPONSE, ResponseTooLarge, read_limited
 
 class ConnectionLike(Protocol):
     host: str
-    username: str
-    password: str
-    client_secret: str
+    api_token: str
     verify_tls: bool
     os_exclude: list[str]
     pdql_extra: str
@@ -37,7 +36,7 @@ class MpVmError(Exception):
 
 
 class MpVmLoginError(MpVmError):
-    """Токен не выдан: логин, пароль или client secret не приняты."""
+    """API-токен не задан или не принят."""
 
 
 PDQL_SELECT = (
@@ -93,8 +92,10 @@ class MpVmClient:
         return json.loads(self._body(r))
 
     def token(self) -> str:
-        if self._token:
-            return self._token
+        token = self.conn.api_token.strip()
+        if not token:
+            raise MpVmLoginError("API-токен не задан")
+        return token
         host = self.conn.host.strip().rstrip("/").removeprefix("https://").removeprefix("http://")
         url = f"https://{url_host(host)}:3334/connect/token"
         data = {

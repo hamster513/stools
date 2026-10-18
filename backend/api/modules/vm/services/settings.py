@@ -1,9 +1,10 @@
 """Настройки модуля VM в `app_setting['vm']` (спека §7).
 
-Пароль и client secret MaxPatrol хранятся здесь же, зашифрованными
-(api/crypto.py); расшифровываются только для обращения к VM
-(`Connection.unsealed`). Наружу они не отдаются никогда — только признак
-«задан».
+Персональный API-токен MaxPatrol хранится здесь же, зашифрованным
+(api/crypto.py); расшифровывается только для обращения к VM
+(`Connection.unsealed`). Наружу он не отдаётся никогда — только признак
+«задан». Логин, пароль и client secret больше не нужны: MaxPatrol принимает
+токен как Bearer напрямую.
 """
 from __future__ import annotations
 
@@ -29,9 +30,8 @@ DEFAULT_OS_EXCLUDE = ["Windows 7", "Windows 10", "ESXi", "IOS", "NX-OS", "IOS XE
 
 class Connection(BaseModel):
     host: str = ""
-    username: str = ""
-    password: str = ""
-    client_secret: str = ""
+    #: Персональный токен доступа (pat_…), выпускается в консоли управления MaxPatrol.
+    api_token: str = ""
     #: MaxPatrol обычно стоит на самоподписанном сертификате; проверка
     #: выключена по умолчанию, но явно — флагом, который человек видит.
     verify_tls: bool = False
@@ -41,7 +41,7 @@ class Connection(BaseModel):
 
     @property
     def configured(self) -> bool:
-        return bool(self.host.strip() and self.username.strip() and self.password)
+        return bool(self.host.strip() and self.api_token)
 
     def unsealed(self) -> Connection:
         """Копия с расшифрованными секретами — для обращения к VM, не для записи."""
@@ -57,10 +57,10 @@ class ConnectionIn(Connection):
         return validate_host(value) if value.strip() else ""
 
 
-#: Поля, от которых зависит, куда и под чьим именем уйдут пароль и секрет.
-ADDRESS_FIELDS = ("host", "username", "verify_tls")
-SECRET_FIELDS = ("password", "client_secret")
-SECRETS_AGAIN = "при смене адреса или учётной записи пароль нужно ввести заново"
+#: Поля, от которых зависит, куда уйдёт токен.
+ADDRESS_FIELDS = ("host", "verify_tls")
+SECRET_FIELDS = ("api_token",)
+SECRETS_AGAIN = "при смене адреса API-токен нужно ввести заново"
 
 
 class SecretsRequired(ValueError):

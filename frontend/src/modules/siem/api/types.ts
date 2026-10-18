@@ -711,19 +711,17 @@ export interface UpdateSettingsRequest {
 export interface KbConnectionView {
   host: string
   kb_port: number
-  username: string
   verify_tls: boolean
-  password_set: boolean
-  client_secret_set: boolean
+  /** Персональный API-токен MaxPatrol задан; само значение наружу не отдаётся. */
+  api_token_set: boolean
   configured: boolean
 }
 
 export interface KbConnectionUpdate {
   host: string
   kb_port: number
-  username: string
-  password: string
-  client_secret: string
+  /** Пусто — оставить прежний токен. */
+  api_token: string
   verify_tls: boolean
 }
 

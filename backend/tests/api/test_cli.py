@@ -91,18 +91,18 @@ def test_reseal_secrets_encrypts_plaintext_in_place(app_settings: Any, db_sessio
     db_session.add_all([
         AdConnection(host="dc01.corp.local", username="CORP\\auditor", password="ad-plain"),
         KscConnection(host="ksc01.corp.local", username="svc", password="ksc-plain"),
-        AppSetting(key="vm", value_json=json.dumps({"connection": {"host": "vm.local", "username": "u", "password": "vm-plain", "client_secret": "vm-sec"}})),
+        AppSetting(key="vm", value_json=json.dumps({"connection": {"host": "vm.local", "api_token": "vm-plain"}})),
         AppSetting(key="oidc", value_json=json.dumps({"client_id": "stools", "client_secret": "oidc-plain"})),
-        AppSetting(key="siem_kb", value_json=json.dumps({"host": "mp.local", "username": "u", "password": "kb-plain", "client_secret": "kb-sec"})),
+        AppSetting(key="siem_kb", value_json=json.dumps({"host": "mp.local", "api_token": "kb-plain"})),
     ])
     db_session.commit()
 
     result = runner.invoke(app, ["reseal-secrets"])
     assert result.exit_code == 0, result.output
     assert "ad: 1" in result.output and "ksc: 1" in result.output
-    assert "vm: 2" in result.output and "oidc: 1" in result.output
-    assert "siem_kb: 2" in result.output and "kb-plain" not in result.output
-    assert "plain" not in result.output and "vm-sec" not in result.output
+    assert "vm: 1" in result.output and "oidc: 1" in result.output
+    assert "siem_kb: 1" in result.output and "kb-plain" not in result.output
+    assert "plain" not in result.output
 
     db_session.expire_all()
     ad = db_session.query(AdConnection).one().password
@@ -110,9 +110,9 @@ def test_reseal_secrets_encrypts_plaintext_in_place(app_settings: Any, db_sessio
     vm = json.loads(db_session.get(AppSetting, "vm").value_json)["connection"]
     oidc = json.loads(db_session.get(AppSetting, "oidc").value_json)
     kb = json.loads(db_session.get(AppSetting, "siem_kb").value_json)
-    sealed = [ad, ksc, vm["password"], vm["client_secret"], oidc["client_secret"], kb["password"], kb["client_secret"]]
+    sealed = [ad, ksc, vm["api_token"], oidc["client_secret"], kb["api_token"]]
     assert all(v.startswith("enc:v1:") for v in sealed)
-    assert [decrypt(v) for v in sealed] == ["ad-plain", "ksc-plain", "vm-plain", "vm-sec", "oidc-plain", "kb-plain", "kb-sec"]
+    assert [decrypt(v) for v in sealed] == ["ad-plain", "ksc-plain", "vm-plain", "oidc-plain", "kb-plain"]
     assert oidc["client_id"] == "stools" and vm["host"] == "vm.local"
 
     again = runner.invoke(app, ["reseal-secrets"])

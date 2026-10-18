@@ -46,9 +46,8 @@ class SettingsView(BaseModel):
 
 
 def _view(s: VmSettings) -> SettingsView:
-    conn = s.connection.model_dump(exclude={"password", "client_secret"})
-    conn["password_set"] = bool(s.connection.password)
-    conn["client_secret_set"] = bool(s.connection.client_secret)
+    conn = s.connection.model_dump(exclude={"api_token"})
+    conn["api_token_set"] = bool(s.connection.api_token)
     conn["configured"] = s.connection.configured
     return SettingsView(
         connection=conn,
@@ -103,14 +102,14 @@ def _public_error(exc: BaseException) -> str:
 
 @router.post("/test-vm", response_model=TestVmResponse)
 def test_vm(db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> TestVmResponse:
-    """Проверка сохранённого подключения: токен и PDQL с limit(1).
+    """Проверка сохранённого подключения: PDQL с limit(1) под API-токеном.
 
-    Проверяется то, что сохранено, а не то, что в форме: пароль и секрет
-    форма не показывает и не присылает, проверять их «из поля» нечем.
+    Проверяется то, что сохранено, а не то, что в форме: токен форма не
+    показывает и не присылает, проверять его «из поля» нечем.
     """
     conn = load_settings(db).connection
     if not conn.configured:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="подключение не настроено: нужны хост, логин и пароль")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="подключение не настроено: нужны хост и API-токен")
     slot = take_slot("vm", user.id)
     try:
         with make_client(conn, timeout=30.0) as http:

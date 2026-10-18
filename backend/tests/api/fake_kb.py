@@ -8,6 +8,8 @@ from typing import Any
 import httpx
 
 DB = "Default"
+#: Персональный API-токен подключения в тестах (не настоящий).
+TOKEN = "pat_test_token"
 ROOT = "00000000-0000-0000-0000-000000000001"
 INSTALL_SET = "11111111-1111-1111-1111-111111111111"
 DATABASES: list[dict[str, Any]] = [
@@ -45,7 +47,7 @@ class FakeKb:
         #: Состав наборов: id набора → guid'ы; корневой набор содержит всё.
         self.members = {INSTALL_SET: [o["Id"] for o in self.objects[:3]]} if members is None else members
         self.databases = DATABASES
-        self.token_status = 200
+        self.unauthorized = False
         self.forbidden = False
         self.export_status = 200
         self.calls: list[httpx.Request] = []
@@ -58,11 +60,9 @@ class FakeKb:
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request)
         p = request.url.path
-        if p == "/connect/token":
-            form = dict(x.split("=", 1) for x in request.content.decode().split("&"))
-            assert request.url.port == 3334 and form["client_id"] == "mpx" and "ptkb.api" in form["scope"]
-            return httpx.Response(self.token_status, json={"access_token": "tok"} if self.token_status == 200 else {"error": "invalid_client"})
-        assert request.headers["Authorization"] == "Bearer tok" and request.url.port == 8091
+        assert request.headers["Authorization"] == f"Bearer {TOKEN}" and request.url.port == 8091
+        if self.unauthorized:
+            return httpx.Response(401, json={"detail": "unauthorized"})
         if self.forbidden:
             return httpx.Response(403, json={"detail": "forbidden"})
         if p == "/api-studio/content-database-selector/content-databases":

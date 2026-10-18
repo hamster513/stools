@@ -35,9 +35,7 @@ export function AttackThresholdSection({ settings }: { settings: SettingsView })
       {
         connection: {
           host: settings.connection.host,
-          username: settings.connection.username,
-          password: '',
-          client_secret: '',
+          api_token: '',
           verify_tls: settings.connection.verify_tls,
           os_exclude: settings.connection.os_exclude,
           pdql_extra: settings.connection.pdql_extra,

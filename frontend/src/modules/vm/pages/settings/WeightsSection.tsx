@@ -56,7 +56,7 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
   }
   function submit() {
     save.mutate(
-      { connection: { host: settings.connection.host, username: settings.connection.username, password: '', client_secret: '', verify_tls: settings.connection.verify_tls, os_exclude: settings.connection.os_exclude, pdql_extra: settings.connection.pdql_extra, limit: settings.connection.limit }, weights: w, threshold },
+      { connection: { host: settings.connection.host, api_token: '', verify_tls: settings.connection.verify_tls, os_exclude: settings.connection.os_exclude, pdql_extra: settings.connection.pdql_extra, limit: settings.connection.limit }, weights: w, threshold },
       { onSuccess: () => { setDirty(false); recalc.mutate() } },
     )
   }
