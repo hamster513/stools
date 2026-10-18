@@ -1,6 +1,6 @@
 """Активы — модуль STools.
 
-Реестр хостов из VM, KSC, AD, сканера сети и DNS: актив и наблюдения
+Реестр хостов из VM, KSC, AD, сканера сети, DNS и RackTables: актив и наблюдения
 источников, сети с зонами, расхождения между источниками. Сканы, DNS и
 синхронизация с модулями — задачи модуля, их запускают вручную и планировщик платформы.
 """
@@ -12,8 +12,18 @@ from api.jobs import make_jobs_router
 from api.modules.assets import models as models  # таблицы должны попасть в metadata
 from api.modules.assets.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.assets.models import AssetJob
-from api.modules.assets.routers import assets, dns, networks, overview, scan, settings, zones
+from api.modules.assets.routers import (
+    assets,
+    dns,
+    networks,
+    overview,
+    racktables,
+    scan,
+    settings,
+    zones,
+)
 from api.modules.assets.services.dns import schedule_handler as dns_schedule_handler
+from api.modules.assets.services.racktables import schedule_handler as rt_schedule_handler
 from api.modules.assets.services.scan import schedule_handler
 from api.modules.assets.services.sync import schedule_handler as sync_schedule_handler
 
@@ -23,13 +33,14 @@ from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 for sub in (
-    assets.router, dns.router, networks.router, overview.router, scan.router, settings.router, zones.router,
+    assets.router, dns.router, networks.router, overview.router, racktables.router, scan.router, settings.router, zones.router,
     make_jobs_router(AssetJob, "assets"),
 ):
     router.include_router(sub)
 
 scheduler.register_schedule_kind("assets", "scan", schedule_handler)
 scheduler.register_schedule_kind("assets", "dns", dns_schedule_handler)
+scheduler.register_schedule_kind("assets", "rt", rt_schedule_handler)
 scheduler.register_schedule_kind("assets", "sync", sync_schedule_handler)
 register_adapter(FINDINGS_ADAPTER)
 

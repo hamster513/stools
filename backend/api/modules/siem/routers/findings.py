@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,8 +26,10 @@ from api.db.base import get_db
 from api.db.models import AppUser, DivergenceRow
 from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
-from api.modules.siem.findings_adapter import ADAPTER, SCOPE
+from api.modules.siem.findings_adapter import ADAPTER, KIND_TITLES, SCOPE
 from api.modules.siem.services.facets import FindingFilters, FindingQuery, ListRow
+from api.platform.export import Column, export_response
+from api.platform.filters import QueryInts, QueryList, QueryStatus, Values, is_all, multi, multi_int
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES
 
 router = APIRouter(prefix="/findings", tags=["findings"])
@@ -73,17 +76,17 @@ class FindingListResponse(BaseModel):
     status_keys_broken: bool = False
 
 
-def _statuses(raw: str | None, risk_expiring: bool) -> frozenset[str]:
-    """`status` — коды через запятую или `all`; не задан — открытые, а с «риск
+def _statuses(raw: Values, risk_expiring: bool) -> frozenset[str]:
+    """`status` — коды (повтором ключа или через запятую) или `all`; не задан — открытые, а с «риск
     истекает» — принятые: среди открытых такого риска не бывает."""
-    if not raw:
-        return frozenset({"risk_accepted"}) if risk_expiring else OPEN
-    if raw == "all":
+    if is_all(raw):
         return frozenset(STATUSES)
-    picked = frozenset(s for s in raw.split(",") if s)
+    picked = multi(raw, commas=True)
+    if picked is None:
+        return frozenset({"risk_accepted"}) if risk_expiring else OPEN
     unknown = picked - set(STATUSES)
-    if unknown or not picked:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown)) or raw}")
+    if unknown:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown))}")
     return picked
 
 
@@ -122,17 +125,17 @@ class FindingDetail(BaseModel):
 @router.get("", response_model=FindingListResponse)
 def list_findings(
     snapshot_id: int = Query(...),
-    kind: int | None = None,
-    polarity: str | None = None,
-    object_type: str | None = None,
+    kind: QueryInts = None,
+    polarity: QueryList = None,
+    object_type: QueryList = None,
     in_table: bool | None = None,
-    shape: str | None = None,
-    status_: str | None = Query(default=None, alias="status"),
-    assignee: str | None = Query(default=None, max_length=255),
+    shape: QueryList = None,
+    status_: QueryStatus = None,
+    assignee: QueryList = None,
     overdue: bool = False,
     risk_expiring: bool = False,
     key: str | None = Query(default=None, max_length=128),
-    field: str | None = None,
+    field: QueryList = None,
     object_uuid: str | None = None,
     q: str | None = None,
     sort: str = "kind",
@@ -142,20 +145,22 @@ def list_findings(
     db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> FindingListResponse:
-    """По умолчанию — открытые статусы; `status` — коды через запятую или `all`;
-    `assignee` — `me`, `none` или логин."""
+    """По умолчанию — открытые статусы; `status` — коды повтором ключа (или старой строкой через запятую) или `all`;
+    `assignee` — `me`, `none` или логин. Фасеты `kind, polarity, object_type, shape, field,
+    assignee` — повтором ключа, внутри фасета «или»."""
+    who = multi(assignee)
     filters = FindingFilters(
         snapshot_id=snapshot_id,
-        kind=kind,
-        polarity=polarity,
-        object_type=object_type,
+        kind=multi_int(kind),
+        polarity=multi(polarity),
+        object_type=multi(object_type),
         in_table=in_table,
-        shape=shape,
+        shape=multi(shape),
         statuses=_statuses(status_, risk_expiring),
-        field=field,
+        field=multi(field),
         object_uuid=object_uuid,
         key=key,
-        assignee=user.login if assignee == "me" else (assignee or None),
+        assignee=frozenset(user.login if a == "me" else a for a in who) if who else None,
         overdue=overdue,
         risk_expiring=risk_expiring,
         q=q,
@@ -164,6 +169,54 @@ def list_findings(
     rows = query.page(sort=sort, order=order, limit=limit, offset=offset)
     return FindingListResponse(total=query.total(), items=_items(db, rows), facets=query.facets(),
                                is_latest=query.is_latest, status_keys_broken=query.keys_broken)
+
+
+#: Подписи — как на экране (OBJECT_TYPE_LABELS, POLARITY_LABELS фронтенда); значения находок не выгружаются, как и в списке.
+OBJECT_TYPE_TITLES = {"correlation": "корреляция", "filter": "фильтр", "enrichment": "обогащение"}
+POLARITY_TITLES = {"negation": "отрицание", "assertion": "утверждение"}
+#: Выгрузке нужен весь отбор: страница списка ограничена, здесь — нет.
+EXPORT_ALL = 10**9
+
+EXPORT_COLUMNS = [
+    Column("number", "№"), Column("kind", "Класс"), Column("object", "Объект"), Column("field", "Поле"),
+    Column("polarity", "Полярность"), Column("in_table", "В списке"), Column("status", "Статус"), Column("age", "Возраст"),
+]
+
+
+@router.get("/export")
+def export_findings(
+    snapshot_id: int = Query(...),
+    kind: QueryInts = None,
+    polarity: QueryList = None,
+    object_type: QueryList = None,
+    in_table: bool | None = None,
+    shape: QueryList = None,
+    status_: QueryStatus = None,
+    assignee: QueryList = None,
+    overdue: bool = False,
+    risk_expiring: bool = False,
+    key: str | None = Query(default=None, max_length=128),
+    field: QueryList = None,
+    object_uuid: str | None = None,
+    q: str | None = None,
+    sort: str = "kind",
+    order: str = "asc",
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Находки под фильтрами и сортировкой списка — тот же отбор (`list_findings`) без страницы;
+    «№» — порядковый номер в выгрузке, как на экране."""
+    page = list_findings(snapshot_id, kind, polarity, object_type, in_table, shape, status_, assignee, overdue, risk_expiring,
+                         key, field, object_uuid, q, sort, order, limit=EXPORT_ALL, offset=0, db=db, user=user)
+    rows = [
+        {"number": n, "kind": KIND_TITLES.get(i.kind, str(i.kind)),
+         "object": f"{i.object_name} ({OBJECT_TYPE_TITLES.get(i.object_type, i.object_type)})", "field": i.field,
+         "polarity": POLARITY_TITLES.get(i.polarity, i.polarity), "in_table": "да" if i.in_table else "нет",
+         "status": i.status_title, "age": i.age_days}
+        for n, i in enumerate(page.items, 1)
+    ]
+    return export_response(fmt, EXPORT_COLUMNS, rows, module="siem", name="findings")
 
 
 @router.get("/{finding_id}/detail", response_model=FindingDetail)

@@ -10,7 +10,31 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link, useRouter, useSearchParams } from '@/lib/router'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { NetworkForm } from './NetworkForm'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'cidr', label: 'CIDR', width: 136 },
+  { key: 'title', label: 'Название', width: 96, flex: true },
+  { key: 'zone', label: 'Зона', width: 80 },
+  { key: 'site', label: 'Площадка', width: 96 },
+  { key: 'assets', label: 'Активов', width: 84, align: 'right' },
+  { key: 'alive', label: 'Живых', width: 72, align: 'right' },
+  { key: 'unknown', label: 'Только сканер', width: 80, align: 'right' },
+  { key: 'last_scan', label: 'Последний скан', width: 112 },
+  { key: 'estimate', label: 'Скан займёт', width: 80, align: 'right' },
+  { key: 'schedule', label: 'Расписание', width: 112 },
+]
+// Кнопки только у тех, кому можно менять: без них пустая колонка не занимает места.
+const WRITE_COLUMNS: ColumnDef[] = [...COLUMNS, { key: 'actions', label: 'Действие', width: 152, resizable: false }]
+const HEADER = {
+  alive: <span title="ответили при последнем скане">Живых</span>,
+  unknown: <span title="найдено сканером, нигде не описано">Только сканер</span>,
+  estimate: <span title="если никто не ответит; по таймаутам, параллельности и темпу">Скан займёт</span>,
+  actions: <span className="sr-only">Действие</span>,
+}
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—'
@@ -93,6 +117,7 @@ export function NetworksPage() {
   useEffect(() => { if (params.has('new')) navigate('/assets/networks', { replace: true }) }, [params, navigate])
   function closeForm() { setEditing(undefined); setNewCidr('') }
   const [deleting, setDeleting] = useState<Network | null>(null)
+  const cols = useColumnWidths('assets-networks-columns', write ? WRITE_COLUMNS : COLUMNS)
 
   if (networks.isLoading) return <FullPageSpinner />
   if (networks.isError || !networks.data) {
@@ -105,7 +130,10 @@ export function NetworksPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-4 flex items-start gap-3">
         <div>
-          <h1 className="text-base font-semibold text-text">Сети</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-base font-semibold text-text">Сети</h1>
+            <ExportButton href={(fmt) => `/api/assets/networks/export?format=${fmt}`} total={list.length} />
+          </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Актив привязывается к самой узкой сети, содержащей его адрес; в карточке актива сеть можно задать вручную. Пересечение сетей допустимо.
           </p>
@@ -122,55 +150,51 @@ export function NetworksPage() {
       {list.length === 0 ? (
         <EmptyState icon={NetworkIcon} title="Сетей ещё нет" description="Опишите сети с зоной и площадкой: активы привяжутся к ним по адресу, а сканер будет знать, что можно сканировать." />
       ) : (
-        <table className="w-full rounded border border-grid bg-surface text-xs">
-          <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-            <tr className="border-b border-grid">
-              <th className="px-3 py-2 text-left">CIDR</th>
-              <th className="px-3 py-2 text-left">Название</th>
-              <th className="px-3 py-2 text-left">Зона</th>
-              <th className="px-3 py-2 text-left">Площадка</th>
-              <th className="px-3 py-2 text-right">Активов</th>
-              <th className="px-3 py-2 text-right" title="ответили при последнем скане">Живых</th>
-              <th className="px-3 py-2 text-right" title="найдено сканером, нигде не описано">Только сканер</th>
-              <th className="px-3 py-2 text-left">Последний скан</th>
-              <th className="px-3 py-2 text-right" title="если никто не ответит; по таймаутам, параллельности и темпу">Скан займёт</th>
-              <th className="px-3 py-2 text-left">Расписание</th>
-              <th className="px-3 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((n) => (
-              <tr key={n.id} className="border-t border-grid align-top hover:bg-row-hover">
-                <td className="px-3 py-2 font-mono text-text">{n.cidr}</td>
-                <td className="px-3 py-2 text-text">{n.title || '—'}{n.vlan !== null && <span className="ml-1 text-text-secondary">· VLAN {n.vlan}</span>}</td>
-                <td className="px-3 py-2 text-text-secondary">{n.zone ?? '—'}</td>
-                <td className="px-3 py-2 text-text-secondary">{n.site || '—'}</td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums">
-                  <Link to={`/assets/list?network_id=${n.id}`} className="text-text hover:underline">{n.stats.assets}</Link>
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{n.stats.alive_last_scan ?? '—'}</td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">
-                  {n.stats.unknown_hosts > 0 ? <Link to={`/assets/list?network_id=${n.id}&code=unknown_host`} className="text-risk-high hover:underline">{n.stats.unknown_hosts}</Link> : 0}
-                </td>
-                <td className="px-3 py-2 text-text-secondary">
-                  {when(n.last_scan_at)}
-                  {n.last_scan_icmp === false && <span className="ml-1 rounded border border-grid px-1 text-[11px] text-kind-1" title="ICMP недоступен — скан шёл только по портам">только порты</span>}
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{scanEstimate(n.estimated_seconds)}</td>
-                <td className="px-3 py-2 text-text-secondary">{scheduleText(n.schedule, n.scan_enabled)}</td>
-                <td className="px-3 py-2">
-                  {write && (
-                    <div className="flex items-start justify-end gap-1 whitespace-nowrap">
-                      <ScanButton network={n} />
-                      <Button variant="ghost" onClick={() => setEditing(n)}>изменить</Button>
-                      <Button variant="ghost" onClick={() => setDeleting(n)} aria-label={`Удалить сеть ${n.cidr}`}><Trash2 size={13} aria-hidden /></Button>
-                    </div>
-                  )}
-                </td>
+        <div className="overflow-x-auto rounded border border-grid bg-surface">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+              <tr className="border-b border-grid">
+                <ResizableHeader cols={cols} className="px-3 py-2" content={HEADER} />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {list.map((n) => (
+                <tr key={n.id} className="border-t border-grid align-top hover:bg-row-hover">
+                  <td className="truncate px-3 py-2 font-mono text-text" title={n.cidr}>{n.cidr}</td>
+                  <td className="px-3 py-2 break-words text-text">
+                  {n.title || '—'}{n.vlan !== null && <span className="ml-1 text-text-secondary">· VLAN {n.vlan}</span>}
+                  {n.origin === 'racktables' && <span className="ml-1 rounded border border-grid px-1 text-[11px] text-text-secondary" title="Создана проходом RackTables: название, описание, VLAN и теги обновляет он; зона, площадка и настройки скана — ваши">RackTables</span>}
+                </td>
+                  <td className="truncate px-3 py-2 text-text-secondary" title={n.zone ?? undefined}>{n.zone ?? '—'}</td>
+                  <td className="truncate px-3 py-2 text-text-secondary" title={n.site || undefined}>{n.site || '—'}</td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums">
+                    <Link to={`/assets/list?network_id=${n.id}`} className="text-text hover:underline">{n.stats.assets}</Link>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{n.stats.alive_last_scan ?? '—'}</td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">
+                    {n.stats.unknown_hosts > 0 ? <Link to={`/assets/list?network_id=${n.id}&code=unknown_host`} className="text-risk-high hover:underline">{n.stats.unknown_hosts}</Link> : 0}
+                  </td>
+                  <td className="px-3 py-2 text-text-secondary">
+                    {when(n.last_scan_at)}
+                    {n.last_scan_icmp === false && <span className="ml-1 rounded border border-grid px-1 text-[11px] text-kind-1" title="ICMP недоступен — скан шёл только по портам">только порты</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{scanEstimate(n.estimated_seconds)}</td>
+                  <td className="px-3 py-2 break-words text-text-secondary">{scheduleText(n.schedule, n.scan_enabled)}</td>
+                  {write && (
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap items-start justify-end gap-1 whitespace-nowrap">
+                        <ScanButton network={n} />
+                        <Button variant="ghost" onClick={() => setEditing(n)}>изменить</Button>
+                        <Button variant="ghost" onClick={() => setDeleting(n)} aria-label={`Удалить сеть ${n.cidr}`}><Trash2 size={13} aria-hidden /></Button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {deleting && <ConfirmDelete network={deleting} onDone={() => setDeleting(null)} />}
     </div>

@@ -142,14 +142,16 @@ export type FindingDetail<F extends FindingBase> = F & {
   history: { snapshot_id: number; collected_at: string }[]
 }
 
-/** Параметры запроса списка: статус — коды через запятую или `all`; без него — открытые. */
+/** Параметры запроса списка: статус — коды (ключ повторяется) или `all`; без него — открытые. */
 export interface FindingsQuery {
-  check?: string
-  severity?: Severity
+  /** Многозначные фасеты уходят повторением ключа (buildQuery). */
+  check?: string[]
+  severity?: Severity[]
   allowlisted?: boolean
-  delta?: FindingDelta
-  status?: string
-  assignee?: string
+  delta?: FindingDelta[]
+  /** Статусы (ключ повторяется) или `all`; без него — открытые. */
+  status?: string[] | 'all'
+  assignee?: string[]
   overdue?: boolean
   risk_expiring?: boolean
   q?: string
@@ -159,10 +161,10 @@ export interface FindingsQuery {
 
 /** Фильтры страницы находок, которые попадают в фасеты. */
 export interface FindingFilters extends FindingFacetFilters {
-  check?: string
-  severity?: Severity
+  check?: string[]
+  severity?: Severity[]
   allowlisted?: boolean
-  delta?: FindingDelta
+  delta?: FindingDelta[]
 }
 
 /** Расписание задачи планировщика (скан сети, DNS, синхронизация, сбор по подключению); окно — местное время пояса STOOLS_TZ (`tz`). */

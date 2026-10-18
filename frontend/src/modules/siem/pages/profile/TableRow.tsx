@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, FileCheck2, FileWarning, FileX2 } from 'lucide-react'
 import { useTableReaders, useTableValues } from '@/modules/siem/api/queries'
 import type { TableRankingEntry } from '@/modules/siem/api/types'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const STATE_META = {
   missing: { icon: FileX2, label: 'Нет в выгрузке', color: 'var(--color-kind-1)' },
@@ -45,6 +47,14 @@ export function TableRow({
   const readers = useTableReaders(open ? entry.name : undefined, snapshotId)
   // Отметку аудитор видит, но не ставит: она — решение о профиле.
   const { write } = useCan()
+  // Колонки у каждого списка свои — и ширины помнятся по списку. Резиновая —
+  // первая колонка-комментарий (там длинный текст), без неё — последняя.
+  const valueColumns = useMemo<ColumnDef[]>(() => {
+    const names = values.data?.columns ?? []
+    const flex = names.find((c) => values.data?.comment_columns.includes(c)) ?? names[names.length - 1]
+    return names.map((c) => ({ key: c, label: c, width: 176, flex: c === flex }))
+  }, [values.data])
+  const cols = useColumnWidths(`siem-profile-values-${entry.name}`, valueColumns)
 
   const state = tableState(entry)
   const meta = STATE_META[state]
@@ -118,25 +128,23 @@ export function TableRow({
                     человеком для себя. Слитые в одну колонку, они не
                     говорят ничего — а решают по ним разное. */}
                 <div className="max-h-56 overflow-auto">
-                  <table className="w-max min-w-full text-xs">
+                  <table className="w-full text-xs" style={cols.tableStyle}>
+                    <ColGroup cols={cols} />
                     <thead className="sticky top-0 bg-app-bg">
                       <tr>
-                        {values.data.columns.map((c) => (
-                          <th
-                            key={c}
-                            className={cn(
-                              'px-1.5 py-1 text-left font-mono text-[11px] font-medium',
-                              values.data.comment_columns.includes(c)
-                                ? 'text-text-secondary/70'
-                                : 'text-text-secondary',
-                            )}
-                          >
-                            {c}
-                            {values.data.comment_columns.includes(c) && (
-                              <span className="ml-1 font-sans">— комментарий</span>
-                            )}
-                          </th>
-                        ))}
+                        <ResizableHeader
+                          cols={cols}
+                          className="px-1.5 py-1 text-left font-mono text-[11px] text-text-secondary"
+                          content={Object.fromEntries(
+                            values.data.comment_columns.map((c) => [
+                              c,
+                              <span key={c} className="text-text-secondary/70">
+                                {c}
+                                <span className="ml-1 font-sans">— комментарий</span>
+                              </span>,
+                            ]),
+                          )}
+                        />
                       </tr>
                     </thead>
                     <tbody>
@@ -146,7 +154,7 @@ export function TableRow({
                             <td
                               key={c}
                               className={cn(
-                                'max-w-[22rem] truncate px-1.5 py-0.5 font-mono',
+                                'truncate px-1.5 py-0.5 font-mono',
                                 values.data!.comment_columns.includes(c)
                                   ? 'text-text-secondary'
                                   : 'text-text',

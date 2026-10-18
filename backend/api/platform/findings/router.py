@@ -24,6 +24,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -32,6 +33,8 @@ from api.audit import changes_summary
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.platform.export import Column, export_response
+from api.platform.filters import QueryList, QueryStatus, is_all, multi
 from api.platform.findings import service as svc
 from api.platform.findings.adapters import (
     BulkConflict,
@@ -324,18 +327,20 @@ def post_bulk(payload: BulkBody, request: Request, response: Response, backgroun
 
 @router.get("/api/findings/mine", response_model=list[MineItem])
 def get_mine(
-    status_: str = Query(default="", alias="status"), module: str = Query(default="", max_length=16),
+    status_: QueryStatus = None, module: QueryList = None,
     db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
 ) -> list[MineItem]:
     """Находки, назначенные текущему пользователю, из всех модулей: сначала просроченные,
-    затем по сроку (без срока — в конце), затем по тяжести. По умолчанию — открытые."""
-    wanted = [s for s in status_.split(",") if s] or sorted(OPEN)
+    затем по сроку (без срока — в конце), затем по тяжести. По умолчанию — открытые; `all` — любые,
+    как у списков модулей. `status` и `module` — повтором ключа (`status` — ещё и через запятую)."""
+    wanted = STATUSES if is_all(status_) else multi(status_, commas=True) or OPEN
     unknown = set(wanted) - set(STATUSES)
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестные статусы: {', '.join(sorted(unknown))}")
-    query = select(FindingState).where(FindingState.assignee == user.login, FindingState.status.in_(wanted))
-    if module:
-        query = query.where(FindingState.module == module)
+    query = select(FindingState).where(FindingState.assignee == user.login, FindingState.status.in_(sorted(wanted)))
+    modules = multi(module)
+    if modules is not None:
+        query = query.where(FindingState.module.in_(sorted(modules)))
     on = svc.today()
     items = []
     for row in db.scalars(query.order_by(FindingState.updated_at.desc())):
@@ -355,6 +360,29 @@ def get_mine(
     items.sort(key=lambda i: (not i.overdue, i.due_date is None, i.due_date or on,
                               SEVERITY_ORDER.get(i.severity.lower(), len(SEVERITY_ORDER))))
     return items
+
+
+#: Подписи тяжести — как на экране «Мои находки» (SEVERITY в MyFindingsPage); неизвестная — как есть.
+SEVERITY_TITLES = {"critical": "критический", "high": "высокий", "medium": "средний", "low": "низкий", "info": "инфо"}
+
+MINE_COLUMNS = [
+    Column("module", "Модуль"), Column("title", "Находка"), Column("severity", "Тяжесть"), Column("status", "Статус"),
+    Column("due", "Срок"), Column("risk_until", "Риск принят до"),
+]
+
+
+@router.get("/api/findings/mine/export")
+def export_mine(
+    status_: QueryStatus = None, module: QueryList = None, fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """«Мои находки» под теми же фильтрами и в том же порядке, что на странице (список и так без лимита)."""
+    rows = [
+        {"module": i.module_title, "title": i.title, "severity": SEVERITY_TITLES.get(i.severity.lower(), i.severity),
+         "status": i.status_title, "due": i.due_date, "risk_until": i.risk_until}
+        for i in get_mine(status_, module, db=db, user=user)
+    ]
+    return export_response(fmt, MINE_COLUMNS, rows, module="findings", name="mine")
 
 
 @router.get("/api/findings/mine/count", response_model=MineCount)

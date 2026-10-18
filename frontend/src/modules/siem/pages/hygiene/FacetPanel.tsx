@@ -9,21 +9,27 @@ import type {
 import { OBJECT_TYPE_LABELS, POLARITY_LABELS, SHAPE_LABELS } from '@/modules/siem/api/types'
 import { cn } from '@/lib/cn'
 import { KindBadge } from '@/modules/siem/components/ui/KindBadge'
-import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, type FindingFacetFilters } from '@/platform/findings/facets'
+import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleValue, type FindingFacetFilters } from '@/platform/findings/facets'
+import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 
-/** Статус, исполнитель и сроки — общие фасеты статусов находок платформы. */
+/** Статус, исполнитель и сроки — общие фасеты статусов находок платформы. Перечислимые фасеты — мультивыбор. */
 export interface HygieneFilters extends FindingFacetFilters {
-  kind?: FindingKind
-  polarity?: Polarity
-  object_type?: ObjectType
+  kind?: FindingKind[]
+  polarity?: Polarity[]
+  object_type?: ObjectType[]
   in_table?: boolean
-  shape?: ShapeFilter
-  field?: string
+  shape?: ShapeFilter[]
+  field?: string[]
 }
+
+type MultiKey = 'kind' | 'polarity' | 'object_type' | 'shape' | 'field' | 'assignee'
+
+const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
 
 interface FacetPanelProps {
   facets: FindingsFacets | undefined
-  fieldFacet: Record<string, number> | undefined
+  /** Поля и исполнители, которые панель уже показывала; считает страница (useRememberedFacets), чтобы память жила, пока панель закрыта. */
+  remembered: Partial<Record<'field' | 'assignee', FacetValue[]>>
   filters: HygieneFilters
   onToggle: <K extends keyof HygieneFilters>(key: K, value: HygieneFilters[K]) => void
   total: number
@@ -51,6 +57,8 @@ function Row({
         'flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
         active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
+        // Значение, ушедшее в ноль под другими фильтрами, приглушено, но выбирается.
+        !active && count === 0 && 'opacity-60',
       )}
       aria-pressed={active}
     >
@@ -84,14 +92,13 @@ const SHAPES = [
 
 const POLARITIES: Polarity[] = ['negation', 'assertion']
 
-export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLogin, names }: FacetPanelProps) {
-  const topFields = Object.entries(fieldFacet ?? {})
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 12)
-  const assignees = Object.entries(facets?.assignee ?? {})
-    .filter(([login]) => login !== 'none' && login !== myLogin)
-    .sort((a, b) => b[1] - a[1])
-  const pickAssignee = (value: string) => onToggle('assignee', filters.assignee === value ? undefined : value)
+export function FacetPanel({ facets, remembered, filters, onToggle, total, myLogin, names }: FacetPanelProps) {
+  // Счётчики считаются по отфильтрованному набору: поля и исполнители, ушедшие
+  // в ноль, панель помнит, иначе второе значение было бы не выбрать.
+  const topFields = remembered.field ?? []
+  const assignees = (remembered.assignee ?? []).filter((a) => a.value !== 'none' && a.value !== myLogin)
+  const pick = <K extends MultiKey>(key: K, value: string) =>
+    onToggle(key, toggleValue(filters[key] as string[] | undefined, value) as HygieneFilters[K])
 
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
@@ -110,10 +117,10 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLog
       </Section>
 
       <Section title="Исполнитель">
-        <Row active={filters.assignee === 'me'} count={myLogin ? facets?.assignee[myLogin] : undefined} onClick={() => pickAssignee('me')}>{ASSIGNEE_SPECIAL.me}</Row>
-        <Row active={filters.assignee === 'none'} count={facets?.assignee.none} onClick={() => pickAssignee('none')}>{ASSIGNEE_SPECIAL.none}</Row>
-        {assignees.map(([login, n]) => (
-          <Row key={login} active={filters.assignee === login} count={n} onClick={() => pickAssignee(login)}>{names.get(login) ?? login}</Row>
+        <Row active={has(filters.assignee, 'me')} count={myLogin ? facets?.assignee[myLogin] : undefined} onClick={() => pick('assignee', 'me')}>{ASSIGNEE_SPECIAL.me}</Row>
+        <Row active={has(filters.assignee, 'none')} count={facets?.assignee.none} onClick={() => pick('assignee', 'none')}>{ASSIGNEE_SPECIAL.none}</Row>
+        {assignees.map(({ value: login, count }) => (
+          <Row key={login} active={has(filters.assignee, login)} count={count} onClick={() => pick('assignee', login)}>{names.get(login) ?? login}</Row>
         ))}
       </Section>
 
@@ -124,7 +131,7 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLog
 
       <Section title="Класс">
         {KINDS.map((k) => (
-          <Row key={k} active={filters.kind === k} count={facets?.kind[k]} onClick={() => onToggle('kind', filters.kind === k ? undefined : k)}>
+          <Row key={k} active={has(filters.kind, k)} count={facets?.kind[k]} onClick={() => pick('kind', k)}>
             <span className="inline-flex items-center gap-1.5">
               <KindBadge kind={k} className="border-none bg-transparent px-0 py-0" />
             </span>
@@ -136,9 +143,9 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLog
         {OBJECT_TYPES.map((t) => (
           <Row
             key={t}
-            active={filters.object_type === t}
+            active={has(filters.object_type, t)}
             count={facets?.object_type[t]}
-            onClick={() => onToggle('object_type', filters.object_type === t ? undefined : t)}
+            onClick={() => pick('object_type', t)}
           >
             {OBJECT_TYPE_LABELS[t]}
           </Row>
@@ -149,9 +156,9 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLog
         {POLARITIES.map((p) => (
           <Row
             key={p}
-            active={filters.polarity === p}
+            active={has(filters.polarity, p)}
             count={facets?.polarity[p]}
-            onClick={() => onToggle('polarity', filters.polarity === p ? undefined : p)}
+            onClick={() => pick('polarity', p)}
           >
             {POLARITY_LABELS[p]}
           </Row>
@@ -166,9 +173,9 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLog
         {SHAPES.map(({ key, label }) => (
           <Row
             key={key}
-            active={filters.shape === key}
+            active={has(filters.shape, key)}
             count={facets?.shape[key]}
-            onClick={() => onToggle('shape', filters.shape === key ? undefined : key)}
+            onClick={() => pick('shape', key)}
           >
             {label}
           </Row>
@@ -186,8 +193,8 @@ export function FacetPanel({ facets, fieldFacet, filters, onToggle, total, myLog
 
       <Section title="Поле">
         {topFields.length === 0 && <div className="px-2 py-1 text-xs text-text-secondary">нет данных</div>}
-        {topFields.map(([field, cnt]) => (
-          <Row key={field} active={filters.field === field} count={cnt} onClick={() => onToggle('field', filters.field === field ? undefined : field)}>
+        {topFields.map(({ value: field, count }) => (
+          <Row key={field} active={has(filters.field, field)} count={count} onClick={() => pick('field', field)}>
             <span className="font-mono text-[11px]">{field}</span>
           </Row>
         ))}

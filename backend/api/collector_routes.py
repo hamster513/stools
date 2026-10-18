@@ -12,6 +12,7 @@ import logging
 import threading
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from itertools import batched
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -37,6 +38,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.hosts import take_slot
 from api.jobs import UPLOAD_INTERRUPTED, JobHandle, active_job, fail_job, run_job, start_job
+from api.platform.filters import QueryList, QueryStatus, Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
@@ -395,13 +397,14 @@ class FindingSet:
 
 @dataclass(frozen=True)
 class FindingFilter:
-    check: str | None = None
-    severity: str | None = None
+    #: Многозначные фасеты (спека фильтров §1.1): None — не задан, иначе любое из значений.
+    check: frozenset[str] | None = None
+    severity: frozenset[str] | None = None
     allowlisted: bool | None = None
     statuses: frozenset[str] = OPEN
-    delta: str | None = None
-    #: Логин или `none`; `me` уже заменено логином.
-    assignee: str | None = None
+    delta: frozenset[str] | None = None
+    #: Логины и `none`; `me` уже заменено логином.
+    assignee: frozenset[str] | None = None
     overdue: bool = False
     risk_expiring: bool = False
     q: str | None = None
@@ -413,26 +416,47 @@ class FindingFilter:
 
 
 def finding_filter(
-    user: AppUser, *, check: str | None, severity: str | None, allowlisted: bool | None, status_: str | None,
-    delta: str | None, assignee: str | None, overdue: bool, risk_expiring: bool, q: str | None,
+    user: AppUser, *, check: Values, severity: Values, allowlisted: bool | None, status_: Values,
+    delta: Values, assignee: Values, overdue: bool, risk_expiring: bool, q: str | None,
 ) -> FindingFilter:
-    """Параметры списка. `status` — коды через запятую или `all`; не задан — открытые,
-    а с «риск истекает» — принятые: среди открытых такого риска не бывает."""
-    if not status_:
-        statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN
-    elif status_ == "all":
+    """Параметры списка; фасеты — повтором ключа. `status` — коды (повтором или через запятую) или `all`;
+    не задан — открытые, а с «риск истекает» — принятые: среди открытых такого риска не бывает."""
+    picked = multi(status_, commas=True)
+    if is_all(status_):
         statuses = frozenset(STATUSES)
+    elif picked is None:
+        statuses = frozenset({"risk_accepted"}) if risk_expiring else OPEN
     else:
-        statuses = frozenset(s for s in status_.split(",") if s)
+        statuses = picked
         unknown = statuses - set(STATUSES)
-        if unknown or not statuses:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown)) or status_}")
-    if delta is not None and delta not in DELTAS:
+        if unknown:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный статус: {', '.join(sorted(unknown))}")
+    deltas = multi(delta)
+    if deltas is not None and not deltas <= set(DELTAS):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="неизвестное значение delta")
+    who = multi(assignee)
     return FindingFilter(
-        check=check, severity=severity, allowlisted=allowlisted, statuses=statuses, delta=delta,
-        assignee=user.login if assignee == "me" else (assignee or None), overdue=overdue, risk_expiring=risk_expiring, q=q,
+        check=multi(check), severity=multi(severity), allowlisted=allowlisted, statuses=statuses, delta=deltas,
+        assignee=frozenset(user.login if a == "me" else a for a in who) if who else None,
+        overdue=overdue, risk_expiring=risk_expiring, q=q,
     )
+
+
+def finding_params(
+    check: QueryList = None,
+    severity: QueryList = None,
+    status_: QueryStatus = None,
+    delta: QueryList = None,
+    assignee: QueryList = None,
+    overdue: bool = False,
+    risk_expiring: bool = False,
+    allowlisted: bool | None = None,
+    q: str | None = None,
+    user: AppUser = Depends(get_current_user),
+) -> FindingFilter:
+    """Параметры фильтра одной зависимостью: список и выгрузка находок отбирают одинаково."""
+    return finding_filter(user, check=check, severity=severity, allowlisted=allowlisted, status_=status_, delta=delta,
+                          assignee=assignee, overdue=overdue, risk_expiring=risk_expiring, q=q)
 
 
 def _stub(adapter: SnapshotFindingAdapter, state: FindingState) -> Any:
@@ -496,11 +520,12 @@ def _matches(r: FindingRow, flt: FindingFilter, today: dt.date, haystack: Callab
     """Отбор по фильтрам; `skip` — какие фильтры не применять (фасет считается без своего фильтра).
     Строка без данных находки (`finding is None`) бывает, только когда фильтров по ним нет."""
     f = r.finding
-    if flt.delta and r.delta != flt.delta:
+    if not matches(r.delta, flt.delta):
         return False
     if "status" not in skip and r.status not in flt.statuses:
         return False
-    if "assignee" not in skip and flt.assignee and r.assignee != (None if flt.assignee == "none" else flt.assignee):
+    # Без исполнителя — значение фасета `none`, его можно выбрать вместе с логинами.
+    if "assignee" not in skip and not matches(r.assignee or "none", flt.assignee):
         return False
     if "overdue" not in skip and flt.overdue and not _overdue(r, today):
         return False
@@ -508,9 +533,7 @@ def _matches(r: FindingRow, flt: FindingFilter, today: dt.date, haystack: Callab
         return False
     if f is None:
         return not flt.by_finding
-    if flt.check and f.check != flt.check:
-        return False
-    if flt.severity and f.severity != flt.severity:
+    if not matches(f.check, flt.check) or not matches(f.severity, flt.severity):
         return False
     if flt.allowlisted is not None and f.allowlisted != flt.allowlisted:
         return False
@@ -547,6 +570,36 @@ def state_fields(db: Session, adapter: SnapshotFindingAdapter, scope_id: int, ro
     return out
 
 
+def _filtered(rows: Sequence[FindingRow], flt: FindingFilter, today: dt.date, haystack: Callable[[Any], Iterable[str]],
+              sort_key: Callable[[Any], Any]) -> list[FindingRow]:
+    return sorted((r for r in rows if r.finding is not None and _matches(r, flt, today, haystack)),
+                  key=lambda r: (sort_key(r.finding), r.finding.id, r.finding.key))
+
+
+#: Подписи серьёзности — как на экране (SEVERITY_LABELS фронтенда).
+SEVERITY_TITLES = {"Critical": "критический", "High": "высокий", "Medium": "средний", "Low": "низкий", "Info": "справочно"}
+
+
+def finding_export_rows(
+    db: Session, adapter: SnapshotFindingAdapter, scope_id: int, found: FindingSet, flt: FindingFilter, *,
+    haystack: Callable[[Any], Iterable[str]], sort_key: Callable[[Any], Any], check_titles: dict[str, str],
+    extra: Callable[[Any], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Все отобранные находки (без страницы и фасетов) ячейками выгрузки: общие колонки и колонки
+    модуля (`extra`). Поля состояния — пачками: один запрос возраста и имён на тысячу строк."""
+    out: list[dict[str, Any]] = []
+    for chunk in batched(_filtered(found.rows, flt, finding_svc.today(), haystack, sort_key), 1000):
+        for r, fields in zip(chunk, state_fields(db, adapter, scope_id, chunk), strict=True):
+            f, first = r.finding, fields["first_seen_at"]
+            out.append({
+                "severity": SEVERITY_TITLES.get(f.severity, f.severity), "check": check_titles.get(f.check, f.check),
+                "target": f.target, "status": fields["status_title"], "age": fields["age_days"],
+                "assignee": fields["assignee_name"], "first_seen": dt.datetime.fromisoformat(first) if first else None,
+                **extra(f),
+            })
+    return out
+
+
 def findings_page(
     db: Session, adapter: SnapshotFindingAdapter, scope_id: int, found: FindingSet, flt: FindingFilter, cmp_: Comparison, *,
     offset: int, limit: int, haystack: Callable[[Any], Iterable[str]], sort_key: Callable[[Any], Any],
@@ -558,8 +611,7 @@ def findings_page(
     снапшота (`statuses_as_of`); `is_latest` — смотрят ли последний снапшот области."""
     today = finding_svc.today()
     rows = found.rows
-    filtered = sorted((r for r in rows if r.finding is not None and _matches(r, flt, today, haystack)),
-                      key=lambda r: (sort_key(r.finding), r.finding.id, r.finding.key))
+    filtered = _filtered(rows, flt, today, haystack, sort_key)
     facets: dict[str, dict[str, int]] | None = None
     if offset == 0:
         facets = {

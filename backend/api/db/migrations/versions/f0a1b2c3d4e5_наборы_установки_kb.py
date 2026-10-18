@@ -1,7 +1,7 @@
 """наборы установки и статус установки правил из базы знаний по API; у снапшота — сервер и БД контента
 
-Revision ID: c7d8e9f0a1b2
-Revises: 3d4e5f6a7b8c
+Revision ID: f0a1b2c3d4e5
+Revises: d8e9f0a1b2c3
 Create Date: 2026-10-13 12:00:00.000000
 
 Снапшот, собранный из базы знаний по API, помнит, с какого сервера и из
@@ -16,8 +16,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "c7d8e9f0a1b2"
-down_revision: str | Sequence[str] | None = "3d4e5f6a7b8c"
+revision: str = "f0a1b2c3d4e5"
+down_revision: str | Sequence[str] | None = "d8e9f0a1b2c3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

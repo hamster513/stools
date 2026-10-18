@@ -55,6 +55,7 @@ from api.modules.vm.services.query import (
     pair_key,
     status_filter,
 )
+from api.platform.filters import multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.adapters import (
     BulkConflict,
@@ -213,6 +214,11 @@ def reconcile_after_import(db: Session, import_id: int) -> None:
 # ---- Массовая смена по фильтру -------------------------------------------------------
 
 
+#: Многозначный параметр фильтра: список значений как есть ('' и `-` — «не задано») или одна строка —
+#: одно значение. Через запятую делится только `status`, как в `GET /api/vm/vulns`.
+Multi = str | list[str] | None
+
+
 class BulkFilter(BaseModel):
     """Фильтр массовой смены — те же параметры, что у `GET /api/vm/vulns`."""
 
@@ -221,16 +227,16 @@ class BulkFilter(BaseModel):
     q: str | None = None
     host: str | None = None
     cve: str | None = None
-    criticality: str | None = None
-    zone: str | None = None
-    os: str | None = None
-    level: str | None = None
+    criticality: Multi = None
+    zone: Multi = None
+    os: Multi = None
+    level: Multi = None
     exploits: bool | None = None
     msf: bool | None = None
-    cvss_source: str | None = None
+    cvss_source: Multi = None
     host_id: int | None = None
-    status: str | None = None
-    assignee: str | None = None
+    status: Multi = None
+    assignee: Multi = None
     overdue: bool | None = None
     risk_expiring: bool | None = None
 
@@ -239,8 +245,8 @@ def parse_filter(raw: dict[str, Any], *, login: str) -> VulnFilters:
     """Ошибка — ValueError (в том числе ValidationError): платформа отвечает 422 до запуска задачи."""
     b = BulkFilter.model_validate(raw)
     sf = status_filter(b.status, b.assignee, b.overdue, b.risk_expiring, login=login)
-    return VulnFilters(b.q, b.host, b.cve, b.criticality, b.zone, b.os, b.level, b.exploits, b.msf, b.cvss_source,
-                       b.host_id, sf)
+    return VulnFilters(b.q, b.host, b.cve, multi(b.criticality), multi(b.zone), multi(b.os), multi(b.level),
+                       b.exploits, b.msf, multi(b.cvss_source), b.host_id, sf)
 
 
 def keys_by_filter(db: Session, scope_id: int, raw: dict[str, Any]) -> Iterator[str]:

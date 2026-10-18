@@ -10,7 +10,8 @@ import datetime as dt
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -33,6 +34,8 @@ from api.modules.ksc.routers.policies import task_fields
 from api.modules.ksc.services.grade import GRADES, Grade, policy_findings, policy_grades
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.snapshots import snapshot_path
+from api.platform.export import Column, export_response
+from api.platform.filters import QueryList, matches, multi
 from api.platform.findings.core import STATUS_TITLES
 from api.settings import Settings, get_settings
 
@@ -210,15 +213,18 @@ def _item(p: KscPolicy, idx: ExportIndex | None, grade: tuple[Grade | None, str,
 def get_policy_list(
     snapshot_id: int,
     q: str = "",
-    product: str = "",
+    product: QueryList = None,
     active: bool | None = None,
-    grade: str = "",
+    grade: QueryList = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> PolicyListResponse:
-    if grade and grade not in (*GRADES, "none"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{grade}»")
+    """Фасеты `grade, product` — повтором ключа, внутри фасета «или»."""
+    grades_, products = multi(grade), multi(product)
+    for g in sorted(grades_ or ()):
+        if g not in (*GRADES, "none"):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{g}»")
     snap = _snapshot(db, snapshot_id, settings)
     rows = list(db.execute(select(KscPolicy).where(KscPolicy.snapshot_id == snapshot_id)).scalars())
     # Файл выгрузки нужен только ради замков; без содержимого у политик его не открываем.
@@ -228,9 +234,9 @@ def get_policy_list(
     kept = [
         p for p in rows
         if (not needle or needle in p.name.lower())
-        and (not product or p.product == product)
+        and matches(p.product, products)
         and (active is None or p.active == active)
-        and (not grade or (grades[p.policy_id][0] or "none") == grade)
+        and matches(grades[p.policy_id][0] or "none", grades_)
     ]
     kept.sort(key=lambda p: (not p.active, p.name.lower(), p.policy_id))
     facets: dict[str, dict[str, int]] = {"product": {}, "active": {"true": 0, "false": 0}, "grade": dict.fromkeys((*GRADES, "none"), 0)}
@@ -241,6 +247,49 @@ def get_policy_list(
     # Профили собраны, если хотя бы у одной политики снапшота они не NULL (по таблице, без чтения файла).
     collected = any(p.profiles is not None for p in rows)
     return PolicyListResponse(items=[_item(p, idx, grades[p.policy_id]) for p in kept], facets=facets, profiles_collected=collected)
+
+
+#: Подписи оценок — как на экране (GRADE_LABELS фронтенда).
+GRADE_TITLES = {"bad": "плохая", "ok": "нормальная", "good": "хорошая"}
+
+POLICY_COLUMNS = [
+    Column("name", "Политика"), Column("product", "Продукт"), Column("group", "Группа"), Column("active", "Активна"),
+    Column("groups", "Групп"), Column("hosts", "Хостов"), Column("grade", "Оценка"), Column("locks", "Замки"),
+    Column("profiles", "Профилей"), Column("exclusions", "Исключений"), Column("findings", "Находок"),
+]
+
+
+def _policy_row(p: PolicyItem) -> dict[str, Any]:
+    """Ячейки — как на экране: «—» там, где считать не из чего (нет содержимого, продукт не описан), а не 0."""
+    if p.locks is None:
+        locks = "—"
+    elif p.locks.with_lock_flag == 0:
+        locks = "не распознаны"
+    else:
+        locks = f"{p.locks.locked} из {p.locks.with_lock_flag}"
+    return {
+        "name": p.name, "product": f"{p.product} {p.version}".strip(), "group": p.group or "—", "active": "да" if p.active else "нет",
+        "groups": p.groups, "hosts": p.hosts, "grade": GRADE_TITLES[p.grade] if p.grade else "нет оценки", "locks": locks,
+        "profiles": p.profiles if p.profiles is not None else "не собрано",
+        "exclusions": p.exclusions if p.has_contents and p.described else "—", "findings": p.findings,
+    }
+
+
+@router.get("/snapshots/{snapshot_id}/policy-list/export")
+def export_policy_list(
+    snapshot_id: int,
+    q: str = "",
+    product: QueryList = None,
+    active: bool | None = None,
+    grade: QueryList = None,
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Политики под фильтрами списка, в его порядке (список и так без страниц)."""
+    listed = get_policy_list(snapshot_id, q, product, active, grade, db=db, settings=settings, _user=user)
+    return export_response(fmt, POLICY_COLUMNS, [_policy_row(p) for p in listed.items], module="ksc", name="policies")
 
 
 def _policy_errors(idx: ExportIndex, policy_id: int) -> list[str]:
@@ -361,12 +410,14 @@ def get_policy_profiles(
 def get_tasks(
     snapshot_id: int,
     q: str = "",
-    type: str = "",
+    type: QueryList = None,
     failed: bool = False,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> TasksResponse:
+    """Фасет `type` — повтором ключа, внутри фасета «или»."""
+    types = multi(type)
     idx = _index(_snapshot(db, snapshot_id, settings), settings)
     items: list[TaskItem] = []
     for t in idx.export.tasks:
@@ -381,7 +432,7 @@ def get_tasks(
     kept = [
         i for i in items
         if (not needle or needle in i.name.lower())
-        and (not type or i.type == type)
+        and matches(i.type, types)
         and (not failed or i.failed > 0)
     ]
     kept.sort(key=lambda i: (i.group.lower(), i.name.lower(), i.id))
@@ -389,3 +440,31 @@ def get_tasks(
     for i in kept:
         facets["type"][i.type] = facets["type"].get(i.type, 0) + 1
     return TasksResponse(items=kept, facets=facets)
+
+
+TASK_COLUMNS = [
+    Column("type", "Тип"), Column("name", "Название"), Column("product", "Продукт"), Column("group", "Группа"),
+    Column("schedule", "Расписание"), Column("last_run", "Последний запуск"), Column("ok", "Успех"), Column("warn", "Предупр."),
+    Column("fail", "Провал"),
+]
+
+
+@router.get("/snapshots/{snapshot_id}/tasks/export")
+def export_tasks(
+    snapshot_id: int,
+    q: str = "",
+    type: QueryList = None,
+    failed: bool = False,
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Задачи под фильтрами списка, в его порядке; группа пуста у задачи для набора устройств — как на экране."""
+    listed = get_tasks(snapshot_id, q, type, failed, db=db, settings=settings, _user=user)
+    rows = [
+        {"type": t.type, "name": t.name, "product": t.product or "—", "group": t.group or "набор устройств", "schedule": t.schedule,
+         "last_run": t.last_run_at, "ok": t.ok, "warn": t.warning, "fail": t.failed}
+        for t in listed.items
+    ]
+    return export_response(fmt, TASK_COLUMNS, rows, module="ksc", name="tasks")

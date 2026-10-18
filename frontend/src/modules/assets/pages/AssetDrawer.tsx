@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Monitor, Pin, PinOff, X } from 'lucide-react'
+import { Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useQueryClient } from '@tanstack/react-query'
-import { invalidateDiscrepancies, useAsset, useAssets, useDetachObservation, useMergeAssets, useNetworks, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
+import { invalidateDiscrepancies, useAsset, useAssets, useDeleteAsset, useDetachObservation, useMergeAssets, useNetworks, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
 import {
   CODE_LABELS,
   CRITICALITIES,
+  CLUSTER_LABELS,
   CRITICALITY_LABELS,
   defaultCidr,
   MARK_TEXT,
@@ -25,6 +26,8 @@ import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
 import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const PIN_FIELDS: { field: PinnableField; label: string; mono?: boolean }[] = [
   { field: 'name', label: 'Имя' },
@@ -152,6 +155,12 @@ function CanonicalCard({ a, write }: { a: AssetDetail; write: boolean }) {
             <Link to={`/assets/networks?new=${encodeURIComponent(defaultCidr(a.ip))}`} className="ml-2 text-[11px] text-primary hover:underline">создать сеть {defaultCidr(a.ip)}</Link>
           )}
         </dd>
+        {a.cluster && (
+          <>
+            <dt className="text-text-secondary">Кластер</dt>
+            <dd className="col-span-2 text-text">{CLUSTER_LABELS[a.cluster]}{a.cluster !== 'node' && <span className="text-text-secondary"> — виртуальное имя, не хост: без агента антивируса, входов и своего адреса</span>}</dd>
+          </>
+        )}
         <dt className="text-text-secondary">Виден</dt>
         <dd className="col-span-2 text-text">впервые {day(a.first_seen)}, последний раз {day(a.last_seen)}</dd>
       </dl>
@@ -169,31 +178,38 @@ function Cell({ o, field, mono }: { o: Observation; field: 'name' | 'fqdn' | 'ip
   )
 }
 
+// Сумма ширин по умолчанию — 560 px: влезает в содержимое панели (600 px без рамки и отступов, 567 px) без прокрутки.
+const SOURCE_COLUMNS: ColumnDef[] = [
+  { key: 'source', label: 'Источник', width: 72 },
+  { key: 'name', label: 'Имя', width: 80 },
+  { key: 'fqdn', label: 'FQDN', width: 112, flex: true },
+  { key: 'ip', label: 'IP', width: 88 },
+  { key: 'os', label: 'ОС', width: 72 },
+  { key: 'seen', label: 'Видел', width: 72 },
+]
+const DETACH_COLUMNS: ColumnDef[] = [...SOURCE_COLUMNS, { key: 'detach', label: 'Отвязать', width: 64, resizable: false }]
+
 function SourcesTable({ a, write, onDetach }: { a: AssetDetail; write: boolean; onDetach: (o: Observation) => void }) {
   const canDetach = write && a.observations.length > 1
+  const cols = useColumnWidths('assets-sources-columns', canDetach ? DETACH_COLUMNS : SOURCE_COLUMNS)
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-left text-[11px]">
+      <table className="w-full text-left text-[11px]" style={cols.tableStyle}>
+        <ColGroup cols={cols} />
         <thead className="text-text-secondary">
           <tr>
-            <th className="px-1.5 py-1 font-medium">Источник</th>
-            <th className="px-1.5 py-1 font-medium">Имя</th>
-            <th className="px-1.5 py-1 font-medium">FQDN</th>
-            <th className="px-1.5 py-1 font-medium">IP</th>
-            <th className="px-1.5 py-1 font-medium">ОС</th>
-            <th className="px-1.5 py-1 font-medium">Видел</th>
-            {canDetach && <th className="px-1.5 py-1" />}
+            <ResizableHeader cols={cols} className="px-1.5 py-1" content={{ detach: <span className="sr-only">Отвязать</span> }} />
           </tr>
         </thead>
         <tbody>
           {a.observations.map((o) => (
             <tr key={o.id} className={cn('border-t border-grid align-top', o.gone_at && 'opacity-50')}>
-              <td className="px-1.5 py-1 text-text">{SOURCE_LABELS[o.source]}</td>
+              <td className="truncate px-1.5 py-1 text-text" title={SOURCE_LABELS[o.source]}>{SOURCE_LABELS[o.source]}</td>
               <Cell o={o} field="name" />
               <Cell o={o} field="fqdn" mono />
               <Cell o={o} field="ip" mono />
-              <td className="px-1.5 py-1 text-text-secondary">{o.os || '—'}</td>
-              <td className="px-1.5 py-1 whitespace-nowrap text-text-secondary">{day(o.seen_at)}{o.gone_at && <div>пропал {day(o.gone_at)}</div>}</td>
+              <td className="px-1.5 py-1 break-words text-text-secondary">{o.os || '—'}</td>
+              <td className="px-1.5 py-1 break-words text-text-secondary">{day(o.seen_at)}{o.gone_at && <div>пропал {day(o.gone_at)}</div>}</td>
               {canDetach && (
                 <td className="px-1.5 py-1">
                   <button type="button" onClick={() => onDetach(o)} className="rounded px-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">отвязать</button>
@@ -356,12 +372,14 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
   const detail = useAsset(assetId)
   const merge = useMergeAssets(assetId ?? 0)
   const detach = useDetachObservation()
+  const remove = useDeleteAsset()
   const [mergeWith, setMergeWith] = useState<{ id: number; label: string } | null>(null)
   const [detaching, setDetaching] = useState<Observation | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const closeRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => { if (open) closeRef.current?.focus(); setMergeWith(null); setDetaching(null) }, [open, assetId])
+  useEffect(() => { if (open) closeRef.current?.focus(); setMergeWith(null); setDetaching(null); setDeleting(false) }, [open, assetId])
   const a = detail.data
-  const err = merge.error ?? detach.error
+  const err = merge.error ?? detach.error ?? remove.error
 
   return (
     <>
@@ -403,6 +421,8 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
                     <>
                       <SectionTitle>Объединить с другим активом</SectionTitle>
                       <MergePicker a={a} onPick={setMergeWith} />
+                      <SectionTitle>Удалить актив</SectionTitle>
+                      <Button variant="ghost" className="text-risk-high" onClick={() => setDeleting(true)}><Trash2 size={13} aria-hidden /> Удалить актив</Button>
                     </>
                   )}
                   {err && <p className="mt-2 text-kind-1">{err.message}</p>}
@@ -420,6 +440,17 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
           pending={merge.isPending}
           onCancel={() => setMergeWith(null)}
           onConfirm={() => merge.mutate(mergeWith.id, { onSuccess: () => setMergeWith(null) })}
+        />
+      )}
+      {a && deleting && (
+        <Confirm
+          label={`Удалить «${title(a)}»?`}
+          text="Актив исчезнет вместе с наблюдениями источников. Если источник его всё ещё видит, он вернётся при следующей синхронизации — удаление чистит реестр, а не прячет хост."
+          action="Удалить"
+          danger
+          pending={remove.isPending}
+          onCancel={() => setDeleting(false)}
+          onConfirm={() => remove.mutate(a.id, { onSuccess: () => { setDeleting(false); onClose() } })}
         />
       )}
       {a && detaching && (

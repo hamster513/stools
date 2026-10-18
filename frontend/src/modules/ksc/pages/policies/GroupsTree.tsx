@@ -7,6 +7,15 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'group', label: 'Группа', width: 240 },
+  { key: 'policies', label: 'Политики', width: 320, flex: true },
+  { key: 'tasks', label: 'Задачи', width: 280 },
+  { key: 'findings', label: 'Находки', width: 160 },
+]
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
@@ -25,7 +34,7 @@ function GroupRow({ group, serverId }: { group: PolicyGroup; serverId: number })
           <Monitor size={11} aria-hidden /> {group.hosts}
         </div>
       </td>
-      <td className="py-2 pr-3">
+      <td className="py-2 pr-3 break-words">
         {group.policies.length === 0 && !hasPolicyNone && <span className="text-text-secondary">—</span>}
         <ul className="flex flex-col gap-1">
           {group.policies.map((p) => (
@@ -50,7 +59,7 @@ function GroupRow({ group, serverId }: { group: PolicyGroup; serverId: number })
         </ul>
         {hasPolicyNone && <div className="mt-1 text-[11px] font-medium text-risk-high">нет политики</div>}
       </td>
-      <td className="py-2 pr-3">
+      <td className="py-2 pr-3 break-words">
         {group.tasks.length === 0 && <span className="text-text-secondary">—</span>}
         <ul className="flex flex-col gap-1">
           {group.tasks.map((t) => (
@@ -87,6 +96,7 @@ function GroupRow({ group, serverId }: { group: PolicyGroup; serverId: number })
 /** Вкладка «По группам»: дерево групп администрирования снапшота — действующие политики, групповые задачи, их находки. */
 export function GroupsTree({ serverId, snapshotId }: { serverId: number; snapshotId: number }) {
   const policies = usePolicies(snapshotId)
+  const cols = useColumnWidths('ksc-groups-columns', COLUMNS)
 
   if (policies.isLoading) return <FullPageSpinner />
   if (policies.isError || !policies.data) {
@@ -97,21 +107,21 @@ export function GroupsTree({ serverId, snapshotId }: { serverId: number; snapsho
   return (
     <div className="h-full overflow-y-auto p-6">
       <p className="mb-4 max-w-2xl text-xs text-text-secondary">Действующие политики и групповые задачи по дереву групп администрирования снапшота #{snapshotId}.</p>
-      <table className="w-full text-xs">
-        <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-          <tr>
-            <th className="w-1/4 py-1.5 pr-3 pl-2 text-left">Группа</th>
-            <th className="w-1/3 py-1.5 pr-3 text-left">Политики</th>
-            <th className="w-1/4 py-1.5 pr-3 text-left">Задачи</th>
-            <th className="py-1.5 text-left">Находки</th>
-          </tr>
-        </thead>
-        <tbody>
-          {policies.data.groups.map((g) => (
-            <GroupRow key={g.id} group={g} serverId={serverId} />
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs" style={cols.tableStyle}>
+          <ColGroup cols={cols} />
+          <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+            <tr>
+              <ResizableHeader cols={cols} className="py-1.5 pr-3 first:pl-2" />
+            </tr>
+          </thead>
+          <tbody>
+            {policies.data.groups.map((g) => (
+              <GroupRow key={g.id} group={g} serverId={serverId} />
+            ))}
+          </tbody>
+        </table>
+      </div>
       {policies.data.groups.length === 0 && (
         <div className="mt-4"><EmptyState icon={FolderTree} title="Групп нет" description="В снапшоте нет групп администрирования." /></div>
       )}

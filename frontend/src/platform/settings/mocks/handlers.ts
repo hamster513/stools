@@ -506,12 +506,13 @@ export const platformHandlers = [
 
 /** Отбор журнала по параметрам адреса — общий для списка и выгрузки. */
 function selected(url: URL): AuditItem[] {
-  const userId = url.searchParams.get('user_id')
+  // Пользователи — повторением ключа, как на сервере: «ИЛИ».
+  const userIds = url.searchParams.getAll('user_id').map(Number)
   const since = url.searchParams.get('since')
   const until = url.searchParams.get('until')
   const deniedOnly = url.searchParams.get('denied_only') === 'true'
   return audit.filter((e) => {
-    if (userId && e.user_id !== Number(userId)) return false
+    if (userIds.length && !userIds.includes(e.user_id as number)) return false
     if (since && e.at < new Date(since).toISOString()) return false
     if (until && e.at > new Date(until).toISOString()) return false
     if (deniedOnly && e.status !== 403) return false

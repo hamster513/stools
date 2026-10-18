@@ -82,9 +82,14 @@ export function useSaveFindingSettings() {
   })
 }
 
+/** Параметры «Моих находок» — те же у списка и у выгрузки; статусы и модули — повторением ключа. */
+export function myFindingsParams(filters: { status?: FindingStatus[]; module?: string[] }) {
+  return { status: filters.status, module: filters.module }
+}
+
 /** «Мои находки»; без статусов сервер отдаёт открытые. */
-export function useMyFindings(filters: { status?: FindingStatus[]; module?: string }) {
-  const params = { status: filters.status?.join(','), module: filters.module }
+export function useMyFindings(filters: { status?: FindingStatus[]; module?: string[] }) {
+  const params = myFindingsParams(filters)
   return useQuery<MyFinding[], ApiRequestError>({
     queryKey: [FINDINGS_MINE_KEY, 'list', params],
     queryFn: () => api.get(`/api/findings/mine${buildQuery(params)}`),

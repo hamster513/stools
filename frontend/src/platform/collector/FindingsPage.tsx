@@ -12,31 +12,31 @@ import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { useMe } from '@/api/auth'
 import { useCan } from '@/lib/can'
 import { BulkBar } from '@/platform/findings/BulkBar'
-import { findingFacetChips, findingFacetParams } from '@/platform/findings/facets'
+import { findingFacetChips, findingFacetParams, listFrom, valueChips } from '@/platform/findings/facets'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
 import { useUsersDirectory } from '@/platform/findings/queries'
 import { STATUSES, type FindingStatus } from '@/platform/findings/types'
 import { FacetPanel } from './FacetPanel'
 import type { FindingsTableProps } from './FindingsTable'
-import { SEVERITY_LABELS, type FindingBase, type FindingDelta, type FindingFilters, type FindingsQuery, type FindingsResponse, type Severity } from './types'
+import { SEVERITIES, SEVERITY_LABELS, type FindingBase, type FindingDelta, type FindingFilters, type FindingsQuery, type FindingsResponse, type Severity } from './types'
 
 const DELTA_LABELS: Record<FindingDelta, string> = { new: 'появились в этом снапшоте', same: 'были и раньше', gone: 'исчезла (нет в последнем снапшоте)' }
 
-/** Статусы из ссылки: коды через запятую или `all`; незнакомые коды отбрасываются. */
-function statusesFrom(raw: string | null): FindingStatus[] | undefined {
-  if (!raw) return undefined
-  if (raw === 'all') return [...STATUSES]
-  const picked = raw.split(',').filter((s): s is FindingStatus => (STATUSES as string[]).includes(s))
-  return picked.length ? picked : undefined
+/** Статусы из ссылки: коды (ключ повторяется; старые ссылки — через запятую) или `all`; незнакомые отбрасываются. */
+function statusesFrom(params: URLSearchParams): FindingStatus[] | undefined {
+  if (params.get('status') === 'all') return [...STATUSES]
+  return listFrom<FindingStatus>(params, 'status', STATUSES)
 }
 
 function filtersFrom(params: URLSearchParams): FindingFilters {
-  const delta = params.get('delta')
   return {
-    check: params.get('check') ?? undefined,
-    severity: (params.get('severity') as Severity | null) ?? undefined,
-    delta: delta === 'new' || delta === 'same' || delta === 'gone' ? delta : undefined,
-    status: statusesFrom(params.get('status')),
-    assignee: params.get('assignee') ?? undefined,
+    check: listFrom(params, 'check'),
+    severity: listFrom<Severity>(params, 'severity', SEVERITIES),
+    delta: listFrom<FindingDelta>(params, 'delta', ['new', 'same', 'gone']),
+    status: statusesFrom(params),
+    assignee: listFrom(params, 'assignee'),
     overdue: params.get('overdue') === 'true' || undefined,
     risk_expiring: params.get('risk_expiring') === 'true' || undefined,
   }
@@ -93,6 +93,8 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
   const first = query.data?.pages[0]
   const total = first?.total ?? 0
+  // Память фасетов — на странице, а не в панели: панель по умолчанию закрыта и при закрытии забывала бы значения.
+  const remembered = useRememberedFacets(first?.facets ? { check: facetValues(first.facets.check), assignee: facetValues(first.facets.assignee) } : undefined)
   useEffect(() => { setSelectedIndex(0); setChecked(new Set()); setAnchor(null) }, [queryArgs, snapshotId])
   const selected: F | null = items[selectedIndex] ?? null
 
@@ -111,11 +113,12 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
   }
   function changed() { setChecked(new Set()); setAnchor(null); onChanged() }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  // Чип на каждое выбранное значение: крестик снимает только его.
   const chips: FilterChip[] = findingFacetChips(filters, (next) => setFilters((prev) => ({ ...prev, ...next })), names)
-  if (filters.delta) chips.push({ label: DELTA_LABELS[filters.delta], clear: () => toggle('delta', undefined) })
-  if (filters.severity) chips.push({ label: `severity ${SEVERITY_LABELS[filters.severity]}`, clear: () => toggle('severity', undefined) })
+  chips.push(...valueChips('Снапшот', filters.delta, (d) => DELTA_LABELS[d], (v) => toggle('delta', v)))
+  chips.push(...valueChips('Severity', filters.severity, (s) => SEVERITY_LABELS[s], (v) => toggle('severity', v)))
   if (filters.allowlisted !== undefined) chips.push({ label: filters.allowlisted ? 'в allowlist (понижено до Low)' : 'не в allowlist', clear: () => toggle('allowlisted', undefined) })
-  if (filters.check) chips.push({ label: `проверка ${first?.check_titles[filters.check] ?? filters.check}`, clear: () => toggle('check', undefined) })
+  chips.push(...valueChips('Проверка', filters.check, (c) => first?.check_titles[c] ?? c, (v) => toggle('check', v)))
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -143,6 +146,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
         <h1 className="text-sm font-semibold text-text">Находки</h1>
         <span className="font-mono text-xs text-text-secondary">снапшот #{snapshotId}</span>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/${module}/snapshots/${snapshotId}/findings/export`, queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder={searchPlaceholder} className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -155,7 +159,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
       {first && !first.is_latest && <div className="shrink-0 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text-secondary">Статусы показаны на сегодня, находки — на дату снапшота</div>}
       {write && <BulkBar module={module} scopeId={scopeId} keys={[...checked]} total={total} onDone={changed} onClear={() => setChecked(new Set())} />}
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} titles={first?.check_titles ?? {}} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} remembered={remembered} titles={first?.check_titles ?? {}} filters={filters} onToggle={toggle} total={total} myLogin={me.data?.login} names={names} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {query.isLoading && <FullPageSpinner />}
           {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}

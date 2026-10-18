@@ -119,8 +119,8 @@ Assets: расхождения активов — находки области 
 
 | Параметр | Значение |
 |---|---|
-| `status` | коды через запятую или `all`; не задан — открытые (`new`, `in_work`, `fixed`, `reopened`); не задан при `risk_expiring=true` — `risk_accepted` |
-| `assignee` | `me`, `none` или логин |
+| `status` | коды повторением ключа (`status=new&status=in_work`; старая форма через запятую `status=new,in_work` тоже принимается) или `all`; не задан — открытые (`new`, `in_work`, `fixed`, `reopened`); не задан при `risk_expiring=true` — `risk_accepted` |
+| `assignee` | `me`, `none` или логин; несколько — повторением ключа |
 | `overdue` | `true` — только просроченные |
 | `risk_expiring` | `true` — принятый риск, срок которого истекает в ближайшие 30 дней |
 
@@ -137,6 +137,9 @@ Assets: строка списка — актив, а не находка, поэ
 статусы, а не открытые), `assignee`, `overdue`; актив подходит, если у него
 есть такое расхождение (`docs/assets/api.md`).
 
+Формат многозначных параметров и выгрузка списков (`…/export?format=csv|xlsx`)
+— общие для платформы: `docs/api-contract.md`, «Общие правила».
+
 ## API
 
 | Метод | Путь | Смысл |
@@ -145,7 +148,8 @@ Assets: строка списка — актив, а не находка, поэ
 | PUT | `/api/findings/state` | `{module, scope_id, key, status?, assignee?, due_date?, risk_until?, comment?}`; поле не передано — не трогается, `null` — очистить |
 | POST | `/api/findings/comment` | комментарий без смены статуса |
 | POST | `/api/findings/bulk` | `{module, scope_id, keys: [...] (≤ 5000) \| filter: {...}, change: {...}}` → `{changed}`; по фильтру у VM — 202 `{job_id}` (фоновая задача) |
-| GET | `/api/findings/mine?status=&module=` | находки всех модулей, где исполнитель — я; сначала просроченные, затем по сроку и тяжести; по умолчанию открытые |
+| GET | `/api/findings/mine?status=&module=` | находки всех модулей, где исполнитель — я; сначала просроченные, затем по сроку и тяжести; по умолчанию открытые; `status` и `module` — повторением ключа (`status` — ещё и через запятую), `all` — любые |
+| GET | `/api/findings/mine/export?format=csv\|xlsx&status=&module=` | «Мои находки» под теми же фильтрами и в том же порядке, любой роли; колонки «Модуль, Находка, Тяжесть, Статус, Срок, Риск принят до» |
 | GET | `/api/findings/mine/count` | `{open, overdue}` — для значка меню |
 | GET | `/api/findings/summary?module=&scope_id=` | по статусам, просроченные, «риск истекает ≤ 30 дней», без исполнителя |
 | GET | `/api/users/directory` | `[{login, display_name}]` — активные аналитики и администраторы; кому можно назначить |

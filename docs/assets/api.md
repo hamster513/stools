@@ -35,7 +35,7 @@ GET   /assets                          q, source_has, source_missing, code, netw
                                        tag, criticality (Critical|High|Medium|Low|none), disc_status,
                                        assignee, overdue, limit≤500 (200), offset
                                        → {total, items, facets|null}
-                                       items: [{id, name, fqdn, domain, ip, os, network: {id, cidr, title,
+                                       items: [{id, cluster: cluster|role|node|null, name, fqdn, domain, ip, os, network: {id, cidr, title,
                                        zone}|null, first_seen, last_seen, criticality, tags, pinned,
                                        sources: [{source, live, fresh, seen_at}], discrepancy_count, codes}]
                                        discrepancy_count, codes — только расхождения с учитываемым статусом
@@ -58,6 +58,11 @@ PATCH /assets/{id}  {criticality?, tags?, note?, network_id?, network_manual?}  
                                        network_id: null, network_manual: false — вернуть расчёт по адресу
 GET   /assets/ids                      те же фильтры, без limit/offset → {total, ids} — выбор «всех по
                                        фильтру» для массового изменения (не больше 50 000)
+GET   /assets/export                   format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
+DELETE /assets/{id}                    204; 404 — нет; 409 — идёт синхронизация или запись задачи.
+                                       Актив удаляется с наблюдениями; если источник его ещё видит,
+                                       следующая синхронизация создаст его заново
+POST  /assets/bulk-delete  {ids}       → {deleted}; несуществующие id пропускаются
 POST  /assets/bulk  {ids, criticality?, tags_add?, tags_remove?}   → {updated}
                                        критичность и теги у многих активов: теги добавляются и снимаются,
                                        а не заменяются; несуществующие и объединённые id пропускаются;
@@ -76,12 +81,21 @@ POST  /assets/{id}/merge  {other_id}   → карточка первого; 409 
                                        задачи — повторите позже»)
 POST  /observations/{id}/detach        → карточка нового актива; 409 — у актива одно наблюдение,
                                        идёт синхронизация или запись результатов скана/DNS
+GET   /racktables                      подключения к JSON API RackTables: [{id, title, url, username,
+                                       password_set, verify_tls, rate_per_s, timeout_ms, enabled,
+                                       schedule_id, last_run_at, schedule}]
+POST  /racktables  {title?, url, username?, password?, verify_tls?, rate_per_s?, timeout_ms?, enabled?}
+PUT   /racktables/{id}                 то же; пустой password — оставить прежний
+DELETE /racktables/{id}                204; расписание удаляется вместе с подключением
+POST  /racktables/{id}/check           {version} — getAPIVersion сохранёнными учётными данными; 502 — ошибка API
+POST  /racktables/{id}/run             202 {job_id}; 409 — идёт другой проход или подключение выключено
+PUT/DELETE /racktables/{id}/schedule   расписание проходов (вид assets/rt)
 GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост модуля не сопоставлен
 ```
 
 `q` ищет подстроку в имени, FQDN, IP и ОС актива и его наблюдений (старые
-адреса тоже находятся). `disc_status` (коды статусов через запятую или
-`all`), `assignee` (`me`, `none`, логин) и `overdue=true` — про расхождения:
+адреса тоже находятся). `disc_status` (коды статусов повторением ключа или
+через запятую, или `all`), `assignee` (`me`, `none`, логины) и `overdue=true` — про расхождения:
 актив подходит, если у него есть расхождение под всеми ими сразу, а если
 задан `code` — расхождение этого кода. Без `disc_status` фильтр по
 расхождениям (и `code`) видит только учитываемые статусы — как до статусов.
@@ -90,6 +104,20 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 под фильтрами по данным. `source_has`/`source_missing` смотрят на живые
 наблюдения (без `gone_at`). Значок источника `fresh` — видит сейчас и видел
 моложе `stale_days`.
+
+Многозначные фасеты — `code`, `source_has`, `source_missing`, `criticality`,
+`zone`, `network_id` (числа), `assignee`, `disc_status`: несколько значений
+повторением ключа (`?zone=DMZ&zone=-&code=no_av&code=stale`), значение по
+запятой не делится; внутри фасета — «или», между фасетами — «и». `zone=-` —
+активы без зоны (`-` — общий маркер «не задано»), у критичности «не задана» —
+`none`; `all` — фильтр не задан. Через запятую принимается только
+`disc_status` (старая форма `disc_status=new,in_work`).
+
+Выгрузка `/assets/export` — все активы под фильтрами списка в его порядке,
+любой роли; колонки «Имя, IP, Сеть, Зона, ОС, Источники, Виден,
+Расхождения». CSV — UTF-8 с BOM, `;`, CRLF, потоком; XLSX — не больше
+100 000 строк и строка «Выгружены первые 100 000 строк — сузьте фильтры».
+Общие правила формата — `docs/api-contract.md`.
 
 `lookup` — ссылка «в Assets» у хоста модуля: актив по ключу наблюдения
 `(source, source_key)`. Ключи: KSC — `server_id:host_id` (или `key=host_id`
@@ -154,6 +182,7 @@ GET    /networks                       [{id, cidr, title, description, zone, sit
                                         stats: {assets, alive_last_scan, unknown_hosts}, schedule|null}]
 POST   /networks                       201 | 409 такой CIDR уже есть | 422
 GET    /networks/{id}  PUT /networks/{id}  DELETE /networks/{id}   204
+GET    /networks/export?format=csv|xlsx   все сети в порядке таблицы (фильтров у списка нет), любой роли
 ```
 
 `cidr` нормализуется (`10.10.0.7/24` → `10.10.0.0/24`); IPv4 шире /16 — 422

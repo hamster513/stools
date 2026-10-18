@@ -186,7 +186,3 @@ export function useCancelJob() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vm-jobs'] }),
   })
 }
-
-export function exportUrl(query: Omit<VulnsQuery, 'limit' | 'offset'>): string {
-  return `/api/vm/export${buildQuery({ ...query })}`
-}

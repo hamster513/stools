@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,12 +23,23 @@ from api.modules.ksc.core.policy_model import Exclusion, covered_by
 from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy, KscSnapshot
 from api.modules.ksc.routers.hosts import host_scope
 from api.modules.ksc.services.policy_store import ensure_policy_tables
+from api.platform.export import Column, export_response
+from api.platform.filters import QueryInts, QueryList, matches, multi, multi_int
 from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ksc"])
 
 MAX_LIMIT = 1000
 DUP = ("multi", "single", "covered")
+#: Выгрузке нужен весь отбор: страница списка ограничена `MAX_LIMIT`, здесь — нет.
+EXPORT_ALL = 10**9
+#: Подписи видов исключений — как на экране (EXCLUSION_KIND_LABELS фронтенда); неизвестный код — как есть.
+EXCLUSION_KIND_TITLES = {"path": "путь", "mask": "маска", "hash": "хеш", "threat": "угроза", "trusted_app": "доверенная программа"}
+
+
+def policy_cell(name: str, profile: str) -> str:
+    """Колонка «Политика / профиль» одной строкой: имя политики и профиль либо «сама политика»."""
+    return f"{name or '—'} / {f'профиль {profile}' if profile else 'сама политика'}"
 
 
 class _HostFilter:
@@ -156,11 +168,11 @@ def _exclusion_item(r: KscExclusion, name: str, policies: int, covered: str | No
 def list_exclusions(
     snapshot_id: int,
     q: str = "",
-    policy_id: int | None = None,
+    policy_id: QueryInts = None,
     profile: str | None = None,
-    kind: str = "",
+    kind: QueryList = None,
     enabled: bool | None = None,
-    dup: str = "",
+    dup: QueryList = None,
     risky: bool | None = None,
     host_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
@@ -169,9 +181,12 @@ def list_exclusions(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    """Фасеты `policy_id, kind, dup` — повтором ключа, внутри фасета «или»."""
     _snapshot(db, snapshot_id, settings)
-    if dup and dup not in DUP:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{dup}»")
+    policy_ids, kinds, dups = multi_int(policy_id), multi(kind), multi(dup)
+    for d in sorted(dups or ()):
+        if d not in DUP:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{d}»")
     host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscExclusion).where(KscExclusion.snapshot_id == snapshot_id)).scalars())
@@ -182,21 +197,24 @@ def list_exclusions(
     covered = _covered(rows)
     needle = q.strip().lower()
 
+    def is_dup(r: KscExclusion, d: str) -> bool:
+        n = len(owners[r.key])
+        return n > 1 if d == "multi" else n == 1 if d == "single" else covered(r) is not None
+
     def keep(r: KscExclusion) -> bool:
-        if policy_id is not None and r.policy_id != policy_id:
+        if policy_ids is not None and r.policy_id not in policy_ids:
             return False
         if profile is not None and r.profile != profile:
             return False
         if host is not None and not host.keep(r.policy_id, r.profile):
             return False
-        if kind and r.kind != kind:
+        if not matches(r.kind, kinds):
             return False
         if enabled is not None and r.enabled != enabled:
             return False
         if risky is not None and bool(_risks(r)) != risky:
             return False
-        n = len(owners[r.key])
-        if (dup == "multi" and n < 2) or (dup == "single" and n != 1) or (dup == "covered" and covered(r) is None):
+        if dups and not any(is_dup(r, d) for d in dups):
             return False
         return not needle or needle in r.value.lower() or needle in r.comment.lower() or needle in _name(policies, r.policy_id).lower()
 
@@ -233,6 +251,42 @@ def list_exclusions(
     }
 
 
+EXCLUSION_COLUMNS = [
+    Column("value", "Значение"), Column("risk", "Риск"), Column("kind", "Вид"), Column("policy", "Политика/профиль"),
+    Column("components", "Компоненты"), Column("enabled", "Включено"), Column("comment", "Комментарий"), Column("policies", "Политик"),
+    Column("covered", "Перекрыто"),
+]
+
+
+@router.get("/snapshots/{snapshot_id}/exclusions/export")
+def export_exclusions(
+    snapshot_id: int,
+    q: str = "",
+    policy_id: QueryInts = None,
+    profile: str | None = None,
+    kind: QueryList = None,
+    enabled: bool | None = None,
+    dup: QueryList = None,
+    risky: bool | None = None,
+    host_id: str | None = None,
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Исключения под фильтрами списка, в его порядке — тот же отбор (`list_exclusions`) без страницы.
+    Риски — их заголовками из правил, а не короткими ярлыками экрана: ярлыков на сервере нет."""
+    page = list_exclusions(snapshot_id, q, policy_id, profile, kind, enabled, dup, risky, host_id, limit=EXPORT_ALL, offset=0,
+                           db=db, settings=settings, _user=user)
+    rows = [
+        {"value": e["value"], "risk": "; ".join(e["risk_titles"]), "kind": EXCLUSION_KIND_TITLES.get(e["kind"], e["kind"]),
+         "policy": policy_cell(e["policy_name"], e["profile"]), "components": ", ".join(e["components"]),
+         "enabled": "да" if e["enabled"] else "нет", "comment": e["comment"], "policies": e["policies"], "covered": e["covered_by"]}
+        for e in page["items"]
+    ]
+    return export_response(fmt, EXCLUSION_COLUMNS, rows, module="ksc", name="exclusions")
+
+
 @router.get("/snapshots/{snapshot_id}/exclusions/{row_id}")
 def get_exclusion(
     snapshot_id: int,
@@ -263,10 +317,10 @@ def _net_rule_item(r: KscNetRule, name: str) -> dict[str, Any]:
 def list_net_rules(
     snapshot_id: int,
     q: str = "",
-    policy_id: int | None = None,
+    policy_id: QueryInts = None,
     profile: str | None = None,
-    action: str = "",
-    direction: str = "",
+    action: QueryList = None,
+    direction: QueryList = None,
     enabled: bool | None = None,
     host_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
@@ -275,20 +329,22 @@ def list_net_rules(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
+    """Фасеты `policy_id, action, direction` — повтором ключа, внутри фасета «или»."""
     _snapshot(db, snapshot_id, settings)
+    policy_ids, actions, directions = multi_int(policy_id), multi(action), multi(direction)
     host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind
     policies = _policies(db, snapshot_id)
     rows = list(db.execute(select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id)).scalars())
     needle = q.strip().lower()
 
     def keep(r: KscNetRule) -> bool:
-        if policy_id is not None and r.policy_id != policy_id:
+        if policy_ids is not None and r.policy_id not in policy_ids:
             return False
         if profile is not None and r.profile != profile:
             return False
         if host is not None and not host.keep(r.policy_id, r.profile):
             return False
-        if (action and r.action != action) or (direction and r.direction != direction) or (enabled is not None and r.enabled != enabled):
+        if not matches(r.action, actions) or not matches(r.direction, directions) or (enabled is not None and r.enabled != enabled):
             return False
         return not needle or any(needle in f.lower() for f in (r.name, r.addresses, r.local_ports, r.remote_ports))
 
@@ -308,6 +364,40 @@ def list_net_rules(
         "undescribed": _undescribed(policies), "partial": _partial(policies),
         **({"undetermined": host.undetermined} if host is not None else {}),
     }
+
+
+NET_RULE_COLUMNS = [
+    Column("name", "Название"), Column("index", "№"), Column("action", "Действие"), Column("direction", "Направление"),
+    Column("protocol", "Протокол"), Column("local_ports", "Локальные порты"), Column("remote_ports", "Удалённые порты"),
+    Column("addresses", "Адреса"), Column("enabled", "Включено"), Column("policy", "Политика/профиль"),
+]
+
+
+@router.get("/snapshots/{snapshot_id}/net-rules/export")
+def export_net_rules(
+    snapshot_id: int,
+    q: str = "",
+    policy_id: QueryInts = None,
+    profile: str | None = None,
+    action: QueryList = None,
+    direction: QueryList = None,
+    enabled: bool | None = None,
+    host_id: str | None = None,
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Сетевые правила под фильтрами списка, в его порядке — тот же отбор (`list_net_rules`) без страницы."""
+    page = list_net_rules(snapshot_id, q, policy_id, profile, action, direction, enabled, host_id, limit=EXPORT_ALL, offset=0,
+                          db=db, settings=settings, _user=user)
+    rows = [
+        {"name": r["name"], "index": r["position"], "action": r["action"], "direction": r["direction"], "protocol": r["protocol"],
+         "local_ports": r["local_ports"], "remote_ports": r["remote_ports"], "addresses": r["addresses"],
+         "enabled": "да" if r["enabled"] else "нет", "policy": policy_cell(r["policy_name"], r["profile"])}
+        for r in page["items"]
+    ]
+    return export_response(fmt, NET_RULE_COLUMNS, rows, module="ksc", name="net-rules")
 
 
 @router.get("/snapshots/{snapshot_id}/net-rules/{row_id}")

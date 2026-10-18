@@ -7,8 +7,21 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
-import { Link } from '@/lib/router'
+import { Link, useRouter } from '@/lib/router'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { SEVERITIES, type SnapshotBase } from './types'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'snapshot', label: 'Снапшот', width: 160, flex: true },
+  { key: 'source', label: 'Источник', width: 152 },
+  { key: 'count', label: 'Количество', width: 108, align: 'right' },
+  { key: 'findings', label: 'Находок', width: 88, align: 'right' },
+  ...SEVERITIES.slice(0, 4).map((s): ColumnDef => ({ key: s, label: s, width: 72, align: 'right' })),
+  { key: 'new', label: 'Новых', width: 72, align: 'right' },
+  { key: 'fixed', label: 'Закрыто', width: 84, align: 'right' },
+  { key: 'actions', label: 'Действие', width: 104, resizable: false },
+]
 
 function when(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -17,8 +30,9 @@ function when(iso: string): string {
 /**
  * Экран «Снапшоты» модуля. Модуль задаёт, куда ведёт снапшот, как назвать
  * источник и что считать (объекты, хосты), и тексты пустого списка и удаления.
+ * Ширины колонок — под `storageKey`, по умолчанию по модулю из адреса (`ad-snapshots-columns`).
  */
-export function CollectorSnapshotsPage<S extends SnapshotBase>({ snapshots, reanalyze, remove, findingsPath, emptyDescription, countHeader, count, source, deleteNote }: {
+export function CollectorSnapshotsPage<S extends SnapshotBase>({ snapshots, reanalyze, remove, findingsPath, emptyDescription, countHeader, count, source, deleteNote, storageKey }: {
   snapshots: UseQueryResult<S[], ApiRequestError>
   reanalyze: UseMutationResult<{ job_id: number }, ApiRequestError, number>
   remove: UseMutationResult<void, ApiRequestError, number>
@@ -28,10 +42,13 @@ export function CollectorSnapshotsPage<S extends SnapshotBase>({ snapshots, rean
   count: (s: S) => number
   source: (s: S) => string
   deleteNote: string
+  storageKey?: string
 }) {
   // Список снапшотов — чтение; пересчёт и удаление аудитору недоступны.
   const { write } = useCan()
   const [confirm, setConfirm] = useState<S | null>(null)
+  const { path } = useRouter()
+  const cols = useColumnWidths(storageKey ?? `${path.split('/')[1] || 'collector'}-snapshots-columns`, COLUMNS)
 
   if (snapshots.isLoading) return <FullPageSpinner />
   if (snapshots.isError || !snapshots.data) {
@@ -52,17 +69,11 @@ export function CollectorSnapshotsPage<S extends SnapshotBase>({ snapshots, rean
         <EmptyState icon={Camera} title="Снапшотов нет" description={emptyDescription} />
       ) : (
         <div className="overflow-x-auto rounded border border-grid">
-          <table className="w-full min-w-[960px] text-xs">
-            <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="bg-surface text-[11px] tracking-wide text-text-secondary uppercase">
               <tr>
-                <th className="px-3 py-2 text-left">Снапшот</th>
-                <th className="px-3 py-2 text-left">Источник</th>
-                <th className="px-3 py-2 text-right">{countHeader}</th>
-                <th className="px-3 py-2 text-right">Находок</th>
-                {SEVERITIES.slice(0, 4).map((s) => <th key={s} className="px-2 py-2 text-right">{s}</th>)}
-                <th className="px-3 py-2 text-right">Новых</th>
-                <th className="px-3 py-2 text-right">Закрыто</th>
-                <th className="px-3 py-2"></th>
+                <ResizableHeader cols={cols} className="px-3 py-2" content={{ count: countHeader, actions: <span className="sr-only">Действие</span> }} />
               </tr>
             </thead>
             <tbody>
@@ -71,10 +82,10 @@ export function CollectorSnapshotsPage<S extends SnapshotBase>({ snapshots, rean
                   <td className="px-3 py-2">
                     <Link to={`${findingsPath}?snapshot=${s.id}`} className="text-text hover:text-primary">#{s.id} · {when(s.collected_at)}</Link>
                   </td>
-                  <td className="px-3 py-2 text-text-secondary">{source(s)} · {s.collector}{s.filename ? ` · ${s.filename}` : ''}</td>
+                  <td className="px-3 py-2 break-words text-text-secondary">{source(s)} · {s.collector}{s.filename ? ` · ${s.filename}` : ''}</td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{count(s).toLocaleString('ru-RU')}</td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-text">{s.findings}</td>
-                  {SEVERITIES.slice(0, 4).map((sev) => <td key={sev} className="px-2 py-2 text-right font-mono tabular-nums text-text-secondary">{s.by_severity[sev] ?? 0}</td>)}
+                  {SEVERITIES.slice(0, 4).map((sev) => <td key={sev} className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{s.by_severity[sev] ?? 0}</td>)}
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-risk-high">{s.new ?? '—'}</td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-kind-accepted">{s.fixed ?? '—'}</td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">

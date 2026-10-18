@@ -15,10 +15,25 @@ import { cn } from '@/lib/cn'
 import { AttentionBadge, attentionLevel } from '@/modules/siem/components/ui/AttentionBadge'
 import { RuleDetailDrawer } from './rules/RuleDetailDrawer'
 import { useRouter } from '@/lib/router'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const ROW_HEIGHT = 32
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'name', label: 'Имя', width: 420, flex: true },
+  { key: 'author', label: 'Автор', width: 128 },
+  { key: 'category', label: 'Категория', width: 112 },
+  { key: 'msgid', label: 'msgid', width: 80, align: 'right' },
+  { key: 'attention', label: 'Внимание', width: 144 },
+  { key: 'attack', label: 'ATT&CK', width: 224 },
+  { key: 'scoped', label: 'Ограничено', width: 112 },
+  { key: 'installed', label: 'В SIEM', width: 128 },
+]
 
 /**
  * Фасеты по автору/категории/группе и переключатель «только ограниченные
@@ -54,6 +69,7 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
   const [openUuid, setOpenUuid] = useState<string | null>(null)
   const parentRef = useRef<HTMLDivElement>(null)
   const filtersPanel = useFiltersPanel('siem-rules')
+  const cols = useColumnWidths('siem-rules-columns', COLUMNS)
   const sets = useDeploymentSets(snapshotId)
   // Инвентарь есть только у снапшота, собранного по API: тогда фильтры
   // установки показываются; у снапшота из файла их нечем заполнить.
@@ -151,6 +167,18 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Инвентарь правил</h1>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        {/* Список фильтруется здесь, на клиенте, а выгрузку собирает сервер: ему уходят все те же отборы,
+            включая «внимание», «ограничено» и разметку ATT&CK. */}
+        <ExportButton
+          href={exportHref('/api/siem/rules/export', {
+            snapshot_id: snapshotId, author, category, q: q.trim() || undefined,
+            attention: onlyAttention || undefined, scoped: onlyScoped || undefined, attack: attackFilter === 'all' ? undefined : attackFilter,
+            installed: hasInventory && installedFilter !== 'all' ? installedFilter === 'yes' : undefined,
+            deployment_set: hasInventory ? setFilter : undefined, folder: hasInventory ? folderFilter : undefined,
+          })}
+          total={filtered.length}
+          disabled={query.isLoading}
+        />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input
@@ -290,26 +318,15 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
             </div>
           )}
           {!query.isLoading && !errorMessage && filtered.length > 0 && (
-            <div ref={parentRef} className="h-full overflow-auto">
-              <div className="sticky top-0 z-10 flex w-max min-w-full border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-                {/* Имя правила — главная колонка, и ширина у неё
-                    фиксированная. Растягивающаяся колонка в контейнере
-                    шириной по содержимому берёт ширину своего текста,
-                    и тогда у каждой строки остальные колонки оказываются
-                    в своём месте — таблица разъезжается. Длинные имена
-                    обрезаются, полное видно в подсказке. */}
-                <div className="w-[420px] shrink-0 px-2 py-2">Имя</div>
-                <div className="w-32 shrink-0 px-2 py-2">Автор</div>
-                <div className="w-28 shrink-0 px-2 py-2">Категория</div>
-                <div className="w-20 shrink-0 px-2 py-2 text-right">msgid</div>
-                {/* Маркировка вместо голого счётчика находок: число само
-                    по себе не говорит, надо ли смотреть. */}
-                <div className="w-36 shrink-0 px-2 py-2">Внимание</div>
-                {/* Идентификатор техники и тактика: в списке нужен ярлык,
-                    а название и обоснование — в подробностях. */}
-                <div className="w-56 shrink-0 px-2 py-2">ATT&amp;CK</div>
-                <div className="w-28 shrink-0 px-2 py-2">Ограничено</div>
-                <div className="w-32 shrink-0 px-2 py-2">В SIEM</div>
+            <div ref={parentRef} data-col-resize-root className="h-full overflow-auto">
+              {/* Имя правила — главная колонка: забирает свободное место, её
+                  ширина — минимум. Заголовок и строки делят один шаблон сетки,
+                  поэтому колонки не разъезжаются. Длинные имена обрезаются,
+                  полное видно в подсказке. Внимание — маркировка вместо голого
+                  счётчика находок; ATT&CK — ярлык техники и тактика, название
+                  и обоснование — в подробностях. */}
+              <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+                <ResizableHeader cols={cols} as="div" className="px-2 py-2" />
               </div>
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
                 {virtualizer.getVirtualItems().map((row) => {
@@ -318,31 +335,31 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
                     <div
                       key={rule.uuid}
                       {...clickableRow(() => setOpenUuid(rule.uuid))}
-                      className={cn(ROW_FOCUS, 'absolute top-0 left-0 flex w-max min-w-full cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover')}
-                      style={{ height: ROW_HEIGHT, transform: `translateY(${row.start}px)` }}
+                      className={cn(ROW_FOCUS, 'absolute top-0 left-0 grid w-full cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover')}
+                      style={{ ...cols.gridStyle, height: ROW_HEIGHT, transform: `translateY(${row.start}px)` }}
                     >
-                      <div className="w-[420px] shrink-0 truncate px-2 font-mono text-text" title={rule.name}>
+                      <div className="min-w-0 truncate px-2 font-mono text-text" title={rule.name}>
                         {rule.name}
                       </div>
-                      <div className="w-32 shrink-0 truncate px-2 text-text-secondary">{rule.author}</div>
-                      <div className="w-28 shrink-0 truncate px-2 font-mono text-text-secondary">
+                      <div className="min-w-0 truncate px-2 text-text-secondary">{rule.author}</div>
+                      <div className="min-w-0 truncate px-2 font-mono text-text-secondary">
                         {rule.category}/{rule.group}
                       </div>
-                      <div className="w-20 shrink-0 px-2 text-right font-mono tabular-nums text-text-secondary">{rule.msgid_count}</div>
-                      <div className="w-36 shrink-0 px-2">
+                      <div className="min-w-0 px-2 text-right font-mono tabular-nums text-text-secondary">{rule.msgid_count}</div>
+                      <div className="min-w-0 overflow-hidden px-2">
                         <RuleAttentionCell snapshotId={snapshotId} rule={rule} />
                       </div>
-                      <div className="w-56 shrink-0 truncate px-2">
+                      <div className="min-w-0 truncate px-2">
                         <RuleAttackCell attack={rule.attack} />
                       </div>
-                      <div className="w-28 shrink-0 px-2">
+                      <div className="min-w-0 px-2">
                         {rule.scoped ? (
                           <CheckCircle2 size={14} className="text-kind-accepted" aria-label="ограничено" />
                         ) : (
                           <XCircle size={14} className="text-text-secondary/50" aria-label="не ограничено" />
                         )}
                       </div>
-                      <div className="w-32 shrink-0 px-2">
+                      <div className="min-w-0 px-2">
                         <InstalledCell installed={rule.installed} />
                       </div>
                     </div>

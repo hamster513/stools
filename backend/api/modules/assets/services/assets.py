@@ -31,13 +31,14 @@ from api.modules.assets.core.matching import (
 )
 from api.modules.assets.models import Asset, AssetObservation, AssetSettings, Network
 from api.modules.assets.services.networks import NetworkList, network_for_ip
+from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUS_TITLES, STATUSES, is_overdue
 from api.platform.findings.models import FindingState
 from api.timeutil import utcnow
 
 DEFAULT_SETTINGS: dict[str, Any] = {"inactive_days": 30, "stale_days": 30, "sync_after_import": True}
-SOURCES = ("vm", "ksc", "ad", "scan", "dns")
+SOURCES = ("vm", "ksc", "ad", "scan", "dns", "rt")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
 #: Фильтр и фасет «хоть одно расхождение».
 ANY_CODE = "any"
@@ -410,6 +411,21 @@ def update_manual(db: Session, asset_id: int, values: dict[str, Any]) -> Asset:
     return asset
 
 
+def delete_assets(db: Session, ids: list[int]) -> int:
+    """Удалить активы с наблюдениями; число удалённых. У активов, объединённых в удалённый, ссылка
+    `merged_into` обнуляется; решения по его расхождениям закроет сверка находок как исчезнувшие.
+    Актив, которого источник всё ещё видит, вернётся при следующей синхронизации — удаление не
+    скрывает хост, а чистит реестр от того, чего уже нет."""
+    deleted = 0
+    for start in range(0, len(ids), BULK_CHUNK):
+        chunk = ids[start : start + BULK_CHUNK]
+        for asset in db.execute(select(Asset).where(Asset.id.in_(chunk))).scalars():
+            db.delete(asset)
+            deleted += 1
+    db.flush()
+    return deleted
+
+
 #: Столько id за раз уходит в один запрос массового изменения (параметров у запроса не больше 65 535).
 BULK_CHUNK = 10_000
 
@@ -506,60 +522,72 @@ def _tracked(asset_id: int, found: list[Discrepancy], states: dict[str, FindingS
 
 @dataclass(frozen=True)
 class DiscFilter:
-    """Фильтр «есть расхождение под всеми условиями»: код (`any` — любой), статусы (None — любые),
-    исполнитель (логин или `none`), просрочено. Без статусов в запросе — учитываемые
+    """Фильтр «есть расхождение под всеми условиями»: коды (`any` — любой), статусы (None — любые),
+    исполнители (логины и `none`), просрочено. Без статусов в запросе — учитываемые
     (`counted_statuses`): так и до статусов фильтр по коду не видел решённого."""
 
-    code: str | None = None
+    code: frozenset[str] | None = None
     statuses: frozenset[str] | None = None
-    assignee: str | None = None
+    assignee: frozenset[str] | None = None
     overdue: bool = False
     #: Задан ли фильтр по расхождениям вообще; нет — активы не отбираются по ним.
     active: bool = False
 
 
 def disc_filter(
-    counted: frozenset[str], *, code: str | None = None, disc_status: str | None = None,
-    assignee: str | None = None, overdue: bool | None = None, login: str = "",
+    counted: frozenset[str], *, code: frozenset[str] | None = None, disc_status: Values = None,
+    assignee: Values = None, overdue: bool | None = None, login: str = "",
 ) -> DiscFilter:
-    """`disc_status` — коды статусов через запятую или `all`; неизвестный статус — ValueError."""
+    """`disc_status` — коды статусов (повтором или через запятую) или `all`; неизвестный статус —
+    ValueError. `assignee` — `me`, `none` и логины."""
+    picked = multi(disc_status, commas=True)
+    # Фильтр по расхождениям включает разобранный статус, а не сырая строка: `disc_status=,` — не задан.
+    by_status = picked is not None or is_all(disc_status)
     statuses: frozenset[str] | None
-    if not disc_status:
-        statuses = counted
-    elif disc_status == "all":
+    if is_all(disc_status):
         statuses = None
+    elif picked is None:
+        statuses = counted
+    elif unknown := picked - set(STATUSES):
+        raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown))}")
     else:
-        statuses = frozenset(s for s in disc_status.split(",") if s)
-        unknown = statuses - set(STATUSES)
-        if unknown or not statuses:
-            raise ValueError(f"неизвестный статус: {', '.join(sorted(unknown)) or disc_status}")
-    who = login if assignee == "me" else (assignee or None)
-    return DiscFilter(code or None, statuses, who, bool(overdue), active=bool(code or disc_status or assignee or overdue))
+        statuses = picked
+    who = multi(assignee)
+    whom = frozenset(login if a == "me" else a for a in who) if who else None
+    return DiscFilter(code, statuses, whom, bool(overdue), active=bool(code or by_status or whom or overdue))
 
 
 def _hits(t: Tracked, f: DiscFilter, today: dt.date, *, code: bool = True, status: bool = True, overdue: bool = True) -> bool:
     """Подходит ли расхождение под фильтр; `code`/`status`/`overdue=False` — без этой части (фасеты)."""
-    if code and f.code and f.code != ANY_CODE and t.d.code != f.code:
+    if code and f.code and ANY_CODE not in f.code and t.d.code not in f.code:
         return False
     if status and f.statuses is not None and t.status not in f.statuses:
         return False
-    if f.assignee == "none" and t.assignee is not None:
-        return False
-    if f.assignee not in (None, "none") and t.assignee != f.assignee:
+    if not matches(t.assignee or "none", f.assignee):
         return False
     return not (overdue and f.overdue and not is_overdue(t.status, t.due_date, today))
 
 
 def _item(asset: Asset, rows: list[AssetObservation], tracked: list[Tracked], network: Network | None, now: dt.datetime,
-          stale_days: int, counted: frozenset[str]) -> dict[str, Any]:
-    """Счётчик и коды расхождений — только с учитываемым статусом: принятый риск не «висит»."""
+          stale_days: int, counted: frozenset[str], cluster: str | None) -> dict[str, Any]:
+    """Счётчик и коды расхождений — только с учитываемым статусом: принятый риск не «висит».
+    `cluster` — cluster | role | node из наблюдения AD: учётка кластера и роль — виртуальные имена."""
     live = [t.d for t in tracked if t.status in counted]
     return {
+        "cluster": cluster,
         "id": asset.id, "name": asset.name, "fqdn": asset.fqdn, "domain": asset.domain, "ip": asset.ip, "os": asset.os,
         "network": _network_view(network), "first_seen": _iso(asset.first_seen), "last_seen": _iso(asset.last_seen),
         "criticality": asset.criticality, "tags": list(asset.tags or []), "pinned": dict(asset.pinned or {}),
         "sources": _sources(rows, now, stale_days), "discrepancy_count": len(live), "codes": sorted({d.code for d in live}, key=CODES.index),
     }
+
+
+def cluster_kinds(db: Session) -> dict[int, str]:
+    """asset_id → cluster | role | node по живым наблюдениям AD (`extra.cluster`) — одним запросом на список."""
+    kind = AssetObservation.extra["cluster"].as_string()
+    return dict(db.execute(
+        select(AssetObservation.asset_id, kind).where(AssetObservation.source.in_(("ad",)), AssetObservation.gone_at.is_(None), kind.is_not(None))
+    ).tuples().all())
 
 
 def _matches_query(asset: Asset, rows: list[AssetObservation], needle: str) -> bool:
@@ -589,15 +617,17 @@ def _pick(
     now: dt.datetime,
     with_found: bool,
     q: str | None = None,
-    source_has: str | None = None,
-    source_missing: str | None = None,
-    network_id: int | None = None,
-    zone: str | None = None,
+    source_has: frozenset[str] | None = None,
+    source_missing: frozenset[str] | None = None,
+    network_id: frozenset[int] | None = None,
+    zone: frozenset[str] | None = None,
     port: int | None = None,
     tag: str | None = None,
-    criticality: str | None = None,
+    criticality: frozenset[str] | None = None,
 ) -> Picked:
-    """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Расхождения
+    """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Многозначные фильтры —
+    «любое из»: `source_has` — есть хоть один из источников, `source_missing` — нет хоть одного,
+    `criticality` `none` — не задана. Расхождения
     считаются на лету, поэтому фильтры — в памяти; фильтр по расхождениям и их статусам — у
     вызывающего (`DiscFilter`). `with_found=False` — расхождения не считаются и остаются пустыми
     (выбор id для массового изменения без фильтра по расхождениям)."""
@@ -617,18 +647,20 @@ def _pick(
     for asset in assets:
         rows = per_asset[asset.id]
         live = {r.source for r in rows if r.gone_at is None}
-        if source_has and source_has not in live:
+        if source_has and not source_has & live:
             continue
-        if source_missing and source_missing in live:
+        if source_missing and source_missing <= live:
             continue
-        if network_id is not None and asset.network_id != network_id:
+        if network_id is not None and asset.network_id not in network_id:
             continue
         net = networks.get(asset.network_id) if asset.network_id is not None else None
-        if zone and (net is None or net.zone != zone):
+        # '' в наборе (`-` в запросе) — актив без зоны: вне сетей или в сети без зоны.
+        if not matches(net.zone if net is not None else None, zone):
             continue
         if tag and tag not in (asset.tags or []):
             continue
-        if criticality and asset.criticality != ("" if criticality == "none" else criticality):
+        # «Не задана» — `none` (как в фасете) или '' (`-` в запросе, общий знак пустого значения).
+        if criticality is not None and not {asset.criticality or "none", asset.criticality or ""} & criticality:
             continue
         if needle and not _matches_query(asset, rows, needle):
             continue
@@ -681,7 +713,7 @@ def _disc_split(picked: Picked, f: DiscFilter, states: dict[str, FindingState], 
 
 
 def matching_ids(
-    db: Session, *, code: str | None = None, disc_status: str | None = None, assignee: str | None = None,
+    db: Session, *, code: frozenset[str] | None = None, disc_status: Values = None, assignee: Values = None,
     overdue: bool | None = None, login: str = "", **filters: Any,
 ) -> list[int]:
     """Id всех активов под фильтрами списка — без фасетов и строк, а расхождения считаются,
@@ -702,9 +734,9 @@ def list_assets(
     limit: int = 200,
     offset: int = 0,
     now: dt.datetime | None = None,
-    code: str | None = None,
-    disc_status: str | None = None,
-    assignee: str | None = None,
+    code: frozenset[str] | None = None,
+    disc_status: Values = None,
+    assignee: Values = None,
     overdue: bool | None = None,
     login: str = "",
     **filters: Any,
@@ -750,8 +782,9 @@ def list_assets(
 
     picked.sort(key=lambda t: (t[0].name_key or normalize_fqdn(t[0].fqdn) or "~", t[0].ip, t[0].id))
     stale_days = int(settings["stale_days"])
+    clusters = cluster_kinds(db)
     page = [
-        _item(asset, rows, tracked, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days, counted)
+        _item(asset, rows, tracked, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days, counted, clusters.get(asset.id))
         for asset, rows, tracked in picked[offset : offset + limit]
     ]
     return page, len(picked), facets
@@ -829,8 +862,9 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
     keys = [finding_key(asset.id, d) for d in found]
     tracked = _tracked(asset.id, found, finding_svc.state_map(db, FINDINGS_MODULE, FINDINGS_SCOPE, keys))
     today = finding_svc.today()
+    cluster = next((str(r.extra["cluster"]) for r in rows if r.source == "ad" and r.gone_at is None and (r.extra or {}).get("cluster")), None)
     return {
-        **_item(asset, rows, tracked, network, now, int(settings["stale_days"]), counted),
+        **_item(asset, rows, tracked, network, now, int(settings["stale_days"]), counted, cluster),
         "network_manual": asset.network_manual, "note": asset.note, "merged_into": asset.merged_into,
         "created_at": _iso(asset.created_at), "updated_at": _iso(asset.updated_at),
         "observations": [

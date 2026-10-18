@@ -98,7 +98,7 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 
 Обзор — по последнему снапшоту. `counted` и у проверки `total`, `by_severity` —
 находки со статусами, которые велено учитывать (`counted.statuses`, настройка
-платформы); список с тем же числом — `findings?severity=…&status=<statuses через запятую>`.
+платформы); список с тем же числом — `findings?severity=…&status=<код>&status=<код>…` (статус повторением ключа).
 У проверки `all` — все её находки, `open` — открытые, `new` — появились в
 этом снапшоте, `resolved` — пропали с предыдущего. `summary` — счётчики
 статусов сервера (вместе с отсутствующими в последнем снапшоте).
@@ -111,6 +111,7 @@ GET  /snapshots/{id}/hosts             group, product, agent(none|silent|alive),
                                        status(ok|warning|critical), component, component_state(on|off|other|none),
                                        tag, policy, q, limit≤1000, offset
                                        → {total, items, facets|null, tags_collected}
+GET  /snapshots/{id}/hosts/export      format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
 GET  /snapshots/{id}/hosts/{host_id}   + findings[] (каждая: key, check, check_title, severity, status, status_title, details),
                                        findings_counted — учитываемые (то же правило, что `findings` в списке),
                                        policies[] — действующие политики группы хоста: {id, name, product, active, own}
@@ -129,6 +130,14 @@ GET  /snapshots/{id}/hosts/{host_id}/profiles
 фильтр. Показывается русское название, у компонента без пары — имя как пришло. Справочник пар —
 `core/dictionary/components.py` (`component_code`, `component_title`). Если хост перечисляет компонент под обоими написаниями,
 состояния сливаются по худшему (в карточке — строка с худшим состоянием). Находки `COMPONENT_OFF` у хоста — одна на компонент.
+
+Многозначные фасеты хостов — `protection`, `agent`, `bases`, `in_ad`, `status`, `component`, `tag`, `group`,
+`product`: несколько значений повторением ключа (`?group=Офис%2C%20Москва&group=DMZ&status=warning&status=critical`),
+значение по запятой не делится (в именах групп и продуктов бывают запятые); внутри фасета — «или», между фасетами — «и»;
+`all` — фильтр не задан. `tag=-` — хосты без тегов. `status` ещё принимает старую форму через запятую
+(`status=ok,warning`). `component_state` — одно значение, применяется к любому из выбранных компонентов. Выгрузка
+`hosts/export` — все хосты под фильтрами списка в его порядке, любой роли; формат — общая «Выгрузка списков»
+(`docs/api-contract.md`: CSV — UTF-8 с BOM, `;`, CRLF; XLSX — не больше 100 000 строк и строка-предупреждение).
 
 Компонент защиты: `component=<название>` (любое написание, без учёта регистра и краевых пробелов) без состояния — хосты, у которых компонент есть; с `component_state`:
 `on` — работает (код 4), `off` — остановлен, приостановлен, сбой, не установлен, нет лицензии
@@ -192,14 +201,26 @@ GET  /snapshots/{id}/hosts/{host_id}/profiles
 
 ```
 GET  /snapshots/{id}/findings          check, severity, allowlisted, q,
-                                       status (коды через запятую или all; по умолчанию — открытые:
-                                         new, in_work, fixed, reopened; с risk_expiring — risk_accepted),
+                                       status (коды повторением ключа или через запятую, или all;
+                                         по умолчанию — открытые: new, in_work, fixed, reopened;
+                                         с risk_expiring — risk_accepted),
                                        delta (new|same|gone), assignee (логин | me | none),
                                        overdue=true, risk_expiring=true, limit≤1000, offset
                                        → {total, items, facets|null, compared_to, check_titles,
                                           is_latest, statuses_as_of: "today"}
+GET  /snapshots/{id}/findings/export   format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
 GET  /snapshots/{id}/findings/{key}    элемент списка + description, history[{snapshot_id, collected_at}]
 ```
+
+Многозначные фасеты — `check`, `severity`, `delta`, `assignee`, `status`: несколько значений
+повторением ключа (`?severity=High&severity=Critical&delta=new`), внутри фасета — «или», между
+фасетами — «и»; `all` — фильтр не задан (у `status` — любые статусы). Через запятую принимается
+только `status` (старая форма `status=new,in_work`); у остальных `a,b` — одно значение.
+
+Выгрузка `findings/export` — все находки под фильтрами списка в его порядке, любой роли (объявлена
+до карточки `findings/{key}`). CSV — UTF-8 с BOM, `;`, CRLF, потоком; XLSX — не больше 100 000
+строк, после них строка «Выгружены первые 100 000 строк — сузьте фильтры». Колонки — как в таблице
+на экране. Общие правила формата и выгрузки — `docs/api-contract.md`.
 
 Статусы находок — общий механизм платформы: `GET/PUT /api/findings/state`,
 `POST /api/findings/comment`, `POST /api/findings/bulk`, `GET /api/findings/mine`,
@@ -334,10 +355,16 @@ GET  /snapshots/{id}/policies/{pid}/settings
                                         groups: [{component, title, enabled: bool|null,
                                                   settings: [{section, path, title, value, raw, locked, verified}]}],
                                         other: [{section, path, value, locked}]}
+GET  /snapshots/{id}/policy-list/export?format=csv|xlsx&<те же фильтры>   → файл
 GET  /snapshots/{id}/tasks?q=&type=&failed=true
                                         {items: [{id, name, type, product, group, schedule, last_run_at,
                                                   ok, warning, failed}], facets: {type: {тип: n}}}
+GET  /snapshots/{id}/tasks/export?format=csv|xlsx&<те же фильтры>         → файл
 ```
+
+Многозначные: у списка политик — `product` и `grade` (`grade=bad&grade=none`), у задач — `type`; повторением
+ключа, внутри фасета — «или», `all` — не задан. Выгрузки — весь отфильтрованный список в его порядке, любой роли,
+формат — общая «Выгрузка списков» (`docs/api-contract.md`).
 
 `PolicyItem` = `{id, name, product, version, group, active, accept_parent, modified_at, has_contents,
 contents_partial, described, groups, hosts, profiles, exclusions, net_rules, locks: {locked, with_lock_flag}|null, grade,
@@ -451,7 +478,17 @@ GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offse
                                                          profile, section, path, before, after}],
                                         facets: {kind: {…}, action: {…}}|null,
                                         snapshots: [{id, collected_at, prev, total|null, compared, truncated, reason|null}]}
+GET  /snapshots/{id}/exclusions/export?format=csv|xlsx&<те же фильтры>   → файл
+GET  /snapshots/{id}/net-rules/export?format=csv|xlsx&<те же фильтры>    → файл
+GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>        → файл
 ```
+
+Многозначные (повторением ключа, внутри фасета — «или», `all` — не задан): у исключений — `policy_id`, `kind`, `dup`
+(`?policy_id=12&policy_id=15&dup=multi`), у сетевых правил — `policy_id`, `action`, `direction`, у изменений —
+`kind`, `action`, `policy_id`, `snapshot_id`; `policy_id` и `snapshot_id` — числа. Остальные параметры однозначные.
+Выгрузки — все записи под фильтрами списка без `limit`/`offset`, в его порядке, любой роли; формат — общая
+«Выгрузка списков» (`docs/api-contract.md`: CSV — UTF-8 с BOM, `;`, CRLF, потоком; XLSX — не больше 100 000 строк и
+строка-предупреждение).
 
 `404` — снапшот или сервер не найдены, у карточек — ещё «исключение не найдено» / «правило не найдено» (строки нет
 или она из другого снапшота), с `host_id` — «хост не найден»; `422` — неизвестное значение `dup` или `limit` вне 1..1000.

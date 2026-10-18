@@ -14,12 +14,12 @@ import secrets
 import shutil
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import UploadFile
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import Select, case, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -291,6 +291,13 @@ def findings_page(db: Session, job_id: int, *, kind: str | None, q: str, limit: 
         )
     ]
     groups.sort(key=lambda g: KINDS.index(g["kind"]) if g["kind"] in KINDS else len(KINDS))
+    stmt = _findings_stmt(job_id, kind=kind, q=q, secrets_searchable=secrets_searchable)
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    items = db.scalars(_findings_ordered(stmt).limit(limit).offset(offset)).all()
+    return groups, list(items), int(total)
+
+
+def _findings_stmt(job_id: int, *, kind: str | None, q: str, secrets_searchable: bool) -> Select[tuple[ToolboxFinding]]:
     stmt = select(ToolboxFinding).where(ToolboxFinding.job_id == job_id)
     if kind:
         stmt = stmt.where(ToolboxFinding.kind == kind)
@@ -298,10 +305,17 @@ def findings_page(db: Session, job_id: int, *, kind: str | None, q: str, limit: 
         stmt = stmt.where(func.lower(ToolboxFinding.value).contains(q.lower(), autoescape=True))
         if not secrets_searchable:
             stmt = stmt.where(ToolboxFinding.kind != "secret")
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    return stmt
+
+
+def _findings_ordered(stmt: Select[tuple[ToolboxFinding]]) -> Select[tuple[ToolboxFinding]]:
     rank = case({k: i for i, k in enumerate(KINDS)}, value=ToolboxFinding.kind, else_=len(KINDS))
-    items = db.scalars(stmt.order_by(rank, ToolboxFinding.count.desc(), ToolboxFinding.id).limit(limit).offset(offset)).all()
-    return groups, list(items), int(total)
+    return stmt.order_by(rank, ToolboxFinding.count.desc(), ToolboxFinding.id)
+
+
+def finding_rows(db: Session, job_id: int, *, kind: str | None, q: str) -> Iterator[ToolboxFinding]:
+    """Все находки задания под фильтрами списка, в его порядке, пачками — для выгрузки аналитику."""
+    yield from db.scalars(_findings_ordered(_findings_stmt(job_id, kind=kind, q=q, secrets_searchable=True))).yield_per(1000)
 
 
 def _reals(db: Session, job_id: int) -> list[re.Pattern[str]]:

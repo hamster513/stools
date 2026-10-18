@@ -227,3 +227,14 @@ def test_canonical_all_gone_keeps_last_known_values() -> None:
     gone = Observed(source="vm", source_key="old|10.10.0.7", name="old", ip="10.10.0.7", seen_at=days_ago(9), gone_at=days_ago(1))
     card = canonical([gone], {}, {})
     assert card["name"] == "old" and card["ip"] == "10.10.0.7" and card["last_seen"] == days_ago(9)
+
+
+def test_canonical_prefers_private_ip_over_public() -> None:
+    """Внешний адрес (NAT) той же свежести не становится каноническим; без внутреннего — остаётся внешний."""
+    from api.modules.assets.core.matching import canonical
+
+    now = dt.datetime(2026, 10, 1, tzinfo=dt.UTC)
+    public = Observed(source="rt", source_key="8.8.4.2", name="srv01", ip="8.8.4.2", seen_at=now)
+    private = Observed(source="rt", source_key="10.10.0.11", name="srv01", ip="10.10.0.11", seen_at=now)
+    assert canonical([public, private], {}, {})["ip"] == "10.10.0.11"
+    assert canonical([public], {}, {})["ip"] == "8.8.4.2"

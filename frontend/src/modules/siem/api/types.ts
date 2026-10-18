@@ -197,20 +197,21 @@ export interface FindingsQuery {
   /** Находки одного правила — вход из инвентаря. */
   object_uuid?: string
   snapshot_id: number
-  kind?: FindingKind
-  polarity?: Polarity
-  object_type?: ObjectType
+  /** Многозначные фасеты уходят повторением ключа (buildQuery): `kind=1&kind=2`. */
+  kind?: FindingKind[]
+  polarity?: Polarity[]
+  object_type?: ObjectType[]
   in_table?: boolean
-  shape?: ShapeFilter
-  /** Коды через запятую или `all`; не задан — открытые. */
-  status?: string
-  /** `me`, `none` или логин. */
-  assignee?: string
+  shape?: ShapeFilter[]
+  /** Коды (ключ повторяется) или `all`; не задан — открытые. */
+  status?: string[] | 'all'
+  /** `me`, `none` или логин; несколько — «ИЛИ». */
+  assignee?: string[]
   overdue?: boolean
   risk_expiring?: boolean
   /** Одна находка по ключу — ссылка `?key=`. */
   key?: string
-  field?: string
+  field?: string[]
   q?: string
   sort?: string
   order?: 'asc' | 'desc'

@@ -37,7 +37,7 @@ def test_registry_codes() -> None:
         "PasswordNotRequired", "ReversiblePassword", "AdminDelegable", "AdminPasswordAge", "BuiltinAdminUsed",
         "GuestEnabled", "AzureSsoKeyAge", "DuplicateObjects",
         "InactiveComputers", "ComputerPasswordAge", "ObsoleteOs", "DcCount", "DcDelegation", "DcOwner",
-        "TooManyAdmins", "FunctionalLevel", "PreWin2000Access", "DomainRootAcl",
+        "TooManyAdmins", "FunctionalLevel", "PreWin2000Access", "DomainRootAcl", "Clusters",
     }
 
 

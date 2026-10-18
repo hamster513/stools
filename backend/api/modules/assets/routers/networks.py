@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import datetime as dt
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,8 +32,10 @@ from api.modules.assets.services.networks import (
     normalize_exclude,
     update_network,
 )
+from api.platform.export import Column, export_response
 from api.platform.schedule_views import ScheduleView, schedule_view
 from api.platform.scheduler import PlatformSchedule
+from api.settings import get_settings
 
 router = APIRouter(prefix="/networks", tags=["assets"])
 
@@ -153,6 +157,8 @@ class NetworkView(BaseModel):
     last_scan_alive: int | None
     #: False — последний скан шёл в режиме «только порты»; None — сеть не сканировали.
     last_scan_icmp: bool | None
+    #: Пусто — описана вручную; racktables — создана задачей RackTables (название, описание, VLAN и теги обновляет она).
+    origin: str
     created_at: dt.datetime
     updated_at: dt.datetime
     stats: NetworkStats
@@ -173,7 +179,7 @@ def _view(n: Network, stats: dict[str, Any], schedules: dict[int, PlatformSchedu
         tags=list(n.tags or []), scan_enabled=n.scan_enabled, ports=list(n.ports or []), exclude=list(n.exclude or []),
         concurrency=n.concurrency, icmp_timeout_ms=n.icmp_timeout_ms, tcp_timeout_ms=n.tcp_timeout_ms,
         rate_per_s=n.rate_per_s, estimated_seconds=estimated_seconds(n), schedule_id=n.schedule_id,
-        last_scan_at=n.last_scan_at, last_scan_alive=n.last_scan_alive, last_scan_icmp=n.last_scan_icmp, created_at=n.created_at, updated_at=n.updated_at,
+        last_scan_at=n.last_scan_at, last_scan_alive=n.last_scan_alive, last_scan_icmp=n.last_scan_icmp, origin=n.origin, created_at=n.created_at, updated_at=n.updated_at,
         stats=NetworkStats(**stats), schedule=schedule_view(sched) if sched is not None else None,
     )
 
@@ -206,6 +212,40 @@ def post_network(payload: NetworkIn, db: Session = Depends(get_db), _user: AppUs
     network = _errors(create_network, db, payload.model_dump())
     db.commit()
     return _one(db, network)
+
+
+EXPORT_COLUMNS = [
+    Column("cidr", "CIDR"), Column("title", "Название"), Column("zone", "Зона"), Column("site", "Площадка"),
+    Column("assets", "Активов"), Column("alive", "Живых"), Column("scanner_only", "Только сканер"),
+    Column("last_scan", "Последний скан"), Column("schedule", "Расписание"),
+]
+
+
+def _schedule_text(v: NetworkView) -> str:
+    """Колонка «Расписание» — как на экране (`scheduleText`); время следующего запуска — в поясе STOOLS_TZ."""
+    s = v.schedule
+    if s is None:
+        return "вручную" if v.scan_enabled else "не сканируется"
+    every = f"раз в {s.interval_hours // 24} сут" if s.interval_hours % 24 == 0 else f"раз в {s.interval_hours} ч"
+    window = f", {s.window_from}–{s.window_to} {s.tz}" if s.window_from and s.window_to else ""
+    if not s.enabled:
+        return f"выключено ({every}{window})"
+    nxt = s.next_run_at.astimezone(ZoneInfo(get_settings().tz)).strftime("%d.%m.%Y %H:%M") if s.next_run_at else "—"
+    return f"{every}{window}; следующий {nxt}"
+
+
+@router.get("/export")
+def export_networks(
+    fmt: str = Query(default="csv", alias="format"), db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """Все сети в порядке таблицы (у списка фильтров нет); объявлена до `/{network_id}`."""
+    rows = [
+        {"cidr": v.cidr, "title": (v.title or "—") + (f" · VLAN {v.vlan}" if v.vlan is not None else ""), "zone": v.zone,
+         "site": v.site or None, "assets": v.stats.assets, "alive": v.stats.alive_last_scan, "scanner_only": v.stats.unknown_hosts,
+         "last_scan": v.last_scan_at, "schedule": _schedule_text(v)}
+        for v in list_networks(db=db, _user=user)
+    ]
+    return export_response(fmt, EXPORT_COLUMNS, rows, module="assets", name="networks")
 
 
 @router.get("/{network_id}", response_model=NetworkView)

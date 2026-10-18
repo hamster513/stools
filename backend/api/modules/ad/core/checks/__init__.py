@@ -32,6 +32,7 @@ from api.modules.ad.core.checks.adcs import check_adcs_templates
 from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
 from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
 from api.modules.ad.core.checks.catalog import with_guidance
+from api.modules.ad.core.checks.clusters import check_clusters
 from api.modules.ad.core.checks.common import CheckSpec
 from api.modules.ad.core.checks.computers import (
     check_computer_password_age,
@@ -59,7 +60,7 @@ from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "3"
+ANALYZER_VERSION = "4"
 
 _CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -100,6 +101,7 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("TooManyAdmins", "Слишком много администраторов", "Чем больше администраторов домена, тем больше учётных записей, захват любой из которых даёт полный контроль над доменом.", check_too_many_admins, ("T1078.002",)),
     CheckSpec("FunctionalLevel", "Функциональный уровень домена", "Низкий функциональный уровень домена не даёт включить защиту новых версий Windows Server: Protected Users, политики и силосы проверки подлинности, AES для Kerberos по умолчанию.", check_functional_level, ()),
     CheckSpec("PreWin2000Access", "Группа Pre-Windows 2000 Compatible Access", "Участники группы читают атрибуты всех пользователей и групп домена; Anonymous Logon или Everyone в ней открывают каталог без входа.", check_pre_win2000_access, ("T1087.002",)),
+    CheckSpec("Clusters", "Кластеры Windows", "Отказоустойчивые кластеры по SPN компьютеров: учётка кластера, его роли (виртуальные имена, не хосты) и узлы. Роль привязана к кластеру по создателю объекта; узлы к кластеру из AD не привязываются. Выключенная роль — вероятно, брошена.", check_clusters, ()),
     CheckSpec("DomainRootAcl", "Опасные права на корень домена", "GenericAll, WriteDacl или WriteOwner на корне домена позволяют выдать себе права репликации (DCSync) и получить полный контроль над доменом.", check_domain_root_acl, ("T1222.001",)),
 ]
 

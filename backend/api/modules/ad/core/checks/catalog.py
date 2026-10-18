@@ -243,6 +243,13 @@ GUIDANCE: dict[str, Guidance] = {
             ("Microsoft: конфликты репликации AD", f"{_LEARN}/troubleshoot/windows-server/active-directory/active-directory-replication-errors"),
         ),
     ),
+    "Clusters": Guidance(
+        "inventory",
+        "Это инвентарная находка, не уязвимость: учётки кластера и ролей — виртуальные имена без агентов и входов, их не нужно лечить как хосты. Проверьте выключенные роли: объекты брошенных ролей удалите из AD (Remove-ClusterResource на кластере, затем объект компьютера), чтобы они не копились в каталоге.",
+        (
+            ("Microsoft: учётные записи кластера в Active Directory", f"{_LEARN}/windows-server/failover-clustering/configure-ad-accounts"),
+        ),
+    ),
     "InactiveComputers": Guidance(
         "accounts",
         "Определите владельца машины. Ненужные компьютеры отключите (Disable-ADAccount), через положенный срок удалите; для контроллера проверьте репликацию и при выводе из эксплуатации снимите роль через dcpromo или Uninstall-ADDSDomainController, а не удаляйте объект вручную.",

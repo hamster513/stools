@@ -6,7 +6,7 @@ import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/quer
 import type { FindingSummary } from '@/platform/findings/types'
 import type {
   AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, Job, Network, NetworkIn,
-  NetworkSchedule, PinnableField, ScanStarted, ScheduleIn, SyncStatus, Zone, ZoneIn,
+  NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScanStarted, ScheduleIn, SyncStatus, Zone, ZoneIn,
 } from './types'
 
 export const ASSETS_PAGE_SIZE = 200
@@ -73,6 +73,28 @@ export function useMergeAssets(id: number) {
 
 export function useDetachObservation() {
   return useAssetMutation<number>((observationId) => api.post(`/api/assets/observations/${observationId}/detach`))
+}
+
+/** Удалённые карточки не перезапрашиваются (иначе 404 в консоли), а забываются; список и обзор — обновляются. */
+function forgetDeleted(qc: ReturnType<typeof useQueryClient>, ids: number[]) {
+  for (const id of ids) qc.removeQueries({ queryKey: ['assets-asset', id] })
+  for (const key of ['assets-list', 'assets-overview']) qc.invalidateQueries({ queryKey: [key] })
+}
+
+export function useDeleteAsset() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/assets/assets/${id}`),
+    onSuccess: (_void, id) => forgetDeleted(qc, [id]),
+  })
+}
+
+export function useBulkDelete() {
+  const qc = useQueryClient()
+  return useMutation<{ deleted: number }, ApiRequestError, number[]>({
+    mutationFn: (ids) => api.post('/api/assets/assets/bulk-delete', { ids }),
+    onSuccess: (_result, ids) => forgetDeleted(qc, ids),
+  })
 }
 
 /** Id всех активов под фильтрами списка — выбор «всех по фильтру», а не только загруженных строк. */
@@ -282,6 +304,50 @@ export function useRunDns() {
     mutationFn: (id) => api.post(`/api/assets/dns/${id}/run`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-jobs'] }),
   })
+}
+
+export function useRacktables() {
+  return useQuery<Racktables[], ApiRequestError>({ queryKey: ['assets-racktables'], queryFn: () => api.get('/api/assets/racktables') })
+}
+
+function useRacktablesMutation<V, R>(fn: (vars: V) => Promise<R>) {
+  const qc = useQueryClient()
+  return useMutation<R, ApiRequestError, V>({
+    mutationFn: fn,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-racktables'] }),
+  })
+}
+
+export function useSaveRacktables() {
+  return useRacktablesMutation<{ id?: number; body: RacktablesIn }, Racktables>(({ id, body }) =>
+    id === undefined ? api.post('/api/assets/racktables', body) : api.put(`/api/assets/racktables/${id}`, body),
+  )
+}
+
+export function useDeleteRacktables() {
+  return useRacktablesMutation<number, void>((id) => api.del(`/api/assets/racktables/${id}`))
+}
+
+/** `getAPIVersion` сохранёнными учётными данными — проверка адреса и пароля. */
+export function useCheckRacktables() {
+  return useMutation<{ version: string }, ApiRequestError, number>({ mutationFn: (id) => api.post(`/api/assets/racktables/${id}/check`) })
+}
+
+/** Проход по RackTables сейчас; за задачей следит страница через `useJob`. */
+export function useRunRacktables() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, number>({
+    mutationFn: (id) => api.post(`/api/assets/racktables/${id}/run`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-jobs'] }),
+  })
+}
+
+export function useSaveRacktablesSchedule(rtId: number) {
+  return useRacktablesMutation<ScheduleIn, NetworkSchedule>((body) => api.put(`/api/assets/racktables/${rtId}/schedule`, body))
+}
+
+export function useDeleteRacktablesSchedule(rtId: number) {
+  return useRacktablesMutation<void, void>(() => api.del(`/api/assets/racktables/${rtId}/schedule`))
 }
 
 export function useSaveDnsSchedule(dnsId: number) {

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from api.modules.vm.models import VmHost
+from kbaudit.attack.reference import rows_from_xlsx
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -112,6 +113,17 @@ def test_export_csv_neutralises_formulas(loaded: TestClient, db_session: Any) ->
     row = next(csv.reader(io.StringIO(text.splitlines()[1]), delimiter=";"))
     assert row[2] == "'=HYPERLINK(\"http://evil.example\",\"x\")" and row[13] == "'@SUM(1+1)"
     assert row[0] == "100" and row[4] == "CVE-2021-44228" and float(row[5]) == 10.0
+
+
+def test_export_xlsx(loaded: TestClient) -> None:
+    """Тот же фильтр и те же колонки, что в CSV, но книгой Excel."""
+    r = loaded.get("/api/vm/export", params={"zone": "DMZ", "format": "xlsx"})
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert "stools-vm-vulns-" in r.headers["content-disposition"]
+    table = rows_from_xlsx(r.content)
+    assert table[0][:3] == ["Риск", "Уровень", "Хост"] and len(table[0]) == 18
+    assert len(table) == 1 + 3 and table[1][4] == "CVE-2021-44228"
+    assert loaded.get("/api/vm/export", params={"format": "pdf"}).status_code == 422
 
 
 def test_empty_overview(auth_client: TestClient) -> None:

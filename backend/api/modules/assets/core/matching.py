@@ -20,7 +20,8 @@ from typing import Any
 FIELDS = ("name", "fqdn", "domain", "ip", "os")
 
 #: Порядок источников при равном `seen_at` (спека §2): у VM `seen_at` — время импорта, он последний.
-PRECEDENCE = {"dns": 4, "scan": 3, "ksc": 2, "ad": 1, "vm": 0}
+#: RackTables ведётся руками — ниже всех источников, которые хост видят сами.
+PRECEDENCE = {"dns": 4, "scan": 3, "ksc": 2, "ad": 1, "vm": 0, "rt": -1}
 
 _EPOCH = dt.datetime.min.replace(tzinfo=dt.UTC)
 
@@ -234,6 +235,13 @@ def _freshness(o: Observed) -> tuple[dt.datetime, int]:
     return _seen(o), PRECEDENCE.get(o.source, -1)
 
 
+def _is_global(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return False
+
+
 def canonical(observations: list[Observed], pinned: dict[str, bool], current: dict[str, str]) -> dict[str, Any]:
     """name, fqdn, domain, ip, os, first_seen, last_seen по спеке §2; закреплённые поля из current.
     Если живых наблюдений нет совсем, карточка держит последнее известное, а не пустеет."""
@@ -244,7 +252,9 @@ def canonical(observations: list[Observed], pinned: dict[str, bool], current: di
         if pinned.get(name):
             card[name] = current.get(name, "")
         elif name == "ip":
-            card[name] = next((a for a in (normalize_ip(o.ip) for o in fresh_first) if a), "")
+            # Внутренний адрес важнее внешнего той же свежести: реестр — про хосты внутри, внешний — NAT.
+            ips = [a for a in (normalize_ip(o.ip) for o in fresh_first) if a]
+            card[name] = next((a for a in ips if not _is_global(a)), ips[0] if ips else "")
         else:
             card[name] = next((getattr(o, name) for o in fresh_first if getattr(o, name)), "")
     all_seen = [o.seen_at for o in observations if o.seen_at]

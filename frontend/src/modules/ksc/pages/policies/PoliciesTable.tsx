@@ -7,8 +7,14 @@ import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -33,39 +39,44 @@ function ExclusionsCell({ p }: { p: PolicyListItem }) {
   return <span className="font-mono tabular-nums text-text-secondary">{p.exclusions}</span>
 }
 
+const COLUMNS: ColumnDef[] = [
+  { key: 'name', label: 'Политика', width: 240, flex: true },
+  { key: 'product', label: 'Продукт', width: 160 },
+  { key: 'group', label: 'Группа', width: 192 },
+  { key: 'active', label: 'Активна', width: 80 },
+  { key: 'groups', label: 'Групп', width: 64, align: 'right' },
+  { key: 'hosts', label: 'Хостов', width: 64, align: 'right' },
+  { key: 'grade', label: 'Оценка', width: 112 },
+  { key: 'locks', label: 'Замки', width: 112 },
+  { key: 'profiles', label: 'Профилей', width: 96, align: 'right' },
+  { key: 'exclusions', label: 'Исключений', width: 96, align: 'right' },
+  { key: 'findings', label: 'Находок', width: 80, align: 'right' },
+  { key: 'open', label: '', width: 24, resizable: false },
+]
+
 function Table({ items, serverId }: { items: PolicyListItem[]; serverId: number }) {
   const { navigate } = useRouter()
+  const cols = useColumnWidths('ksc-policies-columns', COLUMNS)
   return (
-    <div className="h-full overflow-auto">
-      <div className="sticky top-0 z-10 flex min-w-[1320px] border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        <div className="min-w-[240px] flex-1 px-2 py-2">Политика</div>
-        <div className="w-40 shrink-0 px-2 py-2">Продукт</div>
-        <div className="w-48 shrink-0 px-2 py-2">Группа</div>
-        <div className="w-20 shrink-0 px-2 py-2">Активна</div>
-        <div className="w-16 shrink-0 px-2 py-2 text-right">Групп</div>
-        <div className="w-16 shrink-0 px-2 py-2 text-right">Хостов</div>
-        <div className="w-28 shrink-0 px-2 py-2">Оценка</div>
-        <div className="w-28 shrink-0 px-2 py-2">Замки</div>
-        <div className="w-24 shrink-0 px-2 py-2 text-right">Профилей</div>
-        <div className="w-24 shrink-0 px-2 py-2 text-right">Исключений</div>
-        <div className="w-20 shrink-0 px-2 py-2 text-right">Находок</div>
-        <div className="w-6 shrink-0" />
+    <div data-col-resize-root className="h-full overflow-auto">
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" />
       </div>
       {items.map((p) => (
-        <div key={p.id} {...clickableRow(() => navigate(`/ksc/servers/${serverId}/policies/${p.id}`))} className={cn(ROW_FOCUS, 'flex min-w-[1320px] cursor-pointer items-center border-b border-grid py-2 text-xs hover:bg-row-hover')}>
-          <div className="min-w-[240px] flex-1 truncate px-2 text-text" title={p.name}>{p.name}</div>
-          <div className="w-40 shrink-0 truncate px-2 text-text-secondary" title={`${p.product} ${p.version}`.trim()}>{p.product}{p.version ? ` ${p.version}` : ''}</div>
-          <div className="w-48 shrink-0 truncate px-2 text-text-secondary" title={p.group}>{p.group || '—'}</div>
-          <div className="w-20 shrink-0 px-2 text-text-secondary">{p.active ? 'да' : 'нет'}</div>
-          <div className="w-16 shrink-0 px-2 text-right font-mono tabular-nums text-text-secondary">{p.groups}</div>
-          <div className="w-16 shrink-0 px-2 text-right font-mono tabular-nums text-text-secondary">{p.hosts}</div>
-          <div className="w-28 shrink-0 px-2"><GradeBadge grade={p.grade} reason={p.grade_reason} /></div>
-          <div className="w-28 shrink-0 truncate px-2"><LocksCell p={p} /></div>
-          <div className="w-24 shrink-0 px-2 text-right">
+        <div key={p.id} {...clickableRow(() => navigate(`/ksc/servers/${serverId}/policies/${p.id}`))} className={cn(ROW_FOCUS, 'grid cursor-pointer items-center border-b border-grid py-2 text-xs hover:bg-row-hover')} style={cols.gridStyle}>
+          <div className="min-w-0 truncate px-2 text-text" title={p.name}>{p.name}</div>
+          <div className="min-w-0 truncate px-2 text-text-secondary" title={`${p.product} ${p.version}`.trim()}>{p.product}{p.version ? ` ${p.version}` : ''}</div>
+          <div className="min-w-0 truncate px-2 text-text-secondary" title={p.group}>{p.group || '—'}</div>
+          <div className="min-w-0 px-2 text-text-secondary">{p.active ? 'да' : 'нет'}</div>
+          <div className="min-w-0 px-2 text-right font-mono tabular-nums text-text-secondary">{p.groups}</div>
+          <div className="min-w-0 px-2 text-right font-mono tabular-nums text-text-secondary">{p.hosts}</div>
+          <div className="min-w-0 px-2"><GradeBadge grade={p.grade} reason={p.grade_reason} /></div>
+          <div className="min-w-0 truncate px-2"><LocksCell p={p} /></div>
+          <div className="min-w-0 px-2 text-right">
             {p.profiles === null ? <span className="text-text-secondary">не собрано</span> : <span className="font-mono tabular-nums text-text-secondary">{p.profiles}</span>}
           </div>
-          <div className="w-24 shrink-0 px-2 text-right"><ExclusionsCell p={p} /></div>
-          <div role="presentation" className="w-20 shrink-0 px-2 text-right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}>
+          <div className="min-w-0 px-2 text-right"><ExclusionsCell p={p} /></div>
+          <div role="presentation" className="min-w-0 px-2 text-right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}>
             {p.findings > 0 ? (
               <Link to={`/ksc/servers/${serverId}/findings?q=${encodeURIComponent(p.name)}`} className="font-mono tabular-nums text-text hover:text-primary">{p.findings}</Link>
             ) : (
@@ -93,18 +104,21 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
   function toggle<K extends keyof PolicyFilters>(key: K, value: PolicyFilters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   function clearAll() { setFilters({}); setSearchInput('') }
   const chips: FilterChip[] = []
-  if (filters.product) chips.push({ label: `продукт ${filters.product}`, clear: () => toggle('product', undefined) })
+  // Чип на каждое выбранное значение: крестик снимает только его.
+  chips.push(...valueChips('Продукт', filters.product, (p) => p, (v) => toggle('product', v)))
   if (filters.active !== undefined) chips.push({ label: filters.active ? 'активные' : 'неактивные', clear: () => toggle('active', undefined) })
-  if (filters.grade) chips.push({ label: `оценка: ${gradeLabel(filters.grade)}`, clear: () => toggle('grade', undefined) })
+  chips.push(...valueChips('Оценка', filters.grade, gradeLabel, (v) => toggle('grade', v)))
 
   const hasFilters = chips.length > 0 || q !== ''
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить политики' : null
-  const products = Object.entries(facets?.product ?? {}).sort((a, b) => b[1] - a[1])
+  // Продукты считаются по отфильтрованному набору: ушедшие в ноль панель помнит, иначе второй не выбрать.
+  const products = useRememberedFacets(facets ? { product: facetValues(facets.product) } : undefined).product ?? []
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/policy-list/export`, queryArgs)} total={items.length} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Название политики" aria-label="Поиск по названию политики" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
@@ -119,7 +133,7 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
           <FacetPanel total={items.length} noun="Политик">
             <FacetSection title="Оценка">
               {GRADE_FILTERS.map((g) => (
-                <FacetRow key={g} active={filters.grade === g} count={facets?.grade?.[g] ?? 0} onClick={() => toggle('grade', filters.grade === g ? undefined : g)}>{gradeLabel(g)}</FacetRow>
+                <FacetRow key={g} active={filters.grade?.includes(g) ?? false} count={facets?.grade?.[g] ?? 0} onClick={() => toggle('grade', toggleValue(filters.grade, g))}>{gradeLabel(g)}</FacetRow>
               ))}
             </FacetSection>
             <FacetSection title="Активность">
@@ -128,8 +142,8 @@ export function PoliciesTable({ serverId, snapshotId }: { serverId: number; snap
               ))}
             </FacetSection>
             <FacetSection title="Продукт">
-              {products.map(([p, n]) => (
-                <FacetRow key={p} active={filters.product === p} count={n} onClick={() => toggle('product', filters.product === p ? undefined : p)}>{p}</FacetRow>
+              {products.map(({ value: p, count }) => (
+                <FacetRow key={p} active={filters.product?.includes(p) ?? false} count={count} onClick={() => toggle('product', toggleValue(filters.product, p))}>{p}</FacetRow>
               ))}
             </FacetSection>
           </FacetPanel>

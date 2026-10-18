@@ -88,18 +88,19 @@ export interface VulnsQuery {
   q?: string
   host?: string
   cve?: string
-  criticality?: string
-  zone?: string
-  os?: string
-  level?: RiskLevel
+  /** Многозначные фасеты: в адресе — повторением ключа (buildQuery), в массовой смене — списком. */
+  criticality?: string[]
+  zone?: string[]
+  os?: string[]
+  level?: RiskLevel[]
   exploits?: boolean
   msf?: boolean
-  cvss_source?: CvssSource
+  cvss_source?: CvssSource[]
   host_id?: number
-  /** Коды через запятую или `all`; не задан — открытые. */
-  status?: string
-  /** `me`, `none` или логин. */
-  assignee?: string
+  /** Коды (ключ повторяется) или `all`; не задан — открытые. */
+  status?: string[] | 'all'
+  /** `me`, `none` или логин; несколько — «ИЛИ». */
+  assignee?: string[]
   overdue?: boolean
   risk_expiring?: boolean
   sort?: VulnSort

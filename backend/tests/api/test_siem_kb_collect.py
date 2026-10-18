@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from tests.api.conftest import U1, U2, _build_kb_zip, collect_and_wait
 from tests.api.fake_kb import INSTALL_SET, ROOT, FakeKb, kb_object
+from tests.export_check import csv_rows
 
 BODY = {"host": "mp.corp.local", "username": "svc", "password": "p1", "client_secret": "s1"}
 U3 = "333ffb49-bb9e-4ee4-9262-6754b7ee28d5"
@@ -193,3 +194,15 @@ def test_rules_carry_folder_and_sets(auth_client: TestClient, kb: FakeKb) -> Non
 
     summary = auth_client.get(f"/api/siem/snapshots/{sid}").json()
     assert summary["source_type"] == "api" and summary["kb_database"] == "Default"
+
+
+def test_export_applies_inventory_filters(auth_client: TestClient, kb: FakeKb) -> None:
+    """Выгрузка правил применяет те же отборы установки, что страница, и несёт колонку «В SIEM»."""
+    sid = collect_and_wait(auth_client)["snapshot_id"]
+    rows = csv_rows(auth_client, "/api/siem/rules/export", snapshot_id=sid, installed="false")
+    assert rows[0][-1] == "В SIEM"
+    assert [r[0] for r in rows[1:]] == ["DEMO_HC_002_030_Other"] and rows[1][-1] == "не установлено"
+    rows = csv_rows(auth_client, "/api/siem/rules/export", snapshot_id=sid, deployment_set=INSTALL_SET)
+    assert [r[0] for r in rows[1:]] == ["DEMO_HC_002_029_Impacket"] and rows[1][-1] == "в SIEM"
+    listed = auth_client.get("/api/siem/rules", params={"snapshot_id": sid, "folder": "DEMO"}).json()
+    assert listed["total"] == 2

@@ -15,17 +15,25 @@ import {
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { LoadMore, PolicyCell, PolicyFacet } from './objects/ObjectsParts'
 import { ChangeValue } from './changes/ChangeValue'
+import { togglePolicy, type PickedPolicy } from './objects/policyFilter'
 
+/** Все фасеты журнала — мультивыбор («ИЛИ» внутри фасета). */
 interface Filters {
-  kind?: ChangeKind
-  action?: ChangeAction
-  policy?: { id: number; name: string }
-  snapshot?: number
+  kind?: ChangeKind[]
+  action?: ChangeAction[]
+  policy?: PickedPolicy[]
+  snapshot?: number[]
 }
 
 /** Поля политики и профиля, которые журнал пишет в `path`. */
@@ -80,25 +88,30 @@ function SnapshotLine({ snap, all, inPolicy }: { snap: ChangesSnapshot; all: Cha
   )
 }
 
+const COLUMNS: ColumnDef[] = [
+  { key: 'collected', label: 'Сбор', width: 144 },
+  { key: 'kind', label: 'Вид', width: 144 },
+  { key: 'action', label: 'Действие', width: 96 },
+  { key: 'policy', label: 'Политика / профиль', width: 224 },
+  { key: 'where', label: 'Где', width: 288 },
+  { key: 'value', label: 'Значение', width: 280, flex: true },
+]
+
 function Rows({ items, inPolicy, serverId }: { items: ChangeItem[]; inPolicy: boolean; serverId: number }) {
+  const cols = useColumnWidths('ksc-changes-columns', COLUMNS)
   return (
-    <div className="min-w-[1240px]">
-      <div className="sticky top-0 z-10 flex border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-        <div className="w-36 shrink-0 px-2 py-2">Сбор</div>
-        <div className="w-36 shrink-0 px-2 py-2">Вид</div>
-        <div className="w-24 shrink-0 px-2 py-2">Действие</div>
-        <div className="w-56 shrink-0 px-2 py-2">{inPolicy ? 'Профиль' : 'Политика / профиль'}</div>
-        <div className="w-72 shrink-0 px-2 py-2">Где</div>
-        <div className="min-w-[280px] flex-1 px-2 py-2">Значение</div>
+    <div data-col-resize-root>
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" content={inPolicy ? { policy: 'Профиль' } : undefined} />
       </div>
       {items.map((c) => (
-        <div key={c.id} className="flex items-start border-b border-grid py-2 text-xs">
-          <div className="w-36 shrink-0 px-2 text-text-secondary">{when(c.collected_at)}</div>
-          <div className="w-36 shrink-0 px-2 text-text">{CHANGE_KIND_LABELS[c.kind] ?? c.kind}</div>
-          <div className="w-24 shrink-0 px-2 text-text-secondary">{CHANGE_ACTION_LABELS[c.action] ?? c.action}</div>
-          <div className="w-56 shrink-0 px-2"><PolicyCell serverId={serverId} policyId={c.policy_id} policyName={c.policy_name} profile={c.profile} inPolicy={inPolicy} /></div>
-          <div className="w-72 shrink-0 px-2 font-mono break-all text-text-secondary" title={isRecord(c) ? `ключ ${c.path}` : undefined}>{where(c)}</div>
-          <div className="min-w-[280px] flex-1 px-2"><ChangeValue kind={c.kind} before={c.before} after={c.after} /></div>
+        <div key={c.id} className="grid items-start border-b border-grid py-2 text-xs" style={cols.gridStyle}>
+          <div className="min-w-0 px-2 text-text-secondary">{when(c.collected_at)}</div>
+          <div className="min-w-0 px-2 text-text">{CHANGE_KIND_LABELS[c.kind] ?? c.kind}</div>
+          <div className="min-w-0 px-2 text-text-secondary">{CHANGE_ACTION_LABELS[c.action] ?? c.action}</div>
+          <div className="min-w-0 px-2"><PolicyCell serverId={serverId} policyId={c.policy_id} policyName={c.policy_name} profile={c.profile} inPolicy={inPolicy} /></div>
+          <div className="min-w-0 px-2 font-mono break-all text-text-secondary" title={isRecord(c) ? `ключ ${c.path}` : undefined}>{where(c)}</div>
+          <div className="min-w-0 px-2"><ChangeValue kind={c.kind} before={c.before} after={c.after} /></div>
         </div>
       ))}
     </div>
@@ -129,7 +142,11 @@ export function ChangesList({ serverId, policyId, snapshotId }: { serverId: numb
   const [filters, setFilters] = useState<Filters>({})
   const filtersPanel = useFiltersPanel('ksc-changes')
   const args = useMemo(
-    () => ({ kind: filters.kind, action: filters.action, policy_id: policyId ?? filters.policy?.id, snapshot_id: snapshotId ?? filters.snapshot }),
+    () => ({
+      kind: filters.kind, action: filters.action,
+      policy_id: policyId !== undefined ? [policyId] : filters.policy?.map((p) => p.id),
+      snapshot_id: snapshotId !== undefined ? [snapshotId] : filters.snapshot,
+    }),
     [filters, policyId, snapshotId],
   )
   const query = useChanges(serverId, args)
@@ -138,21 +155,27 @@ export function ChangesList({ serverId, policyId, snapshotId }: { serverId: numb
   const items = pages.flatMap((p) => p.items)
   const facets = first?.facets
   const snapshots = first?.snapshots ?? []
-  const shown = snapshotId ?? filters.snapshot
+  // Строка о снапшоте — про один снапшот: выбранный (первый из выбранных) или последний.
+  const shown = snapshotId ?? filters.snapshot?.[0]
   const current = (shown !== undefined ? snapshots.find((s) => s.id === shown) : undefined) ?? snapshots[0]
+  // Счётчики считаются по отфильтрованному набору: ушедшие в ноль значения панель помнит, иначе второе не выбрать.
+  const remembered = useRememberedFacets(facets ? { kind: facetValues(facets.kind, false), action: facetValues(facets.action, false) } : undefined)
 
   function set<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
-  const chips: FilterChip[] = []
-  if (filters.kind) chips.push({ label: `вид ${CHANGE_KIND_LABELS[filters.kind]}`, clear: () => set('kind', undefined) })
-  if (filters.action) chips.push({ label: CHANGE_ACTION_LABELS[filters.action], clear: () => set('action', undefined) })
-  if (!inPolicy && filters.policy) chips.push({ label: `политика ${filters.policy.name}`, clear: () => set('policy', undefined) })
-  if (snapshotId === undefined && filters.snapshot !== undefined) chips.push({ label: `снапшот #${filters.snapshot}`, clear: () => set('snapshot', undefined) })
+  // Чип на каждое выбранное значение: крестик снимает только его.
+  const chips: FilterChip[] = [
+    ...valueChips('Вид', filters.kind, (k) => CHANGE_KIND_LABELS[k] ?? k, (v) => set('kind', v)),
+    ...valueChips('Действие', filters.action, (a) => CHANGE_ACTION_LABELS[a] ?? a, (v) => set('action', v)),
+  ]
+  if (!inPolicy) chips.push(...(filters.policy ?? []).map((p) => ({ label: `Политика: ${p.name}`, clear: () => set('policy', togglePolicy(filters.policy, p)) })))
+  if (snapshotId === undefined) chips.push(...valueChips('Снапшот', filters.snapshot, (id) => `#${id}`, (v) => set('snapshot', v)))
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить журнал изменений' : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref(`/api/ksc/servers/${serverId}/changes/export`, args)} total={first?.total} disabled={query.isLoading} />
         {chips.length > 0 && <button type="button" onClick={() => setFilters({})} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{first ? first.total : '…'}</div>
         {!filtersPanel.open && <FilterChips chips={chips} />}
@@ -162,20 +185,22 @@ export function ChangesList({ serverId, policyId, snapshotId }: { serverId: numb
         {filtersPanel.open && (
           <FacetPanel total={first?.total ?? 0} noun="Записей">
             <FacetSection title="Вид">
-              {(Object.entries(facets?.kind ?? {}) as [ChangeKind, number][]).map(([k, n]) => (
-                <FacetRow key={k} active={filters.kind === k} count={n} onClick={() => set('kind', filters.kind === k ? undefined : k)}>{CHANGE_KIND_LABELS[k] ?? k}</FacetRow>
-              ))}
+              {(remembered.kind ?? []).map(({ value, count }) => {
+                const k = value as ChangeKind
+                return <FacetRow key={k} active={filters.kind?.includes(k) ?? false} count={count} onClick={() => set('kind', toggleValue(filters.kind, k))}>{CHANGE_KIND_LABELS[k] ?? k}</FacetRow>
+              })}
             </FacetSection>
             <FacetSection title="Действие">
-              {(Object.entries(facets?.action ?? {}) as [ChangeAction, number][]).map(([a, n]) => (
-                <FacetRow key={a} active={filters.action === a} count={n} onClick={() => set('action', filters.action === a ? undefined : a)}>{CHANGE_ACTION_LABELS[a] ?? a}</FacetRow>
-              ))}
+              {(remembered.action ?? []).map(({ value, count }) => {
+                const a = value as ChangeAction
+                return <FacetRow key={a} active={filters.action?.includes(a) ?? false} count={count} onClick={() => set('action', toggleValue(filters.action, a))}>{CHANGE_ACTION_LABELS[a] ?? a}</FacetRow>
+              })}
             </FacetSection>
-            {!inPolicy && <PolicyFacet snapshotId={latestId} selected={filters.policy?.id} onSelect={(p) => set('policy', p)} />}
+            {!inPolicy && <PolicyFacet snapshotId={latestId} selected={filters.policy?.map((p) => p.id)} onToggle={(p) => set('policy', togglePolicy(filters.policy, p))} />}
             {snapshotId === undefined && (
               <FacetSection title="Снапшот">
                 {snapshots.map((s) => (
-                  <FacetRow key={s.id} active={filters.snapshot === s.id} count={inPolicy ? undefined : (s.total ?? undefined)} onClick={() => set('snapshot', filters.snapshot === s.id ? undefined : s.id)}>
+                  <FacetRow key={s.id} active={filters.snapshot?.includes(s.id) ?? false} count={inPolicy ? undefined : (s.total ?? undefined)} onClick={() => set('snapshot', toggleValue(filters.snapshot, s.id))}>
                     #{s.id} · {when(s.collected_at)}{s.total === null ? ' · не считались' : s.prev === null ? ' · первый' : ''}
                   </FacetRow>
                 ))}

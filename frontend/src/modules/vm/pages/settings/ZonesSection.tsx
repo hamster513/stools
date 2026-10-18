@@ -7,6 +7,16 @@ import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Section } from '@/platform/collector/ui'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'zone', label: 'Зона', width: 200, flex: true },
+  { key: 'hosts', label: 'Хостов', width: 80, align: 'right' },
+  { key: 'internet', label: 'Доступна из интернета', width: 160 },
+  { key: 'confidential', label: 'Конфиденциальные данные', width: 176 },
+  { key: 'marked', label: 'Разметка', width: 120 },
+]
 
 /** Разметка зон — единственный источник двух из трёх слагаемых Impact. */
 export function ZonesSection() {
@@ -15,6 +25,7 @@ export function ZonesSection() {
   const zones = useZones()
   const save = useSaveZones()
   const recalc = useRecalculate()
+  const cols = useColumnWidths('vm-zones-columns', COLUMNS)
   const [draft, setDraft] = useState<Zone[]>([])
   const [dirty, setDirty] = useState(false)
 
@@ -43,28 +54,27 @@ export function ZonesSection() {
         <p className="text-xs text-text-secondary">Зон ещё нет — появятся после первого импорта.</p>
       ) : (
         <>
-          <table className="w-full max-w-3xl text-xs">
-            <thead className="text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
-              <tr>
-                <th className="py-1.5 pr-3 text-left">Зона</th>
-                <th className="py-1.5 pr-3 text-right">Хостов</th>
-                <th className="py-1.5 pr-3 text-left">Доступна из интернета</th>
-                <th className="py-1.5 pr-3 text-left">Конфиденциальные данные</th>
-                <th className="py-1.5 text-left">Разметка</th>
-              </tr>
-            </thead>
-            <tbody>
-              {draft.map((z) => (
-                <tr key={z.name} className="border-t border-grid">
-                  <td className="py-1.5 pr-3 font-mono text-text">{z.name}</td>
-                  <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{z.hosts.toLocaleString('ru-RU')}</td>
-                  <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.internet_access} onChange={() => toggle(z.name, 'internet_access')} aria-label={`${z.name}: доступна из интернета`} disabled={!write} /></label></td>
-                  <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.confidential_data} onChange={() => toggle(z.name, 'confidential_data')} aria-label={`${z.name}: конфиденциальные данные`} disabled={!write} /></label></td>
-                  <td className={cn('py-1.5', z.marked ? 'text-text-secondary' : 'text-risk-medium')}>{z.marked ? 'размечена' : 'не размечена'}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full max-w-3xl text-xs" style={cols.tableStyle}>
+              <ColGroup cols={cols} />
+              <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
+                <tr>
+                  <ResizableHeader cols={cols} className="py-1.5 pr-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {draft.map((z) => (
+                  <tr key={z.name} className="border-t border-grid">
+                    <td className="truncate py-1.5 pr-3 font-mono text-text" title={z.name}>{z.name}</td>
+                    <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{z.hosts.toLocaleString('ru-RU')}</td>
+                    <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.internet_access} onChange={() => toggle(z.name, 'internet_access')} aria-label={`${z.name}: доступна из интернета`} disabled={!write} /></label></td>
+                    <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.confidential_data} onChange={() => toggle(z.name, 'confidential_data')} aria-label={`${z.name}: конфиденциальные данные`} disabled={!write} /></label></td>
+                    <td className={cn('truncate py-1.5 pr-3', z.marked ? 'text-text-secondary' : 'text-risk-medium')}>{z.marked ? 'размечена' : 'не размечена'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {write && (
             <div className="mt-3 flex items-center gap-3 border-t border-grid pt-3">
               <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}><Save size={13} aria-hidden /> Сохранить и пересчитать</Button>

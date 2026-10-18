@@ -8,17 +8,19 @@ export type { Job, JobStatus, ScheduleIn } from '@/platform/collector/types'
 export const JOB_KIND_LABELS: Record<string, string> = {
   scan: 'Скан сети',
   dns: 'Обновление DNS',
+  rt: 'Проход RackTables',
   sync: 'Синхронизация с модулями',
 }
 
-export type AssetSource = 'vm' | 'ksc' | 'ad' | 'scan' | 'dns'
-export const SOURCES: AssetSource[] = ['vm', 'ksc', 'ad', 'scan', 'dns']
+export type AssetSource = 'vm' | 'ksc' | 'ad' | 'scan' | 'dns' | 'rt'
+export const SOURCES: AssetSource[] = ['vm', 'ksc', 'ad', 'scan', 'dns', 'rt']
 export const SOURCE_LABELS: Record<AssetSource, string> = {
   vm: 'VM',
   ksc: 'KSC',
   ad: 'AD',
   scan: 'Скан',
   dns: 'DNS',
+  rt: 'RT',
 }
 
 export type DiscrepancyCode = 'stale' | 'conflict' | 'no_av' | 'ad_inactive' | 'unreachable' | 'unknown_host' | 'dns_orphan' | 'no_network'
@@ -70,8 +72,17 @@ export interface AssetNetwork {
   zone: string | null
 }
 
+/** Признак кластера Windows из наблюдения AD: учётка кластера и роль — виртуальные имена, не хосты. */
+export type ClusterKind = 'cluster' | 'role' | 'node'
+export const CLUSTER_LABELS: Record<ClusterKind, string> = {
+  cluster: 'кластер',
+  role: 'роль кластера',
+  node: 'узел кластера',
+}
+
 export interface AssetItem {
   id: number
+  cluster: ClusterKind | null
   name: string
   fqdn: string
   domain: string
@@ -108,18 +119,19 @@ export interface AssetsResponse {
 
 export interface AssetsQuery {
   q?: string
-  source_has?: AssetSource
-  source_missing?: AssetSource
-  code?: CodeFilter
-  network_id?: number
-  zone?: string
+  /** Многозначные фасеты уходят повторением ключа (buildQuery): внутри фасета «ИЛИ». */
+  source_has?: AssetSource[]
+  source_missing?: AssetSource[]
+  code?: CodeFilter[]
+  network_id?: number[]
+  zone?: string[]
   port?: number
   tag?: string
-  criticality?: Criticality | 'none'
-  /** Статусы расхождений через запятую или `all`; без него — учитываемые в подсчётах. */
-  disc_status?: string
-  /** Исполнитель расхождения: `me`, `none` или логин. */
-  assignee?: string
+  criticality?: (Criticality | 'none')[]
+  /** Статусы расхождений (ключ повторяется); без него — учитываемые в подсчётах. */
+  disc_status?: string[]
+  /** Исполнитель расхождения: `me`, `none` или логин; несколько — «ИЛИ». */
+  assignee?: string[]
   overdue?: boolean
 }
 
@@ -248,6 +260,8 @@ export interface ScanStarted {
 
 export interface Network extends NetworkIn {
   id: number
+  /** Пусто — описана вручную; racktables — создана проходом RackTables, который обновляет её название, описание, VLAN и теги. */
+  origin: string
   schedule_id: number | null
   schedule: NetworkSchedule | null
   last_scan_at: string | null
@@ -296,6 +310,27 @@ export interface DnsIn {
 
 export interface DnsServer extends DnsIn {
   id: number
+  schedule_id: number | null
+  last_run_at: string | null
+  schedule: NetworkSchedule | null
+}
+
+/** Подключение к JSON API RackTables: сети и имена адресов → сети Assets и наблюдения RT. */
+export interface RacktablesIn {
+  title: string
+  url: string
+  username: string
+  /** Пусто при обновлении — оставить прежний. */
+  password: string
+  verify_tls: boolean
+  rate_per_s: number
+  timeout_ms: number
+  enabled: boolean
+}
+
+export interface Racktables extends Omit<RacktablesIn, 'password'> {
+  id: number
+  password_set: boolean
   schedule_id: number | null
   last_run_at: string | null
   schedule: NetworkSchedule | null

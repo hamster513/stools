@@ -12,11 +12,23 @@ import { cn } from '@/lib/cn'
 import { useRouter } from '@/lib/router'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { useCancelJob, useDeleteJob, useScrubJobs } from '../api/queries'
 import { JOB_KIND_LABELS, STAGE_LABELS, STATUS_CLASS, STATUS_LABELS, type ScrubJob } from '../api/types'
 import { JobRun } from './JobRun'
 
 const CELL = 'px-3 py-2 align-top'
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'job', label: 'Задание', width: 152 },
+  { key: 'status', label: 'Статус', width: 152 },
+  { key: 'run', label: 'Ход', width: 168 },
+  { key: 'result', label: 'Итог', width: 176, flex: true },
+  { key: 'who', label: 'Кто', width: 104 },
+  { key: 'when', label: 'Когда', width: 104 },
+  { key: 'actions', label: 'Действие', width: 136, resizable: false },
+]
 
 function when(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -35,6 +47,7 @@ export function ScrubJobsPage() {
   const { navigate } = useRouter()
   const jobs = useScrubJobs()
   const filtersPanel = useFiltersPanel('toolbox-jobs')
+  const cols = useColumnWidths('toolbox-jobs-columns', COLUMNS)
   const [status, setStatus] = useState('')
   const [kind, setKind] = useState('')
   const [mine, setMine] = useState(false)
@@ -103,27 +116,22 @@ export function ScrubJobsPage() {
         {cancel.error && <ErrorState message={cancel.error.message} />}
         {del.error && <ErrorState message={del.error.message} />}
         <div className="overflow-x-auto rounded border border-grid">
-          <table className="w-full min-w-[800px] text-xs">
-            <thead className="bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase">
+          <table className="w-full text-xs" style={cols.tableStyle}>
+            <ColGroup cols={cols} />
+            <thead className="bg-surface text-[11px] tracking-wide text-text-secondary uppercase">
               <tr>
-                <th className="px-3 py-2 text-left">Задание</th>
-                <th className="px-3 py-2 text-left">Статус</th>
-                <th className="w-56 px-3 py-2 text-left">Ход</th>
-                <th className="px-3 py-2 text-left">Итог</th>
-                <th className="px-3 py-2 text-left">Кто</th>
-                <th className="px-3 py-2 text-left">Когда</th>
-                <th className="px-3 py-2"><span className="sr-only">Действие</span></th>
+                <ResizableHeader cols={cols} className="px-3 py-2" content={{ actions: <span className="sr-only">Действие</span> }} />
               </tr>
             </thead>
             <tbody>
               {rows.map((j) => (
                 <tr key={j.id} {...clickableRow(() => navigate(`/toolbox/scrub/${j.id}`))} className={cn('cursor-pointer border-t border-grid hover:bg-row-hover', ROW_FOCUS)}>
-                  <td className={cn(CELL, 'whitespace-nowrap text-text')}><span className="font-mono text-text-secondary">#{j.id}</span> {JOB_KIND_LABELS[j.kind] ?? j.kind}</td>
+                  <td className={cn(CELL, 'truncate text-text')} title={JOB_KIND_LABELS[j.kind] ?? j.kind}><span className="font-mono text-text-secondary">#{j.id}</span> {JOB_KIND_LABELS[j.kind] ?? j.kind}</td>
                   <td className={cn(CELL, STATUS_CLASS[j.status])}>{STATUS_LABELS[j.status]}{j.status === 'running' && <span className="text-text-secondary"> · {STAGE_LABELS[j.stage] ?? j.stage}</span>}</td>
                   <td className={CELL}>{j.status === 'running' ? <JobRun job={j} /> : null}</td>
-                  <td className={cn(CELL, 'max-w-[360px] text-text-secondary')}>{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
-                  <td className={cn(CELL, 'font-mono text-text-secondary')}>{j.started_by}</td>
-                  <td className={cn(CELL, 'whitespace-nowrap text-text-secondary')}>{when(j.started_at)}</td>
+                  <td className={cn(CELL, 'break-words text-text-secondary')}>{j.error ? <span className="text-kind-1">{j.error}</span> : j.message}</td>
+                  <td className={cn(CELL, 'truncate font-mono text-text-secondary')} title={j.started_by}>{j.started_by}</td>
+                  <td className={cn(CELL, 'truncate text-text-secondary')}>{when(j.started_at)}</td>
                   {/* Отмена и удаление прямо из списка: карточку ради них открывать не нужно. Клик не должен открыть строку. */}
                   <td className={cn(CELL, 'whitespace-nowrap text-right')} onClick={(e) => e.stopPropagation()}>
                     {write && j.status === 'running' && (j.cancel_requested
