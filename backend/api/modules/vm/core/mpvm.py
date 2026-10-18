@@ -71,7 +71,6 @@ class MpVmClient:
     def __init__(self, conn: ConnectionLike, http: httpx.Client) -> None:
         self.conn = conn
         self.http = http
-        self._token: str | None = None
 
     @property
     def base(self) -> str:
@@ -96,29 +95,6 @@ class MpVmClient:
         if not token:
             raise MpVmLoginError("API-токен не задан")
         return token
-        host = self.conn.host.strip().rstrip("/").removeprefix("https://").removeprefix("http://")
-        url = f"https://{url_host(host)}:3334/connect/token"
-        data = {
-            "username": self.conn.username,
-            "password": self.conn.password,
-            "client_id": "mpx",
-            "client_secret": self.conn.client_secret,
-            "grant_type": "password",
-            "response_type": "code id_token",
-            "scope": "offline_access mpx.api",
-        }
-        try:
-            with self.http.stream("POST", url, data=data) as r:
-                if r.status_code != 200:
-                    raise MpVmLoginError(f"токен не выдан: HTTP {r.status_code}", r.status_code)
-                body = self._json(r)
-        except httpx.HTTPError as exc:
-            raise MpVmError(f"нет связи с {host}:3334 — {exc.__class__.__name__}") from exc
-        token = body.get("access_token")
-        if not token:
-            raise MpVmLoginError("ответ без access_token — проверьте client secret")
-        self._token = str(token)
-        return self._token
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token()}"}

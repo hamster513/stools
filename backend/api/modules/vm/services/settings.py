@@ -56,6 +56,16 @@ class ConnectionIn(Connection):
     def check_host(cls, value: str) -> str:
         return validate_host(value) if value.strip() else ""
 
+    @field_validator("api_token")
+    @classmethod
+    def check_token(cls, value: str) -> str:
+        """Токен — печатная латиница: пробелы по краям срезаются, прочее не уходит в заголовок
+        (не-ASCII символ ронял бы запрос с текстом, в котором виден сам токен)."""
+        token = value.strip()
+        if not token.isascii() or not token.isprintable():
+            raise ValueError("API-токен: только латинские буквы, цифры и знаки")
+        return token
+
 
 #: Поля, от которых зависит, куда уйдёт токен.
 ADDRESS_FIELDS = ("host", "verify_tls")

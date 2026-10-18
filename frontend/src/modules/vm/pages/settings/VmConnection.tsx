@@ -45,7 +45,8 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
         weights: settings.weights,
         threshold: settings.threshold,
       },
-      { onSuccess: () => setDirty(false) },
+      // Токен после сохранения не держим в состоянии: иначе он уйдёт с любым следующим сохранением.
+      { onSuccess: () => { setDirty(false); setForm((f) => ({ ...f, api_token: '' })) } },
     )
   }
 

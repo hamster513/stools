@@ -245,3 +245,11 @@ def test_put_summary_lists_changed_fields(auth_client: TestClient, db_session: A
         (422, "изменено: host, threshold"),
     ]
     assert all("vm" not in (e.summary or "") and "t2" not in (e.summary or "") for e in events)
+
+
+def test_token_is_stripped_and_must_be_printable_ascii(auth_client: TestClient) -> None:
+    r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {"host": "vm.local", "api_token": "  t1  "}})
+    assert r.status_code == 200 and _stored_connection().api_token == "t1"
+    for bad in ("пат_токен", "t\t1", "   "):
+        r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {"host": "vm.local", "api_token": bad}})
+        assert r.status_code == (200 if bad.strip() == "" else 422), (bad, r.text)

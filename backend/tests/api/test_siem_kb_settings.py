@@ -82,3 +82,9 @@ def test_test_reports_error_class_only(auth_client: TestClient, monkeypatch: pyt
     body = auth_client.post("/api/siem/kb/test").json()
     assert body["ok"] is False and body["message"] == "вход отклонён"
     assert "mp.corp.local" not in body["message"]
+
+
+def test_token_must_be_printable_ascii(auth_client: TestClient) -> None:
+    assert auth_client.put("/api/siem/kb", json={**BODY, "api_token": "пат"}).status_code == 422
+    r = auth_client.put("/api/siem/kb", json={**BODY, "api_token": f"  {TOKEN}  "})
+    assert r.status_code == 200 and r.json()["api_token_set"] is True
