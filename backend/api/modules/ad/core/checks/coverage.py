@@ -15,10 +15,12 @@ from api.modules.ad.core.export import AdExport, ExportIndex
 
 def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     users = gpos = templates = pki_objects = enrollment_services = computers = 0
-    has_os = False
+    has_os = has_primary_group = False
     dcs = dc_acl = 0
     logon_dates = False
     for o in export.objects:
+        if o.cls in ("user", "computer"):
+            has_primary_group = has_primary_group or o.primaryGroupID is not None
         if o.cls == "user":
             users += 1
             logon_dates = logon_dates or bool(o.lastLogonTimestamp)
@@ -47,8 +49,22 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     root = next((o for o in export.objects if o.dn.lower() == export.domain.dn.lower()), None)
     if root is None or not root.sd:
         gaps["DomainRootAcl"] = "дескриптор корня домена не собран"
+    level_reasons = []
     if functional_level_value(export.domain.functional_level) is None:
-        gaps["FunctionalLevel"] = f"функциональный уровень домена не прочитан (значение «{export.domain.functional_level}»)"
+        level_reasons.append(f"функциональный уровень домена не прочитан (значение «{export.domain.functional_level}»)")
+    # None — сборщик старой версии уровень леса не читал: это не пробел, проверка уровня домена полная.
+    forest = export.domain.forest_functional_level
+    if forest and functional_level_value(forest) is None:
+        level_reasons.append(f"функциональный уровень леса не прочитан (значение «{forest}»)")
+    if level_reasons:
+        gaps["FunctionalLevel"] = "; ".join(level_reasons)
+    gaps.update(_domain_settings_gaps(export, users or computers, has_primary_group))
+    if (users or computers) and not has_primary_group:
+        # Ни у одной учётки нет primaryGroupID — атрибуты сборщика 1.1/2.1 не собраны вовсе.
+        for code in ("SidHistory", "UnixPasswords", "ComputerCreators"):
+            gaps[code] = "атрибуты учётных записей собраны старым сборщиком"
+        note = "учётки без входов не проверены: нет whenCreated"
+        gaps["InactiveUsers"] = f"{gaps['InactiveUsers']}; {note}" if "InactiveUsers" in gaps else note
     if gpos and not export.sysvol:
         note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
@@ -78,6 +94,35 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
         dc_reasons = [reason for d in ca.dcs for reason in _dc_record_reasons(d)]
         if dc_reasons:
             gaps["ADCS_MAPPING"] = "; ".join(dc_reasons)
+    return gaps
+
+
+OLD_COLLECTOR = "настройки домена не собраны (сборщик старой версии)"
+PSO_UNREAD = "PSO не прочитаны или не видны (нужны права администратора домена); политика домена проверена"
+
+
+def _domain_settings_gaps(export: AdExport, accounts: int, has_primary_group: bool) -> dict[str, str]:
+    """Новые поля блока domain: None — не прочитано (сборщик старой версии или отказ чтения)."""
+    d = export.domain
+    not_read = {
+        "PasswordPolicy": None in (d.min_pwd_length, d.lockout_threshold, d.pwd_properties),
+        "RecycleBin": d.recycle_bin is None,
+        "DsHeuristics": d.ds_heuristics is None,
+        "BackupAge": not d.backup_read,
+        "SmartcardPassword": d.smartcard_rotation is None,
+        "NtfrsSysvol": d.sysvol_replication is None,
+        "SchemaVulnerableClass": d.schema_poss_superiors is None,
+        "LapsDeployment": d.laps_legacy_schema is None and d.laps_schema is None,
+    }
+    gaps = {code: OLD_COLLECTOR for code, missing in not_read.items() if missing}
+    if d.laps_legacy_schema is None and d.laps_schema is False or d.laps_legacy_schema is False and d.laps_schema is None:
+        gaps["LapsDeployment"] = "схема LAPS прочитана не полностью"
+    if d.backup_read is False:
+        gaps["BackupAge"] = "метаданные репликации корня домена (dSASignature) не прочитаны"
+    if "PasswordPolicy" not in gaps and any("PSO не прочитаны" in n or "PSO не найдены" in n for n in export.collector.notes):
+        gaps["PasswordPolicy"] = PSO_UNREAD
+    if accounts and not has_primary_group:
+        gaps["PrimaryGroup"] = "ни у одной учётной записи нет primaryGroupID (сборщик старой версии)"
     return gaps
 
 

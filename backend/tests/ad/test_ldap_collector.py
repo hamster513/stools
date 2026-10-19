@@ -18,13 +18,16 @@ from api.modules.ad.core.ldap_collector import (
     last_backup_from_metadata,
 )
 from tests.ad.fake_ldap import FakeLdap
-from tests.ad.synthetic import DN, EXT_SID, OTHER_SID, PKI, b64sd, export_bytes, rid, user_dn
+from tests.ad.synthetic import DN, EXT_SID, NOW, OTHER_SID, PKI, b64sd, export_bytes, rid, user_dn
 
 
 def test_ldap_collector_matches_powershell_export() -> None:
     fake = FakeLdap()
     collector = LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb, host="dc01", account="CORP\\auditor")
     raw = collector.collect()
+    # Сборщик ставит collected_at текущим временем, а даты фальшивого каталога отсчитаны от NOW:
+    # без закрепления пороги давности (бэкап, входы) расходятся с эталоном по мере хода времени.
+    raw["collected_at"] = NOW.isoformat()
     export = load_export(json.dumps(raw).encode())
     assert export.collector.kind == "ldap" and export.domain.netbios == "CORP" and export.domain.dns_root == "corp.local"
     assert export.domain.machine_account_quota == 10

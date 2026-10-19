@@ -38,6 +38,8 @@ def test_registry_codes() -> None:
         "GuestEnabled", "AzureSsoKeyAge", "DuplicateObjects",
         "InactiveComputers", "ComputerPasswordAge", "ObsoleteOs", "DcCount", "DcDelegation", "DcOwner",
         "TooManyAdmins", "FunctionalLevel", "PreWin2000Access", "DomainRootAcl", "Clusters",
+        "PrimaryGroup", "SidHistory", "SmartcardPassword", "UnixPasswords", "ComputerCreators", "LapsDeployment",
+        "PasswordPolicy", "RecycleBin", "DsHeuristics", "BackupAge", "NtfrsSysvol", "SchemaVulnerableClass",
     }
 
 

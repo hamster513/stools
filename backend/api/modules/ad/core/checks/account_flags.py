@@ -4,12 +4,13 @@ from __future__ import annotations
 from api.modules.ad.core.checks import principals
 from api.modules.ad.core.checks.common import account_finding, days_between
 from api.modules.ad.core.config import AdConfig
-from api.modules.ad.core.export import AdObject, ExportIndex
-from api.modules.ad.core.findings import Finding
+from api.modules.ad.core.export import UAC_PARTIAL_SECRETS_ACCOUNT, AdObject, ExportIndex
+from api.modules.ad.core.findings import Finding, finding_key
 
 UAC_PASSWD_NOTREQD = 0x20
 UAC_ENCRYPTED_TEXT_PWD_ALLOWED = 0x80
 UAC_NOT_DELEGATED = 0x100000
+UAC_SMARTCARD_REQUIRED = 0x40000
 
 RID_GUEST = 501
 AZURE_SSO_SAM = "AZUREADSSOACC$"
@@ -120,4 +121,99 @@ def check_duplicate_objects(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
         account_finding(idx, cfg, "DuplicateObjects", "Low", o, details="Объект-дубликат, созданный конфликтом репликации AD: проверьте и удалите")
         for o in idx.export.objects
         if "cnf:" in o.dn.lower() or (o.sam or "").upper().startswith("$DUPLICATE-")
+    ]
+
+
+#: Ожидаемая первичная группа: Domain Users, Domain Guests (у Guest), Domain Computers, Domain Controllers, Read-only DCs.
+PG_USERS, PG_GUESTS, PG_COMPUTERS, PG_DCS, PG_RODCS = 513, 514, 515, 516, 521
+
+
+def _expected_primary_group(idx: ExportIndex, o: AdObject) -> int:
+    if o.cls == "user":
+        return PG_GUESTS if o.rid == RID_GUEST else PG_USERS
+    if (o.uac or 0) & UAC_PARTIAL_SECRETS_ACCOUNT:
+        return PG_RODCS
+    return PG_DCS if idx.is_dc(o) else PG_COMPUTERS
+
+
+def check_primary_group(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    # Членство через primaryGroupID не видно в member группы: так прячут участников Domain Admins.
+    out = []
+    for o in idx.objects("user") + idx.objects("computer"):
+        if o.primaryGroupID is None:
+            continue
+        expected = _expected_primary_group(idx, o)
+        if o.primaryGroupID != expected:
+            group = idx.principal_name(idx.domain_rid_sid(o.primaryGroupID))
+            out.append(
+                account_finding(
+                    idx, cfg, "PrimaryGroup", "Medium", o,
+                    details=f"Первичная группа — {group} (primaryGroupID={o.primaryGroupID}), ожидается {expected}: членство в ней не видно в списке участников группы",
+                    primary_group_id=o.primaryGroupID,
+                    expected_primary_group_id=expected,
+                )
+            )
+    return out
+
+
+_SID_HISTORY = {
+    "same_domain": ("Critical", "SID своего домена в SID History: учётка получает права этого субъекта без членства в группах"),
+    "privileged": ("High", "встроенный или привилегированный SID (RID < 1000) в SID History"),
+    "unknown_domain": ("Medium", "SID домена, которого нет среди доверий: история от удалённого или чужого домена"),
+    "other": ("Low", "SID History после миграции: очистите, когда миграция завершена"),
+}
+
+
+def sid_history_kind(idx: ExportIndex, sid: str) -> str:
+    domain_part, _, rid_text = sid.rpartition("-")
+    if domain_part == idx.domain_sid:
+        return "same_domain"
+    if sid.startswith("S-1-5-32-") or (rid_text.isdigit() and int(rid_text) < 1000):
+        return "privileged"
+    if domain_part not in idx.trusted_domains:
+        return "unknown_domain"
+    return "other"
+
+
+def check_sid_history(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    out = []
+    for o in idx.export.objects:
+        for sid in o.sIDHistory:
+            kind = sid_history_kind(idx, sid)
+            severity, reason = _SID_HISTORY[kind]
+            f = account_finding(idx, cfg, "SidHistory", severity, o, details=f"{idx.principal_name(sid)}: {reason}", sid_history=sid, kind=kind)
+            # Ключ — с SID из истории: у одной учётки их бывает несколько.
+            f.key_extra = sid
+            f.key = finding_key(f)
+            out.append(f)
+    return out
+
+
+def check_smartcard_password(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    # Домен с msDS-ExpirePasswordsOnSmartCardOnlyAccounts сам меняет такие пароли; без него хэш живёт годами.
+    if idx.export.domain.smartcard_rotation is not False:
+        return []
+    now = idx.export.collected_at
+    limit = cfg.smartcard_password_max_age_days
+    out = []
+    for u in idx.objects("user"):
+        if not u.enabled or not (u.uac or 0) & UAC_SMARTCARD_REQUIRED:
+            continue
+        age = days_between(u.pwdLastSet, now)
+        if age is not None and age > limit:
+            out.append(
+                account_finding(
+                    idx, cfg, "SmartcardPassword", principals.worst("Medium", principals.is_admin(idx, cfg, u), "High"), u,
+                    details=f"Вход только по смарт-карте, но хэш пароля не менялся {age} дн. (порог {limit}): его можно использовать для pass-the-hash",
+                    password_age_days=age,
+                )
+            )
+    return out
+
+
+def check_unix_passwords(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    return [
+        account_finding(idx, cfg, "UnixPasswords", "Medium", o, details="Заполнен userPassword или unixUserPassword: такой пароль может прочитать любой, у кого есть чтение атрибута в каталоге")
+        for o in idx.export.objects
+        if o.hasUnixPassword
     ]

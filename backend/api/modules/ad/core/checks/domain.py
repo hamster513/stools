@@ -1,4 +1,5 @@
-"""Параметры домена: MachineAccountQuota, возраст пароля krbtgt, число админов, функциональный уровень, Pre-Windows 2000."""
+"""Параметры домена: MachineAccountQuota, возраст пароля krbtgt, число админов, функциональный уровень, Pre-Windows 2000, политика паролей,
+корзина, dSHeuristics, бэкап, репликация SYSVOL, уязвимый класс схемы."""
 from __future__ import annotations
 
 from api.modules.ad.core.checks import principals
@@ -73,26 +74,36 @@ _LEVEL_BY_YEAR = {"2000": 0, "2003interim": 1, "2003": 2, "2008": 3, "2008r2": 4
 
 
 def functional_level_value(raw: str) -> int | None:
-    """msDS-Behavior-Version из числа, имени ADDomainMode или года; не распознано — None."""
+    """msDS-Behavior-Version из числа, имени ADDomainMode или ADForestMode или года; не распознано — None."""
     text = raw.strip().lower()
-    if text.startswith("windows") and text.endswith("domain"):
-        text = text[len("windows"):-len("domain")]
+    for suffix in ("domain", "forest"):
+        if text.startswith("windows") and text.endswith(suffix):
+            text = text[len("windows"):-len(suffix)]
+            break
     # Год раньше числа: «2016» — Windows Server 2016, а не msDS-Behavior-Version (их значения 0–10).
     if text in _LEVEL_BY_YEAR:
         return _LEVEL_BY_YEAR[text]
     return int(text) if text.isdigit() else None
 
 
-def check_functional_level(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
-    level = functional_level_value(idx.export.domain.functional_level)
+def _level_finding(idx: ExportIndex, cfg: AdConfig, raw: str, scope: str, key_extra: str) -> list[Finding]:
+    level = functional_level_value(raw)
     if level is None or level >= 7:
         return []
     name = FUNCTIONAL_LEVELS.get(level, str(level))
     f = Finding(
-        check="FunctionalLevel", severity="Medium" if level < 4 else "Low", target=idx.export.domain.dn,
-        details={"details": f"Функциональный уровень домена — Windows Server {name} ({level})", "level": level, "level_name": name},
+        check="FunctionalLevel", severity="Medium" if level < 4 else "Low", target=idx.export.domain.dn, key_extra=key_extra,
+        details={"details": f"Функциональный уровень {scope} — Windows Server {name} ({level})", "level": level, "level_name": name},
     )
     return [finalize(f, cfg, allowlist=False)]
+
+
+def check_functional_level(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    domain = idx.export.domain
+    out = _level_finding(idx, cfg, domain.functional_level, "домена", "")
+    if domain.forest_functional_level is not None:
+        out += _level_finding(idx, cfg, domain.forest_functional_level, "леса", "forest")
+    return out
 
 
 def check_pre_win2000_access(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
@@ -112,3 +123,131 @@ def check_pre_win2000_access(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
         )
         out.append(finalize(f, cfg))
     return out
+
+
+def _domain_finding(idx: ExportIndex, cfg: AdConfig, check: str, severity: str, details: str, key_extra: str = "", **extra: object) -> Finding:
+    f = Finding(check=check, severity=severity, target=idx.export.domain.dn, key_extra=key_extra, details={"details": details, **extra})
+    return finalize(f, cfg, allowlist=False)
+
+
+#: pwdProperties: DOMAIN_PASSWORD_COMPLEX, DOMAIN_PASSWORD_STORE_CLEARTEXT.
+PWD_COMPLEX = 0x1
+PWD_STORE_CLEARTEXT = 0x10
+
+
+def _policy_issues(cfg: AdConfig, min_length: int | None, lockout: int | None, reversible: bool | None, complexity: bool | None) -> list[tuple[str, str, str]]:
+    """(вид, серьёзность, текст) по одной политике паролей; None — значение не прочитано, вид не проверяется."""
+    out = []
+    if min_length is not None and min_length < cfg.password_min_length:
+        out.append(("min_length", "Medium", f"Минимальная длина пароля {min_length} (порог {cfg.password_min_length})"))
+    if lockout == 0:
+        out.append(("no_lockout", "Medium", "Блокировка после неверных паролей выключена: пароли можно подбирать без ограничений"))
+    if reversible:
+        out.append(("reversible", "High", "Пароли хранятся с обратимым шифрованием: их можно восстановить из базы AD"))
+    if complexity is False:
+        out.append(("no_complexity", "Low", "Требование сложности пароля выключено"))
+    return out
+
+
+def check_password_policy(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    domain = idx.export.domain
+    props = domain.pwd_properties
+    out = [
+        _domain_finding(idx, cfg, "PasswordPolicy", severity, f"Политика домена: {text}", kind, kind=kind)
+        for kind, severity, text in _policy_issues(
+            cfg, domain.min_pwd_length, domain.lockout_threshold,
+            None if props is None else bool(props & PWD_STORE_CLEARTEXT), None if props is None else bool(props & PWD_COMPLEX),
+        )
+    ]
+    for pso in idx.objects("msDS-PasswordSettings"):
+        name = pso.name or pso.rdn_value
+        applies = [o.label if (o := idx.get(dn)) is not None else dn for dn in pso.psoAppliesTo]
+        for kind, severity, text in _policy_issues(cfg, pso.psoMinLength, pso.psoLockoutThreshold, pso.psoReversible, pso.psoComplexity):
+            f = Finding(
+                check="PasswordPolicy", severity=severity, identity=name, target=pso.dn, key_extra=kind,
+                details={"details": f"PSO {name}: {text}", "kind": kind, "precedence": pso.psoPrecedence, "applies_to": applies},
+            )
+            out.append(finalize(f, cfg, allowlist=False))
+    return out
+
+
+def check_recycle_bin(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    if idx.export.domain.recycle_bin is not False:
+        return []
+    return [_domain_finding(idx, cfg, "RecycleBin", "Low", "Корзина AD выключена: удалённый объект восстанавливается только из резервной копии либо из tombstone без большинства атрибутов")]
+
+
+def heuristic(value: str, position: int) -> str:
+    """Символ dSHeuristics на позиции с единицы (MS-ADTS 6.1.1.2.4.1.2); строка короче — "0", значение по умолчанию."""
+    return value[position - 1] if len(value) >= position else "0"
+
+
+#: Вид → (позиция, опасный символ: «=X» — равен X, «!X» — не равен X, серьёзность, текст).
+_HEURISTICS: tuple[tuple[str, int, str, str, str], ...] = (
+    ("list_object", 3, "=1", "Info", "fDoListObject: включён режим прав List Object"),
+    ("anonymous", 7, "=2", "High", "fLDAPBlockAnonOps: анонимным клиентам разрешены все операции LDAP, которые пропускают права"),
+    ("anon_nspi", 8, "!0", "Medium", "fAllowAnonNSPI: анонимный доступ к адресной книге по NSPI"),
+    ("adminsdex", 16, "!0", "Medium", "dwAdminSDExMask: группы операторов исключены из защиты AdminSDHolder"),
+    ("uniqueness", 21, "!0", "Medium", "DoNotVerifyUPNAndOrSPNUniqueness: уникальность UPN и SPN не проверяется"),
+)
+
+
+def _matches(ch: str, cond: str) -> bool:
+    return ch == cond[1] if cond[0] == "=" else ch != cond[1]
+
+
+def check_ds_heuristics(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    value = idx.export.domain.ds_heuristics
+    if not value:
+        return []
+    out = []
+    for kind, position, cond, severity, text in _HEURISTICS:
+        ch = heuristic(value, position)
+        if _matches(ch, cond):
+            out.append(_domain_finding(idx, cfg, "DsHeuristics", severity, f"dSHeuristics, позиция {position} = «{ch}»: {text}", kind, kind=kind, value=value))
+    # KB5008383: «2» на позиции 28 (LDAPAddAuthZVerifications) или 29 (LDAPOwnerModify) выключает дополнительные проверки прав.
+    disabled = [p for p in (28, 29) if heuristic(value, p) == "2"]
+    if disabled:
+        out.append(_domain_finding(
+            idx, cfg, "DsHeuristics", "Medium",
+            f"dSHeuristics, позиция {' и '.join(map(str, disabled))} = «2»: защита KB5008383 при создании и изменении компьютеров выключена явно",
+            "ldap_authz", kind="ldap_authz", value=value,
+        ))
+    return out
+
+
+def check_backup_age(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    domain = idx.export.domain
+    if not domain.backup_read:
+        return []
+    limit = cfg.backup_max_age_days
+    if domain.last_backup is None:
+        return [_domain_finding(idx, cfg, "BackupAge", "Medium", "Отметки бэкапа нет: резервная копия AD не делалась ни разу", limit_days=limit)]
+    age = (idx.export.collected_at - domain.last_backup).days
+    if age <= limit:
+        return []
+    return [_domain_finding(
+        idx, cfg, "BackupAge", "Medium", f"Последний бэкап AD {domain.last_backup.strftime('%Y-%m-%d')}, {age} дн. назад (порог {limit})",
+        age_days=age, limit_days=limit, last_backup=domain.last_backup.strftime("%Y-%m-%d"),
+    )]
+
+
+def check_ntfrs_sysvol(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    if (idx.export.domain.sysvol_replication or "").lower() != "ntfrs":
+        return []
+    return [_domain_finding(idx, cfg, "NtfrsSysvol", "Low", "SYSVOL реплицируется устаревшей службой FRS: контроллер Windows Server 2019 и новее в такой домен не вводится, переведите SYSVOL на DFSR")]
+
+
+#: Класс Exchange, в который можно вкладывать компьютеры: CVE-2021-34470.
+VULNERABLE_CLASS = "msExchStorageGroup"
+
+
+def check_schema_vulnerable_class(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    superiors = (idx.export.domain.schema_poss_superiors or {}).get(VULNERABLE_CLASS) or []
+    if "computer" not in {s.lower() for s in superiors}:
+        return []
+    return [_domain_finding(
+        idx, cfg, "SchemaVulnerableClass", "Medium",
+        f"possSuperiors класса {VULNERABLE_CLASS} содержит computer (CVE-2021-34470): схема Exchange не обновлена",
+        poss_superiors=superiors,
+    )]

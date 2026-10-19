@@ -155,3 +155,60 @@ def check_dc_owner(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
         )
         out.append(finalize(f, cfg))
     return out
+
+
+#: Сколько имён компьютеров показывать в находках LapsDeployment и ComputerCreators.
+SAMPLES = 20
+
+
+def _laps_eligible(idx: ExportIndex, cfg: AdConfig, c: AdObject) -> bool:
+    """Включённый компьютер Windows (или без ОС в выгрузке), входивший за computer_inactivity_days, не контроллер."""
+    idle = _logon_age(idx, c)
+    os_name = (c.operatingSystem or "").lower()
+    return idle is not None and idle <= cfg.computer_inactivity_days and not idx.is_dc(c) and (not os_name or "windows" in os_name)
+
+
+def check_laps_deployment(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    domain = idx.export.domain
+    if domain.laps_legacy_schema is False and domain.laps_schema is False:
+        f = Finding(
+            check="LapsDeployment", severity="Medium", target=domain.dn, key_extra="not_installed",
+            details={"details": "В схеме нет атрибутов LAPS (ни ms-Mcs-AdmPwd, ни msLAPS-Password): пароли локальных администраторов не меняются централизованно"},
+        )
+        return [finalize(f, cfg, allowlist=False)]
+    if not (domain.laps_legacy_schema or domain.laps_schema):
+        return []
+    eligible = [c for c in _computers(idx) if _laps_eligible(idx, cfg, c)]
+    without = sorted((c.name or c.label for c in eligible if c.lapsExpiry is None and c.lapsNewExpiry is None), key=str.lower)
+    if not without:
+        return []
+    exact = 100 * len(without) / len(eligible)
+    share = round(exact, 1)
+    f = Finding(
+        check="LapsDeployment", severity="Low" if exact <= 10 else "Medium", target=domain.dn, key_extra="coverage",
+        details={
+            "details": f"Без пароля LAPS {len(without)} из {len(eligible)} активных компьютеров Windows ({share} %)",
+            "eligible": len(eligible), "without_laps": len(without), "share": share, "samples": without[:SAMPLES],
+        },
+    )
+    return [finalize(f, cfg, allowlist=False)]
+
+
+def check_computer_creators(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
+    # ms-DS-CreatorSID пишется при создании по MachineAccountQuota; создатель сохраняет права записи на объект компьютера.
+    by_creator: dict[str, list[str]] = {}
+    for c in idx.objects("computer"):
+        if c.creatorSid:
+            by_creator.setdefault(c.creatorSid, []).append(c.name or c.label)
+    out = []
+    for sid, names in by_creator.items():
+        creator = idx.by_sid.get(sid)
+        if (creator is not None and principals.is_admin(idx, cfg, creator)) or principals.tier0_kind(idx, cfg, sid) == "safe":
+            continue
+        names.sort(key=str.lower)
+        f = Finding(
+            check="ComputerCreators", severity="Low", identity=idx.principal_name(sid), identity_sid=sid, target=idx.export.domain.dn,
+            details={"details": f"Создал компьютеров: {len(names)} (учётка не из администраторов вводила машины в домен по MachineAccountQuota)", "count": len(names), "samples": names[:SAMPLES]},
+        )
+        out.append(finalize(f, cfg))
+    return sorted(out, key=lambda f: f.identity.lower())

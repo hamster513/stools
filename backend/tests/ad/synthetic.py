@@ -134,7 +134,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         acct("svc_backup"),
         acct("svc_sql", spn=["MSSQLSvc/srv01.corp.local:1433"], pwdLastSet=ft(900)),
         acct("svc_old", uac=512 | 0x400000, adminCount=1),
-        acct("user.noexpire", uac=512 | 0x10000),
+        acct("user.noexpire", uac=512 | 0x10000, hasUnixPassword=True),
         acct("helpdesk"),
         acct("user.inactive", lastLogonTimestamp=ft(200)),
         acct("user.rc4", supportedEncryptionTypes=4),

@@ -23,12 +23,17 @@
 | Код | Условие | Серьёзность | Данные | PingCastle |
 |---|---|---|---|---|
 | `PasswordNeverExpires` | включённый пользователь с «пароль не истекает» | Low; админ High | `uac` | — |
-| `InactiveUsers` | включённый пользователь без входа дольше `user_inactivity_days` (90) | Low; админ High | `uac`, `lastLogonTimestamp` | — |
+| `InactiveUsers` | включённый пользователь без входа дольше `user_inactivity_days` (90); без входов вообще — если создан раньше порога | Low; админ High | `uac`, `lastLogonTimestamp`, `whenCreated` | — |
 | `PasswordNotRequired` | включённая учётка (пользователь, компьютер) с флагом «пароль не требуется» | Medium; админ High | `uac` | S-PwdNotRequired |
 | `ReversiblePassword` | включённая учётка с обратимым шифрованием пароля | Medium | `uac` | S-Reversible, S-C-Reversible |
 | `DuplicateObjects` | `CNF:` в DN или `sAMAccountName` начинается с `$DUPLICATE-` | Low | DN, `sAMAccountName` | S-Duplicate |
 | `InactiveComputers` | включённый компьютер без входа дольше `computer_inactivity_days` (90) | Low; контроллер High | `uac`, `lastLogonTimestamp` | S-C-Inactive, S-DC-Inactive |
 | `ComputerPasswordAge` | включённый компьютер входил за 45 дней, пароль старше `computer_password_max_age_days` (90); у контроллера — старше 45 | Low; контроллер Medium | `uac`, `lastLogonTimestamp`, `pwdLastSet` | S-PwdLastSet-45, -90, -DC |
+| `PrimaryGroup` | пользователь с `primaryGroupID` не 513 (Guest — 514); компьютер не 515, контроллер не 516, RODC не 521 | Medium | `primaryGroupID`, `uac` | S-PrimaryGroup, S-C-PrimaryGroup |
+| `SidHistory` | SID в `sIDHistory`, по виду (`key_extra` — сам SID): `same_domain` своего домена; `privileged` RID < 1000 или `S-1-5-32-*`; `unknown_domain` домена нет среди доверий; `other` | Critical; High; Medium; Low | `sIDHistory`, доверия | T-SIDHistorySameDomain, T-SIDHistoryDangerous, T-SIDHistoryUnknownDomain, S-SIDHistory |
+| `SmartcardPassword` | домен не меняет пароли учёток «только смарт-карта» (`smartcard_rotation = false`): включённый пользователь с `0x40000`, пароль старше `smartcard_password_max_age_days` (90) | Medium; админ High | `uac`, `pwdLastSet`, `msDS-ExpirePasswordsOnSmartCardOnlyAccounts` | A-SmartCardRequired, A-SmartCardPwdRotation |
+| `UnixPasswords` | заполнен `userPassword` или `unixUserPassword` (значения не читаются) | Medium | `hasUnixPassword` | A-UnixPwd |
+| `ComputerCreators` | компьютеры с `ms-DS-CreatorSID`, создатель не админ и не безопасный субъект; одна находка на создателя со счётчиком и выборкой | Low | `creatorSid` | A-LAPS-Joined-Computers |
 | `ObsoleteOs` | активный компьютер с ОС вне поддержки (NT/2000/XP/2003 — High; Vista/7/8/2008/2012 и Windows 10 кроме LTSC/IoT — Medium; сборка из `obsolete_os_builds` после даты окончания — Low) | по ОС; контроллер на ступень выше | `operatingSystem`, `operatingSystemVersion`, `lastLogonTimestamp` | S-OS-*, S-DC-* |
 
 ## Привилегированные учётные записи — `privileged`
@@ -85,7 +90,14 @@
 | Код | Условие | Серьёзность | Данные | PingCastle |
 |---|---|---|---|---|
 | `MachineAccountQuota` | `ms-DS-MachineAccountQuota` больше 0 | Medium; 0 — Low | атрибут корня домена | — |
-| `FunctionalLevel` | функциональный уровень домена ниже Windows Server 2016 | Medium ниже 2008 R2; 2008 R2–2012 R2 Low | `msDS-Behavior-Version` домена | S-FunctionalLevel1, 3, 4 |
+| `FunctionalLevel` | функциональный уровень домена, отдельной находкой (`key_extra = forest`) — леса, ниже Windows Server 2016 | Medium ниже 2008 R2; 2008 R2–2012 R2 Low | `msDS-Behavior-Version` домена и леса | S-FunctionalLevel1, 3, 4 |
+| `PasswordPolicy` | политика домена и каждая PSO, по виду: `min_length` длина < `password_min_length` (8); `no_lockout` порог блокировки 0; `reversible` обратимое хранение; `no_complexity` сложность выключена | Medium; Medium; High; Low | `minPwdLength`, `lockoutThreshold`, `pwdProperties`, PSO | A-MinPwdLen, A-ReversiblePwd |
+| `LapsDeployment` | `not_installed`: в схеме нет атрибутов LAPS; `coverage`: у включённых компьютеров Windows (или без ОС), входивших за `computer_inactivity_days`, не контроллеров, нет срока пароля LAPS — одна находка со счётчиком, долей и выборкой | Medium; `coverage` Low при доле ≤ 10 %, иначе Medium | схема, `lapsExpiry`, `lapsNewExpiry` | A-LAPS-Not-Installed |
+| `RecycleBin` | корзина AD выключена | Low | `msDS-EnabledFeatureBL` | P-RecycleBin |
+| `DsHeuristics` | символ `dSHeuristics` (позиции с единицы), по виду: `anonymous` 7-й `2`; `anon_nspi` 8-й не `0`; `adminsdex` 16-й не `0`; `uniqueness` 21-й не `0`; `ldap_authz` 28-й или 29-й `2` (защита KB5008383 выключена явно); `list_object` 3-й `1` | High; Medium; Medium; Medium; Medium; Info | `dSHeuristics` | A-DsHeuristicsAnonymous, -AllowAnonNSPI, P-DsHeuristicsAdminSDExMask, A-DsHeuristicsDoNotVerifyUniqueness, -LDAPSecurity, P-DsHeuristicsDoListObject |
+| `BackupAge` | последний бэкап (`dSASignature` корня) старше `backup_max_age_days` (7) или отметки нет | Medium | `msDS-ReplAttributeMetaData` корня | A-BackupMetadata |
+| `NtfrsSysvol` | SYSVOL реплицируется через FRS | Low | DFSR-GlobalSettings | A-NTFRSOnSysvol |
+| `SchemaVulnerableClass` | `possSuperiors` класса `msExchStorageGroup` содержит `computer` (CVE-2021-34470) | Medium | схема | S-ADRegistrationSchema |
 | `PreWin2000Access` | член группы Pre-Windows 2000 Compatible Access (`S-1-5-32-554`) | High Anonymous Logon и Everyone; Authenticated Users и прочие Low | `member` группы | A-PreWin2000Anonymous, -AuthenticatedUsers, -Other |
 
 ## Доверие — `trust`

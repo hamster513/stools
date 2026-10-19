@@ -307,7 +307,7 @@ GUIDANCE: dict[str, Guidance] = {
     ),
     "FunctionalLevel": Guidance(
         "domain",
-        "Обновите или выведите из домена контроллеры со старыми версиями Windows Server и поднимите функциональный уровень домена (Set-ADDomainMode) до Windows Server 2016. Повышение уровня необратимо на практике: перед ним убедитесь, что все контроллеры работают на нужной версии.",
+        "Обновите или выведите из домена контроллеры со старыми версиями Windows Server и поднимите функциональный уровень домена (Set-ADDomainMode), затем леса (Set-ADForestMode) до Windows Server 2016. Повышение уровня необратимо на практике: перед ним убедитесь, что все контроллеры работают на нужной версии.",
         (
             ("Microsoft: функциональные уровни AD DS", f"{_LEARN}/windows-server/identity/ad-ds/active-directory-functional-levels"),
         ),
@@ -327,6 +327,106 @@ GUIDANCE: dict[str, Guidance] = {
             LEAST_PRIVILEGE,
             ("Microsoft: право DS-Replication-Get-Changes-All", f"{_LEARN}/windows/win32/adschema/r-ds-replication-get-changes-all"),
             _attack("T1222.001", "File and Directory Permissions Modification: Windows File and Directory Permissions Modification"),
+        ),
+    ),
+    "PrimaryGroup": Guidance(
+        "accounts",
+        "Верните учётке стандартную первичную группу (Set-ADUser или Set-ADComputer -Replace @{primaryGroupID=513}; для компьютера 515, для контроллера 516) — прежде добавьте её в эту группу обычным членством. Выясните, кто и зачем менял primaryGroupID: так скрывают участника привилегированной группы.",
+        (
+            ("Microsoft: атрибут primaryGroupID", f"{_LEARN}/windows/win32/adschema/a-primarygroupid"),
+            _attack("T1098", "Account Manipulation"),
+        ),
+    ),
+    "SidHistory": Guidance(
+        "accounts",
+        "Если миграция завершена, очистите sIDHistory (Set-ADUser <учётка> -Remove @{sIDHistory='<SID>'}). SID своего домена или привилегированный SID в истории — признак атаки: расследуйте, кто записал атрибут, и смените пароль учётки. На внешних и лесных довериях держите включённой фильтрацию SID.",
+        (
+            ("Microsoft: атрибут sIDHistory", f"{_LEARN}/windows/win32/adschema/a-sidhistory"),
+            _attack("T1134.005", "Access Token Manipulation: SID-History Injection"),
+        ),
+    ),
+    "SmartcardPassword": Guidance(
+        "accounts",
+        "Поднимите функциональный уровень домена до Windows Server 2016 и включите смену NTLM-секретов учёток «только смарт-карта» (Центр администрирования AD → домен → «Enable rolling of expiring NTLM secrets…»). До этого периодически снимайте и заново ставьте флаг «Для входа требуется смарт-карта»: при этом AD генерирует новый случайный пароль.",
+        (
+            ("Microsoft: новое в AD DS Windows Server 2016 (смена NTLM-секретов)", f"{_LEARN}/windows-server/identity/whats-new-active-directory-domain-services"),
+            _attack("T1550.002", "Use Alternate Authentication Material: Pass the Hash"),
+        ),
+    ),
+    "UnixPasswords": Guidance(
+        "accounts",
+        "Очистите атрибуты userPassword и unixUserPassword (Set-ADUser <учётка> -Clear userPassword, unixUserPassword) и смените пароль учётки, если значение могло быть её паролем. Если Unix-системам нужна аутентификация, переведите их на Kerberos или LDAP bind.",
+        (
+            ("Microsoft: атрибут unixUserPassword", f"{_LEARN}/windows/win32/adschema/a-unixuserpassword"),
+            _attack("T1552", "Unsecured Credentials"),
+        ),
+    ),
+    "ComputerCreators": Guidance(
+        "accounts",
+        "Проверьте, кто создатель и нужны ли эти компьютеры; лишние удалите. Обнулите ms-DS-MachineAccountQuota и вводите машины в домен через делегированную группу с правом создания компьютеров в выделенной OU.",
+        (
+            ("Microsoft: атрибут ms-DS-CreatorSID", f"{_LEARN}/windows/win32/adschema/a-ms-ds-creatorsid"),
+            ("Microsoft: ограничение числа компьютеров, которые пользователь вводит в домен", f"{_LEARN}/troubleshoot/windows-server/active-directory/default-workstation-numbers-join-domain"),
+            _attack("T1136.002", "Create Account: Domain Account"),
+        ),
+    ),
+    "LapsDeployment": Guidance(
+        "domain",
+        "Разверните Windows LAPS: расширьте схему (Update-LapsADSchema), выдайте компьютерам право записи пароля (Set-LapsADComputerSelfPermission) и включите политику LAPS групповой политикой на всех рабочих станциях и серверах. Для компьютеров из выборки проверьте, применяется ли политика.",
+        (
+            ("Microsoft: обзор Windows LAPS", f"{_LEARN}/windows-server/identity/laps/laps-overview"),
+            ("Microsoft: Windows LAPS с Active Directory", f"{_LEARN}/windows-server/identity/laps/laps-scenarios-windows-server-active-directory"),
+            _attack("T1078.003", "Valid Accounts: Local Accounts"),
+        ),
+    ),
+    "PasswordPolicy": Guidance(
+        "domain",
+        "В Default Domain Policy и в каждой PSO задайте минимальную длину пароля не меньше порога (лучше 14), порог блокировки (например, 10 попыток), включите сложность и выключите обратимое шифрование. Если обратимое хранение было включено, смените пароли затронутых учёток. Порог длины задаётся в настройках.",
+        (
+            ("Microsoft: политика паролей", f"{_PREV}/password-policy"),
+            ("Microsoft: порог блокировки учётной записи", f"{_PREV}/account-lockout-threshold"),
+            ("Microsoft: хранение паролей с обратимым шифрованием", f"{_PREV}/store-passwords-using-reversible-encryption"),
+            ("Microsoft: детализированные политики паролей (PSO)", f"{_LEARN}/windows-server/identity/ad-ds/get-started/adac/fine-grained-password-policies"),
+            _attack("T1110", "Brute Force"),
+        ),
+    ),
+    "RecycleBin": Guidance(
+        "domain",
+        "Включите корзину AD (Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target <лес>). Включение необратимо и требует функционального уровня леса Windows Server 2008 R2.",
+        (
+            ("Microsoft: включение корзины AD", f"{_LEARN}/windows-server/identity/ad-ds/get-started/adac/active-directory-recycle-bin"),
+            ("Microsoft: Enable-ADOptionalFeature", f"{_LEARN}/powershell/module/activedirectory/enable-adoptionalfeature"),
+        ),
+    ),
+    "DsHeuristics": Guidance(
+        "domain",
+        "Верните названные символы dSHeuristics (CN=Directory Service,CN=Windows NT,CN=Services в разделе конфигурации) в значение по умолчанию «0»: 7-й — запрет анонимных операций LDAP, 8-й — анонимного NSPI, 16-й — исключения операторов из AdminSDHolder, 21-й — проверки уникальности UPN и SPN, 28-й и 29-й — защиты KB5008383. Позиции 10 и 20 — контрольные, их не трогайте.",
+        (
+            ("Microsoft: атрибут dSHeuristics (MS-ADTS)", "https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-adts/e5899be4-862e-496f-9a38-33950617d2c5"),
+            ("Microsoft: KB5008383, обновление прав AD (CVE-2021-42291)", "https://support.microsoft.com/en-us/topic/kb5008383-active-directory-permissions-updates-cve-2021-42291-536d5555-ffba-4248-a60e-d6cbc849cde1"),
+            _attack("T1087.002", "Account Discovery: Domain Account"),
+        ),
+    ),
+    "BackupAge": Guidance(
+        "domain",
+        "Настройте регулярную резервную копию состояния системы хотя бы одного контроллера каждого домена (wbadmin start systemstatebackup или средство резервного копирования, поддерживающее AD) и проверяйте восстановление. Порог давности задаётся в настройках.",
+        (
+            ("Microsoft: восстановление леса AD — резервная копия сервера", f"{_LEARN}/windows-server/identity/ad-ds/manage/forest-recovery-guide/ad-forest-recovery-backing-up-a-full-server"),
+        ),
+    ),
+    "NtfrsSysvol": Guidance(
+        "domain",
+        "Переведите репликацию SYSVOL на DFSR утилитой dfsrmig (состояния Prepared → Redirected → Eliminated), проверяя репликацию на каждом шаге.",
+        (
+            ("Microsoft: миграция репликации SYSVOL с FRS на DFSR", f"{_LEARN}/windows-server/storage/dfs-replication/migrate-sysvol-to-dfsr"),
+        ),
+    ),
+    "SchemaVulnerableClass": Guidance(
+        "domain",
+        "Установите актуальное накопительное обновление Exchange и выполните Setup /PrepareSchema (или /PrepareAD): обновление убирает computer из possSuperiors класса msExchStorageGroup. Если Exchange выведен, исправьте схему по инструкции Microsoft к CVE-2021-34470.",
+        (
+            ("Microsoft: CVE-2021-34470", "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34470"),
+            _attack("T1068", "Exploitation for Privilege Escalation"),
         ),
     ),
 }

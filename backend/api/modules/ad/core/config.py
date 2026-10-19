@@ -77,6 +77,12 @@ class AdConfig(BaseModel):
     azure_sso_key_max_age_days: int = Field(default=90, ge=1)
     computer_inactivity_days: int = Field(default=90, ge=1)
     computer_password_max_age_days: int = Field(default=90, ge=1)
+    #: Минимальная длина пароля в политике домена и в каждой PSO.
+    password_min_length: int = Field(default=8, ge=1)
+    #: Последний бэкап AD (по dSASignature) старше стольких дней — находка BackupAge.
+    backup_max_age_days: int = Field(default=7, ge=1)
+    #: Пароль учётки «только смарт-карта» старше — находка SmartcardPassword (если домен его не меняет сам).
+    smartcard_password_max_age_days: int = Field(default=90, ge=1)
     #: Сборка Windows (из operatingSystemVersion) → дата окончания поддержки; после неё ОС считается устаревшей.
     obsolete_os_builds: dict[str, datetime.date] = Field(
         default_factory=lambda: {"22000": datetime.date(2024, 10, 8), "22621": datetime.date(2025, 10, 14)}

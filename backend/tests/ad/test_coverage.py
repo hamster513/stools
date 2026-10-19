@@ -32,6 +32,24 @@ def test_full_export_has_no_gaps() -> None:
     assert _gaps(build_export()) == {}
 
 
+def test_old_collector_accounts_mark_new_attribute_checks_unchecked() -> None:
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("primaryGroupID", None)
+    gaps = _gaps(raw)
+    assert set(gaps) == {"PrimaryGroup", "SidHistory", "UnixPasswords", "ComputerCreators", "InactiveUsers"}
+    assert gaps["SidHistory"] == gaps["UnixPasswords"] == gaps["ComputerCreators"] == "атрибуты учётных записей собраны старым сборщиком"
+    assert gaps["InactiveUsers"] == "учётки без входов не проверены: нет whenCreated"
+
+
+def test_old_collector_note_joins_inactive_users_reason() -> None:
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("primaryGroupID", None)
+        o.pop("lastLogonTimestamp", None)
+    assert _gaps(raw)["InactiveUsers"] == "в выгрузке нет дат последнего входа ни у одной учётной записи; учётки без входов не проверены: нет whenCreated"
+
+
 def test_root_without_sd_marks_domain_root_acl_unchecked() -> None:
     raw = build_export()
     root = next(o for o in raw["objects"] if o["class"] == "domainDNS")

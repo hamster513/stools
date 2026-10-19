@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 
 from api.modules.ad.core import sd
 from api.modules.ad.core.checks import principals
@@ -65,6 +66,15 @@ def check_inactive_users(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
                     idx, cfg, "InactiveUsers", _severity(idx, cfg, u, "Low", "High"), u,
                     details=f"Нет входа больше {days} дн.",
                     idle_days=days_between(u.lastLogonTimestamp, now),
+                )
+            )
+        # Граница как у ветки выше (<= cutoff): создана ровно days дней назад — уже неактивна.
+        elif not u.lastLogonTimestamp and u.whenCreated is not None and u.whenCreated <= now - dt.timedelta(days=days):
+            out.append(
+                account_finding(
+                    idx, cfg, "InactiveUsers", _severity(idx, cfg, u, "Low", "High"), u,
+                    details=f"Ни разу не входила, создана {u.whenCreated.strftime('%Y-%m-%d')}",
+                    created=u.whenCreated.strftime("%Y-%m-%d"),
                 )
             )
     return out
