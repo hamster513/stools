@@ -726,12 +726,12 @@ export const handlers = [
   }),
 
   // --- База знаний по API ---------------------------------------------------
-  http.get('/api/siem/kb', () => {
+  http.get('/api/siem/mp', () => {
     if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
     return HttpResponse.json(KB_CONNECTION)
   }),
 
-  http.put('/api/siem/kb', async ({ request }) => {
+  http.put('/api/siem/mp', async ({ request }) => {
     if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
     const body = (await request.json()) as KbConnectionUpdate
     KB_CONNECTION.host = body.host
@@ -742,14 +742,14 @@ export const handlers = [
     return HttpResponse.json(KB_CONNECTION)
   }),
 
-  http.post('/api/siem/kb/test', () => {
+  http.post('/api/siem/mp/test', () => {
     if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
     if (!KB_CONNECTION.configured) return HttpResponse.json({ detail: 'подключение не настроено' }, { status: 400 })
     const response: KbTestResponse = { ok: true, message: 'база знаний 27.1.1234 отвечает, БД контента: Default', version: '27.1.1234', database: 'Default' }
     return HttpResponse.json(response)
   }),
 
-  http.post('/api/siem/kb/collect', () => {
+  http.post('/api/siem/mp/collect', () => {
     if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
     if (!KB_CONNECTION.configured) return HttpResponse.json({ detail: 'подключение не настроено' }, { status: 400 })
     const jobId = jobSeq++

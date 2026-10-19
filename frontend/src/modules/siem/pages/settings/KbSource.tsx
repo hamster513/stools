@@ -32,7 +32,7 @@ export function KbSource() {
   if (connection.isLoading) return <Spinner />
   if (connection.isError || !connection.data) {
     return (
-      <Section title="База знаний по API" about="Не удалось загрузить подключение.">
+      <Section title="Подключение к MaxPatrol" about="Не удалось загрузить подключение.">
         <span className="text-xs text-kind-1">{connection.error instanceof ApiRequestError ? connection.error.message : 'ошибка'}</span>
       </Section>
     )
@@ -80,7 +80,7 @@ function KbForm({ c }: { c: KbConnectionView }) {
 
   return (
     <Section
-      title="База знаний по API"
+      title="Подключение к MaxPatrol"
       about="Правила корреляции забираются из базы знаний MaxPatrol: наборы установки и статус установки каждого правила — из списка объектов, тела правил — экспортом в формате kb, который разбирается как загруженный файл. Только чтение. Персональный API-токен MaxPatrol хранится в базе и наружу не показывается: пустое поле при сохранении оставляет прежнее значение."
     >
       <div className="grid gap-3 sm:grid-cols-2">

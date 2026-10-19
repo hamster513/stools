@@ -46,12 +46,12 @@ def _fake() -> FakeKb:
 def kb(monkeypatch: pytest.MonkeyPatch, auth_client: TestClient) -> FakeKb:
     fake = _fake()
     monkeypatch.setattr("api.modules.siem.services.kb_collect.make_client", fake.http_factory)
-    assert auth_client.put("/api/siem/kb", json=BODY).status_code == 200
+    assert auth_client.put("/api/siem/mp", json=BODY).status_code == 200
     return fake
 
 
 def test_collect_requires_configured_connection(auth_client: TestClient) -> None:
-    assert auth_client.post("/api/siem/kb/collect").status_code == 400
+    assert auth_client.post("/api/siem/mp/collect").status_code == 400
 
 
 def test_collect_builds_snapshot_with_inventory(auth_client: TestClient, kb: FakeKb, db_session: Any) -> None:
@@ -131,7 +131,7 @@ def test_collect_refused_while_another_runs(auth_client: TestClient, kb: FakeKb,
 
     db_session.add(Job(kind="collect", stage="listing", status="running", progress=15))
     db_session.commit()
-    r = auth_client.post("/api/siem/kb/collect")
+    r = auth_client.post("/api/siem/mp/collect")
     assert r.status_code == 409 and "идёт задача" in r.json()["detail"]
 
 
@@ -140,7 +140,7 @@ def test_collect_refused_while_parsing(auth_client: TestClient, kb: FakeKb, db_s
 
     db_session.add(Job(kind="collect", stage="parsing", status="running", progress=45, snapshot_id=None))
     db_session.commit()
-    assert auth_client.post("/api/siem/kb/collect").status_code == 409
+    assert auth_client.post("/api/siem/mp/collect").status_code == 409
 
 
 def test_interrupted_collect_is_closed_at_startup(auth_client: TestClient, kb: FakeKb, db_session: Any) -> None:
@@ -152,7 +152,7 @@ def test_interrupted_collect_is_closed_at_startup(auth_client: TestClient, kb: F
     db_session.commit()
     old_id = old.id
     fail_interrupted_jobs(db_session)
-    assert auth_client.post("/api/siem/kb/collect").status_code == 202
+    assert auth_client.post("/api/siem/mp/collect").status_code == 202
     db_session.expire_all()
     closed = db_session.get(Job, old_id)
     assert closed.status == "failed" and closed.error == RESTART_ERROR

@@ -1,4 +1,4 @@
-"""База знаний MaxPatrol по API: подключение, проверка, сбор правил (спека §3, §7)."""
+"""Подключение к MaxPatrol, общее для разделов SIEM: проверка и сбор базы знаний (спека §3, §7)."""
 from __future__ import annotations
 
 from typing import Any
@@ -23,7 +23,7 @@ from api.modules.siem.services.kb_settings import (
     view,
 )
 
-router = APIRouter(prefix="/kb", tags=["siem"])
+router = APIRouter(prefix="/mp", tags=["siem"])
 
 
 @router.get("")
