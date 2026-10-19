@@ -122,3 +122,19 @@ def test_set_query_enabled(db_session):
     [query] = hunt_queries(db_session, hunt)
     assert query.enabled is False
     assert hunt.updated_by == "editor"
+
+
+def test_hunt_without_queries_rejected(db_session):
+    with pytest.raises(LibraryError, match="у ханта нет запросов"):
+        create_hunt(db_session, _hunt(queries=[]), LOGIN)
+    hunt = create_hunt(db_session, _hunt(), LOGIN)
+    with pytest.raises(LibraryError, match="у ханта нет запросов"):
+        update_hunt(db_session, hunt, _hunt(queries=[]), LOGIN)
+    assert len(hunt_queries(db_session, hunt)) == 1
+
+
+def test_limit_range_rejected(db_session):
+    for bad in (0, 100001, 99999999999):
+        with pytest.raises(LibraryError, match="предел событий"):
+            create_hunt(db_session, _hunt(queries=[_q(limit=bad)]), LOGIN)
+    assert create_hunt(db_session, _hunt(queries=[_q(limit=100000)]), LOGIN) is not None

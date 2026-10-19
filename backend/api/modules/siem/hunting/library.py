@@ -29,6 +29,8 @@ TECHNIQUE_RE = re.compile(r"T\d{4}(?:\.\d{3})?")
 _CODE_LEN = 64
 _QUERY_ID_LEN = 32
 _NAME_LEN = 255
+#: Потолок тот же, что у `ThSettings.default_limit`; без него абсурдное число из файла упало бы ошибкой базы.
+_LIMIT_MAX = 100000
 
 
 class LibraryError(ValueError):
@@ -67,6 +69,8 @@ def check_hunt(data: HuntIn) -> None:
         raise LibraryError(f"код не длиннее {_CODE_LEN} знаков, название не длиннее {_NAME_LEN}")
     if data.technique_id and not TECHNIQUE_RE.fullmatch(data.technique_id):
         raise LibraryError("техника ATT&CK задаётся как T1234 или T1234.001")
+    if not data.queries:
+        raise LibraryError("у ханта нет запросов")
     seen: set[str] = set()
     for q in data.queries:
         qid = q.query_id.strip()
@@ -77,8 +81,8 @@ def check_hunt(data: HuntIn) -> None:
         seen.add(qid)
         if not q.query.strip() or not split_fields(q.fields):
             raise LibraryError(f"{qid}: поля запроса пусты")
-        if q.limit is not None and q.limit < 1:
-            raise LibraryError(f"{qid}: предел событий должен быть больше нуля")
+        if q.limit is not None and not 1 <= q.limit <= _LIMIT_MAX:
+            raise LibraryError(f"{qid}: предел событий от 1 до {_LIMIT_MAX}")
 
 
 def query_view(q: QueryIn) -> tuple[str, list[str], list[str], int | None]:
@@ -160,7 +164,7 @@ def apply_head(hunt: ThHunt, data: HuntIn, login: str, *, keep_technique: bool =
 def revive_hunt(db: Session, hunt: ThHunt, data: HuntIn, login: str, *, from_ui: bool) -> ThHunt:
     """Вернуть удалённый хант; включённость остаётся как была до удаления."""
     hunt.deleted_at = None
-    apply_head(hunt, data, login)
+    apply_head(hunt, data, login, keep_technique=not from_ui)
     db.flush()
     sync_queries(db, hunt, data.queries, from_ui=from_ui)
     return hunt

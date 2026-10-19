@@ -58,8 +58,8 @@ class ThQuery(Base):
     query: Mapped[str] = mapped_column(Text)
     #: JSON-список полей события, которые просит запрос: ["time", "src.ip", ...].
     fields_json: Mapped[str] = mapped_column(Text, default="[]")
-    #: JSON-словарь «поле → подпись колонки».
-    labels_json: Mapped[str] = mapped_column(Text, default="{}")
+    #: JSON-список подписей колонок, по одной на поле из `fields_json` (в том же порядке).
+    labels_json: Mapped[str] = mapped_column(Text, default="[]")
     #: Предел событий запроса; пусто — умолчание из настроек.
     limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -124,7 +124,7 @@ class ThDeepHunt(Base):
     query_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     query: Mapped[str] = mapped_column(Text)
     fields_json: Mapped[str] = mapped_column(Text, default="[]")
-    labels_json: Mapped[str] = mapped_column(Text, default="{}")
+    labels_json: Mapped[str] = mapped_column(Text, default="[]")
     limit: Mapped[int] = mapped_column(Integer, default=5000)
     period_from: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
     period_to: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))

@@ -110,7 +110,11 @@ def test_preview_lists_new_and_missing_queries_and_revive(db_session):
                                    "          fields: time, object.process.cmdline\n"
                                    "          fields_label: Время\n          limit: 200\n", ""))
     [row] = [r for r in preview_import(db_session, reduced) if r.code == "TH-WIN-001"]
-    assert row.changes == ["Q2 нет в файле"]
+    assert (row.action, row.changes) == ("same", ["Q2 нет в файле"])
+    # запрос вне файла не требует замены: применение ничего не пропускает и ничего не удаляет
+    assert apply_import(db_session, reduced, set(), LOGIN) == {"created": 0, "replaced": 0, "skipped": 0}
+    queries = hunt_queries(db_session, hunt_by_code(db_session, "TH-WIN-001"))
+    assert [q.query_id for q in queries] == ["Q1", "Q2"]
 
     extended = _load(SAMPLE + "        - query_id: Q3\n          query: z = 1\n          fields: time\n")
     [row] = [r for r in preview_import(db_session, extended) if r.code == "TH-WIN-002"]
@@ -216,3 +220,24 @@ def test_export_includes_disabled_and_skips_deleted(db_session):
     set_enabled(db_session, hunt_by_code(db_session, "TH-WIN-001"), False, LOGIN)
     delete_hunt(db_session, hunt_by_code(db_session, "TH-WIN-002"), LOGIN)
     assert [h.code for h in parse_library_yaml(export_library_yaml(db_session))] == ["TH-WIN-001"]
+
+
+def test_parse_rejects_absurd_limit():
+    raw = SAMPLE.replace("limit: 200", "limit: 99999999999")
+    with pytest.raises(LibraryError, match="предел событий"):
+        parse_library_yaml(raw.encode())
+
+
+def test_import_revive_keeps_manual_technique(db_session):
+    apply_import(db_session, _load(), set(), LOGIN)
+    hunt = hunt_by_code(db_session, "TH-WIN-001")
+    hunt.technique_id = "T1000"
+    db_session.commit()
+    delete_hunt(db_session, hunt, LOGIN)
+
+    apply_import(db_session, _load(), set(), LOGIN)
+
+    db_session.expire_all()
+    hunt = hunt_by_code(db_session, "TH-WIN-001")
+    assert hunt.deleted_at is None
+    assert hunt.technique_id == "T1000"  # в названии T1546.002, но вручную заданная техника главнее
