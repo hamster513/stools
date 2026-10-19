@@ -27,6 +27,7 @@ GET  /domains/{id}/overview            {domain, snapshot|null, compared_to,
 GET  /snapshots?domain_id              [{id, domain_id, collected_at, imported_at, source, collector, filename,
                                         objects, findings, by_severity, new, fixed, previous_id}]
 GET  /snapshots/{id}
+GET  /snapshots/{id}/summary           сводка домена (ниже) | 409 «сводка не посчитана: пересчитайте снапшот»
 POST /snapshots/file  multipart file   {job_id} | 409 идёт задача
 POST /snapshots/{id}/reanalyze         {job_id}   — проверки заново по сохранённой выгрузке
 DELETE /snapshots/{id}                 204        — удаляет находки и файл; статусы находок остаются
@@ -38,6 +39,39 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 У проверки `all` — все её находки, `open` — открытые, `new` — появились в
 этом снапшоте, `resolved` — пропали с предыдущего. `summary` — счётчики
 статусов домена (вместе с отсутствующими в последнем снапшоте).
+
+Сводка считается при анализе (импорт и пересчёт) из той же выгрузки и хранится
+в снапшоте; у снапшота, посчитанного до её появления (анализатор до версии 9), —
+409, нужен пересчёт.
+
+```
+{version: 1,
+ accounts: {users: COUNTS, computers: COUNTS},
+ password_age: {all: BUCKETS, admins: BUCKETS}, last_logon: {all: BUCKETS, admins: BUCKETS},
+ os:   [{name, build, total, enabled, active}]                         по убыванию total
+ dcs:  [{name, dn, dns, os, build, rodc, last_logon_days, pwd_age_days, owner}]
+ groups: [{name, sid, members, enabled, inactive, pwd_never_expires, delegable, protected_users}]
+ trusts: [{partner, flat_name, direction, type, within_forest, changed}]
+ password_policies: [{name, min_length, lockout_threshold, complexity, reversible, precedence}]
+ gpos: [{name, dn, machine_disabled, user_disabled, links: [{dn, enforced, disabled}] | null}]
+ subnets: [{name, site}]}
+COUNTS:  total, enabled, disabled, active, inactive, pwd_never_expires, pwd_not_required,
+         no_preauth, sid_history, delegation, laps (у пользователей 0)
+BUCKETS: [{le: 30, n}, {le: 90, n}, {le: 180, n}, {le: 365, n}, {le: 730, n}, {le: 1095, n}, {le: null, n}]
+```
+
+`active` — включённые, входившие за `user_inactivity_days` / `computer_inactivity_days`
+настроек; `inactive` — остальные включённые. Флаги (`pwd_never_expires` … `laps`)
+считаются среди включённых; штатная неограниченная делегация контроллеров в `delegation`
+не входит (ограниченная входит). Корзины — включённые пользователи, `admins` — включённые
+админы (`admin_rids` и RID 500); вход и пароль неизвестны (не входил, пароль не задан) —
+в корзине `le: null`. В группах `members` — все рекурсивные участники (пользователи и
+компьютеры), остальные счётчики — по включённым пользователям-участникам; `delegable` —
+без «учётная запись важна и не может быть делегирована». `owner` контроллера — владелец
+объекта, `""` — дескриптор не прочитан. Первая строка `password_policies` — политика
+домена (`precedence: null`), если сборщик её прочитал, за ней PSO по приоритету.
+`links: null` — привязка GPO неизвестна (сборщик не читал gPLink); в `links` и выключенные
+ссылки. `site` подсети — имя сайта.
 
 ## Данные центра сертификации
 

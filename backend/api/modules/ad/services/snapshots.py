@@ -11,6 +11,7 @@ import logging
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from api.modules.ad.core.checks.coverage import coverage_gaps
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import AdExport, ExportIndex, load_export_path
 from api.modules.ad.core.findings import SEVERITY_RANK, Finding
+from api.modules.ad.core.summary import build_summary
 from api.modules.ad.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot
 from api.modules.ad.services.ca_data import effective_ca_data
@@ -47,7 +49,9 @@ def _domain_for(db: Session, export: AdExport) -> AdDomain:
     return domain
 
 
-def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding], gaps: dict[str, str], handle: JobHandle | None = None) -> None:
+def _store_findings(
+    db: Session, snapshot: AdSnapshot, findings: list[Finding], gaps: dict[str, str], summary: dict[str, Any], handle: JobHandle | None = None,
+) -> None:
     db.execute(delete(AdFinding).where(AdFinding.snapshot_id == snapshot.id))
     rows = (
         {
@@ -74,12 +78,15 @@ def _store_findings(db: Session, snapshot: AdSnapshot, findings: list[Finding], 
     snapshot.stats_json = json.dumps(stats, ensure_ascii=False)
     snapshot.analyzer_version = ANALYZER_VERSION
     snapshot.unchecked_json = json.dumps(gaps, ensure_ascii=False)
+    snapshot.summary_json = json.dumps(summary, ensure_ascii=False)
 
 
-def analyze(export: AdExport, cfg: AdConfig, ca: CaData | None = None) -> list[Finding]:
-    findings = run_all(ExportIndex(export, ca), cfg)
+def analyze(export: AdExport, cfg: AdConfig, ca: CaData | None = None) -> tuple[ExportIndex, list[Finding]]:
+    """Индекс возвращается вместе с находками: по нему же считается сводка."""
+    idx = ExportIndex(export, ca)
+    findings = run_all(idx, cfg)
     findings.sort(key=lambda f: (SEVERITY_RANK.get(f.severity, 9), f.check, f.identity, f.target))
-    return findings
+    return idx, findings
 
 
 def import_export(
@@ -104,7 +111,8 @@ def import_export(
     # неё домен пережил бы отказ задачи.
     known = db.execute(select(AdDomain.id).where(AdDomain.sid == export.domain.sid)).scalar()
     ca, ca_data_id = effective_ca_data(db, known) if known is not None else (None, None)
-    findings = analyze(export, cfg, ca)
+    idx, findings = analyze(export, cfg, ca)
+    summary = build_summary(idx, cfg)
     gaps = coverage_gaps(export, ca)
     if handle:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
@@ -123,7 +131,7 @@ def import_export(
     db.flush()
     # Разобранная выгрузка больше не нужна: находки пишутся без неё рядом.
     del export
-    _store_findings(db, snapshot, findings, gaps, handle)
+    _store_findings(db, snapshot, findings, gaps, summary, handle)
     store_gz(path, snapshot_path(data_dir, snapshot.id))
     db.commit()
     FINDINGS_ADAPTER.reconcile(db, domain.id, snapshot.id)
@@ -151,13 +159,14 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: AdSnapshot, cfg: 
         handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
     export = load_export_path(path)
     ca, ca_data_id = effective_ca_data(db, snapshot.domain_id)
-    findings = analyze(export, cfg, ca)
+    idx, findings = analyze(export, cfg, ca)
+    summary = build_summary(idx, cfg)
     gaps = coverage_gaps(export, ca)
     del export
     if handle:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     snapshot.ca_data_id = ca_data_id
-    _store_findings(db, snapshot, findings, gaps, handle)
+    _store_findings(db, snapshot, findings, gaps, summary, handle)
     db.commit()
     FINDINGS_ADAPTER.reconcile(db, snapshot.domain_id, snapshot.id)
     return snapshot

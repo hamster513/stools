@@ -159,6 +159,15 @@ def get_snapshot(snapshot_id: int, db: Session = Depends(get_db), _user: AppUser
     return _snapshot_view(db, snapshot_or_404(db, AdSnapshot, snapshot_id))
 
 
+@router.get("/snapshots/{snapshot_id}/summary")
+def get_summary(snapshot_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+    snap = snapshot_or_404(db, AdSnapshot, snapshot_id)
+    if not snap.summary_json:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="сводка не посчитана: пересчитайте снапшот")
+    summary: dict[str, Any] = json.loads(snap.summary_json)
+    return summary
+
+
 @router.post("/snapshots/file", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
 async def upload_snapshot(
     background_tasks: BackgroundTasks,

@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from api.modules.ad.models import AdSnapshot
 from api.modules.ad.services.snapshots import snapshot_path
 from tests.ad.synthetic import NOW, build_export
 
@@ -123,6 +124,24 @@ def test_reanalyze_with_new_rules_and_delete(auth_client: TestClient, app_settin
     assert path.exists()
     assert auth_client.delete(f"/api/ad/snapshots/{snap['id']}").status_code == 204
     assert not path.exists() and auth_client.get("/api/ad/snapshots").json() == []
+
+
+def test_summary_after_import_and_409_when_not_computed(auth_client: TestClient, db_session: Any) -> None:
+    assert _upload(auth_client, build_export())["status"] == "done"
+    snap_id = auth_client.get("/api/ad/snapshots").json()[0]["id"]
+    r = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["version"] == 1 and body["accounts"]["users"]["total"] > 0 and body["accounts"]["computers"]["total"] == 2
+    db_session.get(AdSnapshot, snap_id).summary_json = ""
+    db_session.commit()
+    r = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary")
+    assert r.status_code == 409 and r.json() == {"detail": "сводка не посчитана: пересчитайте снапшот"}
+    assert auth_client.get("/api/ad/snapshots/999999/summary").status_code == 404
+    job = auth_client.post(f"/api/ad/snapshots/{snap_id}/reanalyze").json()["job_id"]
+    assert auth_client.get(f"/api/ad/jobs/{job}").json()["status"] == "done"
+    r = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary")
+    assert r.status_code == 200 and r.json() == body
 
 
 def test_gzip_bomb_fails_job_without_snapshot(auth_client: TestClient, monkeypatch: Any) -> None:
