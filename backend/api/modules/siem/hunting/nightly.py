@@ -53,6 +53,8 @@ TH_SCOPE = 1
 FINAL = ("ok", "failed", "skipped", "aborted")
 NOT_IN_TIME = "не успели за ночь"
 NOT_CONFIGURED = "подключение к MaxPatrol не настроено"
+#: Ожидание (повтор, пауза) идёт кусками не длиннее этого: между ними видны отмена и предел ночи.
+WAIT_SLICE_S = 30
 
 
 def finding_key(finding_id: int) -> str:
@@ -65,6 +67,32 @@ class RetriesExhausted(EventsError):
 
 class RunStopped(Exception):
     """Прогон закрыт и зафиксирован в базе; исключение лишь переводит задачу в failed с этим текстом."""
+
+
+class OutOfTime(Exception):
+    """Ожидание закончилось бы за пределом ночи: текущий и оставшиеся запросы — `skipped`."""
+
+
+def sliced_wait(
+    sleeper: Callable[[float], None], handle: JobHandle, clock: Callable[[], dt.datetime], deadline: dt.datetime,
+) -> Callable[[float], None]:
+    """Ожидание кусками по `WAIT_SLICE_S`: график повторов тянется до получаса, и всё это время
+    отмена человека и предел ночи должны срабатывать, а не ждать конца паузы."""
+
+    def wait(seconds: float) -> None:
+        remaining = float(seconds)
+        while True:
+            if as_aware_utc(clock()) + dt.timedelta(seconds=remaining) > deadline:
+                raise OutOfTime()
+            if remaining <= 0:
+                return
+            step = min(WAIT_SLICE_S, remaining)
+            sleeper(step)
+            remaining -= step
+            if handle.cancelled():
+                raise JobCancelled()
+
+    return wait
 
 
 def _live_run(db: Session, target_date: dt.date) -> ThRun | None:
@@ -183,7 +211,7 @@ def persist_finding(
     db.flush()
     rows = (
         {"finding_id": finding.id, "position": i,
-         "data_json": json.dumps({f: event.get(f, "") for f in fields}, ensure_ascii=False)}
+         "data_json": json.dumps({f: "" if event.get(f) is None else event[f] for f in fields}, ensure_ascii=False)}
         for i, event in enumerate(kept)
     )
     insert_chunked(db, ThEvent, rows, len(kept), None, "событий")
@@ -273,23 +301,29 @@ def _execute(
     # Предел ночи считается от конца окна расписания, а не от старта: опоздавший прогон
     # не должен отнимать время у следующей ночи.
     deadline = as_aware_utc(run.period_to) + dt.timedelta(hours=settings.nightly_deadline_h)
+    wait = sliced_wait(sleeper, handle, clock, deadline)
+    index = 0
     with make_client(conn, float(settings.request_timeout_s)) as http:
         client = EventsClient(conn.unsealed(), http)
-        for index, query in enumerate(queue):
-            if index:
-                sleeper(settings.query_pause_s)
-            hunt = db.get(ThHunt, query.hunt_id)
-            assert hunt is not None
-            handle.tick(finished + index, message=f"{finished + index + 1} из {total}, {hunt.code}")
-            if as_aware_utc(clock()) >= deadline:
-                rest = queue[index:]
-                _close_rest(db, run, rest, "skipped", NOT_IN_TIME)
-                _finish(db, run, "done", clock, f"{NOT_IN_TIME}: пропущено запросов {len(rest)}")
-                return
-            if not _run_query(db, client, run, hunt, query, settings, sleeper, clock, current):
-                _close_rest(db, run, queue[index + 1:], "aborted", f"прогон прерван: {LOGIN_REJECTED}")
-                _finish(db, run, "aborted", clock, LOGIN_REJECTED)
-                raise RunStopped(LOGIN_REJECTED)
+        try:
+            for index, query in enumerate(queue):
+                if index:
+                    wait(settings.query_pause_s)
+                hunt = db.get(ThHunt, query.hunt_id)
+                assert hunt is not None
+                handle.tick(finished + index, message=f"{finished + index + 1} из {total}, {hunt.code}")
+                if as_aware_utc(clock()) >= deadline:
+                    raise OutOfTime()
+                if not _run_query(db, client, run, hunt, query, settings, wait, clock, current):
+                    _close_rest(db, run, queue[index + 1:], "aborted", f"прогон прерван: {LOGIN_REJECTED}")
+                    _finish(db, run, "aborted", clock, LOGIN_REJECTED)
+                    raise RunStopped(LOGIN_REJECTED)
+        except OutOfTime:
+            # Текущий запрос (строка «в работе», если ожидание прервало его повторы) и остальные.
+            rest = queue[index:]
+            _close_rest(db, run, rest, "skipped", NOT_IN_TIME)
+            _finish(db, run, "done", clock, f"{NOT_IN_TIME}: пропущено запросов {len(rest)}")
+            return
     _finish(db, run, "done", clock)
 
 
@@ -323,6 +357,7 @@ def _run_query(
     except EventsAuthError as exc:
         row.status, row.error = "failed", public_error(exc)
         row.duration_ms = _ms(started, clock())
+        run.queries_done += 1
         return False
     except EventsError as exc:
         row.status = "failed"

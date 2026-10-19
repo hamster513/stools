@@ -32,5 +32,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Сужение: при заменённых прогонах (две строки на дату) ограничение не создастся и откат упадёт.
     op.drop_index("uq_th_run_target_date_live", table_name="th_run")
     op.create_unique_constraint("uq_th_run_target_date", "th_run", ["target_date"])

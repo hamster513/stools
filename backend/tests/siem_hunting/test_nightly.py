@@ -29,7 +29,7 @@ from api.modules.siem.hunting.nightly import (
     supersede_and_rerun,
 )
 from api.modules.siem.hunting.settings import ThSettings
-from api.modules.siem.services.kb_settings import KbConnectionIn, save_connection
+from api.modules.siem.services.kb_settings import KbConnection, KbConnectionIn, save_connection
 from api.platform.findings.models import FindingState
 from tests.siem_hunting.fake_events import TOKEN, FakeEvents
 
@@ -189,11 +189,17 @@ def test_run_persists_findings_and_history(db_session: Any, fake: FakeEvents) ->
 
 def test_missing_fields_are_blank(db_session: Any, fake: FakeEvents) -> None:
     add_hunt(db_session, "TH-WIN-001", [("Q1", "q-blank")], fields=["time", "src.ip", "event_src.host"])
-    fake.events_by_query["q-blank"] = [{"time": "t1", "event_src.host": "ws-0001", "body": "лишнее поле"}]
+    fake.events_by_query["q-blank"] = [
+        {"time": "t1", "event_src.host": "ws-0001", "body": "лишнее поле"},
+        {"time": "t2", "src.ip": None, "event_src.host": 0},
+    ]
     r = create_run(db_session, NIGHT, ThSettings(), TZ)
     run(db_session, r.id)
-    (event,) = db_session.scalars(select(ThEvent)).all()
-    assert json.loads(event.data_json) == {"time": "t1", "src.ip": "", "event_src.host": "ws-0001"}
+    rows = db_session.scalars(select(ThEvent).order_by(ThEvent.position)).all()
+    assert [json.loads(e.data_json) for e in rows] == [
+        {"time": "t1", "src.ip": "", "event_src.host": "ws-0001"},
+        {"time": "t2", "src.ip": "", "event_src.host": 0},
+    ]
 
 
 def test_500_retries_then_failed_and_run_continues(db_session: Any, fake: FakeEvents) -> None:
@@ -202,7 +208,8 @@ def test_500_retries_then_failed_and_run_continues(db_session: Any, fake: FakeEv
     fake.status_once["q-flaky"] = [500, 500]
     r = create_run(db_session, NIGHT, ThSettings(), TZ)
     sleeper = run(db_session, r.id)
-    assert sleeper.calls == [600, 1200, 30]
+    # Ожидание кусками не длиннее 30 с: 10 мин + 20 мин повторов и пауза между запросами.
+    assert sum(sleeper.calls) == 600 + 1200 + 30 and max(sleeper.calls) <= 30
     assert history(db_session, r.id) == [("TH-WIN-001", "Q1", "ok"), ("TH-WIN-001", "Q2", "ok")]
     assert db_session.get(ThRun, r.id).findings == 1
 
@@ -211,7 +218,7 @@ def test_500_retries_then_failed_and_run_continues(db_session: Any, fake: FakeEv
     fake.calls.clear()
     r2 = create_run(db_session, NIGHT + dt.timedelta(days=1), ThSettings(), TZ)
     sleeper = run(db_session, r2.id)
-    assert sleeper.calls == [600, 1200, 1800, 1800, 1800, 1800, 1800, 30]
+    assert sum(sleeper.calls) == 600 + 1200 + 1800 * 5 + 30 and max(sleeper.calls) <= 30
     assert len(fake.calls) == 9
     assert history(db_session, r2.id) == [("TH-WIN-001", "Q1", "failed"), ("TH-WIN-001", "Q2", "ok")]
     failed = db_session.scalar(select(ThRunQuery).where(ThRunQuery.run_id == r2.id, ThRunQuery.query_id == "Q1"))
@@ -233,6 +240,7 @@ def test_401_aborts_run(db_session: Any, fake: FakeEvents) -> None:
     got = db_session.get(ThRun, run_id)
     assert (got.status, got.error) == ("aborted", "вход отклонён") and got.finished_at is not None
     assert [s for _, _, s in history(db_session, run_id)] == ["failed", "aborted", "aborted"]
+    assert got.queries_done == 1
     job = db_session.get(ThJob, job_id)
     assert job.status == "failed" and job.error == "вход отклонён"
     rows = db_session.scalars(select(ThRunQuery).where(ThRunQuery.run_id == run_id)).all()
@@ -308,3 +316,77 @@ def test_one_run_per_date_and_rerun_supersedes(db_session: Any, fake: FakeEvents
     assert db_session.scalar(select(func.count()).select_from(ThEvent).where(ThEvent.finding_id == kept_id)) == 2
     with pytest.raises(ValueError):
         create_run(db_session, NIGHT, ThSettings(), TZ)
+
+
+def test_cancel_during_retry_wait(db_session: Any, fake: FakeEvents) -> None:
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a"), ("Q2", "q-b")])
+    fake.status_once["q-a"] = [500] * 8
+    r = create_run(db_session, NIGHT, ThSettings(), TZ)
+    run_id = r.id
+    job_id = start_job(db_session, ThJob, "nightly", "t")
+    slept: list[float] = []
+
+    def cancel_after_first_slice(seconds: float) -> None:
+        slept.append(seconds)
+        db_session.execute(ThJob.__table__.update().where(ThJob.id == job_id).values(cancel_requested=True))
+        db_session.commit()
+
+    run_job(ThJob, job_id, lambda db, h: run_nightly(db, h, run_id, sleeper=cancel_after_first_slice, clock=Clock(WINDOW_END)))
+    db_session.expire_all()
+    assert db_session.get(ThRun, run_id).status == "cancelled"
+    assert db_session.get(ThJob, job_id).status == "cancelled"
+    assert history(db_session, run_id) == [("TH-WIN-001", "Q1", "running")]
+    assert sum(slept) <= 60 and len(fake.calls) == 1
+
+
+def test_deadline_cuts_retry_wait(db_session: Any, fake: FakeEvents) -> None:
+    set_th(db_session, nightly_deadline_h=1)
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a"), ("Q2", "q-b")])
+    fake.status_once["q-a"] = [500] * 8
+    r = create_run(db_session, NIGHT, ThSettings(), TZ)
+    clock = Clock(WINDOW_END + dt.timedelta(minutes=50))
+    # Повтор через 10 мин ещё укладывается в предел, но каждый кусок ожидания «длится» 5 минут.
+    sleeper = run(db_session, r.id, sleeper=Sleeper(clock, dt.timedelta(minutes=5)), clock=clock)
+    assert len(sleeper.calls) == 1 and len(fake.calls) == 1
+    assert history(db_session, r.id) == [("TH-WIN-001", "Q1", "skipped"), ("TH-WIN-001", "Q2", "skipped")]
+    skipped = db_session.scalars(select(ThRunQuery).where(ThRunQuery.run_id == r.id)).all()
+    assert {row.error for row in skipped} == {"не успели за ночь"}
+    got = db_session.get(ThRun, r.id)
+    assert got.status == "done" and got.queries_done == 0 and got.error == "не успели за ночь: пропущено запросов 2"
+
+
+def test_unconfigured_connection_aborts(db_session: Any) -> None:
+    db_session.add(AppSetting(key="siem_mp", value_json=KbConnection(host="mp.corp.local").model_dump_json()))
+    db_session.commit()
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a"), ("Q2", "q-b")])
+    r = create_run(db_session, NIGHT, ThSettings(), TZ)
+    run_id = r.id
+    job_id = start_job(db_session, ThJob, "nightly", "t")
+    run_job(ThJob, job_id, lambda db, h: run_nightly(db, h, run_id, sleeper=Sleeper(), clock=Clock(WINDOW_END)))
+    db_session.expire_all()
+    got = db_session.get(ThRun, run_id)
+    assert (got.status, got.error) == ("aborted", "подключение к MaxPatrol не настроено")
+    assert [s for _, _, s in history(db_session, run_id)] == ["aborted", "aborted"]
+    rows = db_session.scalars(select(ThRunQuery).where(ThRunQuery.run_id == run_id)).all()
+    assert all("corp.local" not in (row.error or "") for row in rows) and "corp.local" not in got.error
+    job = db_session.get(ThJob, job_id)
+    assert job.status == "failed" and "corp.local" not in (job.error or "")
+
+
+def test_unexpected_error_fails_run(db_session: Any, fake: FakeEvents, monkeypatch: pytest.MonkeyPatch) -> None:
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a"), ("Q2", "q-b")])
+
+    def boom(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        raise RuntimeError("mp.corp.local сломался")
+
+    monkeypatch.setattr("api.modules.siem.hunting.nightly.EventsClient.search", boom)
+    r = create_run(db_session, NIGHT, ThSettings(), TZ)
+    run_id = r.id
+    job_id = start_job(db_session, ThJob, "nightly", "t")
+    run_job(ThJob, job_id, lambda db, h: run_nightly(db, h, run_id, sleeper=Sleeper(), clock=Clock(WINDOW_END)))
+    db_session.expire_all()
+    got = db_session.get(ThRun, run_id)
+    assert (got.status, got.error) == ("failed", "сбой прогона: RuntimeError")
+    (row,) = db_session.scalars(select(ThRunQuery).where(ThRunQuery.run_id == run_id)).all()
+    assert (row.query_id, row.status, row.error) == ("Q1", "failed", "сбой прогона: RuntimeError")
+    assert db_session.get(ThJob, job_id).status == "failed"
