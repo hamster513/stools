@@ -199,6 +199,10 @@ def test_ca_object_without_templates_still_needs_ca_data() -> None:
     assert set(_gaps(raw, None)) == {"ADCS_ESC", "ADCS_CA", "ADCS_MAPPING", "DcHardening"}
 
 
+#: Прочитанная CIM-часть записи контроллера: без неё каждое null-поле — своя причина DcHardening.
+_CIM = {k: build_ca_data()["dcs"][0][k] for k in ("smb1", "smb_require_signing", "spooler", "webclient", "last_boot")}
+
+
 def _ca_entry(**fields: Any) -> dict[str, Any]:
     return {**build_ca_data()["cas"][0], **fields}
 
@@ -210,8 +214,8 @@ def test_broken_ca_security_is_a_reason(security: str) -> None:
 
 
 def test_unread_dc_is_a_reason() -> None:
-    dcs = [{"host": "dc01.corp.local", "registry_read": False, "cim_read": True, "error": "нет доступа к реестру"},
-           {"host": "dc02.corp.local", "strong_binding": 2, "mapping_methods": 0x18, "registry_read": True, "cim_read": True}]
+    dcs = [{"host": "dc01.corp.local", "registry_read": False, "cim_read": True, **_CIM, "error": "нет доступа к реестру"},
+           {"host": "dc02.corp.local", "strong_binding": 2, "mapping_methods": 0x18, "registry_read": True, "cim_read": True, **_CIM}]
     gaps = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
     assert gaps == {"ADCS_MAPPING": "контроллер dc01.corp.local: реестр не прочитан (нет доступа к реестру)",
                     "DcHardening": "контроллер dc01.corp.local: реестр не прочитан (нет доступа к реестру)"}
@@ -224,7 +228,7 @@ def test_unchecked_web_is_a_reason() -> None:
 
 
 def test_records_with_data_and_error_are_checked() -> None:
-    dcs = [{"host": "dc01.corp.local", "strong_binding": 0, "registry_read": False, "cim_read": True, "error": "CertificateMappingMethods не прочитан"}]
+    dcs = [{"host": "dc01.corp.local", "strong_binding": 0, "registry_read": False, "cim_read": True, **_CIM, "error": "CertificateMappingMethods не прочитан"}]
     web = [{"url": "http://ca01.corp.local/certsrv/", "status": 401, "auth": ["NTLM"], "error": "сертификат не проверен"}]
     ca = parse_ca_data(build_ca_data(dcs=dcs, web=web))
     idx = ExportIndex(load_export(json.dumps(build_export()).encode()), ca)
@@ -271,7 +275,7 @@ def test_ca_field_missing_without_error_is_not_a_reason() -> None:
     ids=["mapping_methods", "strong_binding"],
 )
 def test_partly_read_dc_names_unchecked_value(dc: dict[str, Any], reason: str) -> None:
-    ca = parse_ca_data(build_ca_data(dcs=[{"host": "dc01.corp.local", **dc, "registry_read": False, "cim_read": True, "error": "частично"}]))
+    ca = parse_ca_data(build_ca_data(dcs=[{"host": "dc01.corp.local", **dc, "registry_read": False, "cim_read": True, **_CIM, "error": "частично"}]))
     assert _gaps(build_export(), ca) == {"ADCS_MAPPING": reason, "DcHardening": "контроллер dc01.corp.local: реестр не прочитан (частично)"}
 
 
@@ -325,6 +329,21 @@ def test_cim_error_of_read_registry_is_not_an_esc10_reason() -> None:
     dcs = [_dc(strong_binding=None, mapping_methods=None, cim_read=False, error="CIM: WinRM недоступен")]
     gaps = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
     assert gaps == {"DcHardening": "контроллер dc01.corp.local: службы и SMB не прочитаны (CIM: WinRM недоступен)"}
+
+
+def test_dc_cim_sub_reads_name_each_unread_part() -> None:
+    """CIM-сессия есть, но часть чтений отказала: эти виды DcHardening не проверены — своя причина у каждой части."""
+    dcs = [_dc(smb_require_signing=None, spooler=None, last_boot=None, error="SMB: отказ; службы: нет доступа; время загрузки: таймаут")]
+    reasons = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))["DcHardening"].split("; контроллер ")
+    assert reasons == ["контроллер dc01.corp.local: SMB не прочитан (SMB: отказ)",
+                       "dc01.corp.local: службы не прочитаны (службы: нет доступа)",
+                       "dc01.corp.local: время загрузки не прочитано (время загрузки: таймаут)"]
+
+
+def test_dc_null_registry_values_of_read_registry_are_not_reasons() -> None:
+    """Реестр прочитан, параметров нет — действуют значения по умолчанию, проверка выполнена."""
+    dcs = [_dc(lm_compatibility=None, no_lm_hash=None, ldap_integrity=None, ldap_channel_binding=None, tls=None)]
+    assert "DcHardening" not in _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
 
 
 def _upload(client: TestClient, raw: dict[str, Any]) -> dict[str, Any]:

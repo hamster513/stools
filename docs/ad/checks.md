@@ -1,6 +1,6 @@
 # Проверки модуля Active Directory
 
-Версия анализатора — 6. Реестр — `backend/api/modules/ad/core/checks/__init__.py`, «Как исправить» и
+Версия анализатора — 7. Реестр — `backend/api/modules/ad/core/checks/__init__.py`, «Как исправить» и
 ссылки — `checks/catalog.py`, пороги и списки — настройки правил (Active Directory → Настройки и
 данные → «Правила проверок»).
 
@@ -97,7 +97,10 @@
 | `DcCount` | в домене один контроллер | Low | `uac` компьютеров | A-NotEnoughDC |
 | `DcDelegation` | контроллер с `msDS-AllowedToDelegateTo` или protocol transition | High | `uac`, `msDS-AllowedToDelegateTo` | P-DelegationDCa2d2, P-DelegationDCt2a4d |
 | `DcOwner` | владелец объекта контроллера — небезопасный субъект | Medium | ACL контроллеров | P-DCOwner |
+| `DcHardening` | по виду, на пару «контроллер × вид» (цель — `host`, `key_extra` — вид): `ntlmv1` — `lm_compatibility` (нет значения — 3) < 3 или 3–4; `lm_hash` — `no_lm_hash` = 0; `ldap_signing` — `ldap_integrity` (нет значения — 1) ≠ 2; `channel_binding` — `ldap_channel_binding` (нет значения — 0) = 0 или 1; `smb1` — SMBv1 включён; `smb_signing` — `smb_require_signing` = false; `spooler`, `webclient` — служба `running`; `uptime` — `last_boot` старше `dc_max_uptime_days` (180) на дату выгрузки; `tls_old` — у SSL 3.0, TLS 1.0 или TLS 1.1 `Enabled` задан и ≠ 0. Значение по умолчанию подставляется только при `registry_read`; в `details` — фактическое значение, `default` (подставлено ли) и дата сбора раздела; allowlist не действует | `ntlmv1` High (< 3) или Medium (3–4); `lm_hash` Medium; `ldap_signing` Medium; `channel_binding` Medium (0) или Low (1); `smb1` High; `smb_signing` High; `spooler` Medium; `webclient` Low; `uptime` Medium; `tls_old` Low | данные ЦС, раздел `dc` (сборщик 2.3, пункт 6) | S-OldNtlm, A-LMHashAuthorized, A-DCLdapSign, A-DCLdapsChannelBinding, S-SMB-v1, A-SMB2SignatureNotRequired, A-DC-Spooler, A-DC-WebClient, S-DC-NotUpdated, A-DCLdapsProtocol |
 | `RodcPasswordReplication` | по виду: `reveal_privileged` привилегированная группа или админ в `revealOnDemand` RODC; `never_reveal_missing` в `neverReveal` нет группы 572; `admin_revealed` админ в `revealedUsers`; `krbtgt_orphan` учётка `krbtgt_NNNNN` не связана ни с одним RODC (`krbTgtLink`); при наличии RODC — `allowed_group_not_empty` в группе 571 есть члены (находка на члена), `denied_group_incomplete` в группе 572 (с вложенными) нет 512, 518, 519, 516 или 502 из тех, что есть в выгрузке | Medium | `uac`, `msDS-RevealOnDemandGroup`, `msDS-NeverRevealGroup`, `msDS-RevealedUsers`, `msDS-KrbTgtLink`, `member` | P-RODC* |
+
+Без раздела `dc` в данных ЦС `DcHardening` не проверена — в том числе в домене без AD CS. По контроллеру причина «не проверено» — по каналу (реестр не прочитан; службы и SMB не прочитаны) или, если CIM отработал, по его части: SMB, службы, время загрузки. Виды этой части у контроллера тогда не выдаются.
 
 ## Настройки домена и леса — `domain`
 

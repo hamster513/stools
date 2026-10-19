@@ -53,6 +53,7 @@ from api.modules.ad.core.checks.critical_acl import (
     check_critical_object_acl,
     check_domain_root_acl,
 )
+from api.modules.ad.core.checks.dc_hardening import check_dc_hardening
 from api.modules.ad.core.checks.dns import check_dns_zones
 from api.modules.ad.core.checks.domain import (
     check_backup_age,
@@ -92,7 +93,7 @@ from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "6"
+ANALYZER_VERSION = "7"
 
 _CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -130,6 +131,7 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("DcCount", "Число контроллеров домена", "Один контроллер домена — единая точка отказа: при его потере домен недоступен, а восстановление затруднено.", check_dc_count, ()),
     CheckSpec("DcDelegation", "Делегация контроллеров домена", "Ограниченная делегация у контроллера (служб или protocol transition) позволяет от имени его учётки получать доступ к службам; контроллер — цель высшей ценности.", check_dc_delegation, ("T1558",)),
     CheckSpec("DcOwner", "Владелец объекта контроллера", "Владелец объекта контроллера домена может менять его права независимо от ACL; владельцем должны быть только администраторы.", check_dc_owner, ("T1098",)),
+    CheckSpec("DcHardening", "Настройки контроллеров домена (NTLM, подпись LDAP и SMB, службы)", "Контроллер, который принимает NTLMv1, не требует подписи LDAP и SMB, держит SMBv1, запущенные Spooler и WebClient или давно не перезагружался (не обновлялся), открывает перехват и ретрансляцию проверки подлинности, принуждение контроллера к входу и известные уязвимости.", check_dc_hardening, ("T1557", "T1187", "T1210")),
     CheckSpec("TooManyAdmins", "Слишком много администраторов", "Чем больше администраторов домена, тем больше учётных записей, захват любой из которых даёт полный контроль над доменом.", check_too_many_admins, ("T1078.002",)),
     CheckSpec("FunctionalLevel", "Функциональный уровень домена и леса", "Низкий функциональный уровень домена или леса не даёт включить защиту новых версий Windows Server: Protected Users, политики и силосы проверки подлинности, AES для Kerberos по умолчанию.", check_functional_level, ()),
     CheckSpec("PreWin2000Access", "Группа Pre-Windows 2000 Compatible Access", "Участники группы читают атрибуты всех пользователей и групп домена; Anonymous Logon или Everyone в ней открывают каталог без входа.", check_pre_win2000_access, ("T1087.002",)),

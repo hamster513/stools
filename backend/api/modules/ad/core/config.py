@@ -82,6 +82,8 @@ class AdConfig(BaseModel):
     password_min_length: int = Field(default=8, ge=1)
     #: Последний бэкап AD (по dSASignature) старше стольких дней — находка BackupAge.
     backup_max_age_days: int = Field(default=7, ge=1)
+    #: Контроллер не перезагружался дольше (last_boot из данных контроллеров) — находка DcHardening (uptime).
+    dc_max_uptime_days: int = Field(default=180, ge=1)
     #: Пароль учётки «только смарт-карта» старше — находка SmartcardPassword (если домен его не меняет сам).
     smartcard_password_max_age_days: int = Field(default=90, ge=1)
     #: Объект доверия не менялся дольше — пароль доверия не обновляется, находка TrustSecurity (inactive).

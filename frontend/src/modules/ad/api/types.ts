@@ -65,6 +65,7 @@ export interface AdConfig {
   computer_password_max_age_days: number
   password_min_length: number
   backup_max_age_days: number
+  dc_max_uptime_days: number
   smartcard_password_max_age_days: number
   trust_inactive_days: number
   control_path_many: number

@@ -25,7 +25,7 @@ function osRows(c: AdConfig): OsRow[] { return Object.entries(c.obsolete_os_buil
 function parseOsRows(rows: OsRow[]): Record<string, string> { return Object.fromEntries(rows.map(([b, d]) => [b.trim(), d]).filter(([b, d]) => b && d)) }
 
 type DayKey = 'admin_password_max_age_days' | 'builtin_admin_recent_days' | 'computer_inactivity_days' | 'computer_password_max_age_days' | 'azure_sso_key_max_age_days'
-  | 'backup_max_age_days' | 'trust_inactive_days' | 'smartcard_password_max_age_days'
+  | 'backup_max_age_days' | 'trust_inactive_days' | 'smartcard_password_max_age_days' | 'dc_max_uptime_days'
 const DAYS: { key: DayKey; label: string; hint: string }[] = [
   { key: 'admin_password_max_age_days', label: 'Пароль админа старше, дней', hint: 'AdminPasswordAge' },
   { key: 'builtin_admin_recent_days', label: 'Вход Administrator за, дней', hint: 'BuiltinAdminUsed: встроенная учётка RID 500' },
@@ -33,6 +33,7 @@ const DAYS: { key: DayKey; label: string; hint: string }[] = [
   { key: 'computer_password_max_age_days', label: 'Пароль компьютера старше, дней', hint: 'ComputerPasswordAge; у контроллера порог 45' },
   { key: 'azure_sso_key_max_age_days', label: 'Ключ Entra SSO старше, дней', hint: 'AzureSsoKeyAge: ключ Seamless SSO' },
   { key: 'backup_max_age_days', label: 'Резервная копия AD старше, дней', hint: 'BackupAge: по dSASignature корня домена' },
+  { key: 'dc_max_uptime_days', label: 'Контроллер не перезагружался, дней', hint: 'DcHardening (uptime): по времени загрузки из данных контроллеров' },
   { key: 'trust_inactive_days', label: 'Доверие не менялось, дней', hint: 'TrustSecurity: пароль доверия не обновляется' },
   { key: 'smartcard_password_max_age_days', label: 'Пароль учётки «только смарт-карта» старше, дней', hint: 'SmartcardPassword, если домен не меняет его сам' },
 ]

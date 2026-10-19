@@ -217,7 +217,8 @@ def _ca_record_reasons(c: CaAuthority) -> list[str]:
 
 
 def _dc_state_reasons(ca: CaData | None) -> list[str]:
-    """Состояние контроллеров (раздел dc сборщика 2.3): по каждому контроллеру — какой канал не отработал.
+    """Состояние контроллеров (раздел dc сборщика 2.3): по каждому контроллеру — какой канал не отработал,
+    а при отработавшем CIM — какая его часть (SMB, службы, время загрузки) не прочитана.
     Запись сборщика до 2.3 флагов не несёт — оба канала у неё не прочитаны."""
     if ca is None or "dc" not in ca.sections:
         return ["нужно состояние контроллеров (сборщик, пункт 6)"]
@@ -227,6 +228,15 @@ def _dc_state_reasons(ca: CaData | None) -> list[str]:
             reasons.append(f"контроллер {d.host}: реестр не прочитан{_channel_error(d.error, 'реестр: ')}")
         if not d.cim_read:
             reasons.append(f"контроллер {d.host}: службы и SMB не прочитаны{_channel_error(d.error, 'CIM: ')}")
+            continue
+        # Сессия CIM есть, но отдельное чтение отказало: null здесь — «не известно», а не «значения нет».
+        for missing, what, prefix in (
+            (d.smb1 is None or d.smb_require_signing is None, "SMB не прочитан", "SMB: "),
+            (d.spooler is None or d.webclient is None, "службы не прочитаны", "службы: "),
+            (d.last_boot is None, "время загрузки не прочитано", "время загрузки: "),
+        ):
+            if missing:
+                reasons.append(f"контроллер {d.host}: {what}{_channel_error(d.error, prefix)}")
     return reasons
 
 

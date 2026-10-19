@@ -59,6 +59,7 @@ const DEFAULTS: AdConfig = {
   computer_password_max_age_days: 90,
   password_min_length: 8,
   backup_max_age_days: 7,
+  dc_max_uptime_days: 180,
   smartcard_password_max_age_days: 90,
   trust_inactive_days: 40,
   control_path_many: 100,

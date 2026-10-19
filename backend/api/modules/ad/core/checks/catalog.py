@@ -300,6 +300,21 @@ GUIDANCE: dict[str, Guidance] = {
             _attack("T1098", "Account Manipulation"),
         ),
     ),
+    "DcHardening": Guidance(
+        "dc",
+        "В GPO для OU Domain Controllers (Конфигурация компьютера → Политики → Конфигурация Windows → Параметры безопасности → Локальные политики → Параметры безопасности) задайте «Сетевая безопасность: уровень проверки подлинности LAN Manager» — «Отправлять только NTLMv2-ответ. Отказывать LM и NTLM» (LmCompatibilityLevel = 5), включите «Не хранить хеш-значения LAN Manager при следующей смене пароля», «Контроллер домена: требование подписи для LDAP-сервера» — «Требовать подпись», «Контроллер домена: требования к привязке токена канала LDAP-сервера» — «Всегда» и «Сервер сетевой Майкрософт: применять цифровую подпись (всегда)». Отключите SMBv1 (Set-SmbServerConfiguration -EnableSMB1Protocol $false), остановите и отключите службы Spooler и WebClient, выключите SSL 3.0, TLS 1.0 и TLS 1.1 в SCHANNEL (Server\\Enabled = 0). Контроллеры, которые давно не перезагружались, обновите и перезагрузите; порог давности задаётся в настройках. Перед включением подписи и запретом NTLMv1 проверьте по журналам контроллеров, что старые клиенты их не используют.",
+        (
+            ("Microsoft: уровень проверки подлинности LAN Manager", f"{_PREV}/network-security-lan-manager-authentication-level"),
+            ("Microsoft: подпись LDAP в Windows Server", f"{_LEARN}/troubleshoot/windows-server/active-directory/enable-ldap-signing-in-windows-server"),
+            ("Microsoft: обзор подписи SMB", f"{_LEARN}/windows-server/storage/file-server/smb-signing-overview"),
+            ("Microsoft: обнаружение и отключение SMBv1", f"{_LEARN}/windows-server/storage/file-server/troubleshoot/detect-enable-and-disable-smbv1-v2-v3"),
+            ("Microsoft Defender for Identity: служба печати на контроллерах домена", f"{_LEARN}/defender-for-identity/security-assessment-print-spooler"),
+            ("Microsoft: параметры реестра TLS", f"{_LEARN}/windows-server/security/tls/tls-registry-settings"),
+            _attack("T1557", "Adversary-in-the-Middle"),
+            _attack("T1187", "Forced Authentication"),
+            _attack("T1210", "Exploitation of Remote Services"),
+        ),
+    ),
     "TooManyAdmins": Guidance(
         "privileged",
         "Сократите число администраторов домена: оставьте в группах Domain Admins, Enterprise Admins, Schema Admins и Administrators только тех, кому полный контроль нужен постоянно. Остальным выдайте делегированные права на конкретные OU и задачи; сервисные учётки уберите из этих групп. Порог задаётся в настройках.",
