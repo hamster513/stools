@@ -44,7 +44,10 @@ export function DeepPage() {
   const { write } = useCan()
   const fromParam = Number(params.get('from'))
   const from = Number.isInteger(fromParam) && fromParam > 0 ? fromParam : undefined
-  const origin = useHuntOfQuery(from)
+  const huntParam = Number(params.get('hunt'))
+  const huntId = Number.isInteger(huntParam) && huntParam > 0 ? huntParam : undefined
+  // Аудитору форма не показывается — и запросов ради подстановки не делаем.
+  const origin = useHuntOfQuery(from, huntId, write)
   const deeps = useDeepHunts()
 
   const errorMessage = deeps.isError ? apiMessage(deeps.error, 'Не удалось загрузить большие ханты') : null
@@ -62,7 +65,7 @@ export function DeepPage() {
         {write && (
           origin.loading
             ? <div className="flex justify-center rounded border border-grid bg-surface py-8"><Spinner /></div>
-            : <DeepForm key={from ?? 'blank'} originHunt={origin.hunt} originQuery={from} />
+            : <DeepForm key={from ?? 'blank'} originHunt={origin.hunt} originQuery={from} originFailed={origin.failed} />
         )}
 
         <section>
@@ -110,6 +113,9 @@ function initialForm(hunt: HuntView | null, queryPk: number | undefined): Form {
   }
 }
 
+/** Сколько значений в списке через запятую: пустые не считаются. */
+const countItems = (s: string) => s.split(',').filter((x) => x.trim()).length
+
 const isInt = (s: string, min: number, max: number) => /^\d+$/.test(s.trim()) && Number(s) >= min && Number(s) <= max
 
 /** Что мешает запуску; null — можно. Те же границы, что у сервера (`DeepIn`). */
@@ -141,7 +147,7 @@ function bodyOf(f: Form): DeepCreate {
   return body
 }
 
-function DeepForm({ originHunt, originQuery }: { originHunt: HuntView | null; originQuery: number | undefined }) {
+function DeepForm({ originHunt, originQuery, originFailed }: { originHunt: HuntView | null; originQuery: number | undefined; originFailed: boolean }) {
   const [form, setForm] = useState<Form>(() => initialForm(originHunt, originQuery))
   const [created, setCreated] = useState<DeepView | null>(null)
   const hunts = useHunts()
@@ -151,6 +157,9 @@ function DeepForm({ originHunt, originQuery }: { originHunt: HuntView | null; or
 
   const problem = problemOf(form)
   const defaultMonths = settings.data?.default_depth_months
+  const fieldCount = countItems(form.fields)
+  const labelCount = countItems(form.labels)
+  const labelsMismatch = labelCount > 0 && labelCount !== fieldCount
   const missingOrigin = originQuery !== undefined && !originHunt
 
   function patch(next: Partial<Form>) {
@@ -175,7 +184,11 @@ function DeepForm({ originHunt, originQuery }: { originHunt: HuntView | null; or
   return (
     <section className="rounded border border-grid bg-surface p-4" aria-label="Запуск большого ханта">
       <div className={SECTION_TITLE}>Новый большой хант</div>
-      {missingOrigin && <p className="mb-3 text-xs text-kind-1" role="alert">Запрос №{originQuery} не найден в библиотеке — возможно, хант удалён. Заполните форму вручную.</p>}
+      {missingOrigin && (
+        <p className="mb-3 text-xs text-kind-1" role="alert">
+          {originFailed ? 'Не удалось загрузить хант — запрос не подставлен. Обновите страницу или заполните форму вручную.' : `Запрос №${originQuery} не найден в библиотеке — возможно, хант удалён. Заполните форму вручную.`}
+        </p>
+      )}
 
       <fieldset className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1">
         <legend className="sr-only">Источник запроса</legend>
@@ -221,7 +234,11 @@ function DeepForm({ originHunt, originQuery }: { originHunt: HuntView | null; or
         <label className="block">
           <span className={LABEL}>Подписи колонок</span>
           <input value={form.labels} onChange={(e) => patch({ labels: e.target.value })} className={FIELD} placeholder="Время, Источник, Домен" />
-          <span className={HINT}>По одной на поле; пусто — подписи по умолчанию.</span>
+          <span className={HINT}>
+            {labelsMismatch
+              ? `подписей ${labelCount}, полей ${fieldCount} — лишние подписи отбрасываются, недостающие берутся из имён полей`
+              : 'По одной на поле; пусто — подписи по умолчанию.'}
+          </span>
         </label>
         <label className="block">
           <span className={LABEL}>Предел событий</span>

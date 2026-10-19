@@ -19,7 +19,9 @@ const LINK = 'rounded text-xs text-primary hover:underline focus-visible:outline
  * у ещё не сохранённого он правит черновик. `view` — сохранённая версия: последний запуск, ссылка «в большой хант».
  * Только чтение: поля заблокированы, кнопок нет.
  */
-export function QueryEditor({ draft, view, enabled, readOnly, toggling, onChange, onToggle, onRemove }: {
+export function QueryEditor({ huntId, draft, view, enabled, readOnly, toggling, onChange, onToggle, onRemove }: {
+  /** Номер ханта в базе — ссылка «в большой хант» несёт его, чтобы страница читала одну карточку; у несохранённого ханта пуст. */
+  huntId: number | undefined
   draft: QueryDraft
   view: QueryView | undefined
   /** Текущий выключатель: у сохранённого запроса — серверный. */
@@ -67,7 +69,7 @@ export function QueryEditor({ draft, view, enabled, readOnly, toggling, onChange
         )}
         {view && view.new_findings > 0 && <span className="text-xs text-text">новых находок: {view.new_findings}</span>}
         <div className="ml-auto flex items-center gap-3">
-          {view && <Link to={`/siem/hunting/deep?from=${view.id}`} className={LINK} title="Запустить этот запрос за длинный период">в большой хант</Link>}
+          {view && <Link to={`/siem/hunting/deep?from=${view.id}${huntId !== undefined ? `&hunt=${huntId}` : ''}`} className={LINK} title="Запустить этот запрос за длинный период">в большой хант</Link>}
           {!readOnly && (
             confirmed ? (
               <span className="flex items-center gap-1.5 text-xs text-text-secondary">

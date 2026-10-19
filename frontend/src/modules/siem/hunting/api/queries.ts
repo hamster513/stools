@@ -66,21 +66,38 @@ export function useHunt(id: number | undefined) {
 }
 
 /**
- * Хант, в котором лежит запрос с номером `queryPk` (`QueryView.id`): ссылка «в большой хант» знает только номер запроса.
- * Прямого адреса нет — ханты читаются по одному в общий кэш карточек, как при открытии карточки.
+ * Хант запроса с номером `queryPk` (`QueryView.id`) для подстановки в форму большого ханта. Ссылка «в большой хант»
+ * несёт и номер ханта (`huntId`): тогда читается одна его карточка. Без него (старая закладка) остаётся поиск:
+ * ханты читаются по одному в общий кэш карточек. `enabled = false` (аудитору форма не нужна) не запрашивает ничего.
+ * `failed` — запросы не удались: «не загрузился» не то же, что «запроса нет».
  */
-export function useHuntOfQuery(queryPk: number | undefined) {
-  const list = useHunts()
-  const ids = queryPk === undefined ? [] : (list.data ?? []).map((h) => h.id)
+export function useHuntOfQuery(queryPk: number | undefined, huntId: number | undefined, enabled = true) {
+  const wanted = enabled && queryPk !== undefined
+  const direct = wanted && huntId !== undefined
+  const card = useHunt(direct ? huntId : undefined)
+  const list = useQuery<HuntListItem[], ApiRequestError>({
+    queryKey: [...TH_HUNTS_KEY, 'list', {}],
+    queryFn: () => api.get(`${BASE}/hunts${buildQuery({})}`),
+    enabled: wanted && !direct,
+  })
+  const ids = wanted && !direct ? (list.data ?? []).map((h) => h.id) : []
   const one = useQueries({
     queries: ids.map((id) => ({
       queryKey: [...TH_HUNTS_KEY, 'one', id],
       queryFn: (): Promise<HuntView> => api.get(`${BASE}/hunts/${id}`),
     })),
   })
+  if (!wanted) return { hunt: null, loading: false, failed: false }
+  if (direct) {
+    const hunt = card.data?.queries.some((q) => q.id === queryPk) ? card.data : null
+    return { hunt, loading: card.isLoading, failed: card.isError }
+  }
   const hunt = one.map((q) => q.data).find((h) => h?.queries.some((q) => q.id === queryPk)) ?? null
-  const loading = queryPk !== undefined && !hunt && (list.isLoading || one.some((q) => q.isLoading))
-  return { hunt, loading }
+  return {
+    hunt,
+    loading: !hunt && (list.isLoading || one.some((q) => q.isLoading)),
+    failed: !hunt && (list.isError || one.some((q) => q.isError)),
+  }
 }
 
 /** Ответом хант приходит целиком: кладём его в кэш карточки, список обновится запросом. */

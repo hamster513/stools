@@ -181,7 +181,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
             </div>
           </Row>
           <p className="text-xs text-text-secondary">
-            {schedule?.next_run_at && draft.nightly_enabled
+            {schedule?.next_run_at && view.nightly_enabled
               ? <>Следующий запуск: <span className="text-text">{ruStamp(schedule.next_run_at)}</span> (по времени вашего браузера; часовой пояс сервера — {schedule.tz})</>
               : 'Следующий запуск: не назначен — прогон выключен.'}
             {schedule?.last_run_at && <> Прошлый запуск: {ruStamp(schedule.last_run_at)}.</>}
@@ -215,7 +215,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
       {write && (
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" variant="primary" loading={save.isPending} disabled={!valid || !dirty}>
-            <Save size={14} aria-hidden /> Сохранить
+            <Save size={14} aria-hidden /> Сохранить настройки Threat Hunting
           </Button>
           {saved && !dirty && <span className="inline-flex items-center gap-1.5 text-xs text-kind-accepted"><CheckCircle2 size={14} aria-hidden /> сохранено</span>}
           {!valid && <span className="text-xs text-text-secondary">исправьте отмеченные поля</span>}

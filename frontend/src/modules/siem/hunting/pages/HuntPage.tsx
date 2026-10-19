@@ -181,6 +181,7 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
               return (
                 <QueryEditor
                   key={q.key}
+                  huntId={hunt?.id}
                   draft={q}
                   view={view}
                   enabled={view ? view.enabled : q.enabled}
