@@ -45,8 +45,13 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 `collected_at`, `collector`, `domain: {sid, dns_root}`, `sections` и записи разделов:
 `cas` — `name, host, os_build, edit_flags, interface_flags, disable_extension_list,
 security` (дескриптор прав ЦС, base64), `dcs` — `host, strong_binding,
-mapping_methods`, `web` — `url, status, auth`; у каждой записи `error` — что
-сборщик не прочитал) загружается той же ручкой `POST /snapshots/file`: формат
+mapping_methods` и с PowerShell-сборщика 2.3 `lm_compatibility, no_lm_hash,
+ldap_integrity, ldap_channel_binding, tls, smb1, smb_require_signing, spooler,
+webclient, last_boot, os_build, registry_read, cim_read` (`tls` — `Enabled` для
+`SSL 3.0`, `TLS 1.0`, `TLS 1.1` или `null`; службы — `running`, `stopped`,
+`disabled`, `absent`; флаги — отработал ли канал, реестр и CIM: `null` у значения
+при прочитанном реестре — значения нет), `web` — `url, status, auth`; у каждой
+записи `error` — что сборщик не прочитал) загружается той же ручкой `POST /snapshots/file`: формат
 определяется по полю `format`.
 `stools-ad/1` — выгрузка домена (снапшот); `stools-ad-ca/*` — данные ЦС: домен
 ищется по `domain.sid` (нет — задача падает «сначала загрузите выгрузку
@@ -58,7 +63,9 @@ mapping_methods`, `web` — `url, status, auth`; у каждой записи `e
 
 ```
 GET    /domains/{id}/ca-data           [{id, collected_at, imported_at, filename, uploaded_by,
-                                        sections, cas, dcs, web}]   — cas/dcs/web: число записей
+                                        sections, cas, dcs, web, dc_total, dc_complete}]
+                                       — cas/dcs/web: число записей; dc_total/dc_complete —
+                                       контроллеров и сколько прочитано полностью (реестр и CIM)
 DELETE /ca-data/{id}                   {job_id} 202 — пересчёт последнего снапшота без них;
                                        204 — снапшотов домена нет; 409 — идёт задача, данные не удалены
 ```

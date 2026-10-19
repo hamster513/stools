@@ -18,6 +18,12 @@ const COLUMNS: ColumnDef[] = [
   { key: 'actions', label: 'Удалить', width: 48, resizable: false },
 ]
 
+/** Раздел в строке загрузки; у контроллеров — сколько их и сколько прочитано полностью. */
+function sectionLabel(s: string, c: CaData): string {
+  const label = CA_SECTION_LABELS[s] ?? s
+  return s === 'dc' ? `${label}: ${c.dc_total}, полностью прочитано ${c.dc_complete}` : label
+}
+
 function when(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
@@ -38,7 +44,7 @@ export function CaDataSection() {
   const cols = useColumnWidths('ad-ca-data-columns', COLUMNS)
 
   return (
-    <Section title="Данные центра сертификации" about="Настройки и права ЦС, реестр контроллеров и веб-выдача собираются отдельно скриптом (пункты 5–7 меню), из продукта по LDAP они недоступны. Файл загружается тем же полем, что и выгрузка AD; анализ берёт каждый раздел из самой свежей загрузки, где он есть.">
+    <Section title="Данные ЦС и контроллеров" about="Настройки и права ЦС, состояние контроллеров (реестр, службы, SMB) и веб-выдача собираются отдельно скриптом (пункты 5–7 меню), из продукта по LDAP они недоступны. Файл загружается тем же полем, что и выгрузка AD; анализ берёт каждый раздел из самой свежей загрузки, где он есть.">
       {list.length === 0 ? (
         <p className="text-xs text-text-secondary">Доменов ещё нет: сначала загрузите выгрузку домена.</p>
       ) : (
@@ -61,7 +67,7 @@ export function CaDataSection() {
                   {data.data.map((c) => (
                     <tr key={c.id} className="border-t border-grid align-top">
                       <td className="py-2 pr-3 text-text">{when(c.collected_at)}<div className="text-[10px] break-all text-text-secondary">{c.filename}</div></td>
-                      <td className="py-2 pr-3 break-words text-text-secondary">{c.sections.map((s) => CA_SECTION_LABELS[s] ?? s).join(', ')}</td>
+                      <td className="py-2 pr-3 break-words text-text-secondary">{c.sections.map((s) => sectionLabel(s, c)).join(', ')}</td>
                       <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{c.cas}</td>
                       <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{c.dcs}</td>
                       <td className="py-2 pr-3 break-all text-text-secondary">{c.uploaded_by}<div className="text-[10px]">{when(c.imported_at)}</div></td>

@@ -83,7 +83,7 @@ let config: AdConfig = { ...DEFAULTS }
 
 // Один раздел `ca` — поэтому ESC8 и ESC10 на обзоре не проверены.
 let caData: CaData[] = [
-  { id: 1, collected_at: '2026-09-30T08:40:00Z', imported_at: '2026-09-30T09:05:00Z', filename: 'adca-CORP-20260930.json.gz', uploaded_by: 'analyst', sections: ['ca'], cas: 1, dcs: 0, web: 0 },
+  { id: 1, collected_at: '2026-09-30T08:40:00Z', imported_at: '2026-09-30T09:05:00Z', filename: 'adca-CORP-20260930.json.gz', uploaded_by: 'analyst', sections: ['ca'], cas: 1, dcs: 0, web: 0, dc_total: 0, dc_complete: 0 },
 ]
 
 export const adHandlers = [

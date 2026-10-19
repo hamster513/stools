@@ -321,7 +321,27 @@ def build_ca_data(*, now: dt.datetime = NOW, **overrides: Any) -> dict[str, Any]
                 "error": "",
             }
         ],
-        "dcs": [{"host": "dc01.corp.local", "strong_binding": 2, "mapping_methods": 0x18, "error": ""}],
+        "dcs": [
+            {
+                "host": "dc01.corp.local",
+                "strong_binding": 2,
+                "mapping_methods": 0x18,
+                "lm_compatibility": 5,
+                "no_lm_hash": 1,
+                "ldap_integrity": 2,
+                "ldap_channel_binding": 2,
+                "tls": {"SSL 3.0": 0, "TLS 1.0": 0, "TLS 1.1": 0},
+                "smb1": False,
+                "smb_require_signing": True,
+                "spooler": "disabled",
+                "webclient": "absent",
+                "last_boot": (now - dt.timedelta(days=10)).isoformat(),
+                "os_build": "20348.2340",
+                "registry_read": True,
+                "cim_read": True,
+                "error": "",
+            }
+        ],
         "web": [{"url": "http://ca01.corp.local/certsrv/", "status": 404, "auth": [], "error": ""}],
     }
     data.update(overrides)

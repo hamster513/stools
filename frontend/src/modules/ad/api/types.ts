@@ -92,7 +92,8 @@ export interface SettingsView {
   checks: { code: string; title: string; description: string }[]
 }
 
-/** Загрузка данных центра сертификации (stools-ad-ca/1); cas/dcs/web — число записей. */
+/** Загрузка данных центра сертификации (stools-ad-ca/1); cas/dcs/web — число записей;
+ *  dc_total/dc_complete — контроллеров в разделе dc и сколько прочитано полностью (реестр и CIM). */
 export interface CaData {
   id: number
   collected_at: string
@@ -103,11 +104,13 @@ export interface CaData {
   cas: number
   dcs: number
   web: number
+  dc_total: number
+  dc_complete: number
 }
 
 export const CA_SECTION_LABELS: Record<string, string> = {
   ca: 'настройки и права ЦС',
-  dc: 'реестр контроллеров',
+  dc: 'контроллеры',
   web: 'веб-выдача',
 }
 

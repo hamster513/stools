@@ -19,7 +19,10 @@
   Данные ЦС (их по LDAP не прочитать, STools сам их не собирает):
     ca  — флаги и права каждого ЦС (certutil, при отказе — удалённый реестр);
           нужны права администратора ЦС или локального администратора сервера ЦС;
-    dc  — два значения реестра каждого контроллера домена (удалённый реестр);
+    dc  — состояние каждого контроллера домена: удалённый реестр (привязка сертификатов, NTLM,
+          подпись LDAP, протоколы SCHANNEL, сборка ОС) и CIM по WSMan, при отказе — по DCOM
+          (SMB, службы Spooler и WebClient, время загрузки); нужны права администратора на
+          контроллерах;
     web — ответ веб-выдачи ЦС на запрос без учётных данных (порты 80/443).
   Пишутся отдельным файлом adca-<NETBIOS>-<дата>.json.gz. Ошибка по отдельному
   серверу пишется в запись этого сервера и сбор не прерывает.
@@ -84,7 +87,7 @@ Import-Module ActiveDirectory
 
 $FormatVersion = "stools-ad/1"
 $CaFormatVersion = "stools-ad-ca/1"
-$CollectorVersion = "2.2"
+$CollectorVersion = "2.3"
 # Критичные объекты: группы домена (Domain Admins, Cert Publishers, Schema Admins, Enterprise Admins,
 # Group Policy Creator Owners, Key Admins, Enterprise Key Admins, Allowed RODC Password Replication Group),
 # встроенные (Administrators, Account, Server, Print, Backup Operators, Replicator), DnsAdmins по имени.
@@ -648,7 +651,7 @@ function Show-Menu {
   Write-Host "3  Выгрузка AD без ACL компьютеров (быстрее)"
   Write-Host "4  Выгрузка AD без SYSVOL"
   Write-Host "5  Данные ЦС: настройки и права центров сертификации"
-  Write-Host "6  Данные ЦС: реестр контроллеров домена"
+  Write-Host "6  Контроллеры домена: реестр, службы, SMB"
   Write-Host "7  Данные ЦС: проверка веб-выдачи"
 }
 
@@ -1170,15 +1173,84 @@ function Get-CaSettings($ca) {
   return $rec
 }
 
-function Get-DcBinding([string]$dc) {
-  $rec = [ordered]@{ host = $dc; strong_binding = $null; mapping_methods = $null; error = "" }
+# Служба из Win32_Service → состояние для анализа; службы нет — absent. Запуск отключён, а служба ещё
+# работает (до перезагрузки) — running: опасна работающая служба.
+function ConvertTo-ServiceState($service) {
+  if ($null -eq $service) { return "absent" }
+  if ($service.State -eq "Running") { return "running" }
+  if ($service.StartMode -eq "Disabled") { return "disabled" }
+  return "stopped"
+}
+
+# Состояние контроллера: удалённый реестр (привязка сертификатов, NTLM, подпись LDAP, протоколы SCHANNEL,
+# сборка ОС) и CIM (SMB, службы, время загрузки). registry_read и cim_read — отработал ли канал: при
+# прочитанном реестре $null значит «значения нет», при непрочитанном — «не известно». Отказы — в error.
+function Get-DcState([string]$dc) {
+  $rec = [ordered]@{
+    host = $dc; strong_binding = $null; mapping_methods = $null
+    lm_compatibility = $null; no_lm_hash = $null; ldap_integrity = $null; ldap_channel_binding = $null; tls = $null
+    smb1 = $null; smb_require_signing = $null; spooler = $null; webclient = $null; last_boot = $null; os_build = $null
+    registry_read = $false; cim_read = $false; error = ""
+  }
+  $errs = New-Object System.Collections.Generic.List[string]
   try {
     $kdc = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Services\Kdc" @("StrongCertificateBindingEnforcement")
     if ($kdc) { $rec.strong_binding = AsDword $kdc.StrongCertificateBindingEnforcement }
     $schannel = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Control\SecurityProviders\Schannel" @("CertificateMappingMethods")
     if ($schannel) { $rec.mapping_methods = AsDword $schannel.CertificateMappingMethods }
-  } catch { $rec.error = ErrorText $_ }
+    $lsa = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Control\Lsa" @("LmCompatibilityLevel", "NoLMHash")
+    if ($lsa) { $rec.lm_compatibility = AsDword $lsa.LmCompatibilityLevel; $rec.no_lm_hash = AsDword $lsa.NoLMHash }
+    $ntds = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Services\NTDS\Parameters" @("LDAPServerIntegrity", "LdapEnforceChannelBinding")
+    if ($ntds) { $rec.ldap_integrity = AsDword $ntds.LDAPServerIntegrity; $rec.ldap_channel_binding = AsDword $ntds.LdapEnforceChannelBinding }
+    $tls = [ordered]@{}
+    foreach ($protocol in @("SSL 3.0", "TLS 1.0", "TLS 1.1")) {
+      $server = Read-RemoteRegistry $dc ("SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\{0}\Server" -f $protocol) @("Enabled")
+      $tls[$protocol] = $(if ($server) { AsDword $server.Enabled } else { $null })
+    }
+    $rec.tls = $tls
+    $version = Read-RemoteRegistry $dc "SOFTWARE\Microsoft\Windows NT\CurrentVersion" @("CurrentBuildNumber", "UBR")
+    if ($version -and $version.CurrentBuildNumber) {
+      $rec.os_build = [string]$version.CurrentBuildNumber
+      if ($null -ne $version.UBR) { $rec.os_build += "." + (AsDword $version.UBR) }
+    }
+    $rec.registry_read = $true
+  } catch { $errs.Add("реестр: " + (ErrorText $_)) }
+
+  $session = $null
+  try {
+    try { $session = New-CimSession -ComputerName $dc -OperationTimeoutSec 30 }
+    catch {
+      $wsman = ErrorText $_
+      try { $session = New-CimSession -ComputerName $dc -OperationTimeoutSec 30 -SessionOption (New-CimSessionOption -Protocol Dcom) }
+      catch { throw ("WSMan: {0}; DCOM: {1}" -f $wsman, (ErrorText $_)) }
+    }
+    $rec.cim_read = $true
+    try {
+      $smb = Get-CimInstance -CimSession $session -Namespace root/Microsoft/Windows/SMB -ClassName MSFT_SmbServerConfiguration
+      if ($null -eq $smb) { throw "MSFT_SmbServerConfiguration не вернул данных" }
+      $rec.smb1 = AsBool $smb.EnableSMB1Protocol
+      $rec.smb_require_signing = AsBool $smb.RequireSecuritySignature
+    } catch { $errs.Add("SMB: " + (ErrorText $_)) }
+    try {
+      $services = @(Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter "Name='Spooler' OR Name='WebClient'")
+      $rec.spooler = ConvertTo-ServiceState ($services | Where-Object { $_.Name -eq "Spooler" } | Select-Object -First 1)
+      $rec.webclient = ConvertTo-ServiceState ($services | Where-Object { $_.Name -eq "WebClient" } | Select-Object -First 1)
+    } catch { $errs.Add("службы: " + (ErrorText $_)) }
+    try {
+      $os = Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem
+      $rec.last_boot = IsoTime $os.LastBootUpTime
+    } catch { $errs.Add("время загрузки: " + (ErrorText $_)) }
+  } catch { $errs.Add("CIM: " + (ErrorText $_)) }
+  finally { if ($null -ne $session) { try { Remove-CimSession -CimSession $session } catch { } } }
+  $rec.error = $errs -join "; "
   return $rec
+}
+
+# Значение для строки хода работы: нет значения — «—», флаг — да/нет.
+function Format-DcValue($value) {
+  if ($null -eq $value) { return "—" }
+  if ($value -is [bool]) { return $(if ($value) { "да" } else { "нет" }) }
+  return [string]$value
 }
 
 # Схемы из значений WWW-Authenticate: первое слово каждого вызова. .NET может склеить несколько
@@ -1241,12 +1313,13 @@ function Collect-Ca([string[]]$sections, $cas, [string[]]$dcs, [string[]]$urls) 
     }
   }
   if ($sections -contains "dc") {
-    Write-Step "Реестр контроллеров домена"
+    Write-Step "Состояние контроллеров домена"
     foreach ($dc in $dcs) {
-      $r = Get-DcBinding $dc
+      $r = Get-DcState $dc
       $dcRecs.Add($r)
+      Write-Step ("  {0}: привязка {1}, NTLM {2}, подпись LDAP {3}, SMB1 {4}" -f $dc, (Format-DcValue $r.strong_binding),
+        (Format-DcValue $r.lm_compatibility), (Format-DcValue $r.ldap_integrity), (Format-DcValue $r.smb1))
       if ($r.error) { Add-Warning ("контроллер {0}: {1}" -f $dc, $r.error) }
-      else { Write-Step ("  {0}: привязка {1}, сопоставление {2}" -f $dc, $r.strong_binding, $r.mapping_methods) }
     }
   }
   if ($sections -contains "web") {
@@ -1346,7 +1419,7 @@ try {
     foreach ($ca in $cas) { Write-Host ("    {0} на {1}" -f $ca.Name, $ca.DnsName) }
   }
   if ($picked -contains "dc") {
-    Write-Host "  Реестр контроллеров домена (удалённый реестр, два значения):"
+    Write-Host "  Состояние контроллеров домена (удалённый реестр; CIM по WSMan, при отказе DCOM — SMB, службы, время загрузки):"
     foreach ($dc in $dcs) { Write-Host ("    {0}" -f $dc) }
   }
   if ($picked -contains "web") {

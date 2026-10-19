@@ -82,6 +82,9 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
     if gpos:
         gaps.update(_gpo_gaps(export))
+    dc_state = _dc_state_reasons(ca)
+    if dc_state:
+        gaps["DcHardening"] = "; ".join(dc_state)
     if not templates:
         gaps["ADCS_ESC"] = "шаблонов сертификатов в выгрузке нет: в лесу нет AD CS или контейнер шаблонов недоступен"
     if not templates and not enrollment_services:
@@ -213,8 +216,36 @@ def _ca_record_reasons(c: CaAuthority) -> list[str]:
     return reasons
 
 
+def _dc_state_reasons(ca: CaData | None) -> list[str]:
+    """Состояние контроллеров (раздел dc сборщика 2.3): по каждому контроллеру — какой канал не отработал.
+    Запись сборщика до 2.3 флагов не несёт — оба канала у неё не прочитаны."""
+    if ca is None or "dc" not in ca.sections:
+        return ["нужно состояние контроллеров (сборщик, пункт 6)"]
+    reasons = []
+    for d in ca.dcs:
+        if not d.registry_read:
+            reasons.append(f"контроллер {d.host}: реестр не прочитан{_channel_error(d.error, 'реестр: ')}")
+        if not d.cim_read:
+            reasons.append(f"контроллер {d.host}: службы и SMB не прочитаны{_channel_error(d.error, 'CIM: ')}")
+    return reasons
+
+
+def _channel_error(error: str, prefix: str) -> str:
+    """Часть error о канале в скобках. Сборщик 2.3 пишет отказы частями через «; »: «реестр: …» — одна
+    часть, «CIM: …» — последняя (внутри неё свои «; »). Части с префиксом нет — весь текст."""
+    if not error:
+        return ""
+    parts = error.split("; ")
+    for i, part in enumerate(parts):
+        if part.startswith(prefix):
+            return f" ({'; '.join(parts[i:]) if prefix == 'CIM: ' else part})"
+    return f" ({error})"
+
+
 def _dc_record_reasons(d: DcBinding) -> list[str]:
-    if not d.error:
+    # Реестр прочитан целиком: значения привязки, которого нет, — значение по умолчанию, а текст
+    # в error относится к CIM.
+    if not d.error or d.registry_read:
         return []
     if d.strong_binding is None and d.mapping_methods is None:
         return [f"контроллер {d.host}: реестр не прочитан ({d.error})"]

@@ -1,4 +1,4 @@
-"""Сборщик AD 2.2: раздача, поля, которые читают модели, меню и чистые функции скрипта в контейнере PowerShell.
+"""Сборщик AD 2.3: раздача, поля, которые читают модели, меню и чистые функции скрипта в контейнере PowerShell.
 
 Весь скрипт в контейнере не запустить (нужен модуль ActiveDirectory и домен), поэтому из него
 по AST вынимаются отдельные функции без обращений к домену и выполняются сами по себе.
@@ -54,6 +54,19 @@ def test_script_writes_the_fields_the_models_read() -> None:
                  "altSecurityIdentities", "flatName", "trustAttributes",
                  "edit_flags", "interface_flags", "disable_extension_list", "security", "os_build",
                  "strong_binding", "mapping_methods", "StrongCertificateBindingEnforcement", "CertificateMappingMethods"):
+        assert name in text, name
+
+
+def test_script_writes_dc_state_fields() -> None:
+    """Состояние контроллеров (раздел dc сборщика 2.3): поля DcBinding, ключи реестра и классы CIM."""
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    for name in ("lm_compatibility", "no_lm_hash", "ldap_integrity", "ldap_channel_binding", "tls", "smb1", "smb_require_signing",
+                 "spooler", "webclient", "last_boot", "os_build", "registry_read", "cim_read",
+                 "LmCompatibilityLevel", "NoLMHash", "LDAPServerIntegrity", "LdapEnforceChannelBinding",
+                 "SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\SCHANNEL\\Protocols", '"SSL 3.0", "TLS 1.0", "TLS 1.1"',
+                 "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "CurrentBuildNumber", "UBR",
+                 "MSFT_SmbServerConfiguration", "EnableSMB1Protocol", "RequireSecuritySignature", "Win32_Service",
+                 "Win32_OperatingSystem", "LastBootUpTime", "New-CimSessionOption -Protocol Dcom", "Remove-CimSession"):
         assert name in text, name
 
 
@@ -129,7 +142,7 @@ def test_script_collects_computer_host_attributes() -> None:
 def test_menu_lists_seven_items() -> None:
     text = SCRIPT.read_text(encoding="utf-8-sig")
     for line in ("1  Всё: выгрузка AD и данные ЦС", "5  Данные ЦС: настройки и права центров сертификации",
-                 "6  Данные ЦС: реестр контроллеров домена", "7  Данные ЦС: проверка веб-выдачи"):
+                 "6  Контроллеры домена: реестр, службы, SMB", "7  Данные ЦС: проверка веб-выдачи"):
         assert line in text
 
 
@@ -137,7 +150,7 @@ def test_script_keeps_bom_version_and_module_requirement() -> None:
     raw = SCRIPT.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")
     text = raw.decode("utf-8-sig")
-    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.2"' in text
+    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.3"' in text
 
 
 def _image_present() -> bool:
@@ -445,6 +458,47 @@ function Get-Acl {
   $acl
 }
 """
+#: Удалённый реестр контроллера dc01.corp.local (в Linux его нет; другие серверы недоступны). Псевдоним
+#: сильнее функции сборщика с тем же именем — так подделка подменяет Read-RemoteRegistry во всём скрипте.
+FAKE_DC_REGISTRY = r"""
+function Read-FakeRegistry([string]$computer, [string]$path, [string[]]$names) {
+  if ($computer -ne "dc01.corp.local") { throw [System.IO.IOException]::new("The network path was not found.") }
+  $keys = @{
+    "SYSTEM\CurrentControlSet\Services\Kdc" = @{ StrongCertificateBindingEnforcement = 1 }
+    "SYSTEM\CurrentControlSet\Control\SecurityProviders\Schannel" = @{ CertificateMappingMethods = 0x1F }
+    "SYSTEM\CurrentControlSet\Control\Lsa" = @{ LmCompatibilityLevel = 3 }
+    "SYSTEM\CurrentControlSet\Services\NTDS\Parameters" = @{ LDAPServerIntegrity = 1; LdapEnforceChannelBinding = 0 }
+    "SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.0\Server" = @{ Enabled = -1 }
+    "SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.1\Server" = @{ Enabled = 0 }
+    "SOFTWARE\Microsoft\Windows NT\CurrentVersion" = @{ CurrentBuildNumber = "17763"; UBR = 6189 }
+  }
+  if (-not $keys.ContainsKey($path)) { return $null }
+  $values = @{}
+  foreach ($n in $names) { $values[$n] = $keys[$path][$n] }
+  return $values
+}
+Set-Alias -Name Read-RemoteRegistry -Value Read-FakeRegistry
+"""
+#: CIM контроллера (в Linux командлетов нет): WSMan закрыт, сессия открывается по DCOM.
+FAKE_CIM = r"""
+function New-CimSessionOption { [CmdletBinding()] param([string]$Protocol) [pscustomobject]@{ Protocol = $Protocol } }
+function New-CimSession {
+  [CmdletBinding()] param([string[]]$ComputerName, [uint32]$OperationTimeoutSec, $SessionOption)
+  if ($null -eq $SessionOption) { throw "WinRM cannot complete the operation." }
+  [pscustomobject]@{ ComputerName = $ComputerName[0]; Protocol = $SessionOption.Protocol }
+}
+function Get-CimInstance {
+  [CmdletBinding()] param($CimSession, [string]$Namespace, [string]$ClassName, [string]$Filter)
+  if ($CimSession.Protocol -ne "Dcom") { throw "сессия не по DCOM" }
+  switch ($ClassName) {
+    "MSFT_SmbServerConfiguration" { [pscustomobject]@{ EnableSMB1Protocol = $true; RequireSecuritySignature = $false } }
+    "Win32_Service" { [pscustomobject]@{ Name = "Spooler"; StartMode = "Auto"; State = "Running" } }
+    "Win32_OperatingSystem" { [pscustomobject]@{ LastBootUpTime = [datetime]::new(2026, 3, 1, 4, 5, 6, [DateTimeKind]::Utc) } }
+    default { throw "Invalid class $ClassName" }
+  }
+}
+function Remove-CimSession { [CmdletBinding()] param($CimSession) }
+"""
 #: Кто, кроме владельца, может писать по FAKE_GET_ACL: SYSTEM, bob (Modify), S-1-5-21-1-2-3-1301 (смена прав)
 #: и S-1-5-21-1-2-3-1302 (GENERIC_WRITE).
 FAKE_WRITERS = ["S-1-5-18", "S-1-5-21-1-2-3-1106", "S-1-5-21-1-2-3-1301", "S-1-5-21-1-2-3-1302"]
@@ -509,6 +563,84 @@ $r | ConvertTo-Json -Compress -Depth 4
     assert out["basic"]["status"] == 401 and out["basic"]["auth"] == ["Basic"]
     assert out["none"]["status"] == 404 and out["none"]["error"] == ""
     assert out["down"]["status"] is None and out["down"]["auth"] == [] and out["down"]["error"]
+
+
+@needs_pwsh
+def test_convert_to_service_state(tmp_path: Path) -> None:
+    body = """
+$cases = [ordered]@{
+  absent = $null
+  disabled = [pscustomobject]@{ Name = "Spooler"; StartMode = "Disabled"; State = "Stopped" }
+  running = [pscustomobject]@{ Name = "Spooler"; StartMode = "Auto"; State = "Running" }
+  disabled_running = [pscustomobject]@{ Name = "Spooler"; StartMode = "Disabled"; State = "Running" }
+  stopped = [pscustomobject]@{ Name = "WebClient"; StartMode = "Manual"; State = "Stopped" }
+}
+$r = [ordered]@{}
+foreach ($k in @($cases.Keys)) { $r[$k] = ConvertTo-ServiceState $cases[$k] }
+$r | ConvertTo-Json -Compress
+"""
+    out = _pwsh(tmp_path, body, ("ConvertTo-ServiceState",))
+    # Запуск отключён, а служба работает до перезагрузки — running.
+    assert out == {"absent": "absent", "disabled": "disabled", "running": "running", "disabled_running": "running", "stopped": "stopped"}
+
+
+#: Состояние контроллера без домена: реестр и CIM — подделки в теле пробы (в Linux их нет).
+DC_STATE_PROBE = r"""
+$global:Removed = 0
+function Read-RemoteRegistry([string]$computer, [string]$path, [string[]]$names) {
+  if ($computer -eq "dc02.corp.local") { throw [System.UnauthorizedAccessException]::new("Access is denied.") }
+  $keys = @{
+    "SYSTEM\CurrentControlSet\Services\Kdc" = @{ StrongCertificateBindingEnforcement = 2 }
+    "SYSTEM\CurrentControlSet\Control\Lsa" = @{ LmCompatibilityLevel = 5; NoLMHash = 1 }
+    "SYSTEM\CurrentControlSet\Services\NTDS\Parameters" = @{ LDAPServerIntegrity = 2 }
+    "SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.0\Server" = @{ Enabled = 0 }
+    "SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.1\Server" = @{ }
+    "SOFTWARE\Microsoft\Windows NT\CurrentVersion" = @{ CurrentBuildNumber = "20348"; UBR = 2340 }
+  }
+  if (-not $keys.ContainsKey($path)) { return $null }
+  $values = @{}
+  foreach ($n in $names) { $values[$n] = $keys[$path][$n] }
+  return $values
+}
+function New-CimSessionOption([string]$Protocol) { [pscustomobject]@{ Protocol = $Protocol } }
+function New-CimSession([string]$ComputerName, [uint32]$OperationTimeoutSec, $SessionOption) {
+  [pscustomobject]@{ ComputerName = $ComputerName }
+}
+function Get-CimInstance($CimSession, [string]$Namespace, [string]$ClassName, [string]$Filter) {
+  if ($ClassName -eq "MSFT_SmbServerConfiguration") { throw "Invalid namespace" }
+  if ($ClassName -eq "Win32_Service") {
+    return @([pscustomobject]@{ Name = "Spooler"; StartMode = "Auto"; State = "Running" },
+             [pscustomobject]@{ Name = "WebClient"; StartMode = "Disabled"; State = "Stopped" })
+  }
+  [pscustomobject]@{ LastBootUpTime = [datetime]::new(2026, 3, 1, 4, 5, 6, [DateTimeKind]::Utc) }
+}
+function Remove-CimSession($CimSession) { $global:Removed++ }
+$ok = Get-DcState "dc01.corp.local"
+$removedAfterOk = $global:Removed
+# У второго контроллера реестр отказал, а командлетов CIM нет вовсе (как в Linux).
+Remove-Item function:New-CimSession, function:New-CimSessionOption, function:Get-CimInstance, function:Remove-CimSession
+$denied = Get-DcState "dc02.corp.local"
+[ordered]@{ ok = $ok; denied = $denied; removed = $removedAfterOk } | ConvertTo-Json -Compress -Depth 4
+"""
+
+
+@needs_pwsh
+def test_dc_state_reads_registry_and_cim_and_names_failures(tmp_path: Path) -> None:
+    out = _pwsh(tmp_path, DC_STATE_PROBE, ("Get-DcState", "ConvertTo-ServiceState", "AsDword", "AsBool", "ErrorText", "IsoTime"))
+    ok, denied = out["ok"], out["denied"]
+    # Реестр прочитан: значения, которых нет, — null (раздела Schannel и SSL 3.0 нет, у TLS 1.1 нет Enabled).
+    assert (ok["strong_binding"], ok["mapping_methods"], ok["lm_compatibility"], ok["no_lm_hash"]) == (2, None, 5, 1)
+    assert (ok["ldap_integrity"], ok["ldap_channel_binding"], ok["os_build"]) == (2, None, "20348.2340")
+    assert ok["tls"] == {"SSL 3.0": None, "TLS 1.0": 0, "TLS 1.1": None}
+    # CIM: сессия открыта; класс SMB не прочитан — его поля null, причина в error; сессия закрыта.
+    assert (ok["registry_read"], ok["cim_read"], ok["smb1"], ok["smb_require_signing"]) == (True, True, None, None)
+    assert (ok["spooler"], ok["webclient"], ok["last_boot"]) == ("running", "disabled", "2026-03-01T04:05:06Z")
+    assert ok["error"].startswith("SMB: ") and "Invalid namespace" in ok["error"] and out["removed"] == 1
+    assert (denied["registry_read"], denied["cim_read"], denied["tls"], denied["os_build"], denied["spooler"]) == (False, False, None, None, None)
+    reasons = denied["error"].split("; ")
+    assert reasons[0] == "реестр: Access is denied." and reasons[1].startswith("CIM: "), denied["error"]
+    assert parse_ca_data({"format": "stools-ad-ca/1", "collected_at": "2026-10-01T00:00:00Z", "domain": {"sid": "S-1-5-21-1-2-3"},
+                          "sections": ["dc"], "dcs": [ok, denied]}).dcs[0].tls == ok["tls"]
 
 
 # Подделка модуля ActiveDirectory: синтетический домен corp.local. Get-ADObject отдаёт все запрошенные
@@ -737,7 +869,14 @@ if ($env:STUB_ACL) {
 ''' + FAKE_GET_ACL + r'''
   $Exported += "Get-Acl"
 }
-Export-ModuleMember -Function $Exported
+$Aliases = @()
+# STUB_DC — подделки удалённого реестра и CIM контроллера dc01; без них раздел dc не прочитан.
+if ($env:STUB_DC) {
+''' + FAKE_DC_REGISTRY + FAKE_CIM + r'''
+  $Exported += @("Read-FakeRegistry", "New-CimSessionOption", "New-CimSession", "Get-CimInstance", "Remove-CimSession")
+  $Aliases += "Read-RemoteRegistry"
+}
+Export-ModuleMember -Function $Exported -Alias $Aliases
 '''
 TRUST_SID = "S-1-5-21-111-222-333"
 CREATOR_SID = "S-1-5-21-1-2-3-1106"
@@ -789,8 +928,8 @@ def _gz_json(path: Path) -> Any:
 @needs_pwsh
 def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: int) -> None:
     """-Mode All: выгрузка AD с объектами PKI и данные ЦС; ошибки серверов (нет certutil и удалённого реестра
-    в Linux, нет TLS) пишутся в записи, сбор не прерывается."""
-    console, out = _run_collector(tmp_path, web_server, ("-Mode", "All", "-OutputPath", "/out/"))
+    у ЦС, нет TLS) пишутся в записи, сбор не прерывается. Реестр и CIM контроллера — подделки (STUB_DC)."""
+    console, out = _run_collector(tmp_path, web_server, ("-Mode", "All", "-OutputPath", "/out/"), env_extra={"STUB_DC": "1"})
     assert "План сбора" in console and "Продолжить?" not in console and "Сбор прерван" not in console, console
     [ad_file] = list(out.glob("ad-CORP-*.json.gz"))
     [ca_file] = list(out.glob("adca-CORP-*.json.gz"))
@@ -814,7 +953,7 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     raw = _gz_json(ad_file)
     assert next(o for o in raw["objects"] if o["class"] == "trustedDomain")["trustAttributes"] == 8
     assert list(export.sysvol) == [GPO_DN]
-    assert export.collector.notes == [] and export.collector.version == "2.2"
+    assert export.collector.notes == [] and export.collector.version == "2.3"
     # Блок gpo — у каждой GPO; Get-Acl в Linux нет: права не прочитаны, причина в notes записи GPO.
     assert export.gpo is not None and set(export.gpo) == {GPO_DN, GONE_DN}
     assert export.gpo[GPO_DN].registry == [] and export.gpo[GPO_DN].acl is None
@@ -863,11 +1002,18 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     assert site.name == "Default-First-Site-Name" and subnet.name == "10.0.0.0/24" and subnet.site == site.dn
 
     data = parse_ca_data(_gz_json(ca_file))
-    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.2"
+    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.3"
     [authority] = data.cas
     assert authority.name == "CORP-CA" and authority.os_build == "10.0 (17763)" and authority.error and authority.edit_flags is None
     [dc] = data.dcs
-    assert dc.host == "dc01.corp.local" and dc.strong_binding is None and dc.error
+    # Реестр: значений NoLMHash и SSL 3.0 нет — null; Enabled = 0xFFFFFFFF пишется без знака.
+    assert (dc.host, dc.strong_binding, dc.mapping_methods, dc.registry_read) == ("dc01.corp.local", 1, 0x1F, True)
+    assert (dc.lm_compatibility, dc.no_lm_hash, dc.ldap_integrity, dc.ldap_channel_binding) == (3, None, 1, 0)
+    assert dc.tls == {"SSL 3.0": None, "TLS 1.0": 0xFFFFFFFF, "TLS 1.1": 0} and dc.os_build == "17763.6189"
+    # CIM: WSMan закрыт — сессия по DCOM; службы WebClient нет.
+    assert (dc.cim_read, dc.smb1, dc.smb_require_signing, dc.spooler, dc.webclient) == (True, True, False, "running", "absent")
+    assert dc.last_boot == dt.datetime(2026, 3, 1, 4, 5, 6, tzinfo=dt.UTC) and dc.error == ""
+    assert "  dc01.corp.local: привязка 1, NTLM 3, подпись LDAP 1, SMB1 да" in console, console
     base = f"host.docker.internal:{web_server}"
     web = {w.url: w for w in data.web}
     assert list(web) == [f"http://{base}/certsrv/", f"https://{base}/certsrv/", f"http://{base}/ntlm/"]

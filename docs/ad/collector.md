@@ -1,13 +1,13 @@
 # Сборщик AD для доменной машины
 
-Скрипт `STools-AD-Collector.ps1` (версия 2.2) скачивается в интерфейсе: Active Directory →
+Скрипт `STools-AD-Collector.ps1` (версия 2.3) скачивается в интерфейсе: Active Directory →
 Настройки и данные → «Скачать». Он ничего не анализирует и не меняет в домене и пишет
 файлы двух видов:
 
 | Файл | Формат | Что внутри |
 |---|---|---|
 | `ad-<NETBIOS>-<дата>.json.gz` | `stools-ad/1` | выгрузка AD: учётные записи, группы, ACL, ссылки GPO, файлы GPO из SYSVOL и права на их папки, шаблоны сертификатов, центры сертификации и контейнеры PKI, политики выдачи, доверенные домены, настройки домена и леса, политики паролей (PSO), зоны DNS, сайты и подсети |
-| `adca-<NETBIOS>-<дата>.json.gz` | `stools-ad-ca/1` | данные ЦС: флаги и права центров сертификации, два значения реестра контроллеров домена, ответ веб-выдачи |
+| `adca-<NETBIOS>-<дата>.json.gz` | `stools-ad-ca/1` | данные ЦС и контроллеров: флаги и права центров сертификации, состояние контроллеров домена (реестр, службы, SMB, время загрузки), ответ веб-выдачи |
 
 Данных ЦС в LDAP нет, и STools сам их не собирает — ни онлайн-сбором по LDAP, ни иначе.
 Без файла данных ЦС проверки ESC6–8, 10, 11, 16 на обзоре помечены как «не проверено» — только
@@ -32,7 +32,7 @@
 3  Выгрузка AD без ACL компьютеров (быстрее)
 4  Выгрузка AD без SYSVOL
 5  Данные ЦС: настройки и права центров сертификации
-6  Данные ЦС: реестр контроллеров домена
+6  Контроллеры домена: реестр, службы, SMB
 7  Данные ЦС: проверка веб-выдачи
 Выбор (можно несколько через запятую, например 5,7):
 ```
@@ -69,7 +69,7 @@
 |---|---|---|
 | выгрузка AD | LDAP контроллера домена; файлы GPO из SYSVOL (раздел «Что читается из SYSVOL»); что именно — список под таблицей | учётная запись домена с правом чтения каталога (обычный пользователь читает дескрипторы большинства объектов и срок пароля LAPS; SYSVOL доступен всем доменным пользователям). PSO видит только администратор домена |
 | `ca` — настройки и права ЦС | `certutil -config "<сервер>\<ЦС>" -getreg` для `policy\EditFlags`, `policy\DisableExtensionList`, `CA\InterfaceFlags`; при отказе certutil — те же значения удалённым реестром. Права ЦС (`Security`) — всегда удалённым реестром (`HKLM\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\<ЦС>`). Сборка ОС — из объекта компьютера ЦС в AD | администратор ЦС или локальный администратор сервера ЦС; на сервере ЦС запущена служба «Удалённый реестр» (Remote Registry) |
-| `dc` — реестр контроллеров | удалённый реестр каждого контроллера (`Get-ADDomainController -Filter *`): `HKLM\SYSTEM\CurrentControlSet\Services\Kdc\StrongCertificateBindingEnforcement` и `HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\Schannel\CertificateMappingMethods`; отсутствующее значение пишется как `null`. Единственный раздел, который обращается к контроллерам не по LDAP | чтение удалённого реестра контроллеров (обычно — администратор домена или делегированное право на эти ключи) |
+| `dc` — состояние контроллеров | каждый контроллер (`Get-ADDomainController -Filter *`) по двум каналам. **Удалённый реестр** (`HKLM`): `SYSTEM\CurrentControlSet\Services\Kdc\StrongCertificateBindingEnforcement` и `SYSTEM\CurrentControlSet\Control\SecurityProviders\Schannel\CertificateMappingMethods` (привязка сертификатов, ESC10); `SYSTEM\CurrentControlSet\Control\Lsa` — `LmCompatibilityLevel`, `NoLMHash`; `SYSTEM\CurrentControlSet\Services\NTDS\Parameters` — `LDAPServerIntegrity`, `LdapEnforceChannelBinding`; `SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\<SSL 3.0, TLS 1.0, TLS 1.1>\Server\Enabled`; `SOFTWARE\Microsoft\Windows NT\CurrentVersion` — `CurrentBuildNumber` и `UBR` (сборка `<build>.<ubr>`). **CIM** — сессия по WSMan, при отказе по DCOM: `MSFT_SmbServerConfiguration` (SMB1, обязательная подпись SMB), `Win32_Service` (Spooler, WebClient: `running`, `stopped`, `disabled`, `absent`), `Win32_OperatingSystem` (время последней загрузки). Отсутствующее значение реестра — `null`; флаги `registry_read` и `cim_read` говорят, отработал ли канал, отказ — текст в `error`. Единственный раздел, который обращается к контроллерам не по LDAP | администратор на контроллерах (обычно — администратор домена); на контроллерах доступны служба «Удалённый реестр» (Remote Registry) и WinRM (порт 5985) или DCOM/RPC (порт 135 и динамические порты) |
 | `web` — веб-выдача | запрос `GET` без учётных данных и без перенаправлений (таймаут 10 с) к `http://<ЦС>/certsrv/`, `https://<ЦС>/certsrv/` и адресам из `msPKI-Enrollment-Servers`; записываются код ответа и схемы из `WWW-Authenticate` | сетевой доступ к серверам ЦС по портам 80 и 443 |
 
 Ошибка по отдельному серверу (нет прав, служба не запущена, сервер недоступен) пишется в поле
