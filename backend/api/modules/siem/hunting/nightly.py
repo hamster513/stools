@@ -245,7 +245,8 @@ def run_nightly(
             if row.status == "running":
                 row.status, row.error = "failed", error
         _finish(db, run, "failed", clock, error)
-        raise
+        # Текст исходного исключения может нести адрес — в задачу уходит только класс.
+        raise RunStopped(error) from exc
 
 
 def _finish(db: Session, run: ThRun, status: str, clock: Callable[[], dt.datetime], error: str | None = None) -> None:

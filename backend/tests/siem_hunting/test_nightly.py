@@ -389,4 +389,5 @@ def test_unexpected_error_fails_run(db_session: Any, fake: FakeEvents, monkeypat
     assert (got.status, got.error) == ("failed", "сбой прогона: RuntimeError")
     (row,) = db_session.scalars(select(ThRunQuery).where(ThRunQuery.run_id == run_id)).all()
     assert (row.query_id, row.status, row.error) == ("Q1", "failed", "сбой прогона: RuntimeError")
-    assert db_session.get(ThJob, job_id).status == "failed"
+    job = db_session.get(ThJob, job_id)
+    assert (job.status, job.error) == ("failed", "сбой прогона: RuntimeError") and "corp.local" not in job.error
