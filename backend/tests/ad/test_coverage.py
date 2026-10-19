@@ -70,7 +70,8 @@ def test_missing_sysvol_marks_user_rights_unchecked() -> None:
     raw = build_export()
     raw["sysvol"] = {}
     gaps = _gaps(raw)
-    assert set(gaps) == {"UserRightsAssignment"} and "SYSVOL" in gaps["UserRightsAssignment"]
+    assert set(gaps) == {"UserRightsAssignment", "TieringLogonDeny"} and "SYSVOL" in gaps["UserRightsAssignment"]
+    assert gaps["TieringLogonDeny"] == "файлы GptTmpl.inf не прочитаны"
 
 
 def test_collector_note_explains_missing_sysvol() -> None:
@@ -78,6 +79,36 @@ def test_collector_note_explains_missing_sysvol() -> None:
     raw["sysvol"] = {}
     raw["collector"]["notes"] = ["SYSVOL недоступен: ConnectionError"]
     assert "ConnectionError" in _gaps(raw)["UserRightsAssignment"]
+
+
+GPO_FILE_CHECKS = {"GpoSecurityOptions", "DcLogonRights", "RestrictedGroups"}
+
+
+def test_missing_gpo_block_marks_gpp_passwords_unchecked() -> None:
+    raw = build_export()
+    raw.pop("gpo")
+    assert set(_gaps(raw)) == {"GppPasswords"}
+
+
+def test_missing_sysvol_and_gpo_block_mark_gpo_file_checks_unchecked() -> None:
+    raw = build_export()
+    raw["sysvol"] = {}
+    raw.pop("gpo")
+    gaps = _gaps(raw)
+    assert set(gaps) == {"UserRightsAssignment", "GppPasswords", "TieringLogonDeny"} | GPO_FILE_CHECKS
+    assert all(gaps[code] == "файлы GPO из SYSVOL не прочитаны" for code in GPO_FILE_CHECKS)
+    assert gaps["TieringLogonDeny"] == "файлы GptTmpl.inf не прочитаны"
+
+
+def test_unknown_gpo_links_are_noted() -> None:
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("gpLink", None)
+    links = "привязка GPO неизвестна (сборщик старой версии)"
+    assert _gaps(raw) == {code: links for code in ("GpoSecurityOptions", "DcLogonRights")}
+    raw["sysvol"] = {}
+    raw.pop("gpo")
+    assert _gaps(raw)["DcLogonRights"] == f"файлы GPO из SYSVOL не прочитаны; {links}"
 
 
 def test_missing_logon_dates_mark_inactive_users_unchecked() -> None:

@@ -66,6 +66,7 @@ class AdConfig(BaseModel):
             UserRight(right="SeTcbPrivilege", severity="High"),
             UserRight(right="SeBackupPrivilege", severity="Medium"),
             UserRight(right="SeRestorePrivilege", severity="Medium"),
+            UserRight(right="SeTrustedCredManAccessPrivilege", severity="Medium"),
         ]
     )
     user_inactivity_days: int = Field(default=90, ge=1)

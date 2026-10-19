@@ -98,7 +98,7 @@ GUIDANCE: dict[str, Guidance] = {
     ),
     "UserRightsAssignment": Guidance(
         "gpo",
-        "В GPO из находки (Конфигурация компьютера → Политики → Конфигурация Windows → Параметры безопасности → Локальные политики → Назначение прав пользователя) удалите субъекта из опасного права. SeDebugPrivilege, SeTcbPrivilege и SeEnableDelegationPrivilege оставьте только Administrators или никому, SeBackupPrivilege и SeRestorePrivilege — Administrators и Backup Operators.",
+        "В GPO из находки (Конфигурация компьютера → Политики → Конфигурация Windows → Параметры безопасности → Локальные политики → Назначение прав пользователя) удалите субъекта из опасного права. SeDebugPrivilege, SeTcbPrivilege и SeEnableDelegationPrivilege оставьте только Administrators или никому, SeBackupPrivilege и SeRestorePrivilege — Administrators и Backup Operators, SeTrustedCredManAccessPrivilege (доступ к диспетчеру учётных данных от имени доверенного вызывающего) не назначайте никому.",
         (
             ("Microsoft: назначение прав пользователя", f"{_PREV}/user-rights-assignment"),
             _attack("T1134", "Access Token Manipulation"),
@@ -475,6 +475,55 @@ GUIDANCE: dict[str, Guidance] = {
         (
             ("Microsoft: делегированные управляемые учётные записи служб (dMSA)", f"{_LEARN}/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview"),
             ("Microsoft: CVE-2025-53779", "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2025-53779"),
+            _attack("T1098", "Account Manipulation"),
+        ),
+    ),
+    "GppPasswords": Guidance(
+        "gpo",
+        "Удалите из GPO настройку с паролем (GPP «Локальные пользователи и группы», «Задания», «Службы», «Источники данных», «Подключённые диски») или параметр DefaultPassword автологона и смените этот пароль везде, где он использовался: значение уже известно любому пользователю домена. Для паролей локальных администраторов используйте LAPS, для служб — gMSA.",
+        (
+            ("Microsoft: MS14-025, пароли в настройках групповой политики", f"{_LEARN}/security-updates/securitybulletins/2014/ms14-025"),
+            _attack("T1552.006", "Unsecured Credentials: Group Policy Preferences"),
+        ),
+    ),
+    "GpoSecurityOptions": Guidance(
+        "gpo",
+        "В GPO из находки (Конфигурация компьютера → Политики → Конфигурация Windows → Параметры безопасности → Локальные политики → Параметры безопасности) задайте безопасные значения: уровень проверки подлинности LAN Manager «Отправлять только NTLMv2, отказывать LM и NTLM» (5) на контроллерах, не хранить хэш LM, запретить анонимное перечисление и права Everyone для анонимных, ограничить пустые пароли входом с консоли, требовать подписи LDAP на контроллерах, разрешить смену паролей компьютерных учёток, выключить автоматический вход в консоль восстановления, выключить обратимое хранение паролей. Перед режимом «только NTLMv2» проверьте аудитом NTLM, что старые клиенты не используют LM и NTLMv1.",
+        (
+            ("Microsoft: уровень проверки подлинности LAN Manager", f"{_PREV}/network-security-lan-manager-authentication-level"),
+            ("Microsoft: не хранить хэш LAN Manager", f"{_PREV}/network-security-do-not-store-lan-manager-hash-value-on-next-password-change"),
+            ("Microsoft: права Everyone для анонимных пользователей", f"{_PREV}/network-access-let-everyone-permissions-apply-to-anonymous-users"),
+            ("Microsoft: требования к подписи LDAP на контроллере", f"{_PREV}/domain-controller-ldap-server-signing-requirements"),
+            ("Microsoft: обратимое шифрование паролей", f"{_PREV}/store-passwords-using-reversible-encryption"),
+            _attack("T1557.001", "Adversary-in-the-Middle: LLMNR/NBT-NS Poisoning and SMB Relay"),
+            _attack("T1003", "OS Credential Dumping"),
+            _attack("T1087.002", "Account Discovery: Domain Account"),
+        ),
+    ),
+    "DcLogonRights": Guidance(
+        "gpo",
+        "В GPO, применимой к контроллерам, оставьте права «Локальный вход в систему», «Разрешить вход через службу удалённых рабочих столов» и «Вход в качестве пакетного задания» только Administrators и, если нужно, операторам (Backup, Server, Account Operators); широкие группы из этих прав удалите.",
+        (
+            ("Microsoft: локальный вход в систему", f"{_PREV}/allow-log-on-locally"),
+            ("Microsoft: вход через службу удалённых рабочих столов", f"{_PREV}/allow-log-on-through-remote-desktop-services"),
+            ("Microsoft: вход в качестве пакетного задания", f"{_PREV}/log-on-as-a-batch-job"),
+            _attack("T1078.002", "Valid Accounts: Domain Accounts"),
+        ),
+    ),
+    "TieringLogonDeny": Guidance(
+        "gpo",
+        "Создайте GPO для рабочих станций и рядовых серверов (не для контроллеров) с правами «Запретить локальный вход» и «Запретить вход через службу удалённых рабочих столов» для Domain Admins (и Enterprise Admins, Schema Admins): администраторы домена должны входить только на контроллеры и выделенные административные станции.",
+        (
+            ("Microsoft: защита группы Domain Admins", f"{_LEARN}/windows-server/identity/ad-ds/plan/security-best-practices/appendix-f--securing-domain-admins-groups-in-active-directory"),
+            ("Microsoft: запретить локальный вход", f"{_PREV}/deny-log-on-locally"),
+            _attack("T1078.002", "Valid Accounts: Domain Accounts"),
+        ),
+    ),
+    "RestrictedGroups": Guidance(
+        "gpo",
+        "Уберите широкую группу из Restricted Groups (Конфигурация компьютера → Политики → Конфигурация Windows → Параметры безопасности → Группы с ограниченным доступом) или из настройки GPP «Локальные пользователи и группы» и добавляйте в локальные группы только выделенные группы администраторов этих компьютеров.",
+        (
+            LEAST_PRIVILEGE,
             _attack("T1098", "Account Manipulation"),
         ),
     ),

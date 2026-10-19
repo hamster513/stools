@@ -68,6 +68,13 @@ from api.modules.ad.core.checks.domain import (
     check_too_many_admins,
 )
 from api.modules.ad.core.checks.gpo import check_user_rights_assignment
+from api.modules.ad.core.checks.gpo_settings import (
+    check_dc_logon_rights,
+    check_gpo_security_options,
+    check_gpp_passwords,
+    check_restricted_groups,
+    check_tiering_logon_deny,
+)
 from api.modules.ad.core.checks.groups import (
     check_privileged_groups,
     check_protected_users_coverage,
@@ -139,6 +146,11 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("RodcPasswordReplication", "Репликация паролей на RODC", "Пароли, которые кэширует RODC, достаются тому, кто захватил сам RODC. Привилегированные учётки не должны кэшироваться, Denied RODC Password Replication Group должна запрещать кэширование контроллеров, администраторов и krbtgt, а учётки krbtgt_NNNNN удалённых RODC — удаляться.", check_rodc_password_replication, ("T1003",)),
     CheckSpec("CriticalObjectAcl", "Опасные права на критичные объекты", "Право менять привилегированную группу (членство, права, владельца) или её участника (сброс пароля, Shadow Credentials) даёт права этой группы. Проверяются группы администраторов и операторов, DnsAdmins, их рекурсивные участники и учётки Administrator и krbtgt; права, совпадающие с AdminSDHolder, показывает ShadowAdmins. Учитывается один шаг: цепочки через вложенные права не строятся.", check_critical_object_acl, ("T1098", "T1222.001")),
     CheckSpec("BadSuccessor", "Создание dMSA в OU (BadSuccessor)", "Кто может создать в OU объект dMSA, тот назначает ему предшественником любую учётку и получает её права, включая администратора домена. Опасно при контроллере Windows Server 2025; без такого контроллера находка Low. Учитываются явные права CreateChild (любых объектов или dMSA) и GenericAll на OU.", check_bad_successor, ("T1098",)),
+    CheckSpec("GppPasswords", "Пароли в GPO (GPP, автологон)", "Пароль в настройках GPP (cpassword) расшифровывается опубликованным ключом, пароль автологона в Registry.pol лежит открытым текстом; файлы SYSVOL читает любой пользователь домена. Значения сборщик не передаёт, только факт.", check_gpp_passwords, ("T1552.006",)),
+    CheckSpec("GpoSecurityOptions", "Параметры безопасности в GPO", "Параметры безопасности из GptTmpl.inf и Registry.pol: разрешённые LM и NTLMv1 и отсутствие режима «только NTLMv2» на контроллерах, хранение хэша LM, анонимный доступ, вход с пустым паролем, LDAP без подписи, запрет смены пароля компьютеров, консоль восстановления без пароля, обратимое хранение паролей.", check_gpo_security_options, ("T1557.001", "T1003", "T1087.002", "T1557")),
+    CheckSpec("DcLogonRights", "Вход на контроллеры для широких групп", "GPO, применимая к контроллерам домена, разрешает широкой группе (Everyone, Authenticated Users, Users, Domain Users, Domain Computers) локальный вход, вход по RDP или как пакетное задание: любая учётка домена получает сеанс на контроллере.", check_dc_logon_rights, ("T1078.002",)),
+    CheckSpec("TieringLogonDeny", "Нет запрета входа администраторов домена", "Ни одна GPO не запрещает Domain Admins локальный вход и вход по RDP: учётные данные администраторов домена остаются на рабочих станциях и серверах, где их можно украсть.", check_tiering_logon_deny, ("T1078.002",)),
+    CheckSpec("RestrictedGroups", "Широкие группы в локальных группах (Restricted Groups, GPP)", "Restricted Groups в GptTmpl.inf или настройка GPP Groups добавляет широкую группу в локальную встроенную группу компьютеров: в Administrators — права администратора на всех компьютерах, куда применяется GPO.", check_restricted_groups, ("T1098",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

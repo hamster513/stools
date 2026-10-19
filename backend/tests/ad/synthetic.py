@@ -104,6 +104,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
             "dn": DN,
             "class": "domainDNS",
             "sid": DOMAIN_SID,
+            "gpLink": f"[LDAP://CN={{31B2F340-016D-11D2-945F-00C04FB984F9}},CN=Policies,CN=System,{DN};0]",
             "sd": b64sd(
                 [
                     sd.build_ace(rid(512), sd.EXTENDED_RIGHT, object_type=uuid.UUID(GUID_GET_CHANGES_ALL)),
@@ -289,6 +290,8 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
                 + "\r\nSeBackupPrivilege = *S-1-5-32-551\r\nSeShutdownPrivilege = *S-1-5-32-545\r\n"
             }
         },
+        # Блок gpo, как у сборщиков 1.2/2.2: у Default Domain Policy нет Registry.pol и настроек GPP.
+        "gpo": {f"CN={{31B2F340-016D-11D2-945F-00C04FB984F9}},CN=Policies,CN=System,{DN}": {}},
         "principals": principals,
     }
 

@@ -13,7 +13,8 @@ from api.modules.ad.core.ca_data import CaAuthority, CaData, DcBinding
 from api.modules.ad.core.checks.adcs_ca import broken_security, unread
 from api.modules.ad.core.checks.critical_acl import DMSA_CLASS
 from api.modules.ad.core.checks.domain import functional_level_value
-from api.modules.ad.core.export import CRITICAL_ACL_UNREAD, AdExport, ExportIndex
+from api.modules.ad.core.checks.gpo_settings import LINKS_UNKNOWN
+from api.modules.ad.core.export import _LINK_CONTAINERS, CRITICAL_ACL_UNREAD, AdExport, ExportIndex
 from api.modules.ad.core.sd import parse_sd
 
 
@@ -79,6 +80,8 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     if gpos and not export.sysvol:
         note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
+    if gpos:
+        gaps.update(_gpo_gaps(export))
     if not templates:
         gaps["ADCS_ESC"] = "шаблонов сертификатов в выгрузке нет: в лесу нет AD CS или контейнер шаблонов недоступен"
     if not templates and not enrollment_services:
@@ -146,6 +149,29 @@ def _trust_dns_gaps(export: AdExport) -> dict[str, str]:
         notes = [n for n in export.collector.notes if "зоны DNS не прочитаны" in n]
         gaps["DnsZones"] = f"зоны DNS не собраны: {'; '.join(notes)}" if notes else "зоны DNS не собраны (сборщик старой версии)"
     return gaps
+
+
+_GPO_FILE_CHECKS = ("GpoSecurityOptions", "DcLogonRights", "RestrictedGroups")
+_LINKS_UNKNOWN_CHECKS = ("GpoSecurityOptions", "DcLogonRights")
+
+
+def _gpo_gaps(export: AdExport) -> dict[str, str]:
+    """Проверки этапа GPO: блок gpo (Registry.pol, GPP) и GptTmpl.inf; приписка о привязке — проверка при этом выполнена."""
+    note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
+    suffix = f" ({note})" if note else ""
+    reasons: dict[str, list[str]] = {}
+    if export.gpo is None:
+        reasons["GppPasswords"] = ["настройки GPP и Registry.pol не собраны (сборщик старой версии или SYSVOL не прочитан)" + suffix]
+        if not export.sysvol:
+            for code in _GPO_FILE_CHECKS:
+                reasons[code] = ["файлы GPO из SYSVOL не прочитаны" + suffix]
+    if not export.sysvol:
+        # Права входа есть только в GptTmpl.inf: без него отсутствие запрета не доказано.
+        reasons["TieringLogonDeny"] = ["файлы GptTmpl.inf не прочитаны" + suffix]
+    if not any(o.gpLink is not None for o in export.objects if o.cls in _LINK_CONTAINERS):
+        for code in _LINKS_UNKNOWN_CHECKS:
+            reasons.setdefault(code, []).append(LINKS_UNKNOWN)
+    return {code: "; ".join(parts) for code, parts in reasons.items()}
 
 
 def _critical_acl_gaps(export: AdExport) -> dict[str, str]:
