@@ -7,7 +7,8 @@
   Запускается на машине в домене с модулем ActiveDirectory (RSAT). Ничего не
   анализирует и не меняет.
 
-  Выгрузка AD: объекты, дескрипторы безопасности, GptTmpl.inf из SYSVOL,
+  Выгрузка AD: объекты, дескрипторы безопасности (в том числе привилегированных
+  групп, их участников, Administrator и krbtgt), GptTmpl.inf из SYSVOL,
   шаблоны сертификатов, центры сертификации и контейнеры PKI, политики выдачи,
   доверенные домены, настройки домена и леса, политики паролей (PSO), зоны DNS,
   сайты и подсети — один JSON (gzip), ad-<NETBIOS>-<дата>.json.gz. Хватает
@@ -81,6 +82,13 @@ Import-Module ActiveDirectory
 $FormatVersion = "stools-ad/1"
 $CaFormatVersion = "stools-ad-ca/1"
 $CollectorVersion = "2.1"
+# Критичные объекты: группы домена (Domain Admins, Cert Publishers, Schema Admins, Enterprise Admins,
+# Group Policy Creator Owners, Key Admins, Enterprise Key Admins, Allowed RODC Password Replication Group),
+# встроенные (Administrators, Account, Server, Print, Backup Operators, Replicator), DnsAdmins по имени.
+$CriticalGroupRids = @(512, 517, 518, 519, 520, 526, 527, 571)
+$CriticalBuiltinRids = @(544, 548, 549, 550, 551, 552)
+$CriticalGroupNames = @("DnsAdmins")
+$CriticalMembersLimit = 5000
 
 $ad = @{}
 if ($Server) { $ad["Server"] = $Server }
@@ -222,6 +230,12 @@ function Get-DnBinaryDn([string]$value) {
 # Имена SID: собираются из ACE и самих объектов, чтобы анализатор не
 # ходил в домен за именами.
 $principals = @{}
+# Значение для фильтра LDAP (RFC 4515): \, *, (, ) и NUL — шестнадцатеричными кодами.
+function Format-LdapFilterValue([string]$value) {
+  $chars = foreach ($c in $value.ToCharArray()) { if ("\*()`0".IndexOf($c) -ge 0) { '\{0:x2}' -f [int]$c } else { [string]$c } }
+  -join $chars
+}
+
 function Register-Principal([string]$sid, [string]$name, [string]$class) {
   if (-not $sid) { return }
   if ($principals.ContainsKey($sid)) { return }
@@ -471,6 +485,49 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   }
   Write-Step ("  групп: {0}" -f ($objects.Count - $n0))
 
+  # Дескрипторы критичных групп, их рекурсивных участников (правило LDAP_MATCHING_RULE_IN_CHAIN) и учёток
+  # RID 500 и 502 — в поле sd уже собранных записей пользователей и групп.
+  Write-Step "Права на критичные объекты"
+  $byDn = @{}
+  $bySid = @{}
+  foreach ($r in $objects) {
+    if ($r["class"] -eq "user" -or $r["class"] -eq "group") {
+      $byDn[([string]$r["dn"]).ToLowerInvariant()] = $r
+      if ($r["sid"]) { $bySid[$r["sid"]] = $r }
+    }
+  }
+  $domSid = $domain.DomainSID.Value
+  $critical = [ordered]@{}
+  $wanted = @($CriticalGroupRids | ForEach-Object { "$domSid-$_" }) + @($CriticalBuiltinRids | ForEach-Object { "S-1-5-32-$_" })
+  foreach ($s in $wanted) { if ($bySid.ContainsKey($s)) { $critical[([string]$bySid[$s]["dn"]).ToLowerInvariant()] = $bySid[$s] } }
+  foreach ($r in $byDn.Values) { if ($r["class"] -eq "group" -and $CriticalGroupNames -contains $r["sam"]) { $critical[([string]$r["dn"]).ToLowerInvariant()] = $r } }
+  $script:criticalSd = 0
+  function Set-CriticalSd($o) {
+    $rec = $byDn[([string]$o.DistinguishedName).ToLowerInvariant()]
+    if ($rec -and $o.nTSecurityDescriptor) {
+      $rec["sd"] = ToBase64Sd $o.nTSecurityDescriptor
+      Register-AceSids $o.nTSecurityDescriptor
+      $script:criticalSd++
+    }
+  }
+  $own = @($critical.Values) + @(foreach ($rid in 500, 502) { if ($bySid.ContainsKey("$domSid-$rid")) { $bySid["$domSid-$rid"] } })
+  foreach ($r in $own) {
+    try { Set-CriticalSd (Get-ADObject @ad -Identity $r["dn"] -Properties nTSecurityDescriptor) }
+    catch { Add-Warning ("дескрипторы критичных объектов не прочитаны ({0}): {1}" -f $r["dn"], $_.Exception.Message) }
+  }
+  foreach ($g in $critical.Values) {
+    $flt = "(memberOf:1.2.840.113556.1.4.1941:={0})" -f (Format-LdapFilterValue $g["dn"])
+    try {
+      $members = @(Get-ADObject @ad -LDAPFilter $flt -Properties nTSecurityDescriptor -ResultSetSize ($CriticalMembersLimit + 1))
+      if ($members.Count -gt $CriticalMembersLimit) {
+        Add-Warning ("дескрипторы критичных объектов не прочитаны у части участников {0}: их больше {1}" -f $g["sam"], $CriticalMembersLimit)
+        $members = $members[0..($CriticalMembersLimit - 1)]
+      }
+      foreach ($m in $members) { Set-CriticalSd $m }
+    } catch { Add-Warning ("дескрипторы критичных объектов не прочитаны (участники {0}): {1}" -f $g["sam"], $_.Exception.Message) }
+  }
+  Write-Step ("  групп: {0}, дескрипторов: {1}" -f $critical.Count, $script:criticalSd)
+
   Write-Step "Корень домена, AdminSDHolder, OU"
   $objects.Add(@{ dn = $domain.DistinguishedName; class = "domainDNS"; sid = $domain.DomainSID.Value; sd = ToBase64Sd $domainObj.nTSecurityDescriptor }) | Out-Null
   Register-AceSids $domainObj.nTSecurityDescriptor
@@ -618,7 +675,7 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   return @{
     format = $FormatVersion
     collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    collector = @{ kind = "powershell"; version = $CollectorVersion; host = $env:COMPUTERNAME; account = ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME); notes = [string[]]$notes }
+    collector = @{ kind = "powershell"; version = $CollectorVersion; host = $env:COMPUTERNAME; account = ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME); notes = [string[]]$notes; critical_acl = $true }
     domain = $domainInfo
     guids = @{ extended_rights = $extRights; schema_attributes = $schemaAttrs; schema_classes = $schemaClasses }
     objects = $objects.ToArray()

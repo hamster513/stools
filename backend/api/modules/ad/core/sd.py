@@ -197,14 +197,15 @@ def build_ace(
     return struct.pack("<BBH", ace_type, flags, 4 + len(body)) + body
 
 
-def build_sd(aces: list[bytes], owner: str = "S-1-5-32-544") -> bytes:
-    owner_b = str_to_sid(owner)
+def build_sd(aces: list[bytes], owner: str | None = "S-1-5-32-544") -> bytes:
+    """owner=None — дескриптор без владельца и группы (прочитан без OWNER_SECURITY_INFORMATION)."""
+    owner_b = str_to_sid(owner) if owner else b""
     acl_body = b"".join(aces)
     acl = struct.pack("<BBHHH", 2, 0, 8 + len(acl_body), len(aces), 0) + acl_body
     header_len = 20
-    off_owner = header_len
-    off_group = off_owner + len(owner_b)
-    off_dacl = off_group + len(owner_b)
+    off_owner = header_len if owner else 0
+    off_group = header_len + len(owner_b) if owner else 0
+    off_dacl = header_len + 2 * len(owner_b)
     control = 0x8004  # SE_SELF_RELATIVE | SE_DACL_PRESENT
     header = struct.pack("<BBHIIII", 1, 0, control, off_owner, off_group, 0, off_dacl)
     return header + owner_b + owner_b + acl

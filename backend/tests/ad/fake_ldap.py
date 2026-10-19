@@ -17,6 +17,7 @@ from tests.ad.synthetic import CONF_DN, DN, GUID_KEYCRED, PKI, b64sd, build_expo
 
 _SID_FILTER = re.compile(r"\(objectSid=(S-[0-9-]+)\)")
 _SCHEMA_FILTER = re.compile(r"\(lDAPDisplayName=([^)]+)\)")
+_CHAIN_FILTER = re.compile(r"\(memberOf:1\.2\.840\.113556\.1\.4\.1941:=(.+)\)")
 _DS = f"CN=Directory Service,CN=Windows NT,CN=Services,{CONF_DN}"
 
 
@@ -199,6 +200,10 @@ class FakeLdap:
             return found
         if "(userPassword=*)" in flt:
             return [{"dn": o["dn"], "attributes": {"sAMAccountName": o["sam"]}, "raw_attributes": {}} for o in self.objects if o.get("sam") in self.unix_password]
+        chain = _CHAIN_FILTER.fullmatch(flt)
+        if chain:
+            group_dn = re.sub(r"\\([0-9a-f]{2})", lambda m: chr(int(m.group(1), 16)), chain.group(1))
+            return [self.entry(o) for o in self.members_recursive(group_dn)]
         sids = _SID_FILTER.findall(flt)
         if sids:
             return [self.entry(o) for o in self.objects if o.get("sid") in sids]
@@ -227,6 +232,19 @@ class FakeLdap:
             return dn.lower().endswith(base_l)
 
         return [self.entry(o) for o in self.objects if wanted in ("*", o["class"]) and in_scope(o["dn"])]
+
+    def members_recursive(self, group_dn: str) -> list[dict[str, Any]]:
+        """Как правило LDAP_MATCHING_RULE_IN_CHAIN: прямые и вложенные члены, группы тоже."""
+        by_dn = {o["dn"].lower(): o for o in self.objects}
+        out: dict[str, dict[str, Any]] = {}
+        stack = list(by_dn.get(group_dn.lower(), {}).get("member", []))
+        while stack:
+            o = by_dn.get(stack.pop().lower())
+            if o is None or o["dn"].lower() in out:
+                continue
+            out[o["dn"].lower()] = o
+            stack.extend(o.get("member", []))
+        return list(out.values())
 
     def root_dse(self) -> dict[str, str]:
         return {"defaultNamingContext": DN, "configurationNamingContext": CONF_DN, "schemaNamingContext": f"CN=Schema,{CONF_DN}", "rootDomainNamingContext": DN}

@@ -63,6 +63,11 @@ export interface AdConfig {
   azure_sso_key_max_age_days: number
   computer_inactivity_days: number
   computer_password_max_age_days: number
+  password_min_length: number
+  backup_max_age_days: number
+  smartcard_password_max_age_days: number
+  trust_inactive_days: number
+  control_path_many: number
   /** Сборка Windows → дата окончания поддержки (ГГГГ-ММ-ДД). */
   obsolete_os_builds: Record<string, string>
   low_priv_groups: string[]

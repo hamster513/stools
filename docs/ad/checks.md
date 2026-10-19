@@ -1,6 +1,6 @@
 # Проверки модуля Active Directory
 
-Версия анализатора — 3. Реестр — `backend/api/modules/ad/core/checks/__init__.py`, «Как исправить» и
+Версия анализатора — 5. Реестр — `backend/api/modules/ad/core/checks/__init__.py`, «Как исправить» и
 ссылки — `checks/catalog.py`, пороги и списки — настройки правил (Active Directory → Настройки и
 данные → «Правила проверок»).
 
@@ -70,6 +70,8 @@
 | `SensitiveAcl` | опасные права на OU и компьютерах; унаследованные и массовые сворачиваются | High | ACL OU и компьютеров | — |
 | `GpoPermissions` | опасные права на объекты GPO | High | ACL GPO | — |
 | `DomainRootAcl` | небезопасный субъект с GenericAll, WriteDacl или WriteOwner на корне домена (ACE действует на сам корень) или владелец корня | Critical широкий / High прочий | ACL корня домена | P-ExchangePrivEsc |
+| `CriticalObjectAcl` | на критичном объекте (группы 512, 517, 518, 519, 520, 526, 527, 571 домена, 544, 548–552 встроенные, `DnsAdmins` и `privileged_groups` по имени, их рекурсивные участники-пользователи и вложенные группы, учётки RID 500 и 502) у небезопасного субъекта разрешающая ACE (не inherit-only; SELF и CREATOR OWNER не в счёт) с GenericAll, GenericWrite, WriteDacl, WriteOwner, WriteProperty без типа, записью `member` или AddSelf (у групп), записью `msDS-KeyCredentialLink` (у пользователей), всеми расширенными правами, сбросом пароля (у пользователей), либо он владелец. Субъект — сама критичная группа (связь внутри tier 0) — не в счёт. Группы из `privileged_groups` сверх списков RID проверяются, только если сборщик прочитал их дескрипторы, а он читает фиксированный список. У объекта с `adminCount = 1` ACE, совпадающие с AdminSDHolder (SID, маска, тип), пропускаются. Полный доступ (0xF01FF) показывается одним GenericAll. Одна находка на пару «объект × субъект», в `details.effective_principals` — число фактических участников субъекта | Critical широкий / High прочий; прочий с участниками > `control_path_many` (100) — как широкий | `sd` критичных объектов (`collector.critical_acl`) | P-ControlPathIndirectEveryone, P-ControlPathIndirectMany, P-DelegationKeyAdmin |
+| `BadSuccessor` | класс dMSA есть в схеме (`guids.schema_classes`); у небезопасного субъекта явная (не унаследованная) разрешающая ACE на OU: CreateChild без типа или для dMSA, либо GenericAll (полный доступ); inherit-only — только если наследуется на все объекты, OU или контейнеры | High широкий / Medium прочий, если есть контроллер с «2025» в ОС; иначе Low | `sd` OU, класс dMSA, ОС контроллеров | A-BadSuccessor |
 
 ## Групповые политики — `gpo`
 

@@ -165,6 +165,8 @@ def test_sd_flags_control_only_for_descriptor() -> None:
     list(search("DC=corp,DC=local", "(objectClass=group)", ["name", "nTSecurityDescriptor"], "SUBTREE"))
     assert conn.calls[0]["controls"] is None
     assert [str(c[0]) for c in conn.calls[1]["controls"]] == [SD_FLAGS_OID]
+    # SDFlagsRequestValue ::= SEQUENCE { Flags INTEGER } = 5: OWNER | DACL, без SACL.
+    assert bytes(conn.calls[1]["controls"][0][2]) == b"0\x03\x02\x01\x05"
 
 
 def test_error_result_on_page_two_stops_with_readable_error() -> None:

@@ -459,4 +459,23 @@ GUIDANCE: dict[str, Guidance] = {
             _attack("T1003", "OS Credential Dumping"),
         ),
     ),
+    "CriticalObjectAcl": Guidance(
+        "acl",
+        "Уберите у субъекта права на объект (вкладка «Безопасность» → «Дополнительно» в «Пользователях и компьютерах» или dsacls): членство в привилегированной группе меняют только администраторы домена, сброс пароля и запись msDS-KeyCredentialLink администраторов не делегируются службе поддержки. Владельцем верните Domain Admins. Если право выдано на учётку с adminCount = 1, исправьте и AdminSDHolder, иначе SDProp вернёт его в течение часа.",
+        (
+            LEAST_PRIVILEGE,
+            PROTECTED_ACCOUNTS,
+            _attack("T1098", "Account Manipulation"),
+            _attack("T1222.001", "File and Directory Permissions Modification: Windows File and Directory Permissions Modification"),
+        ),
+    ),
+    "BadSuccessor": Guidance(
+        "acl",
+        "Уберите у субъекта право создавать объекты в OU (CreateChild для всех объектов или для msDS-DelegatedManagedServiceAccount) и GenericAll на OU; делегируйте создание только нужных классов объектов. Установите на контроллеры Windows Server 2025 обновления безопасности с августа 2025 года (CVE-2025-53779). Проверьте существующие dMSA: атрибут msDS-ManagedAccountPrecededByLink не должен указывать на привилегированные учётки.",
+        (
+            ("Microsoft: делегированные управляемые учётные записи служб (dMSA)", f"{_LEARN}/windows-server/identity/ad-ds/manage/delegated-managed-service-accounts/delegated-managed-service-accounts-overview"),
+            ("Microsoft: CVE-2025-53779", "https://msrc.microsoft.com/update-guide/vulnerability/CVE-2025-53779"),
+            _attack("T1098", "Account Manipulation"),
+        ),
+    ),
 }

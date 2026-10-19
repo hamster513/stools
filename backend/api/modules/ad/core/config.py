@@ -85,6 +85,8 @@ class AdConfig(BaseModel):
     smartcard_password_max_age_days: int = Field(default=90, ge=1)
     #: Объект доверия не менялся дольше — пароль доверия не обновляется, находка TrustSecurity (inactive).
     trust_inactive_days: int = Field(default=40, ge=1)
+    #: Прочий субъект с правами на критичный объект, у которого фактических участников больше, — как широкая группа.
+    control_path_many: int = Field(default=100, ge=1)
     #: Сборка Windows (из operatingSystemVersion) → дата окончания поддержки; после неё ОС считается устаревшей.
     obsolete_os_builds: dict[str, datetime.date] = Field(
         default_factory=lambda: {"22000": datetime.date(2024, 10, 8), "22621": datetime.date(2025, 10, 14)}

@@ -25,7 +25,14 @@ from fastapi.testclient import TestClient
 
 from api.modules.ad.core import sd
 from api.modules.ad.core.ca_data import parse_ca_data
-from api.modules.ad.core.export import ExportIndex, load_export
+from api.modules.ad.core.export import (
+    CRITICAL_ACL_UNREAD,
+    CRITICAL_BUILTIN_RIDS,
+    CRITICAL_GROUP_NAMES,
+    CRITICAL_GROUP_RIDS,
+    ExportIndex,
+    load_export,
+)
 
 SCRIPT = Path("api/modules/ad/collector/STools-AD-Collector.ps1")
 IMAGE = "mcr.microsoft.com/powershell:lts-alpine-3.20"
@@ -57,7 +64,13 @@ def test_script_writes_hygiene_fields() -> None:
                  "forest_functional_level", "min_pwd_length", "lockout_threshold", "pwd_properties", "pwd_history_length",
                  "recycle_bin", "ds_heuristics", "smartcard_rotation", "laps_legacy_schema", "laps_schema", "last_backup",
                  "backup_read", "sysvol_replication", "schema_poss_superiors", "schema_classes",
-                 "PSO не найдены: при сборе не администратором домена они не видны"):
+                 "PSO не найдены: при сборе не администратором домена они не видны",
+                 "1.2.840.113556.1.4.1941", "critical_acl = $true", "-ResultSetSize ($CriticalMembersLimit + 1)",
+                 # Списки критичных объектов и пометка об отказе — те же, что в контракте выгрузки (export.py).
+                 f"$CriticalGroupRids = @({', '.join(map(str, CRITICAL_GROUP_RIDS))})",
+                 f"$CriticalBuiltinRids = @({', '.join(map(str, CRITICAL_BUILTIN_RIDS))})",
+                 f"$CriticalGroupNames = @({', '.join(f'{chr(34)}{n}{chr(34)}' for n in CRITICAL_GROUP_NAMES)})",
+                 f'"{CRITICAL_ACL_UNREAD} (участники', f'"{CRITICAL_ACL_UNREAD} у части участников'):
         assert name in text, name
 
 
@@ -229,13 +242,16 @@ $p1 = B "{p1}"; $p2 = B "{p2}"
   update_null = Get-DnsAllowUpdate $null
   dn = Get-DnBinaryDn "B:8:00000001:CN=a:b,CN=Users,DC=corp,DC=local"
   dn_plain = Get-DnBinaryDn "CN=alice,CN=Users,DC=corp,DC=local"
+  filter = Format-LdapFilterValue 'CN=a\\, b (x)*,DC=c'
+  filter_empty = Format-LdapFilterValue ""
 }} | ConvertTo-Json -Compress
 """
-    out = _pwsh(tmp_path, body, ("Get-LastBackup", "Get-DnsAllowUpdate", "Get-DnBinaryDn"))
+    out = _pwsh(tmp_path, body, ("Get-LastBackup", "Get-DnsAllowUpdate", "Get-DnBinaryDn", "Format-LdapFilterValue"))
     assert out == {
         "backup": "2026-09-01T10:20:30Z", "backup_nul": "2026-09-01T10:20:30Z", "backup_none": None, "backup_null": None,
         "update": 1, "update_none": None, "update_short": None, "update_null": None,
         "dn": "CN=a:b,CN=Users,DC=corp,DC=local", "dn_plain": "CN=alice,CN=Users,DC=corp,DC=local",
+        "filter": "CN=a\\5c, b \\28x\\29\\2a,DC=c", "filter_empty": "",
     }
 
 
@@ -305,6 +321,8 @@ function Sid([string]$s) { [pscustomobject]@{ Value = $s } }
 $Base = "S-1-5-21-1-2-3"
 $trustBytes = [Convert]::FromBase64String($env:STUB_TRUST_SID)
 $creatorBytes = [Convert]::FromBase64String($env:STUB_CREATOR_SID)
+# Дескриптор безопасности — байты: ToBase64Sd сборщика принимает и их.
+$sdBytes = [Convert]::FromBase64String($env:STUB_SD)
 $Schema = "CN=Schema,$Conf"
 $Created = [datetime]::new(2025, 1, 2, 3, 4, 5, [DateTimeKind]::Utc)
 # Имена схемы, которых нет в старом лесу (STUB_OLD_SCHEMA): их записи схемы скрыты, а запрос такого
@@ -327,8 +345,9 @@ $Objects = @(
   @{ dn = "CN=Certificate-Enrollment,CN=Extended-Rights,$Conf"; cls = @("controlAccessRight"); displayName = "Enroll"; rightsGuid = "0e10c968-78fb-11d2-90d4-00c04f79dc55" }
   @{ dn = "CN=alice,CN=Users,$Dom"; cls = @("person", "user"); sAMAccountName = "alice"; objectSid = (Sid "$Base-1104"); userAccountControl = 512
      altSecurityIdentities = @("X509:<I>DC=local,DC=corp,CN=CORP-CA<S>CN=alice"); primaryGroupID = 513; sIDHistory = @((Sid "S-1-5-21-9-9-9-1104"))
-     whenCreated = $Created; scriptPath = "logon.bat"; userPassword = "not-for-export" }
-  @{ dn = "CN=bob,CN=Users,$Dom"; cls = @("person", "user"); sAMAccountName = "bob"; objectSid = (Sid "$Base-1106"); userAccountControl = 512; primaryGroupID = 513 }
+     whenCreated = $Created; scriptPath = "logon.bat"; userPassword = "not-for-export"; nTSecurityDescriptor = $sdBytes }
+  @{ dn = "CN=bob,CN=Users,$Dom"; cls = @("person", "user"); sAMAccountName = "bob"; objectSid = (Sid "$Base-1106"); userAccountControl = 512; primaryGroupID = 513
+     nTSecurityDescriptor = $sdBytes }
   @{ dn = "CN=CA01,OU=Servers,$Dom"; cls = @("computer"); sAMAccountName = "CA01$"; objectSid = (Sid "$Base-1105"); userAccountControl = 4096
      dNSHostName = $Web; OperatingSystemVersion = "10.0 (17763)"; primaryGroupID = 515; whenCreated = $Created
      "ms-Mcs-AdmPwdExpirationTime" = [int64]134000000000000000; "msLAPS-PasswordExpirationTime" = [int64]134100000000000000; "ms-DS-CreatorSID" = $creatorBytes }
@@ -337,7 +356,10 @@ $Objects = @(
      "msDS-NeverRevealGroup" = @("CN=Denied RODC Password Replication Group,CN=Users,$Dom")
      "msDS-RevealedUsers" = @("B:8:00000001:CN=alice,CN=Users,$Dom", "B:8:00000002:CN=alice,CN=Users,$Dom", "B:8:00000001:CN=a:b,CN=Users,$Dom")
      "msDS-KrbTgtLink" = "CN=krbtgt_10001,CN=Users,$Dom" }
-  @{ dn = "CN=Domain Admins,CN=Users,$Dom"; cls = @("group"); sAMAccountName = "Domain Admins"; objectSid = (Sid "$Base-512"); member = @("CN=alice,CN=Users,$Dom") }
+  @{ dn = "CN=Domain Admins,CN=Users,$Dom"; cls = @("group"); sAMAccountName = "Domain Admins"; objectSid = (Sid "$Base-512"); member = @("CN=Tier0,CN=Users,$Dom")
+     nTSecurityDescriptor = $sdBytes }
+  @{ dn = "CN=Tier0,CN=Users,$Dom"; cls = @("group"); sAMAccountName = "Tier0"; objectSid = (Sid "$Base-1301"); member = @("CN=alice,CN=Users,$Dom")
+     nTSecurityDescriptor = $sdBytes }
   @{ dn = "OU=Servers,$Dom"; cls = @("organizationalUnit") }
   @{ dn = "CN={11111111-2222-3333-4444-555555555555},CN=Policies,CN=System,$Dom"; cls = @("groupPolicyContainer"); displayName = "Default"; gPCFileSysPath = $env:STUB_GPO }
   @{ dn = "CN=VulnTemplate,CN=Certificate Templates,$Pki"; cls = @("pKICertificateTemplate"); cn = "VulnTemplate"; displayName = "Vuln Template"
@@ -383,6 +405,22 @@ function New-AdEntity($row, [string[]]$props) {
   [pscustomobject]$o
 }
 
+# Правило LDAP_MATCHING_RULE_IN_CHAIN: строка — прямой или вложенный член группы.
+function Test-InChain($row, [string]$group) {
+  $seen = @{}
+  $stack = New-Object System.Collections.Stack
+  $stack.Push($group)
+  while ($stack.Count) {
+    $dn = $stack.Pop()
+    if ($seen.ContainsKey($dn)) { continue }
+    $seen[$dn] = $true
+    $g = @($Objects | Where-Object { $_.dn -eq $dn })
+    if (-not $g -or -not $g[0].ContainsKey("member")) { continue }
+    foreach ($m in $g[0].member) { if ($m -eq $row.dn) { return $true }; $stack.Push($m) }
+  }
+  return $false
+}
+
 function Test-Row($row, [string]$base, [string]$filter, [string]$scope) {
   if ($base) {
     $parent = $row.dn.Substring($row.dn.IndexOf(",") + 1)
@@ -400,6 +438,9 @@ function Test-Row($row, [string]$base, [string]$filter, [string]$scope) {
     }
     return $false
   }
+  if ($filter -match '^\(memberOf:1\.2\.840\.113556\.1\.4\.1941:=(.+)\)$') {
+    return Test-InChain $row ([regex]::Replace($Matches[1], '\\([0-9a-f]{2})', { param($m) [string][char][Convert]::ToInt32($m.Groups[1].Value, 16) }))
+  }
   if ($filter -eq "(objectClass=*)") { return $true }
   if ($filter -match '^\(objectClass=([^)]+)\)$') { return $row.cls -contains $Matches[1] }
   if ($filter -match '^\(([^=]+)=([^)]+)\)$') { return $row.ContainsKey($Matches[1]) -and $row[$Matches[1]] -eq $Matches[2] }
@@ -408,7 +449,8 @@ function Test-Row($row, [string]$base, [string]$filter, [string]$scope) {
 
 function Get-ADObject {
   [CmdletBinding()]
-  param([string]$Identity, [string]$SearchBase, [string]$LDAPFilter, [object[]]$Properties, [string]$SearchScope = "Subtree", [string]$Server)
+  param([string]$Identity, [string]$SearchBase, [string]$LDAPFilter, [object[]]$Properties, [string]$SearchScope = "Subtree", [string]$Server,
+        [int]$ResultSetSize = 0)
   $props = @($Properties | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_ })
   # STUB_DENY — начала баз поиска через «;», чтение которых запрещено (как отказ доступа в настоящем домене).
   foreach ($deny in @(([string]$env:STUB_DENY) -split ';' | Where-Object { $_ })) {
@@ -421,10 +463,12 @@ function Get-ADObject {
     $err = [System.Management.Automation.ErrorRecord]::new([System.ArgumentException]::new("One or more properties are invalid."), "InvalidProperty", "InvalidArgument", $props)
     $PSCmdlet.ThrowTerminatingError($err)
   }
+  $found = 0
   foreach ($row in $Objects) {
     if ($env:STUB_OLD_SCHEMA -and $row.ContainsKey("lDAPDisplayName") -and $OptionalSchema -contains $row.lDAPDisplayName) { continue }
     $hit = $(if ($Identity) { $row.dn -eq $Identity } else { Test-Row $row $SearchBase $LDAPFilter $SearchScope })
-    if ($hit) { New-AdEntity $row $props }
+    if ($hit) { New-AdEntity $row $props; $found++ }
+    if ($ResultSetSize -and $found -ge $ResultSetSize) { return }
   }
 }
 
@@ -468,6 +512,7 @@ Export-ModuleMember -Function Get-ADObject, Get-ADComputer, Get-ADRootDSE, Get-A
 TRUST_SID = "S-1-5-21-111-222-333"
 CREATOR_SID = "S-1-5-21-1-2-3-1106"
 DMSA_GUID = "0feb936f-47b3-49f2-9386-1dedc2c23765"
+STUB_SD = base64.b64encode(sd.build_sd([sd.build_ace("S-1-5-21-1-2-3-1106", sd.WRITE_DACL)])).decode()
 
 
 def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str | None = None,
@@ -483,7 +528,7 @@ def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str 
     out = tmp_path / "out"
     out.mkdir()
     env = {"STUB_WEB": f"host.docker.internal:{port}", "STUB_TRUST_SID": base64.b64encode(sd.str_to_sid(TRUST_SID)).decode(),
-           "STUB_CREATOR_SID": base64.b64encode(sd.str_to_sid(CREATOR_SID)).decode(), "STUB_DMSA_GUID": DMSA_GUID,
+           "STUB_CREATOR_SID": base64.b64encode(sd.str_to_sid(CREATOR_SID)).decode(), "STUB_DMSA_GUID": DMSA_GUID, "STUB_SD": STUB_SD,
            "STUB_GPO": "/t/modules/gpo", "PSModulePath": "/t/modules", "COMPUTERNAME": "WS01", "USERDOMAIN": "CORP",
            "USERNAME": "auditor", **(env_extra or {})}
     name = f"stools-collector-test-{uuid.uuid4().hex[:12]}"
@@ -552,6 +597,10 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     alice, bob = users["alice"], users["bob"]
     assert alice.primaryGroupID == 513 and alice.sIDHistory == ["S-1-5-21-9-9-9-1104"] and alice.whenCreated == created
     assert alice.scriptPath == "logon.bat" and alice.hasUnixPassword is True
+    # Дескрипторы критичных объектов: Domain Admins, вложенная Tier0 и её участник alice; bob вне групп — без sd.
+    groups = {g.sam: g for g in by_class["group"]}
+    assert export.collector.critical_acl is True
+    assert alice.sd == groups["Domain Admins"].sd == groups["Tier0"].sd == STUB_SD and bob.sd is None
     assert bob.hasUnixPassword is False and bob.sIDHistory == [] and bob.whenCreated is None and bob.scriptPath is None
     assert "not-for-export" not in json.dumps(raw)
     assert comp.primaryGroupID == 515 and comp.lapsExpiry == 134000000000000000 and comp.lapsNewExpiry == 134100000000000000

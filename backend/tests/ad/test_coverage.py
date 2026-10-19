@@ -298,3 +298,16 @@ def test_snapshot_of_previous_analyzer_marks_empty_checks_unchecked(auth_client:
     after = {c["code"]: c for c in overview["checks"]}
     assert "SYSVOL" in after["UserRightsAssignment"]["unchecked"] and after["DCSync"]["total"]
     assert after["ADCS_CA"]["unchecked"] == stale and after["ADCS_MAPPING"]["unchecked"] == stale
+
+
+def test_dc_descriptors_without_owner_mark_dc_owner_unchecked() -> None:
+    import base64
+
+    from api.modules.ad.core import sd
+    from tests.ad.mini import dc, mini_export
+
+    blob = base64.b64encode(sd.build_sd([sd.build_ace("S-1-5-18", sd.GENERIC_ALL)], owner=None)).decode()
+    gaps = coverage_gaps(mini_export([dc("DC01", 1001, sd=blob)]))
+    assert gaps["DcOwner"] == "дескрипторы собраны без владельца (сборщик старой версии)"
+    with_owner = base64.b64encode(sd.build_sd([sd.build_ace("S-1-5-18", sd.GENERIC_ALL)])).decode()
+    assert "DcOwner" not in coverage_gaps(mini_export([dc("DC01", 1001, sd=with_owner)]))

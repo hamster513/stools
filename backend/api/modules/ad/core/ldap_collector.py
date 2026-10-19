@@ -16,7 +16,15 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 from api.modules.ad.core import sd
-from api.modules.ad.core.export import FORMAT, WELL_KNOWN_SIDS, datetime_to_filetime
+from api.modules.ad.core.export import (
+    CRITICAL_ACL_UNREAD,
+    CRITICAL_BUILTIN_RIDS,
+    CRITICAL_GROUP_NAMES,
+    CRITICAL_GROUP_RIDS,
+    FORMAT,
+    WELL_KNOWN_SIDS,
+    datetime_to_filetime,
+)
 
 Entry = dict[str, Any]
 Searcher = Callable[[str, str, list[str], str], Iterable[Entry]]
@@ -61,6 +69,10 @@ UNIX_PASSWORD_FILTER = "(&(objectCategory=person)(objectClass=user)(|(userPasswo
 #: dNSProperty: Id свойства DSPROPERTY_ZONE_ALLOW_UPDATE (MS-DNSP 2.3.2.1.1).
 DNS_ZONE_ALLOW_UPDATE = 2
 GPT_TMPL = "\\MACHINE\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf"
+#: Рекурсивные члены группы (LDAP_MATCHING_RULE_IN_CHAIN), вложенные группы тоже.
+IN_CHAIN = "1.2.840.113556.1.4.1941"
+#: Дескрипторов участников одной критичной группы читается не больше — остальные в notes.
+CRITICAL_MEMBERS_LIMIT = 5000
 #: Код LDAP noSuchObject: базы поиска нет.
 NO_SUCH_OBJECT = 32
 
@@ -214,6 +226,11 @@ def dns_allow_update(properties: list[bytes]) -> int | None:
         if prop_id == DNS_ZONE_ALLOW_UPDATE and data:
             return data[0]
     return None
+
+
+def filter_value(value: str) -> str:
+    """Значение для фильтра LDAP (RFC 4515): \\, *, (, ) и NUL — шестнадцатеричными кодами."""
+    return "".join(f"\\{ord(c):02x}" if c in "\\*()\x00" else c for c in value)
 
 
 def _b64(data: bytes | None) -> str | None:
@@ -375,6 +392,7 @@ class LdapCollector:
             sam = str(_first(a.get("sAMAccountName")) or "")
             objects.append({"dn": e["dn"], "class": "group", "sid": sid_, "sam": sam, "name": str(_first(a.get("name")) or sam), "member": _list(a.get("member")), "adminCount": _int(a.get("adminCount"))})
             self._register(sid_, f"{netbios}\\{sam}", "group")
+        self._critical_acl(default_nc, domain_sid, objects)
         for e in self.search(default_nc, "(objectClass=organizationalUnit)", ["nTSecurityDescriptor"], "SUBTREE"):
             ousd = _raw(e, "nTSecurityDescriptor")
             objects.append({"dn": e["dn"], "class": "organizationalUnit", "sd": _b64(ousd)})
@@ -426,13 +444,47 @@ class LdapCollector:
         return {
             "format": FORMAT,
             "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "collector": {"kind": "ldap", "version": "1.1", "host": self.host, "account": self.account, "notes": self.notes},
+            "collector": {"kind": "ldap", "version": "1.1", "host": self.host, "account": self.account, "notes": self.notes, "critical_acl": True},
             "domain": domain,
             "guids": {"extended_rights": ext, "schema_attributes": schema_attrs, "schema_classes": schema_classes},
             "objects": objects,
             "sysvol": sysvol,
             "principals": self.principals,
         }
+
+    def _critical_acl(self, default_nc: str, domain_sid: str, objects: list[dict[str, Any]]) -> None:
+        """Дескрипторы критичных групп, их рекурсивных участников и учёток RID 500 и 502 —
+        в поле sd уже собранных записей пользователей и групп."""
+        by_dn = {o["dn"].lower(): o for o in objects if o["class"] in ("user", "group")}
+        by_sid = {o["sid"]: o for o in by_dn.values() if o.get("sid")}
+        names = {n.lower() for n in CRITICAL_GROUP_NAMES}
+        groups = [by_sid.get(f"{domain_sid}-{r}") for r in CRITICAL_GROUP_RIDS] + [by_sid.get(f"S-1-5-32-{r}") for r in CRITICAL_BUILTIN_RIDS]
+        groups += [o for o in by_dn.values() if o["class"] == "group" and (o.get("sam") or "").lower() in names]
+        found = list({g["dn"].lower(): g for g in groups if g is not None}.values())
+        accounts = [a for a in (by_sid.get(f"{domain_sid}-{r}") for r in (500, 502)) if a is not None]
+
+        def attach(e: Entry) -> None:
+            rec = by_dn.get(e["dn"].lower())
+            raw = _raw(e, "nTSecurityDescriptor")
+            if rec is not None and raw:
+                rec["sd"] = _b64(raw)
+                self._note_sd(raw)
+
+        own = [o["sid"] for o in [*found, *accounts]]
+        if own:
+            flt = "(|" + "".join(f"(objectSid={s})" for s in own) + ")"
+            for e in self._read(CRITICAL_ACL_UNREAD, default_nc, flt, ["nTSecurityDescriptor"], "SUBTREE") or []:
+                attach(e)
+        for g in found:
+            label = g.get("sam") or g["dn"]
+            try:
+                for n, e in enumerate(self._search_optional(default_nc, f"(memberOf:{IN_CHAIN}:={filter_value(g['dn'])})", ["nTSecurityDescriptor"], "SUBTREE")):
+                    if n == CRITICAL_MEMBERS_LIMIT:
+                        self.notes.append(f"{CRITICAL_ACL_UNREAD} у части участников {label}: их больше {CRITICAL_MEMBERS_LIMIT}")
+                        break
+                    attach(e)
+            except LdapResultError as exc:
+                self.notes.append(f"{CRITICAL_ACL_UNREAD} (участники {label}): {exc.reason}")
 
     def _pki_objects(self, pki: str) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
@@ -719,7 +771,7 @@ def ldap3_searcher(
     pacer: Pacer | None = None,
     on_page: Callable[[int], None] | None = None,
 ) -> Searcher:
-    """Постраничный поиск ldap3 с контролем SD_FLAGS (только DACL).
+    """Постраничный поиск ldap3 с контролем SD_FLAGS (владелец и DACL; SACL не запрашивается — на него нужна привилегия).
 
     Страницы запрашиваются своей петлёй, а не `paged_search`: перед каждым
     запросом — страницей одного поиска или отдельным поиском (дозапросы имён
@@ -741,7 +793,7 @@ def ldap3_searcher(
     state = {"read": 0}
 
     def search(base: str, flt: str, attrs: list[str], scope: str) -> Iterable[Entry]:
-        controls = security_descriptor_control(sdflags=0x04) if "nTSecurityDescriptor" in attrs else None
+        controls = security_descriptor_control(sdflags=0x05) if "nTSecurityDescriptor" in attrs else None
         cookie: bytes | None = None
         while True:
             before_request()

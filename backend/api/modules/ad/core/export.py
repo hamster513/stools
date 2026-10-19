@@ -45,6 +45,16 @@ RID_ENTERPRISE_ADMINS = 519
 RID_PROTECTED_USERS = 525
 RID_KRBTGT = 502
 
+#: Критичные объекты (сборщики читают их дескрипторы, проверка CriticalObjectAcl — права на них):
+#: группы домена Domain Admins, Cert Publishers, Schema Admins, Enterprise Admins, Group Policy Creator
+#: Owners, Key Admins, Enterprise Key Admins, Allowed RODC Password Replication Group; встроенные
+#: (S-1-5-32-<RID>) Administrators, Account, Server, Print, Backup Operators, Replicator; DnsAdmins по имени.
+CRITICAL_GROUP_RIDS = (512, 517, 518, 519, 520, 526, 527, 571)
+CRITICAL_BUILTIN_RIDS = (544, 548, 549, 550, 551, 552)
+CRITICAL_GROUP_NAMES = ("DnsAdmins",)
+#: Начало записи сборщика в notes об отказе чтения дескрипторов — по нему пробел в «Не проверено».
+CRITICAL_ACL_UNREAD = "дескрипторы критичных объектов не прочитаны"
+
 #: trustAttributes: доверенный домен — домен того же леса (MS-ADTS 6.1.6.7.9).
 TRUST_ATTRIBUTE_WITHIN_FOREST = 0x20
 
@@ -248,6 +258,8 @@ class CollectorInfo(BaseModel):
     account: str = ""
     #: Что сборщик не смог или не стал читать — попадает в «не проверено».
     notes: list[str] = Field(default_factory=list)
+    #: Сборщик читает дескрипторы критичных групп, их участников и учёток RID 500 и 502.
+    critical_acl: bool = False
 
 
 class Guids(BaseModel):

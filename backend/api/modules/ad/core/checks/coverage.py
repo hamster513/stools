@@ -7,16 +7,20 @@
 """
 from __future__ import annotations
 
+import base64
+
 from api.modules.ad.core.ca_data import CaAuthority, CaData, DcBinding
 from api.modules.ad.core.checks.adcs_ca import broken_security, unread
+from api.modules.ad.core.checks.critical_acl import DMSA_CLASS
 from api.modules.ad.core.checks.domain import functional_level_value
-from api.modules.ad.core.export import AdExport, ExportIndex
+from api.modules.ad.core.export import CRITICAL_ACL_UNREAD, AdExport, ExportIndex
+from api.modules.ad.core.sd import parse_sd
 
 
 def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     users = gpos = templates = pki_objects = enrollment_services = computers = 0
     has_os = has_primary_group = False
-    dcs = dc_acl = 0
+    dcs = dc_acl = dc_owner = 0
     logon_dates = False
     for o in export.objects:
         if o.cls in ("user", "computer"):
@@ -29,7 +33,9 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
             has_os = has_os or bool(o.operatingSystem)
             if ExportIndex.is_dc(o):
                 dcs += 1
-                dc_acl += bool(o.sd)
+                if o.sd:
+                    dc_acl += 1
+                    dc_owner += parse_sd(base64.b64decode(o.sd)).owner is not None
         elif o.cls == "groupPolicyContainer":
             gpos += 1
         elif o.cls == "pKICertificateTemplate":
@@ -46,6 +52,9 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
         gaps["DcCount"] = "в выгрузке нет контроллеров домена"
     if dcs and not dc_acl:
         gaps["DcOwner"] = "компьютеры собраны без ACL: владелец контроллеров не известен"
+    elif dc_acl and not dc_owner:
+        # LDAP-сборщик до SD_FLAGS 0x05 читал только DACL.
+        gaps["DcOwner"] = "дескрипторы собраны без владельца (сборщик старой версии)"
     root = next((o for o in export.objects if o.dn.lower() == export.domain.dn.lower()), None)
     if root is None or not root.sd:
         gaps["DomainRootAcl"] = "дескриптор корня домена не собран"
@@ -60,6 +69,7 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
         gaps["FunctionalLevel"] = "; ".join(level_reasons)
     gaps.update(_domain_settings_gaps(export, users or computers, has_primary_group))
     gaps.update(_trust_dns_gaps(export))
+    gaps.update(_critical_acl_gaps(export))
     if (users or computers) and not has_primary_group:
         # Ни у одной учётки нет primaryGroupID — атрибуты сборщика 1.1/2.1 не собраны вовсе.
         for code in ("SidHistory", "UnixPasswords", "ComputerCreators"):
@@ -135,6 +145,23 @@ def _trust_dns_gaps(export: AdExport) -> dict[str, str]:
     if not any(o.cls == "dnsZone" for o in export.objects):
         notes = [n for n in export.collector.notes if "зоны DNS не прочитаны" in n]
         gaps["DnsZones"] = f"зоны DNS не собраны: {'; '.join(notes)}" if notes else "зоны DNS не собраны (сборщик старой версии)"
+    return gaps
+
+
+def _critical_acl_gaps(export: AdExport) -> dict[str, str]:
+    gaps: dict[str, str] = {}
+    notes = export.collector.notes
+    if not export.collector.critical_acl:
+        gaps["CriticalObjectAcl"] = "дескрипторы критичных объектов не собраны (сборщик старой версии)"
+    elif failed := [n for n in notes if CRITICAL_ACL_UNREAD in n]:
+        gaps["CriticalObjectAcl"] = "; ".join(failed)
+    # Ключа класса dMSA нет: старый сборщик схему не проверял, новый — не смог прочитать.
+    if DMSA_CLASS not in export.guids.schema_classes:
+        if not export.collector.critical_acl:
+            gaps["BadSuccessor"] = "класс dMSA в схеме не проверялся (выгрузка старого сборщика)"
+        else:
+            failed = [n for n in notes if "схема не прочитана" in n]
+            gaps["BadSuccessor"] = "класс dMSA в схеме не проверен: " + ("; ".join(failed) if failed else "схема не прочитана")
     return gaps
 
 

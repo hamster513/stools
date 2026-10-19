@@ -48,7 +48,11 @@ from api.modules.ad.core.checks.computers import (
     check_laps_deployment,
     check_obsolete_os,
 )
-from api.modules.ad.core.checks.critical_acl import check_domain_root_acl
+from api.modules.ad.core.checks.critical_acl import (
+    check_bad_successor,
+    check_critical_object_acl,
+    check_domain_root_acl,
+)
 from api.modules.ad.core.checks.dns import check_dns_zones
 from api.modules.ad.core.checks.domain import (
     check_backup_age,
@@ -75,7 +79,7 @@ from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "4"
+ANALYZER_VERSION = "5"
 
 _CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -133,6 +137,8 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("TrustSecurity", "Безопасность доверий", "Доверия без фильтрации SID пропускают чужие SID из sIDHistory, доверие к домену Windows NT 4.0 работает только по NTLM, делегирование TGT через лесное доверие отдаёт билеты наших пользователей службам партнёра. Давно не менявшийся объект доверия говорит о том, что доверие не работает; без AES межсферные билеты шифруются RC4.", check_trust_security, ("T1134.005", "T1482")),
     CheckSpec("DnsZones", "Зоны DNS в AD", "Небезопасные динамические обновления позволяют без входа менять записи зоны и уводить трафик на себя; в зоне домена и _msdcs это записи контроллеров. Создание записей Authenticated Users (настройка по умолчанию) позволяет занимать несуществующие имена, например WPAD.", check_dns_zones, ("T1557",)),
     CheckSpec("RodcPasswordReplication", "Репликация паролей на RODC", "Пароли, которые кэширует RODC, достаются тому, кто захватил сам RODC. Привилегированные учётки не должны кэшироваться, Denied RODC Password Replication Group должна запрещать кэширование контроллеров, администраторов и krbtgt, а учётки krbtgt_NNNNN удалённых RODC — удаляться.", check_rodc_password_replication, ("T1003",)),
+    CheckSpec("CriticalObjectAcl", "Опасные права на критичные объекты", "Право менять привилегированную группу (членство, права, владельца) или её участника (сброс пароля, Shadow Credentials) даёт права этой группы. Проверяются группы администраторов и операторов, DnsAdmins, их рекурсивные участники и учётки Administrator и krbtgt; права, совпадающие с AdminSDHolder, показывает ShadowAdmins. Учитывается один шаг: цепочки через вложенные права не строятся.", check_critical_object_acl, ("T1098", "T1222.001")),
+    CheckSpec("BadSuccessor", "Создание dMSA в OU (BadSuccessor)", "Кто может создать в OU объект dMSA, тот назначает ему предшественником любую учётку и получает её права, включая администратора домена. Опасно при контроллере Windows Server 2025; без такого контроллера находка Low. Учитываются явные права CreateChild (любых объектов или dMSA) и GenericAll на OU.", check_bad_successor, ("T1098",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

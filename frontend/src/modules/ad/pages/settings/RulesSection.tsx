@@ -24,12 +24,21 @@ function osRows(c: AdConfig): OsRow[] { return Object.entries(c.obsolete_os_buil
 // Неполные строки (без сборки или даты) не сохраняются, но остаются в таблице до перезагрузки.
 function parseOsRows(rows: OsRow[]): Record<string, string> { return Object.fromEntries(rows.map(([b, d]) => [b.trim(), d]).filter(([b, d]) => b && d)) }
 
-const DAYS: { key: 'admin_password_max_age_days' | 'builtin_admin_recent_days' | 'computer_inactivity_days' | 'computer_password_max_age_days' | 'azure_sso_key_max_age_days'; label: string; hint: string }[] = [
+type DayKey = 'admin_password_max_age_days' | 'builtin_admin_recent_days' | 'computer_inactivity_days' | 'computer_password_max_age_days' | 'azure_sso_key_max_age_days'
+  | 'backup_max_age_days' | 'trust_inactive_days' | 'smartcard_password_max_age_days'
+const DAYS: { key: DayKey; label: string; hint: string }[] = [
   { key: 'admin_password_max_age_days', label: 'Пароль админа старше, дней', hint: 'AdminPasswordAge' },
   { key: 'builtin_admin_recent_days', label: 'Вход Administrator за, дней', hint: 'BuiltinAdminUsed: встроенная учётка RID 500' },
   { key: 'computer_inactivity_days', label: 'Неактивность компьютера, дней', hint: 'InactiveComputers; ObsoleteOs учитывает только активные' },
   { key: 'computer_password_max_age_days', label: 'Пароль компьютера старше, дней', hint: 'ComputerPasswordAge; у контроллера порог 45' },
   { key: 'azure_sso_key_max_age_days', label: 'Ключ Entra SSO старше, дней', hint: 'AzureSsoKeyAge: ключ Seamless SSO' },
+  { key: 'backup_max_age_days', label: 'Резервная копия AD старше, дней', hint: 'BackupAge: по dSASignature корня домена' },
+  { key: 'trust_inactive_days', label: 'Доверие не менялось, дней', hint: 'TrustSecurity: пароль доверия не обновляется' },
+  { key: 'smartcard_password_max_age_days', label: 'Пароль учётки «только смарт-карта» старше, дней', hint: 'SmartcardPassword, если домен не меняет его сам' },
+]
+const LIMITS: { key: 'password_min_length' | 'control_path_many'; label: string; hint: string }[] = [
+  { key: 'password_min_length', label: 'Минимальная длина пароля', hint: 'PasswordPolicy: политика домена и каждая PSO' },
+  { key: 'control_path_many', label: 'Участников больше — как широкая группа', hint: 'CriticalObjectAcl: субъект с правами на критичный объект' },
 ]
 
 /** Правила проверок — то, что в прототипе лежало в AD_audit.config.json. */
@@ -101,7 +110,7 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
             <Field label="Группы админов (RID)" hint="Числа через запятую; 544–582 — встроенные (S-1-5-32-RID), остальные — RID домена">{ridField('admin_rids')}</Field>
             <Field label="Безопасные субъекты прав (RID)" hint="RID доменов своего леса: права на корень домена, владелец контроллера и т. п.">{ridField('tier0_safe_rids')}</Field>
             <Field label="Админов не больше" hint="TooManyAdmins"><input className={FIELD} type="number" min={1} value={cfg.admins_max} onChange={(e) => patch({ admins_max: Number(e.target.value) })} disabled={!write} /></Field>
-            {DAYS.map((d) => (
+            {[...LIMITS, ...DAYS].map((d) => (
               <Field key={d.key} label={d.label} hint={d.hint}><input className={FIELD} type="number" min={1} value={cfg[d.key]} onChange={(e) => patch({ [d.key]: Number(e.target.value) })} disabled={!write} /></Field>
             ))}
           </div>

@@ -458,3 +458,44 @@ def test_attribute_unknown_to_schema_is_a_note_not_an_abort() -> None:
     assert raw["domain"]["recycle_bin"] is None
     assert any(n.startswith("корзина AD не прочитана: undefinedAttributeType (17)") for n in raw["collector"]["notes"])
     assert [o for o in raw["objects"] if o["class"] == "user"] and raw["domain"]["min_pwd_length"] == 12
+
+
+def test_collector_reads_critical_object_descriptors() -> None:
+    fake = FakeLdap()
+    blob = b64sd([sd.build_ace(rid(1108), sd.WRITE_DACL)])
+    for o in fake.objects:
+        if o["class"] in ("user", "group"):
+            o["sd"] = blob
+    out = collect_with(fake)
+    by_dn = {o["dn"]: o for o in out["objects"]}
+    # Domain Admins → admin1, Tier0 → admin2 (Tier0 вложена в Domain Admins и обратно), Administrator и krbtgt по RID.
+    for sam in ("Domain Admins", "admin1", "Tier0", "admin2", "krbtgt"):
+        assert by_dn[user_dn(sam)]["sd"] == blob, sam
+    assert by_dn[user_dn("user.noexpire")].get("sd") is None
+    assert out["collector"]["critical_acl"] is True
+    assert out["principals"][rid(1108)]["name"] == "CORP\\helpdesk"
+
+
+def test_critical_members_limit_and_denial_are_noted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.modules.ad.core import ldap_collector
+
+    monkeypatch.setattr(ldap_collector, "CRITICAL_MEMBERS_LIMIT", 1)
+    out = collect_with(FakeLdap())
+    assert any("Domain Admins" in n and "больше 1" in n for n in out["collector"]["notes"])
+
+    fake = FakeLdap()
+    search = fake.search
+
+    def deny_chain(base: str, flt: str, attrs: list[str], scope: str) -> list[dict[str, Any]]:
+        if "1.2.840.113556.1.4.1941" in flt:
+            raise LdapResultError(51, "busy", flt)
+        return search(base, flt, attrs, scope)
+
+    out = LdapCollector(deny_chain, fake.root_dse()).collect()
+    assert any(n.startswith("дескрипторы критичных объектов не прочитаны") and "busy" in n for n in out["collector"]["notes"])
+
+
+def test_chain_filter_escapes_the_group_dn() -> None:
+    from api.modules.ad.core.ldap_collector import filter_value
+
+    assert filter_value("CN=a\\, b (x)*,DC=c") == "CN=a\\5c, b \\28x\\29\\2a,DC=c"

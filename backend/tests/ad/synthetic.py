@@ -246,7 +246,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
     return {
         "format": "stools-ad/1",
         "collected_at": now.isoformat(),
-        "collector": {"kind": "powershell", "version": "0.1", "host": "DC01", "account": "CORP\\auditor"},
+        "collector": {"kind": "powershell", "version": "0.1", "host": "DC01", "account": "CORP\\auditor", "critical_acl": True},
         "domain": {
             "dns_root": "corp.local",
             "dn": DN,
