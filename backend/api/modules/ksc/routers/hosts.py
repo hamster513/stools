@@ -17,6 +17,7 @@ from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.checks.hosts import COMPONENT_OFF_STATES
 from api.modules.ksc.core.dictionary.components import component_title
+from api.modules.ksc.core.export import status_reasons
 from api.modules.ksc.core.profile_activation import (
     REASON_DISABLED,
     Activation,
@@ -100,6 +101,15 @@ def _tags_collected(rows: list[KscHost]) -> bool:
     return any("tags" in json.loads(h.extra_json or "{}") for h in rows)
 
 
+def _status_reasons(h: KscHost) -> list[str] | None:
+    """Причины статуса по KSC из `extra_json`; None — строка записана до разбора причин (ключа `status_mask` нет):
+    причины не разобраны, пересчёт снапшота их заполнит."""
+    extra = json.loads(h.extra_json or "{}")
+    if "status_mask" not in extra:
+        return None
+    return status_reasons(h.status, int(extra.get("status_mask") or 0), str(extra.get("status_text") or ""))
+
+
 def _item(h: KscHost, agent: str, bases: str, findings: int, tags: list[str] | None) -> dict[str, Any]:
     return {
         "id": h.id, "host_id": h.host_id, "name": h.name, "fqdn": h.fqdn, "domain": h.domain, "group": h.group_path, "os": h.os, "ip": h.ip,
@@ -107,7 +117,7 @@ def _item(h: KscHost, agent: str, bases: str, findings: int, tags: list[str] | N
         "product": h.product, "product_version": h.product_version, "protection": h.protection, "rtp_state": h.rtp_state,
         "bases_at": h.bases_at.isoformat() if h.bases_at else None, "bases": bases,
         "last_fullscan_at": h.last_fullscan_at.isoformat() if h.last_fullscan_at else None,
-        "status": h.status, "threats": h.threats, "unassigned": h.unassigned, "in_ad": h.in_ad,
+        "status": h.status, "status_reasons": _status_reasons(h), "threats": h.threats, "unassigned": h.unassigned, "in_ad": h.in_ad,
         "components": _component_rows(h), "extra": json.loads(h.extra_json or "{}"), "tags": tags, "findings": findings,
     }
 
@@ -219,6 +229,7 @@ def list_hosts(
     bases: QueryList = None,
     in_ad: QueryList = None,
     status_: QueryStatus = None,
+    status_reason: QueryList = None,
     component: QueryList = None,
     component_state: str | None = None,
     tag: QueryList = None,
@@ -230,12 +241,12 @@ def list_hosts(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Фасеты `protection, agent, bases, in_ad, status, component, tag, group, product` — повтором
+    """Фасеты `protection, agent, bases, in_ad, status, status_reason, component, tag, group, product` — повтором
     ключа, внутри фасета «или» (`status` — ещё и через запятую); `component_state` — одно, к любому из выбранных
-    компонентов."""
+    компонентов. `status_reason` — текст причины как в `status_reasons`; неизвестный текст ничего не находит."""
     snap = _snapshot(db, snapshot_id, settings)
-    groups, products, agents, protections, bases_, in_ads, components, tags_ = (
-        multi(v) for v in (group, product, agent, protection, bases, in_ad, component, tag))
+    groups, products, agents, protections, bases_, in_ads, reasons_, components, tags_ = (
+        multi(v) for v in (group, product, agent, protection, bases, in_ad, status_reason, component, tag))
     # Статус, как и статусы находок, понимает и старую строку через запятую (`status=ok,warning`).
     statuses = multi(status_, commas=True)
     checked = (
@@ -254,6 +265,7 @@ def list_hosts(
     tags_collected = _tags_collected(rows)
     tags = {h.id: _tags(h, tags_collected) for h in rows}
     comps = {h.id: _components(h) for h in rows}
+    reasons = {h.id: _status_reasons(h) or [] for h in rows}
     policy_groups: set[int] = set()
     if policy is not None:
         scope = select(KscPolicyScope.group_id).where(KscPolicyScope.snapshot_id == snapshot_id, KscPolicyScope.policy_id == policy)
@@ -278,6 +290,8 @@ def list_hosts(
             return False
         if components and not any(has_component(h, c) for c in components):
             return False
+        if reasons_ and not any(r in reasons[h.id] for r in reasons_):
+            return False
         if tags_:
             own = tags[h.id]
             if own is None or not any(has_tag(own, t) for t in tags_):
@@ -294,7 +308,7 @@ def list_hosts(
     filtered = sorted((h for h in rows if keep(h)), key=lambda h: (h.group_path.lower(), h.name.lower()))
     facets: dict[str, dict[str, Any]] = {
         "group": {}, "product": {}, "agent": dict.fromkeys(AGENT, 0), "protection": dict.fromkeys(PROTECTION, 0), "bases": dict.fromkeys(BASES, 0),
-        "in_ad": {}, "status": {"ok": 0, "warning": 0, "critical": 0}, "component": {},
+        "in_ad": {}, "status": {"ok": 0, "warning": 0, "critical": 0}, "status_reason": {}, "component": {},
     }
     if tags_collected:
         facets["tag"] = {}
@@ -309,6 +323,8 @@ def list_hosts(
         if h.in_ad:
             facets["in_ad"][h.in_ad] = facets["in_ad"].get(h.in_ad, 0) + 1
         facets["status"][h.status] = facets["status"].get(h.status, 0) + 1
+        for r in reasons[h.id]:
+            facets["status_reason"][r] = facets["status_reason"].get(r, 0) + 1
         for name, state in comps[h.id].items():
             facets["component"].setdefault(name, {"on": 0, "off": 0, "other": 0})[state] += 1
         for t in tags[h.id] or []:
@@ -360,6 +376,7 @@ def export_hosts(
     bases: QueryList = None,
     in_ad: QueryList = None,
     status_: QueryStatus = None,
+    status_reason: QueryList = None,
     component: QueryList = None,
     component_state: str | None = None,
     tag: QueryList = None,
@@ -371,8 +388,8 @@ def export_hosts(
     user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Хосты под фильтрами списка, в его порядке — тот же отбор (`list_hosts`) без страницы."""
-    page = list_hosts(snapshot_id, group, product, agent, protection, bases, in_ad, status_, component, component_state, tag, policy, q,
-                      limit=EXPORT_ALL, offset=0, db=db, settings=settings, _user=user)
+    page = list_hosts(snapshot_id, group, product, agent, protection, bases, in_ad, status_, status_reason, component, component_state, tag,
+                      policy, q, limit=EXPORT_ALL, offset=0, db=db, settings=settings, _user=user)
     return export_response(fmt, EXPORT_COLUMNS, [_export_row(h) for h in page["items"]], module="ksc", name="hosts")
 
 

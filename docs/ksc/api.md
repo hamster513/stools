@@ -108,9 +108,10 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 ```
 GET  /snapshots/{id}/hosts             group, product, agent(none|silent|alive), protection(none|off|on),
                                        bases(fresh|old|unknown), in_ad(both|ksc_only),
-                                       status(ok|warning|critical), component, component_state(on|off|other|none),
+                                       status(ok|warning|critical), status_reason, component, component_state(on|off|other|none),
                                        tag, policy, q, limit≤1000, offset
-                                       → {total, items, facets|null, tags_collected}
+                                       → {total, items (каждый: … status, status_reasons: [str]|null, extra, tags, findings),
+                                          facets|null, tags_collected}
 GET  /snapshots/{id}/hosts/export      format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
 GET  /snapshots/{id}/hosts/{host_id}   + findings[] (каждая: key, check, check_title, severity, status, status_title, details),
                                        findings_counted — учитываемые (то же правило, что `findings` в списке),
@@ -131,7 +132,7 @@ GET  /snapshots/{id}/hosts/{host_id}/profiles
 `core/dictionary/components.py` (`component_code`, `component_title`). Если хост перечисляет компонент под обоими написаниями,
 состояния сливаются по худшему (в карточке — строка с худшим состоянием). Находки `COMPONENT_OFF` у хоста — одна на компонент.
 
-Многозначные фасеты хостов — `protection`, `agent`, `bases`, `in_ad`, `status`, `component`, `tag`, `group`,
+Многозначные фасеты хостов — `protection`, `agent`, `bases`, `in_ad`, `status`, `status_reason`, `component`, `tag`, `group`,
 `product`: несколько значений повторением ключа (`?group=Офис%2C%20Москва&group=DMZ&status=warning&status=critical`),
 значение по запятой не делится (в именах групп и продуктов бывают запятые); внутри фасета — «или», между фасетами — «и»;
 `all` — фильтр не задан. `tag=-` — хосты без тегов. `status` ещё принимает старую форму через запятую
@@ -147,6 +148,22 @@ GET  /snapshots/{id}/hosts/{host_id}/profiles
 
 `tag=<тег>` — хосты с этим тегом (точное совпадение), `tag=-` — хосты без тегов; `policy=<policy_id>` — хосты групп,
 на которые действует политика (своя или унаследованная). `q` дополнительно ищет по тегам.
+
+**Статус устройства по KSC с причинами.** `status` — `KLHST_WKS_STATUS_ID` (`ok` | `warning` | `critical`);
+`status_reasons` — почему сервер KSC так считает: расшифрованные биты `KLHST_WKS_STATUS_MASK` по порядку номеров
+(`STATUS_MASK_REASONS` в `core/export.py`, 20 битов; бит без расшифровки — «код N»), затем, если непустой, текст
+статуса, заданного управляемым продуктом (`KLHST_WKS_STATUS_HSDP`, бит 18) — как есть, это текст продукта, не наш.
+У статуса `ok` с пустой маской — `[]`; статус не `ok` без единого бита и без текста — `["причина не расшифрована"]`
+(так же в находках `HOST_CRITICAL` и `HOST_WARNING`). `null` — причины не разобраны: строка хоста записана до этой
+версии (в `extra_json` нет ключей `status_mask`, `status_text`); пересчёт снапшота (`reanalyze`) переписывает строки
+хостов и заполняет их. Маска и текст лежат в `extra.status_mask` (число) и `extra.status_text`. Фильтр
+`status_reason=<текст причины>` — повтором ключа, внутри «или», текст — точно как в `status_reasons`; неизвестный
+текст просто ничего не находит (не 422). Фасет `status_reason: {текст: n}` — только непустые причины
+отфильтрованного набора; у строк с `null` причин в фасете нет. Расшифровка битов маски с консолью KSC не сверена
+(см. «Известные оговорки»). Устройство со статусом `warning` даёт находку `HOST_WARNING` (Low), с `critical` — как и
+прежде `HOST_CRITICAL` (Medium); `details.reasons` обеих — те же `status_reasons`. С появлением `HOST_WARNING`
+`ANALYZER_VERSION` модуля — `3`: первый снапшот новой версии после снапшота версии `2` статусы находок не сверяет
+(см. «Находки»).
 
 Фасеты (по отфильтрованному набору) дополнены: `component: {русское название: {on, off, other}}` и `tag: {тег: n}`.
 Теги приходят не от всех сборщиков: `tags_collected` — в выгрузке снапшота была секция тегов. Если нет, у хоста
@@ -716,7 +733,7 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 
 ## Проверки
 
-37 проверок, коды латиницей:
+38 проверок, коды латиницей:
 
 ```
 COVER_AD_MISSING        Есть в AD, нет в KSC
@@ -730,6 +747,7 @@ AGENT_SILENT            Агент давно не выходил на связ�
 UNASSIGNED              Нераспределённые устройства
 COMPONENT_OFF           Выключен ключевой компонент
 HOST_CRITICAL           Критический статус по KSC
+HOST_WARNING            Предупреждение по статусу KSC
 NO_FULLSCAN             Давно не было полного поиска
 PRODUCT_OUTDATED        Устаревшая версия продукта или агента
 POLICY_NONE             Нет действующей политики
@@ -856,6 +874,13 @@ POLICY_KEY_UNLOCKED     Ключевой признак не под замком
   (`/hosts`) — сырые коды KSC (`KLSRVH_SRV_STATUS`, `KLHST_WKS_EDR_STATUS`):
   их перечисления не документированы в открытом Open API, поэтому STools
   показывает число как есть, без текстовой расшифровки.
+- **Расшифровка битов `KLHST_WKS_STATUS_MASK`** (`STATUS_MASK_REASONS`,
+  20 битов; `status_reasons` хоста, `details.reasons` находок `HOST_CRITICAL`
+  и `HOST_WARNING`) составлена на этапе 1 и с консолью KSC не сверена:
+  номер бита может быть отнесён не к той причине, а текст — расходиться
+  с подписью консоли. Бит вне
+  таблицы показывается как «код N». Текст `KLHST_WKS_STATUS_HSDP` —
+  продукта, не наш, показывается как есть.
 - **Предметные проверки по содержимому политик KES** (защита паролем,
   самозащита, исключения, KSN, отчёты об угрозах — по конкретным именам
   ключей) — вне этапа A: имена настроек KES для Windows/Linux не

@@ -4,8 +4,11 @@ import json
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from tests.ksc.synthetic import (
+    PRODUCT_STATUS_TEXT,
     activation,
     add_ws02_twin,
     build_export,
@@ -182,6 +185,49 @@ def test_hosts_tags_not_collected_are_null(auth_client: TestClient) -> None:
     assert _hosts(auth_client, "?tag=VIP")["total"] == 0 and _hosts(auth_client, "?tag=-")["total"] == 0
     snap = auth_client.get("/api/ksc/snapshots").json()[0]
     assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws01").json()["tags"] is None
+
+
+def test_hosts_status_reasons_in_items_filter_and_facet(auth_client: TestClient) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    body = _hosts(auth_client)
+    by_name = {h["name"]: h for h in body["items"]}
+    assert by_name["WS04"]["status"] == "warning" and by_name["WS04"]["status_reasons"] == ["полный поиск давно не выполнялся", "требуется перезагрузка"]
+    assert by_name["WS09"]["status_reasons"] == ["слишком много невылеченных объектов", "статус задан управляемым продуктом", PRODUCT_STATUS_TEXT]
+    assert by_name["WS01"]["status"] == "ok" and by_name["WS01"]["status_reasons"] == []
+    assert body["facets"]["status"] == {"ok": 12, "warning": 1, "critical": 1}
+    # Фасет — только непустые причины отфильтрованного набора.
+    assert body["facets"]["status_reason"] == {
+        "полный поиск давно не выполнялся": 1, "требуется перезагрузка": 1,
+        "слишком много невылеченных объектов": 1, "статус задан управляемым продуктом": 1, PRODUCT_STATUS_TEXT: 1,
+    }
+    # Фильтр — повтор ключа, «или»; неизвестный текст ничего не находит, но это не 422.
+    assert [h["name"] for h in _hosts(auth_client, "?status_reason=требуется перезагрузка")["items"]] == ["WS04"]
+    both = _hosts(auth_client, f"?status_reason=требуется перезагрузка&status_reason={PRODUCT_STATUS_TEXT}")
+    assert [h["name"] for h in both["items"]] == ["WS04", "WS09"] and both["facets"]["status_reason"]["требуется перезагрузка"] == 1
+    assert _hosts(auth_client, "?status_reason=нет такой причины")["total"] == 0
+    assert _hosts(auth_client, "?status_reason=требуется перезагрузка&status=critical")["total"] == 0
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts?status_reason=нет такой причины").status_code == 200
+    detail = auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws09").json()
+    assert detail["status_reasons"] == by_name["WS09"]["status_reasons"] and detail["extra"]["status_mask"] == (1 << 10) | (1 << 18)
+    assert detail["extra"]["status_text"] == PRODUCT_STATUS_TEXT
+
+
+def test_hosts_status_reasons_null_for_rows_without_mask(auth_client: TestClient, db_session: Session) -> None:
+    """Строка хоста старого снапшота: ключей `status_mask`/`status_text` в `extra_json` нет — причины не разобраны, не «пусто»."""
+    assert upload(auth_client, build_export())["status"] == "done"
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    db_session.execute(text("update ksc_host set extra_json = '{}' where snapshot_id = :sid and host_id = 'h-ws04'"), {"sid": snap["id"]})
+    db_session.commit()
+    ws04 = next(h for h in _hosts(auth_client)["items"] if h["name"] == "WS04")
+    assert ws04["status"] == "warning" and ws04["status_reasons"] is None
+    assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws04").json()["status_reasons"] is None
+    facet = _hosts(auth_client)["facets"]["status_reason"]
+    assert "требуется перезагрузка" not in facet and _hosts(auth_client, "?status_reason=требуется перезагрузка")["total"] == 0
+    # Пересчёт снапшота переписывает строки хостов и заполняет причины.
+    r = auth_client.post(f"/api/ksc/snapshots/{snap['id']}/reanalyze")
+    assert auth_client.get(f"/api/ksc/jobs/{r.json()['job_id']}").json()["status"] == "done"
+    assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts/h-ws04").json()["status_reasons"] == ["полный поиск давно не выполнялся", "требуется перезагрузка"]
 
 
 def test_hosts_filter_by_policy_and_card_policies(auth_client: TestClient) -> None:

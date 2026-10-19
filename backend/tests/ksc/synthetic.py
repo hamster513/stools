@@ -193,19 +193,27 @@ def _policy_profiles() -> dict[str, Any]:
     }
 
 
+#: Текст статуса, заданного управляемым продуктом (KLHST_WKS_STATUS_HSDP) у WS09.
+PRODUCT_STATUS_TEXT = "Требуется обновление компонентов продукта"
+
+
 def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
     ok = 1 | 4 | 8 | 16
     hosts = [
         _host(1, "WS01", 2, ok, 7, now=now),
         _host(2, "WS02", 2, ok, 1, now=now),
         _host(3, "WS03", 2, ok, 7, now=now, KLHST_WKS_RTP_AV_BASES_TIME=dtv(now - dt.timedelta(days=10))),
+        # WS04 — «предупреждение» по KSC с двумя битами маски: давно не было полного поиска (6) и требуется перезагрузка (11).
         _host(4, "WS04", 2, ok, 7, now=now, KLHST_WKS_LAST_FULLSCAN=dtv(now - dt.timedelta(days=45)),
-              KLHST_WKS_RBT_REQUIRED=True, KLHST_WKS_RBT_REQUEST_TIME=dtv(now - dt.timedelta(days=15)), KLHST_WKS_RBT_REQUEST_REASON=4),
+              KLHST_WKS_RBT_REQUIRED=True, KLHST_WKS_RBT_REQUEST_TIME=dtv(now - dt.timedelta(days=15)), KLHST_WKS_RBT_REQUEST_REASON=4,
+              KLHST_WKS_STATUS_ID=2, KLHST_WKS_STATUS_MASK=(1 << 6) | (1 << 11)),
         _host(5, "WS05", 2, 1 | 4, 0, now=now, KLHST_WKS_LAST_NAGENT_CONNECTED=dtv(now - dt.timedelta(days=20)), KLHST_WKS_LAST_VISIBLE=dtv(now - dt.timedelta(days=20))),
         _host(6, "WS06", 2, 1, 0, now=now),
         _host(7, "WS07", 2, 1 | 4 | 8, 10, now=now),
         _host(8, "WS08", 1, 1, 0, now=now),
-        _host(9, "WS09", 2, ok, 7, now=now, KLHST_WKS_UNCURED_COUNT=3, KLHST_WKS_STATUS_ID=1, KLHST_WKS_STATUS_MASK=1 << 10),
+        # WS09 — «критично»: невылеченные объекты (10) и статус, заданный управляемым продуктом (18) с его текстом.
+        _host(9, "WS09", 2, ok, 7, now=now, KLHST_WKS_UNCURED_COUNT=3, KLHST_WKS_STATUS_ID=1, KLHST_WKS_STATUS_MASK=(1 << 10) | (1 << 18),
+              KLHST_WKS_STATUS_HSDP=PRODUCT_STATUS_TEXT),
         _host(10, "WS10", 2, ok, 7, now=now, KLHST_WKS_RTP_AV_VERSION="11.0.0.0", KLHST_WKS_NAG_VERSION="14.0.0.0"),
         _host(11, "WS11", 2, ok, 7, now=now),
         _host(12, "SRV01", 3, ok, 7, now=now, KLHST_WKS_CTYPE=2, KLHST_WKS_OS_NAME="Microsoft Windows Server 2022"),

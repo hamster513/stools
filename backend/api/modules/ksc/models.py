@@ -93,7 +93,8 @@ class KscHost(Base):
     #: both | ksc_only | NULL — нет данных AD
     in_ad: Mapped[str | None] = mapped_column(String(16), nullable=True)
     components_json: Mapped[str] = mapped_column(Text, default="[]")
-    #: {os_build, cpu_arch, vm_type, reboot_required, reboot_requested_at, reboot_reason, edr_status, managed_by_other_server}
+    #: {os_build, cpu_arch, vm_type, reboot_required, reboot_requested_at, reboot_reason, edr_status, managed_by_other_server,
+    #: status_mask, status_text}; у строк, записанных до разбора причин статуса, последних двух ключей нет.
     extra_json: Mapped[str] = mapped_column(Text, default="{}")
 
 

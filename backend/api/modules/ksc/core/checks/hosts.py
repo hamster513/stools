@@ -102,7 +102,11 @@ def check_threats_active(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
 
 
 def check_host_critical(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
-    return [host_finding(cfg, "HOST_CRITICAL", "Medium", h, reasons=h.status_reasons or ["причина не расшифрована"]) for h in idx.hosts if h.status == "critical"]
+    return [host_finding(cfg, "HOST_CRITICAL", "Medium", h, reasons=h.status_reasons) for h in idx.hosts if h.status == "critical"]
+
+
+def check_host_warning(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:
+    return [host_finding(cfg, "HOST_WARNING", "Low", h, reasons=h.status_reasons) for h in idx.hosts if h.status == "warning"]
 
 
 def check_reboot_pending(idx: ExportIndex, cfg: KscConfig) -> list[Finding]:

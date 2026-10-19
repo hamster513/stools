@@ -18,6 +18,7 @@ from api.modules.ksc.core.export import (
 from tests.ksc.synthetic import (
     NOTEBOOKS_EXPRESSION,
     NOW,
+    PRODUCT_STATUS_TEXT,
     SECRET_VALUES,
     build_export,
     expected_policy_contents,
@@ -81,6 +82,25 @@ def test_index_parses_hosts() -> None:
     assert by["WS03"].bases_at == NOW - dt.timedelta(days=1) * 10
     assert by["WG01"].domain == "" and by["WG01"].windomain == "WORKGROUP"
     assert idx.now == NOW
+
+
+def test_host_status_reasons_from_mask_and_product_text() -> None:
+    by = {h.name: h for h in ExportIndex(load_export(export_bytes())).hosts}
+    # Биты маски — по порядку номеров; текст управляемого продукта (бит 18) — последним пунктом, как есть.
+    assert by["WS04"].status == "warning" and by["WS04"].status_reasons == ["полный поиск давно не выполнялся", "требуется перезагрузка"]
+    assert by["WS09"].status_text == PRODUCT_STATUS_TEXT
+    assert by["WS09"].status_reasons == ["слишком много невылеченных объектов", "статус задан управляемым продуктом", PRODUCT_STATUS_TEXT]
+    # Статус «ок» с пустой маской — причин нет; маска и текст уходят в `extra` строки хоста.
+    assert by["WS01"].status_reasons == [] and by["WS01"].extra["status_mask"] == 0 and by["WS01"].extra["status_text"] == ""
+    assert by["WS04"].extra["status_mask"] == (1 << 6) | (1 << 11) and by["WS09"].extra["status_text"] == PRODUCT_STATUS_TEXT
+    # Бит без расшифровки — «код N»; статус не «ок» без битов и текста — «причина не расшифрована»; не строка в HSDP — пусто.
+    raw = build_export()
+    hosts = {h["KLHST_WKS_DN"]: h for h in raw["hosts"]}
+    hosts["WS01"].update(KLHST_WKS_STATUS_ID=1, KLHST_WKS_STATUS_MASK=(1 << 7) | (1 << 11) | (1 << 25))
+    hosts["WS02"].update(KLHST_WKS_STATUS_ID=2, KLHST_WKS_STATUS_HSDP={"type": "params", "value": {}})
+    by = {h.name: h for h in ExportIndex(load_export(json.dumps(raw).encode())).hosts}
+    assert by["WS01"].status_reasons == ["базы давно не обновлялись", "требуется перезагрузка", "код 25"]
+    assert by["WS02"].status_text == "" and by["WS02"].status_reasons == ["причина не расшифрована"]
 
 
 def test_live_params_wrappers_are_stripped() -> None:

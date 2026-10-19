@@ -66,6 +66,20 @@ STATUS_MASK_REASONS: dict[int, str] = {
     18: "статус задан управляемым продуктом",
     19: "мало места на диске или ошибки синхронизации",
 }
+#: Причина статуса не «ок», когда ни один бит маски не выставлен и текста продукта нет.
+REASON_UNKNOWN = "причина не расшифрована"
+
+
+def status_reasons(status: str, mask: int, text: str) -> list[str]:
+    """Причины статуса устройства: расшифрованные биты `KLHST_WKS_STATUS_MASK` по порядку номеров (бит без расшифровки —
+    «код N»), затем текст статуса управляемого продукта (`KLHST_WKS_STATUS_HSDP`), если он непустой. Статус не «ок»
+    без единой причины — «причина не расшифрована»; у «ок» с пустой маской причин нет."""
+    reasons = [STATUS_MASK_REASONS.get(bit, f"код {bit}") for bit in range(mask.bit_length()) if mask & (1 << bit)]
+    if text:
+        reasons.append(text)
+    if not reasons and status != "ok":
+        reasons.append(REASON_UNKNOWN)
+    return reasons
 
 #: Имена продуктов KSC (KLHST_WKS_PRODUCT_NAME).
 PRODUCT_AGENT = "1103"
@@ -297,6 +311,9 @@ class HostRecord:
         self.rtp_state = _int(raw.get("KLHST_WKS_RTP_STATE"))
         self.status = HOST_STATUS.get(_int(raw.get("KLHST_WKS_STATUS_ID")), "ok")
         self.status_mask = _int(raw.get("KLHST_WKS_STATUS_MASK"))
+        # Текст статуса, заданного управляемым продуктом (бит 18): это текст продукта, показывается как есть; не строка — пусто.
+        hsdp = unwrap(raw.get("KLHST_WKS_STATUS_HSDP"))
+        self.status_text = hsdp.strip() if isinstance(hsdp, str) else ""
         self.last_seen_at = _dt(raw.get("KLHST_WKS_LAST_NAGENT_CONNECTED")) or _dt(raw.get("KLHST_WKS_LAST_VISIBLE"))
         self.bases_at = _dt(raw.get("KLHST_WKS_RTP_AV_BASES_TIME"))
         self.last_fullscan_at = _dt(raw.get("KLHST_WKS_LAST_FULLSCAN"))
@@ -337,6 +354,8 @@ class HostRecord:
             "reboot_requested_at": self.reboot_requested_at.strftime("%Y-%m-%dT%H:%M:%SZ") if self.reboot_requested_at else None,
             "reboot_reason": self.reboot_reason, "edr_status": self.edr_status,
             "managed_by_other_server": self.managed_by_other_server,
+            # Маска и текст статуса: по ним список и карточка хоста собирают причины; у строк старых снапшотов ключей нет.
+            "status_mask": self.status_mask, "status_text": self.status_text,
         }
         if self.tags_collected:
             extra["tags"] = self.tags
@@ -350,7 +369,7 @@ class HostRecord:
 
     @property
     def status_reasons(self) -> list[str]:
-        return [text for bit, text in STATUS_MASK_REASONS.items() if self.status_mask & (1 << bit)]
+        return status_reasons(self.status, self.status_mask, self.status_text)
 
 
 class ExportIndex:

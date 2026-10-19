@@ -14,7 +14,7 @@ from api.modules.ksc.core.checks import CHECK_BY_CODE, CHECKS, run_all
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import ExportIndex, load_export
 from api.modules.ksc.core.findings import Finding
-from tests.ksc.synthetic import NOW, add_ws02_twin, build_export, export_bytes
+from tests.ksc.synthetic import NOW, PRODUCT_STATUS_TEXT, add_ws02_twin, build_export, export_bytes
 
 
 def _findings(raw: dict | None = None, cfg: KscConfig | None = None) -> list[Finding]:
@@ -44,6 +44,7 @@ def test_host_checks_fire_on_expected_hosts() -> None:
     assert _hosts(f, "UNASSIGNED") == {"WS08"}
     assert _hosts(f, "THREATS_ACTIVE") == {"WS09"}
     assert _hosts(f, "HOST_CRITICAL") == {"WS09"}
+    assert _hosts(f, "HOST_WARNING") == {"WS04"}
     assert _hosts(f, "PRODUCT_OUTDATED") == {"WS10"}
     assert len([x for x in f if x.check == "PRODUCT_OUTDATED"]) == 2  # продукт и агент
     assert _hosts(f, "COMPONENT_OFF") == {"WS11"}
@@ -54,6 +55,8 @@ def test_severities_and_details() -> None:
     f = {x.check: x for x in _findings() if x.host in ("WS02", "WS09", "WS11", "WS10", "WS03")}
     assert f["RTP_OFF"].severity == "Critical" and f["RTP_OFF"].details["rtp_state"] == "остановлена"
     assert f["HOST_CRITICAL"].severity == "Medium" and "невылеченных" in f["HOST_CRITICAL"].details["reasons"][0]
+    # Причины критического статуса: биты маски по порядку, затем текст управляемого продукта как есть.
+    assert f["HOST_CRITICAL"].details["reasons"] == ["слишком много невылеченных объектов", "статус задан управляемым продуктом", PRODUCT_STATUS_TEXT]
     assert f["COMPONENT_OFF"].details["component"] == "Firewall" and f["COMPONENT_OFF"].details["status"] == "остановлен" and f["COMPONENT_OFF"].details["code"] == "firewall"
     assert f["BASES_OLD"].details["age_days"] == 10 and f["BASES_OLD"].severity == "High"
     assert f["PRODUCT_OUTDATED"].details["newest"] in ("12.0.0.0", "15.1.0.0")
@@ -158,7 +161,24 @@ def test_license_checks() -> None:
 
 def test_full_registry_count() -> None:
     # 18 (блок 0) + 8 (блок 1) + 3 (блок 2, этап A: замки содержимого политик) + 1 (этап 2b: опасные исключения) + 7 (этап 2b: правила оценки)
-    assert len(CHECKS) == 37
+    # + 1 (предупреждение по статусу KSC)
+    assert len(CHECKS) == 38
+
+
+def test_host_warning_is_low_with_reasons_and_silent_on_ok_hosts() -> None:
+    f = {x.host: x for x in _findings() if x.check == "HOST_WARNING"}
+    assert set(f) == {"WS04"} and f["WS04"].severity == "Low"
+    assert f["WS04"].details["reasons"] == ["полный поиск давно не выполнялся", "требуется перезагрузка"]
+    # Предупреждение без расшифрованных битов и без текста продукта — причина не расшифрована, находка остаётся.
+    raw = build_export()
+    ws01 = next(h for h in raw["hosts"] if h["KLHST_WKS_DN"] == "WS01")
+    ws01["KLHST_WKS_STATUS_ID"] = 2
+    warn = {x.host: x for x in _findings(raw) if x.check == "HOST_WARNING"}
+    assert set(warn) == {"WS01", "WS04"} and warn["WS01"].details["reasons"] == ["причина не расшифрована"]
+    # Ключ — как у находок хоста: переезд в другую группу его не меняет.
+    moved = build_export()
+    next(h for h in moved["hosts"] if h["KLHST_WKS_DN"] == "WS04")["KLHST_WKS_GROUPID"] = 3
+    assert {x.key for x in _findings(moved) if x.check == "HOST_WARNING"} == {f["WS04"].key}
 
 
 def test_group_and_task_ids_tolerate_garbage_values() -> None:
