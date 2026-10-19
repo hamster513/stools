@@ -20,7 +20,11 @@ import type { FindingStatus } from './types'
 
 /** Модули со статусами находок — для фильтра. */
 const FINDING_MODULES = ['ad', 'ksc', 'siem', 'vm', 'assets']
-const MODULE_OPTIONS = MODULES.filter((m) => FINDING_MODULES.includes(m.id))
+/** Threat Hunting — раздел SIEM без своей записи в реестре модулей (иначе он попал бы в рейку), поэтому подпись задана здесь. */
+const MODULE_OPTIONS: { id: string; title: string }[] = [
+  ...MODULES.filter((m) => FINDING_MODULES.includes(m.id)),
+  { id: 'siem_th', title: 'Threat Hunting' },
+]
 
 /** Тяжесть у модулей в разном регистре (AD — `High`, VM — `high`): цвет и слово по нижнему. */
 const SEVERITY: Record<string, { label: string; className: string }> = {
