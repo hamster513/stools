@@ -85,7 +85,7 @@ def _string(data: bytes, pos: int) -> tuple[str, int]:
         if end + 2 > len(data):
             raise ValueError("Registry.pol обрезан")
         end += 2
-    return data[pos:end].decode("utf-16-le"), end + 2
+    return data[pos:end].decode("utf-16-le", errors="replace"), end + 2
 
 
 def _dword(data: bytes, pos: int) -> tuple[int, int]:
@@ -95,12 +95,13 @@ def _dword(data: bytes, pos: int) -> tuple[int, int]:
 
 
 def _reg_data(type_: int, raw: bytes) -> str | int | list[str] | None:
+    # errors="replace": одно битое значение не должно терять весь файл.
     if type_ in (REG_SZ, REG_EXPAND_SZ):
-        return raw.decode("utf-16-le").rstrip("\x00")
+        return raw.decode("utf-16-le", errors="replace").rstrip("\x00")
     if type_ == REG_DWORD:
         return struct.unpack("<I", raw)[0] if len(raw) == 4 else None
     if type_ == REG_MULTI_SZ:
-        text = raw.decode("utf-16-le").rstrip("\x00")
+        text = raw.decode("utf-16-le", errors="replace").rstrip("\x00")
         return text.split("\x00") if text else []
     return None
 
@@ -116,6 +117,9 @@ _KEEP: dict[str, frozenset[str] | None] = {
     "software\\microsoft\\windows nt\\currentversion\\winlogon": frozenset({"autoadminlogon", "defaultusername", "defaultpassword"}),
     "system\\currentcontrolset\\control\\lsa": frozenset({
         "lmcompatibilitylevel", "nolmhash", "restrictanonymous", "everyoneincludesanonymous", "limitblankpassworduse"}),
+    "system\\currentcontrolset\\services\\ntds\\parameters": frozenset({"ldapserverintegrity"}),
+    "system\\currentcontrolset\\services\\netlogon\\parameters": frozenset({"refusepasswordchange"}),
+    "software\\microsoft\\windows nt\\currentversion\\setup\\recoveryconsole": frozenset({"securitylevel"}),
 }
 _WINLOGON = "software\\microsoft\\windows nt\\currentversion\\winlogon"
 
@@ -232,6 +236,13 @@ _GUID_COL, _SETTING_COL = "Subcategory GUID", "Setting Value"
 
 
 def parse_audit_csv(text: str) -> list[dict[str, Any]]:
+    try:
+        return _audit_rows(text)
+    except csv.Error as exc:  # поле длиннее предела модуля csv и прочий мусор
+        raise ValueError(f"audit.csv не разобран ({exc})") from exc
+
+
+def _audit_rows(text: str) -> list[dict[str, Any]]:
     reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
     if text.strip() and not {_GUID_COL, _SETTING_COL} <= set(reader.fieldnames or ()):
         raise ValueError("audit.csv: нет столбцов «Subcategory GUID» и «Setting Value»")

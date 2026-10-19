@@ -17,7 +17,8 @@ from api.modules.ad.core.ldap_collector import (
     dns_allow_update,
     last_backup_from_metadata,
 )
-from tests.ad.fake_ldap import FakeLdap
+from tests.ad.fake_ldap import DC_OU, DDCP_DN, DDP_DN, DDP_PATH, FakeLdap, sysvol_access
+from tests.ad.gpo_fixtures import AUDIT_CSV, GROUPS, LSA, WINLOGON, dword, preg, sz
 from tests.ad.synthetic import DN, EXT_SID, NOW, OTHER_SID, PKI, b64sd, export_bytes, rid, user_dn
 
 
@@ -272,8 +273,136 @@ def test_collector_notes_reach_the_coverage_reason() -> None:
     assert "ConnectionError" in gaps["UserRightsAssignment"]
 
 
-def collect_with(fake: FakeLdap) -> dict[str, Any]:
-    return LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb, host="dc01", account="CORP\\auditor").collect()
+_FAKE_SMB: Any = object()
+
+
+def collect_with(fake: FakeLdap, *, smb: Any = _FAKE_SMB, lister: Any = None) -> dict[str, Any]:
+    reader = fake.smb if smb is _FAKE_SMB else smb
+    return LdapCollector(fake.search, fake.root_dse(), smb_reader=reader, smb_lister=lister, host="dc01", account="CORP\\auditor").collect()
+
+
+def sysvol_reader(files: dict[str, bytes]) -> Any:
+    """SYSVOL с файлами Default Domain Policy: путь `<gPCFileSysPath>\\<относительный>` без учёта регистра."""
+    return sysvol_access({f"{DDP_PATH}\\{rel}": data for rel, data in files.items()})[0]
+
+
+GPO_TEST_FILES = {
+    "Machine\\Registry.pol": preg((LSA, "NoLMHash", 4, dword(0)), ("Software\\Vendor\\App", "ApiKey", 1, sz("secret")),
+                                  (WINLOGON, "DefaultPassword", 1, sz("P@ssw0rd"))),
+    "Machine\\Preferences\\Groups\\Groups.xml": GROUPS.encode(),
+    "MACHINE\\Microsoft\\Windows NT\\Audit\\audit.csv": AUDIT_CSV.encode("utf-16"),
+    "User\\Scripts\\scripts.ini": "[Logon]\r\n0CmdLine=run.bat\r\n0Parameters=\r\n".encode("utf-16"),
+    "User\\Registry.pol": b"broken",
+}
+
+
+def test_collector_reads_gpo_files_with_whitelist_and_redaction() -> None:
+    out = collect_with(FakeLdap(), smb=sysvol_reader(GPO_TEST_FILES))
+    data = next(iter(out["gpo"].values()))
+    assert [(r["value"], r["data"]) for r in data["registry"]] == [("NoLMHash", 0), ("DefaultPassword", "")]
+    assert data["gpp"][0]["cpassword"] is True and data["audit"][0]["setting"] == 3 and data["scripts"][0]["phase"] == "logon"
+    assert data["acl"] is None and any("Registry.pol" in n for n in data["notes"])
+    assert "secret" not in json.dumps(out) and "P@ssw0rd" not in json.dumps(out) and "j1Uyj3Vx8TY9" not in json.dumps(out)
+    root = next(o for o in out["objects"] if o["class"] == "domainDNS")
+    assert "gpLink" in root and out["collector"]["version"] == "1.2"
+    # Блок доходит до модели: у GPO без файлов — пустая запись, а не «не прочитано».
+    export = load_export(json.dumps(out).encode())
+    assert export.gpo is not None and export.gpo[DDP_DN].registry[0].scope == "machine" and export.gpo[DDCP_DN].registry == []
+
+
+def test_collector_without_sysvol_has_no_gpo_block() -> None:
+    out = collect_with(FakeLdap(), smb=None)
+    assert out.get("gpo") is None
+
+
+def test_collector_reads_only_listed_gpo_files() -> None:
+    fake = FakeLdap()
+    fake.sysvol.update({f"{DDP_PATH}\\{rel}": data for rel, data in GPO_TEST_FILES.items()})
+    reads: list[str] = []
+    lists: list[str] = []
+
+    def read(path: str) -> bytes | None:
+        reads.append(path)
+        return fake.smb(path)
+
+    def ls(path: str) -> list[str] | None:
+        lists.append(path)
+        return fake.ls(path)
+
+    out = collect_with(fake, smb=read, lister=ls)
+    assert sorted(p.lower() for p in reads) == sorted(p.lower() for p in fake.sysvol)
+    assert len(out["sysvol"]) == 1 and out["gpo"][DDP_DN]["gpp"][0]["kind"] == "User"
+    # Папки, которых нет в листинге родителя, не перебираются; у GPO без файлов — только Machine и User.
+    ddcp = [p for p in lists if not p.startswith(DDP_PATH)]
+    assert len(ddcp) == 2 and not any("\\Preferences\\Drives" in p or "Machine\\Scripts" in p for p in lists)
+    assert any(p.endswith("Machine\\Preferences\\Groups") for p in lists)
+    assert out["gpo"][DDCP_DN]["notes"] == ["папка GPO не прочитана по SMB: нет Machine и User"]
+
+
+def test_gpo_file_failures_are_notes() -> None:
+    from api.modules.ad.core.gpo_files import MAX_GPO_FILE
+
+    fake = FakeLdap()
+    fake.sysvol.update({
+        f"{DDP_PATH}\\Machine\\Registry.pol": b"PReg" + b"\x00" * MAX_GPO_FILE,
+        f"{DDP_PATH}\\User\\Preferences\\Drives\\Drives.xml": b"<Drives>",
+        f"{DDP_PATH}\\User\\Scripts\\scripts.ini": b"",
+    })
+    gone = f"{DDP_PATH}\\User\\Scripts\\scripts.ini".lower()
+    out = collect_with(fake, smb=lambda p: None if p.lower() == gone else fake.smb(p), lister=fake.ls)
+    notes = out["gpo"][DDP_DN]["notes"]
+    assert len(notes) == 3 and len(out["sysvol"]) == 1
+    assert any("Machine\\Registry.pol" in n and "4 МБ" in n for n in notes)
+    assert any("Drives.xml" in n for n in notes) and any("scripts.ini" in n and "не прочитан" in n for n in notes)
+
+
+def test_failed_listing_is_a_note_not_an_absent_folder() -> None:
+    fake = FakeLdap()
+    fake.sysvol.update({f"{DDP_PATH}\\{rel}": data for rel, data in GPO_TEST_FILES.items()})
+
+    def ls(path: str) -> list[str] | None:
+        if path.lower() == f"{DDP_PATH}\\Machine".lower():
+            raise OSError(0, "Unknown NtStatus error returned 'STATUS_ACCESS_DENIED'")
+        return fake.ls(path)
+
+    out = collect_with(fake, lister=ls)
+    data = out["gpo"][DDP_DN]
+    assert any(n.startswith("Machine: папка не прочитана по SMB (") and "ACCESS_DENIED" in n for n in data["notes"])
+    assert not any("нет Machine и User" in n for n in data["notes"])
+    # Пропущена только папка Machine: файлы пользователя прочитаны, компьютерных нет.
+    assert data["scripts"][0]["phase"] == "logon" and data["registry"] == [] and data["gpp"] == []
+
+
+def test_unknown_gpo_file_kind_is_a_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.modules.ad.core import ldap_collector
+
+    monkeypatch.setattr(ldap_collector, "GPO_FILES", {"machine/odd.txt": "Machine\\odd.txt"})
+    fake = FakeLdap()
+    fake.sysvol[f"{DDP_PATH}\\Machine\\odd.txt"] = b"<Groups/>"
+    out = collect_with(fake, lister=fake.ls)
+    assert out["gpo"][DDP_DN]["notes"] == ["Machine\\odd.txt: неизвестный тип файла"] and out["gpo"][DDP_DN]["gpp"] == []
+
+def test_collector_reads_gpo_links_and_flags() -> None:
+    asked: dict[str, list[str]] = {}
+    fake = FakeLdap()
+
+    def search(base: str, flt: str, attrs: list[str], scope: str) -> Any:
+        asked.setdefault(flt if scope != "BASE" or base != DN else "root", attrs)
+        return fake.search(base, flt, attrs, scope)
+
+    out = LdapCollector(search, fake.root_dse(), smb_reader=fake.smb).collect()
+    for key in ("root", "(objectClass=organizationalUnit)", "(objectClass=site)"):
+        assert {"gPLink", "gPOptions"} <= set(asked[key]), key
+    assert "flags" in asked["(objectClass=groupPolicyContainer)"]
+    by_dn = {o["dn"]: o for o in out["objects"]}
+    assert by_dn[DN]["gpLink"] == f"[LDAP://{DDP_DN};0]" and by_dn[DN]["gpOptions"] == 0
+    assert by_dn[DC_OU]["gpLink"] == f"[LDAP://{DDCP_DN};0]" and by_dn[DDP_DN]["flags"] == 0
+    # Атрибута нет — ссылок нет: пустая строка отличает новый сборщик от старого (None).
+    site = next(o for o in out["objects"] if o["class"] == "site")
+    assert site["gpLink"] == "" and site["gpOptions"] is None
+    idx = ExportIndex(load_export(json.dumps(out).encode()))
+    ddp = next(o for o in idx.objects("groupPolicyContainer") if o.dn == DDP_DN)
+    assert idx.applies_to_dcs(ddp) is True
 
 
 def _prop(prop_id: int, data: bytes) -> bytes:
@@ -297,7 +426,7 @@ def test_last_backup_from_metadata() -> None:
 def test_collector_reads_hygiene_data() -> None:
     out = collect_with(FakeLdap())             # существующий помощник теста сборщика
     d = out["domain"]
-    assert out["collector"]["version"] == "1.1"
+    assert out["collector"]["version"] == "1.2"
     assert d["min_pwd_length"] == 12 and d["recycle_bin"] is True and d["sysvol_replication"] == "dfsr" and d["backup_read"] is True
     assert out["guids"]["schema_classes"] == {"msDS-DelegatedManagedServiceAccount": ""}
     by_class: dict[str, list[dict[str, Any]]] = {}

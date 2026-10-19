@@ -9,16 +9,22 @@ import base64
 import datetime as dt
 import re
 import struct
+from collections.abc import Callable
 from typing import Any
 
 from api.modules.ad.core import sd
-from api.modules.ad.core.ldap_collector import LdapResultError
+from api.modules.ad.core.ldap_collector import GPT_TMPL, LdapResultError
 from tests.ad.synthetic import CONF_DN, DN, GUID_KEYCRED, PKI, b64sd, build_export, rid
 
 _SID_FILTER = re.compile(r"\(objectSid=(S-[0-9-]+)\)")
 _SCHEMA_FILTER = re.compile(r"\(lDAPDisplayName=([^)]+)\)")
 _CHAIN_FILTER = re.compile(r"\(memberOf:1\.2\.840\.113556\.1\.4\.1941:=(.+)\)")
 _DS = f"CN=Directory Service,CN=Windows NT,CN=Services,{CONF_DN}"
+DDP_DN = f"CN={{31B2F340-016D-11D2-945F-00C04FB984F9}},CN=Policies,CN=System,{DN}"
+DDP_PATH = "\\\\corp.local\\SysVol\\corp.local\\Policies\\{31B2F340-016D-11D2-945F-00C04FB984F9}"
+DDCP_GUID = "{6AC1786C-016F-11D2-945F-00C04fB984F9}"
+DDCP_DN = f"CN={DDCP_GUID},CN=Policies,CN=System,{DN}"
+DC_OU = f"OU=Domain Controllers,{DN}"
 
 
 def _uuid_bytes_le(text: str) -> bytes:
@@ -36,6 +42,23 @@ def _gentime(iso: str | None) -> list[bytes]:
 
 def _bool(value: bool | None) -> str | None:
     return None if value is None else "TRUE" if value else "FALSE"
+
+
+def sysvol_access(files: dict[str, bytes]) -> tuple[Callable[[str], bytes | None], Callable[[str], list[str] | None]]:
+    """Фальшивый SYSVOL «полный путь UNC → байты»: чтение и листинг папки без учёта регистра, как у SMB.
+    Листинг — имена файлов и папок на уровень ниже; нет такой папки — None."""
+    by_path = {p.lower(): (p, d) for p, d in files.items()}
+
+    def read(path: str) -> bytes | None:
+        hit = by_path.get(path.lower())
+        return hit[1] if hit else None
+
+    def ls(path: str) -> list[str] | None:
+        prefix = path.lower().rstrip("\\") + "\\"
+        names = {orig[len(prefix):].split("\\", 1)[0] for low, (orig, _) in by_path.items() if low.startswith(prefix)}
+        return sorted(names) if names else None
+
+    return read, ls
 
 
 def dns_property(prop_id: int, data: bytes) -> bytes:
@@ -72,6 +95,22 @@ class FakeLdap:
         }
         if d["sysvol_replication"] == "dfsr":
             self.base_entries[f"CN=Domain System Volume,CN=DFSR-GlobalSettings,CN=System,{DN}"] = {"cn": "Domain System Volume"}
+        # Привязка GPO, как в домене по умолчанию: Default Domain Policy на корне,
+        # Default Domain Controllers Policy на OU контроллеров (файлов в SYSVOL у неё нет; без
+        # дескриптора — иначе против эталонной выгрузки появится лишняя находка GpoPermissions).
+        clean = b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL), sd.build_ace("S-1-5-11", sd.READ_PROPERTY)])
+        by_dn = {o["dn"]: o for o in self.objects}
+        by_dn[DN].update(gpLink=f"[LDAP://{DDP_DN};0]", gpOptions=0)
+        by_dn[DDP_DN]["flags"] = 0
+        self.objects.append({"dn": DC_OU, "class": "organizationalUnit", "gpLink": f"[LDAP://{DDCP_DN};0]", "sd": clean})
+        self.objects.append({
+            "dn": DDCP_DN, "class": "groupPolicyContainer", "displayName": "Default Domain Controllers Policy",
+            "gpcFileSysPath": f"\\\\corp.local\\SysVol\\corp.local\\Policies\\{DDCP_GUID}", "flags": 0,
+        })
+        #: SYSVOL: полный путь UNC → байты. GptTmpl.inf — в UTF-16 с BOM, как его пишет Windows.
+        self.sysvol: dict[str, bytes] = {}
+        for dn, files in self.raw["sysvol"].items():
+            self.sysvol[by_dn[dn]["gpcFileSysPath"] + GPT_TMPL] = ("\ufeff" + files["GptTmpl.inf"]).encode("utf-16")
 
     def entry(self, o: dict[str, Any]) -> dict[str, Any]:
         attrs: dict[str, Any] = {
@@ -125,6 +164,9 @@ class FakeLdap:
             "msDS-PasswordComplexityEnabled": _bool(o.get("psoComplexity")),
             "msDS-PasswordSettingsPrecedence": o.get("psoPrecedence"),
             "msDS-PSOAppliesTo": o.get("psoAppliesTo", []),
+            "gPLink": o.get("gpLink"),
+            "gPOptions": o.get("gpOptions"),
+            "flags": o.get("flags"),
         }
         raw: dict[str, Any] = {}
         if o["class"] == "domainDNS":
@@ -250,11 +292,10 @@ class FakeLdap:
         return {"defaultNamingContext": DN, "configurationNamingContext": CONF_DN, "schemaNamingContext": f"CN=Schema,{CONF_DN}", "rootDomainNamingContext": DN}
 
     def smb(self, path: str) -> bytes | None:
-        for dn, files in self.raw["sysvol"].items():
-            gpo = next(o for o in self.objects if o["dn"] == dn)
-            if path.startswith(gpo["gpcFileSysPath"]):
-                return ("﻿" + files["GptTmpl.inf"]).encode("utf-16")
-        return None
+        return sysvol_access(self.sysvol)[0](path)
+
+    def ls(self, path: str) -> list[str] | None:
+        return sysvol_access(self.sysvol)[1](path)
 
 
 def parse_ok(blob: str) -> bool:

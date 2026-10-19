@@ -643,12 +643,12 @@ class ExportIndex:
 
     def applies_to_dcs(self, gpo: AdObject) -> bool | None:
         """Включённая ссылка на корень домена или на предка DN контроллера, компьютерная часть не выключена.
-        None — привязка неизвестна. Блокировка наследования (gPOptions) не учитывается."""
+        None — привязка неизвестна (компьютерная часть выключена — False и без неё). Блокировка наследования (gPOptions) не учитывается."""
+        if (gpo.flags or 0) & GPO_FLAG_MACHINE_DISABLED:
+            return False
         links = self.gpo_links(gpo)
         if links is None:
             return None
-        if (gpo.flags or 0) & GPO_FLAG_MACHINE_DISABLED:
-            return False
         root = self.export.domain.dn.lower()
         dc_dns = [d.dn.lower() for d in self.dcs]
         for link in links:
