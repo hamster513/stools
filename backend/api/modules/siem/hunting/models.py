@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -72,10 +73,18 @@ class ThJob(JobColumns, Base):
 
 
 class ThRun(Base):
-    """Ночной прогон за сутки: один на дату, повторный запуск той же даты вытесняет прежний."""
+    """Ночной прогон за сутки: один на дату, повторный запуск той же даты вытесняет прежний.
+
+    Вытесненный (`superseded`) остаётся строкой — на него ссылаются находки со статусами
+    и его история, — поэтому единственность даты только среди невытесненных."""
 
     __tablename__ = "th_run"
-    __table_args__ = (UniqueConstraint("target_date", name="uq_th_run_target_date"),)
+    __table_args__ = (
+        Index(
+            "uq_th_run_target_date_live", "target_date", unique=True,
+            postgresql_where=text("status <> 'superseded'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     target_date: Mapped[dt.date] = mapped_column()
