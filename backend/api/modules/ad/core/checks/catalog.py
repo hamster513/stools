@@ -527,4 +527,40 @@ GUIDANCE: dict[str, Guidance] = {
             _attack("T1098", "Account Manipulation"),
         ),
     ),
+    "GpoRegistrySettings": Guidance(
+        "gpo",
+        "В GPO для всех компьютеров (Конфигурация компьютера → Политики → Административные шаблоны) выключите LLMNR («Сеть → DNS-клиент → Отключить многоадресное разрешение имён»: включено); в «Сеть → Поставщик сети → Защищённые UNC-пути» задайте для \\\\*\\SYSVOL и \\\\*\\NETLOGON RequireMutualAuthentication=1, RequireIntegrity=1; укажите сервер WSUS по HTTPS, не разрешайте прокси пользователя при поиске обновлений и не выключайте закрепление сертификата; включите «Компоненты Windows → Windows PowerShell → Включить ведение журнала блоков сценариев PowerShell».",
+        (
+            ("Microsoft: MS15-011, защищённые UNC-пути для SYSVOL и NETLOGON", f"{_LEARN}/security-updates/securitybulletins/2015/ms15-011"),
+            ("Microsoft: настройка WSUS, в том числе SSL", f"{_LEARN}/windows-server/administration/windows-server-update-services/deploy/2-configure-wsus"),
+            ("Microsoft: журналирование PowerShell в Windows", f"{_LEARN}/powershell/module/microsoft.powershell.core/about/about_logging_windows"),
+            _attack("T1557.001", "Adversary-in-the-Middle: LLMNR/NBT-NS Poisoning and SMB Relay"),
+            _attack("T1557", "Adversary-in-the-Middle"),
+            _attack("T1059.001", "Command and Scripting Interpreter: PowerShell"),
+        ),
+    ),
+    "DcAuditPolicy": Guidance(
+        "gpo",
+        "В GPO, привязанной к OU Domain Controllers (Конфигурация компьютера → Политики → Конфигурация Windows → Параметры безопасности → Конфигурация расширенной политики аудита), включите аудит успеха для подкатегорий из находок и включите «Аудит: принудительно использовать параметры подкатегорий политики аудита», чтобы старая политика аудита их не перекрывала. События собирайте в SIEM.",
+        (
+            ("Microsoft: рекомендации по политике аудита", f"{_LEARN}/windows-server/identity/ad-ds/plan/security-best-practices/audit-policy-recommendations"),
+            _attack("T1685.001", "Disable or Modify Tools: Disable or Modify Windows Event Log"),
+        ),
+    ),
+    "GpoExternalFiles": Guidance(
+        "gpo",
+        "Перенесите сценарии и файлы в SYSVOL или NETLOGON домена (\\\\<домен>\\NETLOGON) либо на сервер уровня контроллеров, менять которые могут только администраторы домена; путь в GPO, в настройке GPP «Файлы» и в scriptPath учётки замените. Если сервер оставить нельзя, ограничьте запись в общую папку и сами файлы администраторами домена.",
+        (
+            LEAST_PRIVILEGE,
+            _attack("T1037", "Boot or Logon Initialization Scripts"),
+        ),
+    ),
+    "SysvolAcl": Guidance(
+        "gpo",
+        "Уберите у субъекта право записи на папку GPO и файлы её сценариев в SYSVOL: оставьте Domain Admins, Enterprise Admins, SYSTEM и делегированных администраторов GPO; права на папку синхронизируйте с правами объекта GPO в консоли управления групповой политикой (GPMC сообщает о несовпадении прав SYSVOL и AD).",
+        (
+            LEAST_PRIVILEGE,
+            _attack("T1484.001", "Domain or Tenant Policy Modification: Group Policy Modification"),
+        ),
+    ),
 }

@@ -152,7 +152,8 @@ def _trust_dns_gaps(export: AdExport) -> dict[str, str]:
 
 
 _GPO_FILE_CHECKS = ("GpoSecurityOptions", "DcLogonRights", "RestrictedGroups")
-_LINKS_UNKNOWN_CHECKS = ("GpoSecurityOptions", "DcLogonRights")
+_LINKS_UNKNOWN_CHECKS = ("GpoSecurityOptions", "DcLogonRights", "DcAuditPolicy")
+_GPO_BLOCK_CHECKS = ("GpoRegistrySettings", "DcAuditPolicy", "GpoExternalFiles", "SysvolAcl")
 
 
 def _gpo_gaps(export: AdExport) -> dict[str, str]:
@@ -162,12 +163,17 @@ def _gpo_gaps(export: AdExport) -> dict[str, str]:
     reasons: dict[str, list[str]] = {}
     if export.gpo is None:
         reasons["GppPasswords"] = ["настройки GPP и Registry.pol не собраны (сборщик старой версии или SYSVOL не прочитан)" + suffix]
+        for code in _GPO_BLOCK_CHECKS:
+            reasons[code] = ["Registry.pol, audit.csv, сценарии и настройки GPP не собраны (сборщик старой версии или SYSVOL не прочитан)" + suffix]
         if not export.sysvol:
             for code in _GPO_FILE_CHECKS:
                 reasons[code] = ["файлы GPO из SYSVOL не прочитаны" + suffix]
+    elif all(data.acl is None for data in export.gpo.values()):
+        reasons["SysvolAcl"] = ["права на SYSVOL читает только PowerShell-сборщик"]
     if not export.sysvol:
         # Права входа есть только в GptTmpl.inf: без него отсутствие запрета не доказано.
         reasons["TieringLogonDeny"] = ["файлы GptTmpl.inf не прочитаны" + suffix]
+        reasons.setdefault("DcLogonRights", ["файлы GptTmpl.inf не прочитаны" + suffix])
     if not any(o.gpLink is not None for o in export.objects if o.cls in _LINK_CONTAINERS):
         for code in _LINKS_UNKNOWN_CHECKS:
             reasons.setdefault(code, []).append(LINKS_UNKNOWN)

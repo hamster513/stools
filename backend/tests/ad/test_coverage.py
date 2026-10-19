@@ -70,8 +70,8 @@ def test_missing_sysvol_marks_user_rights_unchecked() -> None:
     raw = build_export()
     raw["sysvol"] = {}
     gaps = _gaps(raw)
-    assert set(gaps) == {"UserRightsAssignment", "TieringLogonDeny"} and "SYSVOL" in gaps["UserRightsAssignment"]
-    assert gaps["TieringLogonDeny"] == "файлы GptTmpl.inf не прочитаны"
+    assert set(gaps) == {"UserRightsAssignment", "TieringLogonDeny", "DcLogonRights"} and "SYSVOL" in gaps["UserRightsAssignment"]
+    assert gaps["TieringLogonDeny"] == gaps["DcLogonRights"] == "файлы GptTmpl.inf не прочитаны"
 
 
 def test_collector_note_explains_missing_sysvol() -> None:
@@ -82,12 +82,20 @@ def test_collector_note_explains_missing_sysvol() -> None:
 
 
 GPO_FILE_CHECKS = {"GpoSecurityOptions", "DcLogonRights", "RestrictedGroups"}
+GPO_BLOCK_CHECKS = {"GppPasswords", "GpoRegistrySettings", "DcAuditPolicy", "GpoExternalFiles", "SysvolAcl"}
 
 
 def test_missing_gpo_block_marks_gpp_passwords_unchecked() -> None:
     raw = build_export()
     raw.pop("gpo")
-    assert set(_gaps(raw)) == {"GppPasswords"}
+    assert set(_gaps(raw)) == GPO_BLOCK_CHECKS
+
+
+def test_gpo_block_without_acl_marks_sysvol_acl_unchecked() -> None:
+    raw = build_export()
+    for data in raw["gpo"].values():
+        data.pop("acl")
+    assert _gaps(raw) == {"SysvolAcl": "права на SYSVOL читает только PowerShell-сборщик"}
 
 
 def test_missing_sysvol_and_gpo_block_mark_gpo_file_checks_unchecked() -> None:
@@ -95,7 +103,7 @@ def test_missing_sysvol_and_gpo_block_mark_gpo_file_checks_unchecked() -> None:
     raw["sysvol"] = {}
     raw.pop("gpo")
     gaps = _gaps(raw)
-    assert set(gaps) == {"UserRightsAssignment", "GppPasswords", "TieringLogonDeny"} | GPO_FILE_CHECKS
+    assert set(gaps) == {"UserRightsAssignment", "TieringLogonDeny"} | GPO_BLOCK_CHECKS | GPO_FILE_CHECKS
     assert all(gaps[code] == "файлы GPO из SYSVOL не прочитаны" for code in GPO_FILE_CHECKS)
     assert gaps["TieringLogonDeny"] == "файлы GptTmpl.inf не прочитаны"
 
@@ -105,7 +113,7 @@ def test_unknown_gpo_links_are_noted() -> None:
     for o in raw["objects"]:
         o.pop("gpLink", None)
     links = "привязка GPO неизвестна (сборщик старой версии)"
-    assert _gaps(raw) == {code: links for code in ("GpoSecurityOptions", "DcLogonRights")}
+    assert _gaps(raw) == {code: links for code in ("GpoSecurityOptions", "DcLogonRights", "DcAuditPolicy")}
     raw["sysvol"] = {}
     raw.pop("gpo")
     assert _gaps(raw)["DcLogonRights"] == f"файлы GPO из SYSVOL не прочитаны; {links}"

@@ -68,6 +68,12 @@ from api.modules.ad.core.checks.domain import (
     check_too_many_admins,
 )
 from api.modules.ad.core.checks.gpo import check_user_rights_assignment
+from api.modules.ad.core.checks.gpo_files_checks import (
+    check_dc_audit_policy,
+    check_gpo_external_files,
+    check_gpo_registry_settings,
+    check_sysvol_acl,
+)
 from api.modules.ad.core.checks.gpo_settings import (
     check_dc_logon_rights,
     check_gpo_security_options,
@@ -86,7 +92,7 @@ from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "5"
+ANALYZER_VERSION = "6"
 
 _CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -151,6 +157,10 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("DcLogonRights", "Вход на контроллеры для широких групп", "GPO, применимая к контроллерам домена, разрешает широкой группе (Everyone, Authenticated Users, Users, Domain Users, Domain Computers) локальный вход, вход по RDP или как пакетное задание: любая учётка домена получает сеанс на контроллере.", check_dc_logon_rights, ("T1078.002",)),
     CheckSpec("TieringLogonDeny", "Нет запрета входа администраторов домена", "Ни одна GPO не запрещает Domain Admins локальный вход и вход по RDP: учётные данные администраторов домена остаются на рабочих станциях и серверах, где их можно украсть.", check_tiering_logon_deny, ("T1078.002",)),
     CheckSpec("RestrictedGroups", "Широкие группы в локальных группах (Restricted Groups, GPP)", "Restricted Groups в GptTmpl.inf или настройка GPP Groups добавляет широкую группу в локальную встроенную группу компьютеров: в Administrators — права администратора на всех компьютерах, куда применяется GPO.", check_restricted_groups, ("T1098",)),
+    CheckSpec("GpoRegistrySettings", "Параметры реестра в GPO (LLMNR, Hardened Paths, WSUS, PowerShell)", "Административные шаблоны GPO: LLMNR не выключен, для SYSVOL и NETLOGON не требуются взаимная проверка подлинности и целостность, WSUS по HTTP или с прокси пользователя, журналирование блоков сценариев PowerShell не включено. Это открывает перехват хэшей и подмену политик и обновлений в сети и скрывает следы атакующего.", check_gpo_registry_settings, ("T1557.001", "T1557")),
+    CheckSpec("DcAuditPolicy", "Аудит на контроллерах домена", "GPO, применимые к контроллерам, не включают аудит успеха важных подкатегорий (проверка учётных данных, Kerberos, изменения учёток, групп и каталога, вход, создание процессов): без этих событий атаку на домен не видно в журналах.", check_dc_audit_policy, ("T1685.001",)),
+    CheckSpec("GpoExternalFiles", "Сценарии и файлы GPO с серверов вне домена", "Сценарий GPO, сценарий входа учётки (scriptPath) или файл из настройки GPP «Файлы» берётся с сервера вне домена и контроллеров: кто управляет этим сервером, тот выполняет код на компьютерах и от имени пользователей, куда применяется GPO.", check_gpo_external_files, ("T1037",)),
+    CheckSpec("SysvolAcl", "Права на папки GPO в SYSVOL", "Субъект вне администраторов домена может менять папку GPO или файл её сценария в SYSVOL: подменённые настройки и сценарии выполняются на всех компьютерах и у всех пользователей, куда привязана GPO.", check_sysvol_acl, ("T1484.001",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

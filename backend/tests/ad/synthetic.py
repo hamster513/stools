@@ -290,8 +290,8 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
                 + "\r\nSeBackupPrivilege = *S-1-5-32-551\r\nSeShutdownPrivilege = *S-1-5-32-545\r\n"
             }
         },
-        # Блок gpo, как у сборщиков 1.2/2.2: у Default Domain Policy нет Registry.pol и настроек GPP.
-        "gpo": {f"CN={{31B2F340-016D-11D2-945F-00C04FB984F9}},CN=Policies,CN=System,{DN}": {}},
+        # Блок gpo, как у сборщика 2.2: у Default Domain Policy нет Registry.pol и настроек GPP, права SYSVOL прочитаны.
+        "gpo": {f"CN={{31B2F340-016D-11D2-945F-00C04FB984F9}},CN=Policies,CN=System,{DN}": {"acl": []}},
         "principals": principals,
     }
 
