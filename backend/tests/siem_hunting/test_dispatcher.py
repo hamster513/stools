@@ -11,7 +11,12 @@ from sqlalchemy import func, select, update
 from api.jobs import RESTART_ERROR, run_job, start_job
 from api.modules.siem.hunting import dispatcher
 from api.modules.siem.hunting.deep import run_deep
-from api.modules.siem.hunting.dispatcher import ensure_th_schedules, kick, nightly_handler
+from api.modules.siem.hunting.dispatcher import (
+    dispatch_handler,
+    ensure_th_schedules,
+    kick,
+    nightly_handler,
+)
 from api.modules.siem.hunting.models import (
     ThDeepHunt,
     ThEvent,
@@ -244,3 +249,54 @@ def test_pause_does_not_overwrite_cancel(db_session: Any, fake: FakeEvents, cont
     assert kick(db_session) is None
     assert db_session.get(ThDeepHunt, deep_id).status == "cancelled"
     assert [j.kind for j in db_session.scalars(select(ThJob).order_by(ThJob.id))] == ["deep", "nightly"]
+
+
+def _nightly_sched(db: Any, *, fired: bool) -> PlatformSchedule:
+    ensure_th_schedules(db)
+    db.commit()
+    sched = db.scalar(select(PlatformSchedule).where(PlatformSchedule.kind == "th_nightly"))
+    if fired:
+        sched.last_run_at = NOW - 2 * D
+        db.commit()
+    return sched
+
+
+def test_dispatch_creates_missed_nightly_run(db_session: Any, fake: FakeEvents, controlled: list[Any]) -> None:
+    """Планировщик уже работал, но ночь за TODAY не завёл (срок уполз за окно): диспетчер
+    заводит прогон сам и запускает его."""
+    sched = _nightly_sched(db_session, fired=True)
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-one")])
+    dispatch_handler(db_session, sched)
+    (run,) = db_session.scalars(select(ThRun)).all()
+    assert (run.target_date, run.status) == (TODAY, "queued")
+    assert len(controlled) == 1
+    job = db_session.scalar(select(ThJob))
+    assert job is not None and job.kind == "nightly"
+    drain(controlled)
+    db_session.expire_all()
+    assert db_session.get(ThRun, run.id).status == "done"
+
+
+def test_dispatch_does_not_create_run_when_scheduler_never_fired(db_session: Any, controlled: list[Any]) -> None:
+    sched = _nightly_sched(db_session, fired=False)
+    dispatch_handler(db_session, sched)
+    assert db_session.scalar(select(func.count()).select_from(ThRun)) == 0
+    assert controlled == []
+
+
+def test_dispatch_does_not_duplicate_existing_run(db_session: Any, controlled: list[Any]) -> None:
+    """Прогон даты в любом статусе (отменённый тоже) — ночь уже решена, второй не заводится."""
+    sched = _nightly_sched(db_session, fired=True)
+    run = create_run(db_session, TODAY, ThSettings(), TZ)
+    run.status = "cancelled"
+    db_session.commit()
+    dispatch_handler(db_session, sched)
+    assert [(r.target_date, r.status) for r in db_session.scalars(select(ThRun))] == [(TODAY, "cancelled")]
+    assert controlled == []
+
+
+def test_dispatch_skips_heal_when_nightly_disabled(db_session: Any, controlled: list[Any]) -> None:
+    set_th(db_session, nightly_enabled=False)
+    sched = _nightly_sched(db_session, fired=True)
+    dispatch_handler(db_session, sched)
+    assert db_session.scalar(select(func.count()).select_from(ThRun)) == 0

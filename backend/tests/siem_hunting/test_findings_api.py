@@ -24,6 +24,8 @@ from api.modules.siem.hunting.models import (
 )
 from api.modules.siem.hunting.nightly import create_run, persist_finding
 from api.modules.siem.hunting.settings import ThSettings
+from api.modules.siem.hunting.windows import nightly_window, target_date_for
+from api.settings import get_settings
 from tests.api.conftest import TEST_LOGIN
 from tests.siem_hunting.fake_events import FakeEvents
 from tests.siem_hunting.test_deep import NOW, D, new_deep
@@ -228,6 +230,42 @@ def test_runs_and_rerun(auth_client: TestClient, db_session: Any, fake: FakeEven
     listed = auth_client.get(f"{BASE}/runs", params={"limit": 1}).json()
     assert [x["id"] for x in listed] == [new.id]
     assert [x["status"] for x in auth_client.get(f"{BASE}/runs", params={"offset": 1}).json()] == ["superseded"]
+
+
+def test_rerun_date_creates_run_for_missing_night(
+    auth_client: TestClient, client_as: Callable[[str], TestClient], db_session: Any,
+    monkeypatch: pytest.MonkeyPatch, started: list[Any],
+) -> None:
+    """Ночь без строки прогона видна диапазоном `expected` и запускается по дате."""
+    monkeypatch.setattr("api.modules.siem.routers.hunting.runs.utcnow", lambda: NOW)
+    tz = get_settings().tz
+    last = target_date_for(NOW, "01:00", tz)
+    assert auth_client.get(f"{BASE}/runs/expected").json() == {"from": last.isoformat(), "to": last.isoformat()}
+
+    missing = last - dt.timedelta(days=2)
+    create_run(db_session, missing - dt.timedelta(days=1), ThSettings(), tz)
+    expected = auth_client.get(f"{BASE}/runs/expected").json()
+    assert expected == {"from": (missing - dt.timedelta(days=1)).isoformat(), "to": last.isoformat()}
+
+    r = auth_client.post(f"{BASE}/runs/rerun-date", json={"target_date": missing.isoformat()})
+    assert r.status_code == 202, r.text
+    body = r.json()
+    db_session.expire_all()
+    run_row = db_session.get(ThRun, body["run_id"])
+    assert (run_row.target_date, run_row.status) == (missing, "queued")
+    assert (run_row.period_from, run_row.period_to) == nightly_window(missing, "01:00", tz)
+    # Задачу заводит диспетчер: раздел занят ждущим прогоном более ранней ночи — он первый в очереди.
+    assert body["job_id"] is not None
+
+    # Прогон даты ждёт — второй запуск за неё же 409.
+    assert auth_client.post(f"{BASE}/runs/rerun-date", json={"target_date": missing.isoformat()}).status_code == 409
+    # Ночь, чьё окно ещё не наступило, — 422.
+    future = {"target_date": (last + dt.timedelta(days=1)).isoformat()}
+    assert auth_client.post(f"{BASE}/runs/rerun-date", json=future).status_code == 422
+    # Аудитор не запускает.
+    other = {"target_date": (missing + dt.timedelta(days=1)).isoformat()}
+    assert client_as("auditor").post(f"{BASE}/runs/rerun-date", json=other).status_code == 403
+    assert db_session.scalar(select(func.count()).select_from(ThRun)) == 2
 
 
 def test_deep_create_from_library_and_adhoc(auth_client: TestClient, db_session: Any, started: list[Any]) -> None:

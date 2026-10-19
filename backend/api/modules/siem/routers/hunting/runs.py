@@ -1,5 +1,9 @@
 """Ночные прогоны Threat Hunting: история по датам, построчные итоги запросов, «Повторить за дату».
 
+Пропущенная ночь (строки прогона на дату нет вовсе) видна в списке как пробел: диапазон
+ожидаемых ночей отдаёт `GET /runs/expected` — последнюю ночь считает сервер по своему поясу,
+а не браузер. Такую ночь запускают по дате (`POST /runs/rerun-date`), строки для `/{id}/rerun` у неё нет.
+
 Повтор не запускает задачу сам: прогон встаёт в очередь в базе, а задачу
 заводит диспетчер раздела (`kick`) — он один решает, свободен ли раздел.
 Занят — прогон дождётся конца текущей задачи, и `job_id` в ответе пуст.
@@ -9,7 +13,7 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -21,6 +25,7 @@ from api.modules.siem.hunting import dispatcher
 from api.modules.siem.hunting.models import ThJob, ThRun, ThRunQuery
 from api.modules.siem.hunting.nightly import supersede_and_rerun
 from api.modules.siem.hunting.settings import load_th_settings
+from api.modules.siem.hunting.windows import target_date_for
 from api.settings import get_settings
 from api.timeutil import utcnow
 
@@ -66,6 +71,17 @@ class RerunOut(BaseModel):
     job_id: int | None
 
 
+class RerunDateIn(BaseModel):
+    target_date: dt.date
+
+
+class ExpectedOut(BaseModel):
+    """Ночи, за которые прогон должен быть: от самой старой в истории до последней наступившей."""
+
+    from_: dt.date = Field(alias="from")
+    to: dt.date
+
+
 def _errors(db: Session, run_ids: list[int]) -> dict[int, int]:
     if not run_ids:
         return {}
@@ -96,6 +112,37 @@ def list_runs(
     ))
     errors = _errors(db, [r.id for r in runs])
     return [_row(r, errors.get(r.id, 0)) for r in runs]
+
+
+def _last_night(db: Session) -> dt.date:
+    return target_date_for(utcnow(), load_th_settings(db).window_from, get_settings().tz)
+
+
+@router.get("/expected", response_model=ExpectedOut, response_model_by_alias=True)
+def expected_nights(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ExpectedOut:
+    """Без истории — только последняя ночь: пробелы до установки раздела пропуском не считаются."""
+    last = _last_night(db)
+    oldest = db.scalar(select(func.min(ThRun.target_date)))
+    return ExpectedOut.model_validate({"from": min(oldest, last) if oldest is not None else last, "to": last})
+
+
+@router.post("/rerun-date", response_model=RerunOut, status_code=status.HTTP_202_ACCEPTED)
+def rerun_date(
+    body: RerunDateIn, request: Request, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+) -> RerunOut:
+    """«Запустить за дату» для ночи без прогона (или с прежним — тогда он заменяется, как в
+    `/{id}/rerun`). Ночь, чьё окно ещё не наступило, — 422: искать за неё рано. Идущий или
+    ждущий прогон даты — 409."""
+    target = body.target_date
+    if target > _last_night(db):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"ночь {target:%d.%m.%Y} ещё не наступила")
+    try:
+        new = supersede_and_rerun(db, target, user.login, load_th_settings(db), get_settings().tz)
+    # Как в rerun: отказ приходит до любых изменений, rollback не нужен.
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    request.state.audit_summary = f"ночной прогон за {target:%d.%m.%Y} запущен вручную: прогон #{new.id}"
+    return RerunOut(run_id=new.id, job_id=dispatcher.kick(db, started_by=user.login))
 
 
 def _run(db: Session, run_id: int) -> ThRun:

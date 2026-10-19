@@ -1,23 +1,26 @@
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Radar } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useRouter, useSearchParams } from '@/lib/router'
 import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { BulkBar } from '@/platform/findings/BulkBar'
 import { listFrom, toggleValue, valueChips } from '@/platform/findings/facets'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { STATUSES, STATUS_TITLES, type FindingStatus } from '@/platform/findings/types'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { TH_FINDINGS_PATH, thFindingsParams, useThFindings } from '../api/queries'
+import { TH_FINDINGS_KEY, TH_FINDINGS_PATH, thFindingsParams, useThFindings } from '../api/queries'
 import type { ThFindingSort, ThFindingsFilters } from '../api/types'
 import { ruDay, ruStamp } from '../format'
 
@@ -33,6 +36,9 @@ const COLUMNS: ColumnDef[] = [
   { key: 'created', label: 'Найдено', width: 144 },
   { key: 'assignee', label: 'Исполнитель', width: 176 },
 ]
+/** Галочка массовой смены — только у тех, кто вправе менять статусы. */
+const CHECK: ColumnDef = { key: 'check', label: 'Отметка', width: 32, resizable: false }
+const WITH_CHECK: ColumnDef[] = [CHECK, ...COLUMNS]
 
 /** Колонка → поле сортировки сервера; колонки без поля (исполнитель) не сортируются. */
 const SORT_OF: Record<string, ThFindingSort> = {
@@ -64,16 +70,35 @@ export function FindingsPage() {
   const [filters, setFilters] = useState<Filters>(() => filtersFrom(params))
   const [offset, setOffset] = useState(0)
   const filtersPanel = useFiltersPanel('siem-th-findings')
-  const cols = useColumnWidths('siem-th-findings-columns', COLUMNS)
+  const { write } = useCan()
+  const cols = useColumnWidths('siem-th-findings-columns', write ? WITH_CHECK : COLUMNS)
   const query = useThFindings({ ...filters, limit: PAGE_SIZE, offset })
+  const qc = useQueryClient()
+  // Отмеченные находки (id); «всё по фильтру» уводит в массовую смену фильтр вместо ключей.
+  const [checked, setChecked] = useState<ReadonlySet<number>>(new Set())
+  const [allByFilter, setAllByFilter] = useState(false)
 
-  // Любой отбор возвращает на первую страницу.
+  function clearChecked() {
+    setChecked(new Set())
+    setAllByFilter(false)
+  }
+  // Любой отбор возвращает на первую страницу; отметки прежней выборки снимаются — они уже не про неё.
   function update(patch: Partial<Filters>) {
     setFilters((f) => ({ ...f, ...patch }))
     setOffset(0)
+    clearChecked()
   }
+  function check(id: number) {
+    const next = new Set(checked)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setChecked(next)
+    setAllByFilter(false)
+  }
+  // Сортировка выборку не меняет — отметки остаются.
   function sortBy(sort: ThFindingSort) {
-    update(filters.sort === sort ? { order: filters.order === 'asc' ? 'desc' : 'asc' } : { sort, order: sort === 'created_at' || sort === 'events' ? 'desc' : 'asc' })
+    setFilters((f) => ({ ...f, ...(f.sort === sort ? { order: f.order === 'asc' ? 'desc' : 'asc' } : { sort, order: sort === 'created_at' || sort === 'events' ? 'desc' : 'asc' }) }))
+    setOffset(0)
   }
 
   const statuses = filters.status === 'all' ? undefined : filters.status
@@ -90,6 +115,18 @@ export function FindingsPage() {
   const items = data?.items ?? []
   // Выбранный хант, которого нет в счётчиках (другие фильтры его исключили), остаётся в списке — иначе его не снять.
   const huntFacet: Record<string, number> = { ...Object.fromEntries((filters.hunt ?? []).map((c) => [c, 0])), ...data?.facets.hunt }
+  const pageChecked = items.length > 0 && items.every((f) => checked.has(f.id))
+  function checkPage(on: boolean) {
+    const next = new Set(checked)
+    for (const f of items) {
+      if (on) next.add(f.id)
+      else next.delete(f.id)
+    }
+    setChecked(next)
+    setAllByFilter(false)
+  }
+  // Фильтр массовой смены — ключи списка без сортировки (`findings_adapter.BulkFilter`).
+  const bulkFilter = { status: filters.status, hunt: filters.hunt, date_from: filters.date_from, date_to: filters.date_to, limit_hit: filters.limit_hit }
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить находки' : null
 
   return (
@@ -101,6 +138,18 @@ export function FindingsPage() {
         <div className="font-mono text-xs tabular-nums text-text-secondary">{data ? `всего: ${total}` : ''}</div>
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
+      {write && (
+        <BulkBar
+          module="siem_th"
+          scopeId={1}
+          keys={[...checked].map((id) => `th:${id}`)}
+          total={total}
+          onSelectAll={() => setAllByFilter(true)}
+          filter={allByFilter ? bulkFilter : undefined}
+          onDone={() => { clearChecked(); qc.invalidateQueries({ queryKey: TH_FINDINGS_KEY }) }}
+          onClear={clearChecked}
+        />
+      )}
 
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && (
@@ -158,9 +207,12 @@ export function FindingsPage() {
                     cols={cols}
                     as="div"
                     className="px-2 py-2"
-                    content={Object.fromEntries(COLUMNS.filter((c) => SORT_OF[c.key]).map((c) => [c.key, (
-                      <SortLabel label={c.label} active={filters.sort === SORT_OF[c.key]} order={filters.order ?? 'desc'} onClick={() => sortBy(SORT_OF[c.key])} />
-                    )]))}
+                    content={{
+                      ...Object.fromEntries(COLUMNS.filter((c) => SORT_OF[c.key]).map((c) => [c.key, (
+                        <SortLabel label={c.label} active={filters.sort === SORT_OF[c.key]} order={filters.order ?? 'desc'} onClick={() => sortBy(SORT_OF[c.key])} />
+                      )])),
+                      check: <input type="checkbox" aria-label="Отметить все на странице" checked={pageChecked} onChange={(e) => checkPage(e.target.checked)} />,
+                    }}
                   />
                 </div>
                 {items.map((f) => (
@@ -170,6 +222,12 @@ export function FindingsPage() {
                     className={cn(ROW_FOCUS, 'grid cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover')}
                     style={{ ...cols.gridStyle, height: ROW_HEIGHT }}
                   >
+                    {write && (
+                      // Галочка не открывает карточку: клик и клавиши до строки не доходят.
+                      <div className="px-2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                        <input type="checkbox" aria-label={`Отметить находку #${f.id}`} checked={checked.has(f.id)} onChange={() => check(f.id)} />
+                      </div>
+                    )}
                     <div className="min-w-0 px-2"><StatusBadge status={f.status} /></div>
                     <div className="min-w-0 truncate px-2" title={`${f.hunt_code} ${f.hunt_name}`}>
                       <span className="font-mono text-text">{f.hunt_code}</span> <span className="text-text-secondary">{f.hunt_name}</span>

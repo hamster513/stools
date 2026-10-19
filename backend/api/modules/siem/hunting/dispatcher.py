@@ -38,6 +38,7 @@ from api.modules.siem.hunting.settings import (
     dispatch_schedule,
     ensure_th_schedules,
     load_th_settings,
+    nightly_schedule,
 )
 from api.modules.siem.hunting.windows import target_date_for
 from api.platform.scheduler import PlatformSchedule
@@ -151,8 +152,28 @@ def nightly_handler(db: Session, _sched: PlatformSchedule) -> int | None:
     return job_id
 
 
+def _heal_missed_night(db: Session) -> None:
+    """Прогон за последнюю ночь, если планировщик его не завёл. Срок ночного расписания
+    уползает вперёд на время запуска, и однажды окно ночи кончится раньше, чем срок наступит, —
+    ночь пропадёт молча. Диспетчер тикает каждый час и закрывает эту дыру сам. Расписание, ни
+    разу не срабатывавшее (свежая установка), оставлено планировщику: первую ночь заводит он."""
+    settings = load_th_settings(db)
+    sched = nightly_schedule(db)
+    if not settings.nightly_enabled or sched is None or not sched.enabled or sched.last_run_at is None:
+        return
+    tz = get_settings().tz
+    # target_date_for отдаёт ночь, чьё окно уже открылось к этому моменту, — её прогон уже должен быть.
+    target = target_date_for(clock(), settings.window_from, tz)
+    if db.scalar(select(ThRun.id).where(ThRun.target_date == target).limit(1)) is not None:
+        return
+    create_run(db, target, settings, tz)
+    log.info("ночной прогон за %s не был создан планировщиком — создан диспетчером", target)
+
+
 def dispatch_handler(db: Session, _sched: PlatformSchedule) -> None:
-    """Обработчик `siem/th_dispatch` (без задачи, раз в час): подобрать очередь и почистить события."""
+    """Обработчик `siem/th_dispatch` (без задачи, раз в час): завести пропущенную планировщиком
+    ночь, подобрать очередь и почистить события."""
+    _heal_missed_night(db)
     kick(db)
     retention.purge(db, load_th_settings(db).retention_days, now=clock())
 

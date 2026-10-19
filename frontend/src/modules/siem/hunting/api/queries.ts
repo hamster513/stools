@@ -15,6 +15,7 @@ import {
   type DeepSaveIn,
   type DeepView,
   type EventsPage,
+  type ExpectedNights,
   type HuntIn,
   type HuntListItem,
   type HuntsFilters,
@@ -22,6 +23,7 @@ import {
   type ImportApplyIn,
   type ImportPreview,
   type ImportResult,
+  type RerunDateIn,
   type RerunOut,
   type RunDetail,
   type RunView,
@@ -269,6 +271,26 @@ export function useRerun() {
   const qc = useQueryClient()
   return useMutation<RerunOut, ApiRequestError, number>({
     mutationFn: (runId) => api.post(`${BASE}/runs/${runId}/rerun`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: TH_RUNS_KEY })
+      qc.invalidateQueries({ queryKey: TH_JOBS_KEY })
+    },
+  })
+}
+
+/** Диапазон ожидаемых ночей: даты без прогона в нём — пропущенные ночи. */
+export function useExpectedNights() {
+  return useQuery<ExpectedNights, ApiRequestError>({
+    queryKey: [...TH_RUNS_KEY, 'expected'],
+    queryFn: () => api.get(`${BASE}/runs/expected`),
+  })
+}
+
+/** «Запустить за дату» для пропущенной ночи: 409, если прогон даты идёт или ждёт; 422 — ночь ещё не наступила. */
+export function useRerunDate() {
+  const qc = useQueryClient()
+  return useMutation<RerunOut, ApiRequestError, RerunDateIn>({
+    mutationFn: (body) => api.post(`${BASE}/runs/rerun-date`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: TH_RUNS_KEY })
       qc.invalidateQueries({ queryKey: TH_JOBS_KEY })

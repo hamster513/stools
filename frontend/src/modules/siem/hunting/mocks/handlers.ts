@@ -330,6 +330,28 @@ function newDeep(body: {
   }
 }
 
+/** Новый прогон даты в очереди; раздел свободен — сразу с задачей, как у диспетчера. Прежний живой прогон даты заменяется. */
+function queueRun(date: string, period: { from: string; to: string }, total: number): RunView {
+  for (const r of runs) if (r.target_date === date && r.status !== 'superseded') r.status = 'superseded'
+  const created: RunView = {
+    id: maxId(runs) + 1, target_date: date, period_from: period.from, period_to: period.to, status: 'queued',
+    started_at: null, finished_at: null, queries_total: total, queries_done: 0, findings: 0, errors: 0, error: null, job_id: null,
+  }
+  runs.push(created)
+  // Раздел занят — прогон дождётся конца текущей задачи, и задачи у него пока нет.
+  if (!busy()) {
+    const job = { id: maxId(jobs) + 1, kind: 'nightly', stage: 'connecting', status: 'running' as const, progress: 0, processed: 0, total, message: 'подключение к MaxPatrol', error: null, cancel_requested: false, started_at: NOW, finished_at: null, started_by: ME }
+    jobs.push(job)
+    created.job_id = job.id
+    created.status = 'running'
+    created.started_at = NOW
+  }
+  return created
+}
+
+const dateBusy = (date: string) => runs.some((r) => r.target_date === date && (r.status === 'queued' || r.status === 'running'))
+const ruDate = (date: string) => `${date.slice(8)}.${date.slice(5, 7)}.${date.slice(0, 4)}`
+
 // --- Обработчики ------------------------------------------------------------------
 
 const P = '/api/siem/hunting'
@@ -570,6 +592,27 @@ export const huntingHandlers = [
     return HttpResponse.json(rows.slice(offset, offset + limit).map(runView))
   }),
 
+  // Последняя наступившая ночь в моках — TODAY (окно в 01:00, «сейчас» — утро).
+  http.get(`${P}/runs/expected`, () => {
+    const denied = noSession()
+    if (denied) return denied
+    const oldest = runs.reduce((m, r) => (r.target_date < m ? r.target_date : m), TODAY)
+    return HttpResponse.json({ from: oldest, to: TODAY })
+  }),
+
+  http.post(`${P}/runs/rerun-date`, async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const { target_date: date } = (await request.json()) as { target_date: string }
+    if (date > TODAY) return fail(422, `ночь ${ruDate(date)} ещё не наступила`)
+    if (dateBusy(date)) return fail(409, `прогон за ${ruDate(date)} ещё не завершён`)
+    const next = new Date(`${date}T00:00:00Z`)
+    next.setUTCDate(next.getUTCDate() + 1)
+    const total = [...runs].sort((a, b) => b.id - a.id)[0]?.queries_total ?? 0
+    const created = queueRun(date, { from: `${date}T00:00:00Z`, to: next.toISOString().replace('.000Z', 'Z') }, total)
+    return HttpResponse.json({ run_id: created.id, job_id: created.job_id }, { status: 202 })
+  }),
+
   http.get(`${P}/runs/:id`, ({ params }) => {
     const denied = noSession()
     if (denied) return denied
@@ -584,23 +627,8 @@ export const huntingHandlers = [
     if (denied) return denied
     const old = runs.find((x) => x.id === Number(params.id))
     if (!old) return fail(404, 'прогон не найден')
-    if (runs.some((r) => r.target_date === old.target_date && (r.status === 'queued' || r.status === 'running'))) {
-      return fail(409, `прогон за ${old.target_date.slice(8)}.${old.target_date.slice(5, 7)} уже идёт или ждёт`)
-    }
-    for (const r of runs) if (r.target_date === old.target_date && r.status !== 'superseded') r.status = 'superseded'
-    const created: RunView = {
-      id: maxId(runs) + 1, target_date: old.target_date, period_from: old.period_from, period_to: old.period_to, status: 'queued',
-      started_at: null, finished_at: null, queries_total: old.queries_total, queries_done: 0, findings: 0, errors: 0, error: null, job_id: null,
-    }
-    runs.push(created)
-    // Раздел занят — прогон дождётся конца текущей задачи, и задачи у него пока нет.
-    if (!busy()) {
-      const job = { id: maxId(jobs) + 1, kind: 'nightly', stage: 'connecting', status: 'running' as const, progress: 0, processed: 0, total: created.queries_total, message: 'подключение к MaxPatrol', error: null, cancel_requested: false, started_at: NOW, finished_at: null, started_by: ME }
-      jobs.push(job)
-      created.job_id = job.id
-      created.status = 'running'
-      created.started_at = NOW
-    }
+    if (dateBusy(old.target_date)) return fail(409, `прогон за ${old.target_date.slice(8)}.${old.target_date.slice(5, 7)} уже идёт или ждёт`)
+    const created = queueRun(old.target_date, { from: old.period_from, to: old.period_to }, old.queries_total)
     return HttpResponse.json({ run_id: created.id, job_id: created.job_id }, { status: 202 })
   }),
 
@@ -766,6 +794,41 @@ export const huntingHandlers = [
       ...prev,
     ])
     return HttpResponse.json(stateOf(f))
+  }),
+
+  // Массовая смена из очереди находок: только ключи или фильтр модуля siem_th, прочие модули — дальше по списку обработчиков.
+  http.post('/api/findings/bulk', async ({ request }) => {
+    const body = (await request.clone().json()) as {
+      module: string; keys?: string[]; filter?: Record<string, unknown>
+      change: { status?: FindingStatus; assignee?: string | null; due_date?: string | null; risk_until?: string | null; comment?: string }
+    }
+    if (body.module !== 'siem_th') return undefined
+    const denied = noSession()
+    if (denied) return denied
+    let targets: FindingRecord[]
+    if (body.filter) {
+      const params = new URLSearchParams()
+      for (const [k, v] of Object.entries(body.filter)) {
+        if (v === undefined || v === null) continue
+        for (const one of Array.isArray(v) ? v : [v]) params.append(k, String(one))
+      }
+      targets = filterFindings(params)
+    } else {
+      targets = (body.keys ?? []).map(thFindingByKey).filter((f): f is FindingRecord => f !== undefined)
+    }
+    const { change } = body
+    for (const f of targets) {
+      const before = f.status
+      if (change.status !== undefined) f.status = change.status
+      if (change.assignee !== undefined) f.assignee = change.assignee
+      if (change.due_date !== undefined) f.due_date = change.due_date
+      if (change.risk_until !== undefined) f.risk_until = change.risk_until
+      stateEvents.set(f.id, [
+        { at: new Date().toISOString(), actor: ME, kind: 'status', from_status: before, to_status: f.status, comment: change.comment ?? '', details: {} },
+        ...(stateEvents.get(f.id) ?? []),
+      ])
+    }
+    return HttpResponse.json({ changed: targets.length })
   }),
 
   http.get('/api/settings/findings', () => {

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { ArrowLeft, History, RotateCw } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/Button'
@@ -11,7 +11,7 @@ import { cn } from '@/lib/cn'
 import { Link, useRouter } from '@/lib/router'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { TH_RUNS_KEY, useCancelRun, useRerun, useRun, useRuns } from '../api/queries'
+import { TH_RUNS_KEY, useCancelRun, useExpectedNights, useRerun, useRerunDate, useRun, useRuns } from '../api/queries'
 import type { RerunOut, RunView } from '../api/types'
 import { ProgressBar, RunStatusText } from '../components/JobStatus'
 import { QueryStatus } from '../components/QueryStatus'
@@ -47,6 +47,29 @@ const QUERY_COLUMNS: ColumnDef[] = [
 const isActive = (r: Pick<RunView, 'status'>) => r.status === 'queued' || r.status === 'running'
 const seconds = (ms: number | null) => (ms === null ? '—' : `${(ms / 1000).toFixed(1)} с`)
 
+/** Дата `YYYY-MM-DD` на день раньше; считается в UTC, чтобы пояс браузера не сдвигал день. */
+function dayBefore(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Пропущенные ночи — даты без единой строки прогона в диапазоне ожидаемых. Нижняя граница — самая
+ * старая загруженная ночь: дальше список обрезан, и пробел там был бы ложным.
+ */
+function missingNights(items: RunView[], from: string, to: string): string[] {
+  const have = new Set(items.map((r) => r.target_date))
+  const oldest = items.reduce((m, r) => (r.target_date < m ? r.target_date : m), to)
+  const lo = items.length > 0 && oldest > from ? oldest : from
+  const out: string[] = []
+  for (let d = to; d >= lo; d = dayBefore(d)) if (!have.has(d)) out.push(d)
+  return out
+}
+
+type ListRow = { kind: 'run'; run: RunView } | { kind: 'gap'; date: string }
+const rowDate = (r: ListRow) => (r.kind === 'run' ? r.run.target_date : r.date)
+
 /** Ночные прогоны: список ночей (без `id`) или карточка прогона с построчной историей запросов. */
 export function RunsPage({ id }: { id?: number }) {
   return id === undefined ? <RunsList /> : <RunCard id={id} />
@@ -60,7 +83,13 @@ function useRunActions(onRerun?: (out: RerunOut) => void) {
   const qc = useQueryClient()
   const cancel = useCancelRun()
   const rerun = useRerun()
+  const rerunDate = useRerunDate()
   const [notice, setNotice] = useState<string | null>(null)
+
+  const started = (out: RerunOut) => {
+    setNotice(out.job_id === null ? 'Раздел занят другой задачей — прогон встал в очередь и начнётся, когда она закончится.' : 'Прогон запущен.')
+    onRerun?.(out)
+  }
 
   return {
     cancel: (runId: number) => {
@@ -70,18 +99,17 @@ function useRunActions(onRerun?: (out: RerunOut) => void) {
     },
     rerun: (runId: number) => {
       setNotice(null)
-      rerun.mutate(runId, {
-        onSuccess: (out) => {
-          setNotice(out.job_id === null ? 'Раздел занят другой задачей — прогон встал в очередь и начнётся, когда она закончится.' : 'Прогон запущен.')
-          onRerun?.(out)
-        },
-        onError: () => qc.invalidateQueries({ queryKey: TH_RUNS_KEY }),
-      })
+      rerun.mutate(runId, { onSuccess: started, onError: () => qc.invalidateQueries({ queryKey: TH_RUNS_KEY }) })
+    },
+    runDate: (date: string) => {
+      setNotice(null)
+      rerunDate.mutate({ target_date: date }, { onSuccess: started, onError: () => qc.invalidateQueries({ queryKey: TH_RUNS_KEY }) })
     },
     cancelling: cancel.isPending ? cancel.variables : undefined,
     rerunning: rerun.isPending ? rerun.variables : undefined,
+    runningDate: rerunDate.isPending ? rerunDate.variables.target_date : undefined,
     notice,
-    error: [cancel.error, rerun.error].filter((e) => e instanceof Error).map((e) => apiMessage(e, 'Не удалось выполнить')).join('; ') || null,
+    error: [cancel.error, rerun.error, rerunDate.error].filter((e) => e instanceof Error).map((e) => apiMessage(e, 'Не удалось выполнить')).join('; ') || null,
   }
 }
 
@@ -115,6 +143,29 @@ function RunButtons({ run, actions, others }: { run: RunView; actions: Actions; 
   )
 }
 
+/** Ночь без прогона: нечего открыть, можно только запустить за дату. */
+function GapRow({ date, actions, style }: { date: string; actions: Actions; style: CSSProperties }) {
+  const { write } = useCan()
+  return (
+    <div className="grid items-center border-b border-grid bg-kind-1/5 text-xs" style={style}>
+      <div className="min-w-0 truncate px-2 tabular-nums text-text">{ruDay(date)}</div>
+      <div className="min-w-0 px-2 text-text-secondary">—</div>
+      <div className="min-w-0 px-2 text-right text-text-secondary">—</div>
+      <div className="min-w-0 px-2 text-text-secondary">—</div>
+      <div className="min-w-0 px-2 text-right text-text-secondary">—</div>
+      <div className="min-w-0 px-2 text-right text-text-secondary">—</div>
+      <div className="min-w-0 truncate px-2 text-kind-1">нет прогона</div>
+      <div className="min-w-0 px-2">
+        {write && (
+          <Button onClick={() => actions.runDate(date)} loading={actions.runningDate === date} title="Прогон за эти сутки: ночь была пропущена" className="px-2 py-0.5 text-xs" aria-label={`Запустить за ${ruDay(date)}`}>
+            <RotateCw size={12} aria-hidden /> Запустить за дату
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function Messages({ actions }: { actions: Actions }) {
   return (
     <>
@@ -129,50 +180,62 @@ function Messages({ actions }: { actions: Actions }) {
 function RunsList() {
   const { navigate } = useRouter()
   const runs = useRuns()
+  const expected = useExpectedNights()
   const cols = useColumnWidths('siem-th-runs-columns', COLUMNS)
   const actions = useRunActions()
 
   const items = runs.data ?? []
+  const gaps = runs.data && expected.data ? missingNights(items, expected.data.from, expected.data.to) : []
+  // Сортировка устойчивая: прогоны одной даты остаются в порядке сервера (новый выше заменённого).
+  const rows: ListRow[] = [
+    ...items.map((run): ListRow => ({ kind: 'run', run })),
+    ...gaps.map((date): ListRow => ({ kind: 'gap', date })),
+  ].sort((a, b) => (rowDate(a) < rowDate(b) ? 1 : rowDate(a) > rowDate(b) ? -1 : 0))
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
         <h1 className="text-sm font-semibold text-text">Ночные прогоны</h1>
         {runs.data && <div className="font-mono text-xs tabular-nums text-text-secondary">всего: {items.length}</div>}
+        {gaps.length > 0 && <div className="font-mono text-xs tabular-nums text-kind-1">пропущено ночей: {gaps.length}</div>}
         <div className="flex basis-full flex-col gap-1 empty:hidden"><Messages actions={actions} /></div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto bg-app-bg p-4">
         {runs.isLoading && <FullPageSpinner />}
         {runs.isError && <ErrorState message={apiMessage(runs.error, 'Не удалось загрузить прогоны')} onRetry={() => runs.refetch()} />}
-        {runs.data && items.length === 0 && (
-          <EmptyState icon={History} title="Прогонов ещё не было" description="Ночной прогон стартует в окне из настроек Threat Hunting; пропущенная ночь появится здесь после первого запуска." />
+        {runs.data && rows.length === 0 && (
+          <EmptyState icon={History} title="Прогонов ещё не было" description="Ночной прогон стартует в окне из настроек Threat Hunting; пропущенная ночь появится здесь пробелом с кнопкой «Запустить за дату»." />
         )}
-        {runs.data && items.length > 0 && (
+        {runs.data && rows.length > 0 && (
           <div data-col-resize-root className="overflow-x-auto rounded border border-grid bg-surface">
             <div className="grid border-b border-grid text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
               <ResizableHeader cols={cols} as="div" className="px-2 py-2" />
             </div>
-            {items.map((r) => (
-              <div
-                key={r.id}
-                {...clickableRow(() => navigate(`/siem/hunting/runs/${r.id}`))}
-                className={cn(ROW_FOCUS, 'grid cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover', r.status === 'superseded' && 'opacity-60')}
-                style={{ ...cols.gridStyle, height: ROW_HEIGHT }}
-              >
-                <div className="min-w-0 truncate px-2 tabular-nums text-text">{ruDay(r.target_date)}</div>
-                <div className="min-w-0 truncate px-2 tabular-nums text-text-secondary">{ruStamp(r.started_at)}</div>
-                <div className="min-w-0 truncate px-2 text-right tabular-nums text-text-secondary">{r.started_at ? ruSpan(r.started_at, r.finished_at) : '—'}</div>
-                <div className="flex min-w-0 flex-col gap-1 px-2">
-                  <span className="font-mono tabular-nums text-text">{r.queries_done} из {r.queries_total}</span>
-                  {r.status === 'running' && <ProgressBar done={r.queries_done} total={r.queries_total} label={`Ход прогона за ${ruDay(r.target_date)}`} />}
+            {rows.map((row) => {
+              if (row.kind === 'gap') return <GapRow key={`gap-${row.date}`} date={row.date} actions={actions} style={{ ...cols.gridStyle, height: ROW_HEIGHT }} />
+              const r = row.run
+              return (
+                <div
+                  key={r.id}
+                  {...clickableRow(() => navigate(`/siem/hunting/runs/${r.id}`))}
+                  className={cn(ROW_FOCUS, 'grid cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover', r.status === 'superseded' && 'opacity-60')}
+                  style={{ ...cols.gridStyle, height: ROW_HEIGHT }}
+                >
+                  <div className="min-w-0 truncate px-2 tabular-nums text-text">{ruDay(r.target_date)}</div>
+                  <div className="min-w-0 truncate px-2 tabular-nums text-text-secondary">{ruStamp(r.started_at)}</div>
+                  <div className="min-w-0 truncate px-2 text-right tabular-nums text-text-secondary">{r.started_at ? ruSpan(r.started_at, r.finished_at) : '—'}</div>
+                  <div className="flex min-w-0 flex-col gap-1 px-2">
+                    <span className="font-mono tabular-nums text-text">{r.queries_done} из {r.queries_total}</span>
+                    {r.status === 'running' && <ProgressBar done={r.queries_done} total={r.queries_total} label={`Ход прогона за ${ruDay(r.target_date)}`} />}
+                  </div>
+                  <div className="min-w-0 px-2 text-right font-mono tabular-nums text-text">{r.findings}</div>
+                  <div className={cn('min-w-0 px-2 text-right font-mono tabular-nums', r.errors > 0 ? 'text-kind-1' : 'text-text-secondary')}>{r.errors}</div>
+                  <div className="min-w-0 truncate px-2" title={r.error ?? undefined}><RunStatusText status={r.status} /></div>
+                  <div className="min-w-0 px-2"><RunButtons run={r} actions={actions} others={items} /></div>
                 </div>
-                <div className="min-w-0 px-2 text-right font-mono tabular-nums text-text">{r.findings}</div>
-                <div className={cn('min-w-0 px-2 text-right font-mono tabular-nums', r.errors > 0 ? 'text-kind-1' : 'text-text-secondary')}>{r.errors}</div>
-                <div className="min-w-0 truncate px-2" title={r.error ?? undefined}><RunStatusText status={r.status} /></div>
-                <div className="min-w-0 px-2"><RunButtons run={r} actions={actions} others={items} /></div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

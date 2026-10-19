@@ -300,6 +300,17 @@ export interface RerunOut {
   job_id: number | null
 }
 
+/** «Запустить за дату» для ночи без прогона (`POST /runs/rerun-date`). */
+export interface RerunDateIn {
+  target_date: string
+}
+
+/** Ночи, за которые прогон должен быть (`GET /runs/expected`): последнюю считает сервер по своему поясу. */
+export interface ExpectedNights {
+  from: string
+  to: string
+}
+
 // --- Большие ханты -----------------------------------------------------------
 
 /** queued | running | paused | done | failed | cancelled. */
