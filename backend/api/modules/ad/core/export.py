@@ -10,6 +10,7 @@ import base64
 import datetime as dt
 import json
 import zlib
+from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
 from api.export_files import GZIP_MAGIC
+from api.modules.ad.core.gpo_files import parse_gplink, parse_inf
 from api.modules.ad.core.sd import SecurityDescriptor, parse_sd
 from kbaudit.safe_io import MB, decompress_gzip, decompress_gzip_file
 
@@ -110,6 +112,13 @@ def _as_text(value: Any) -> Any:
 Text = Annotated[str, BeforeValidator(_as_text)]
 
 
+def _as_obj_list(value: Any) -> Any:
+    """Как _as_list, но для списка объектов: одиночный объект ConvertTo-Json отдаёт без массива."""
+    if value is None or (isinstance(value, dict) and not value):
+        return []
+    return [value] if isinstance(value, dict) else value
+
+
 def _utc_if_naive(value: dt.datetime) -> dt.datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=dt.UTC)
 
@@ -190,6 +199,11 @@ class AdObject(BaseModel):
     psoComplexity: bool | None = None
     psoPrecedence: int | None = None
     psoAppliesTo: StrList = Field(default_factory=list)
+    # Привязка GPO: у domainDNS, organizationalUnit, site — gPLink и gPOptions; у GPO — flags
+    # (1 — выключена пользовательская часть, 2 — компьютерная).
+    gpLink: str | None = None
+    gpOptions: int | None = None
+    flags: int | None = None
 
     @property
     def enabled(self) -> bool:
@@ -276,6 +290,65 @@ class Principal(BaseModel):
     cls: str = Field(default="", alias="class")
 
 
+class GpoRegistry(BaseModel):
+    scope: str
+    key: str
+    value: str
+    type: int
+    data: str | int | list[str] | None = None
+
+
+class GppMember(BaseModel):
+    name: str = ""
+    sid: str = ""
+    action: str = ""
+
+
+class GppItem(BaseModel):
+    scope: str
+    file: str
+    kind: str
+    name: str = ""
+    user: str = ""
+    #: Факт наличия cpassword; само значение сборщик не передаёт.
+    cpassword: bool = False
+    action: str = ""
+    members: Annotated[list[GppMember], BeforeValidator(_as_obj_list)] = Field(default_factory=list)
+    group_sid: str = ""
+    group_name: str = ""
+    path: str = ""
+
+
+class GpoAudit(BaseModel):
+    #: GUID подкатегории в нижнем регистре, без скобок.
+    subcategory: str
+    #: 0 — нет, 1 — успех, 2 — отказ, 3 — оба.
+    setting: int
+
+
+class GpoScript(BaseModel):
+    scope: str
+    phase: str
+    command: str
+    parameters: str = ""
+
+
+class GpoAcl(BaseModel):
+    path: str
+    #: SID, кроме владельца, с правом записи.
+    writers: StrList = Field(default_factory=list)
+
+
+class GpoData(BaseModel):
+    registry: Annotated[list[GpoRegistry], BeforeValidator(_as_obj_list)] = Field(default_factory=list)
+    gpp: Annotated[list[GppItem], BeforeValidator(_as_obj_list)] = Field(default_factory=list)
+    audit: Annotated[list[GpoAudit], BeforeValidator(_as_obj_list)] = Field(default_factory=list)
+    scripts: Annotated[list[GpoScript], BeforeValidator(_as_obj_list)] = Field(default_factory=list)
+    #: None — права не собирались (LDAP-сборщик или отказ Get-Acl).
+    acl: Annotated[list[GpoAcl], BeforeValidator(_as_obj_list)] | None = None
+    notes: StrList = Field(default_factory=list)
+
+
 class AdExport(BaseModel):
     format: str
     collected_at: dt.datetime
@@ -285,6 +358,8 @@ class AdExport(BaseModel):
     objects: list[AdObject] = Field(default_factory=list)
     sysvol: dict[str, dict[str, Text]] = Field(default_factory=dict)
     principals: dict[str, Principal] = Field(default_factory=dict)
+    #: DN GPO → файлы из SYSVOL; None — блока нет (старый сборщик или SYSVOL не прочитан).
+    gpo: dict[str, GpoData] | None = None
 
 
 class ExportFormatError(ValueError):
@@ -367,6 +442,18 @@ def filetime_to_datetime(value: int | None) -> dt.datetime | None:
 
 def datetime_to_filetime(value: dt.datetime) -> int:
     return int((value - dt.datetime(1601, 1, 1, tzinfo=dt.UTC)).total_seconds() * 10_000_000)
+
+
+@dataclass(frozen=True)
+class GpoLink:
+    container_dn: str
+    enforced: bool
+    disabled: bool
+
+
+#: GPO.flags: выключена компьютерная часть.
+GPO_FLAG_MACHINE_DISABLED = 2
+_LINK_CONTAINERS = ("domainDNS", "organizationalUnit", "site")
 
 
 class ExportIndex:
@@ -517,6 +604,58 @@ class ExportIndex:
     def gpo_inf(self, gpo: AdObject) -> str | None:
         files = self.export.sysvol.get(gpo.dn) or self.export.sysvol.get(gpo.dn.lower())
         return files.get("GptTmpl.inf") if files else None
+
+    def inf_sections(self, gpo: AdObject) -> dict[str, dict[str, str]]:
+        cache: dict[str, dict[str, dict[str, str]]] = self.cache.setdefault("inf_sections", {})
+        key = gpo.dn.lower()
+        if key not in cache:
+            cache[key] = parse_inf(self.gpo_inf(gpo) or "")
+        return cache[key]
+
+    @cached_property
+    def _gpo_by_dn(self) -> dict[str, GpoData] | None:
+        if self.export.gpo is None:
+            return None
+        return {dn.lower(): data for dn, data in self.export.gpo.items()}
+
+    def gpo_data(self, gpo: AdObject) -> GpoData | None:
+        """Файлы GPO из SYSVOL; None — блока gpo нет или GPO в нём нет."""
+        return self._gpo_by_dn.get(gpo.dn.lower()) if self._gpo_by_dn is not None else None
+
+    @cached_property
+    def gpo_link_map(self) -> dict[str, list[GpoLink]] | None:
+        """DN GPO (нижний регистр) → все ссылки на неё, в том числе выключенные.
+        None — ни у одного контейнера нет gPLink (сборщик старой версии)."""
+        containers = [o for cls in _LINK_CONTAINERS for o in self.objects(cls) if o.gpLink is not None]
+        if not containers:
+            return None
+        out: dict[str, list[GpoLink]] = {}
+        for c in containers:
+            for dn, disabled, enforced in parse_gplink(c.gpLink or ""):
+                out.setdefault(dn, []).append(GpoLink(c.dn, enforced=enforced, disabled=disabled))
+        return out
+
+    def gpo_links(self, gpo: AdObject) -> list[GpoLink] | None:
+        """Включённые ссылки на GPO (спека §3.1); None — привязка неизвестна."""
+        if self.gpo_link_map is None:
+            return None
+        return [link for link in self.gpo_link_map.get(gpo.dn.lower(), []) if not link.disabled]
+
+    def applies_to_dcs(self, gpo: AdObject) -> bool | None:
+        """Включённая ссылка на корень домена или на предка DN контроллера, компьютерная часть не выключена.
+        None — привязка неизвестна. Блокировка наследования (gPOptions) не учитывается."""
+        links = self.gpo_links(gpo)
+        if links is None:
+            return None
+        if (gpo.flags or 0) & GPO_FLAG_MACHINE_DISABLED:
+            return False
+        root = self.export.domain.dn.lower()
+        dc_dns = [d.dn.lower() for d in self.dcs]
+        for link in links:
+            container = link.container_dn.lower()
+            if container == root or any(dn.endswith("," + container) for dn in dc_dns):
+                return True
+        return False
 
     def to_dict(self) -> dict[str, Any]:
         return self.export.model_dump(by_alias=True, mode="json")

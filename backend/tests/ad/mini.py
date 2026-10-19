@@ -18,7 +18,7 @@ from api.modules.ad.core.export import AdExport, ExportIndex
 from api.modules.ad.core.findings import Finding
 from tests.ad.synthetic import DN, DOMAIN_SID, NOW, b64sd, ft, rid
 
-__all__ = ["DN", "DOMAIN_SID", "NOW", "b64sd", "computer", "dc", "ft", "group", "mini_export", "rid", "run", "user"]
+__all__ = ["DN", "DOMAIN_SID", "NOW", "b64sd", "computer", "dc", "ft", "gpo", "group", "link", "mini_export", "rid", "run", "user"]
 
 
 def user(sam: str, r: int, **extra: Any) -> dict[str, Any]:
@@ -45,6 +45,19 @@ def dc(name: str, r: int, **extra: Any) -> dict[str, Any]:
 def group(sam: str, sid: str, members: Sequence[str] = (), **extra: Any) -> dict[str, Any]:
     obj: dict[str, Any] = {"dn": f"CN={sam},CN=Users,{DN}", "class": "group", "sid": sid, "sam": sam, "name": sam, "member": list(members)}
     return {**obj, **extra}
+
+
+def gpo(name: str, guid: str = "{11111111-1111-1111-1111-111111111111}", **extra: Any) -> dict[str, Any]:
+    obj: dict[str, Any] = {
+        "dn": f"CN={guid},CN=Policies,CN=System,{DN}", "class": "groupPolicyContainer", "cn": guid, "name": guid,
+        "displayName": name, "gpcFileSysPath": f"\\\\corp.local\\SysVol\\corp.local\\Policies\\{guid}",
+    }
+    return {**obj, **extra}
+
+
+def link(*gpo_dns: str) -> str:
+    """Значение gPLink: включённые непринудительные ссылки на GPO."""
+    return "".join(f"[LDAP://{dn};0]" for dn in gpo_dns)
 
 
 def mini_export(objects: Sequence[dict[str, Any]] = (), *, admins: Sequence[str] = (), domain: dict[str, Any] | None = None, **top: Any) -> AdExport:
