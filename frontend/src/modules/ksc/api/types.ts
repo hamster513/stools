@@ -147,6 +147,8 @@ export interface Host {
   bases: HostBases
   last_fullscan_at: string | null
   status: 'ok' | 'warning' | 'critical'
+  /** Причины статуса: расшифрованные биты маски и текст продукта. `null` — в строке хоста причины не разобраны (старый снапшот). */
+  status_reasons: string[] | null
   threats: number
   unassigned: boolean
   in_ad: 'both' | 'ksc_only' | null
@@ -169,6 +171,8 @@ export interface HostsQuery {
   bases?: HostBases[]
   in_ad?: string[]
   status?: string[]
+  /** Причины статуса KSC (текст как в `status_reasons`). */
+  status_reason?: string[]
   /** Названия компонентов защиты; без `component_state` — хосты, у которых он есть. */
   component?: string[]
   /** Одно состояние — для выбранных компонентов. */
@@ -193,6 +197,8 @@ export interface HostsResponse {
     bases: Record<HostBases, number>
     in_ad: Record<string, number>
     status: Record<string, number>
+    /** Только непустые причины отфильтрованного набора. */
+    status_reason: Record<string, number>
     component: Record<string, { on: number; off: number; other: number }>
     /** Нет в ответе, если теги не собраны. */
     tag?: Record<string, number>

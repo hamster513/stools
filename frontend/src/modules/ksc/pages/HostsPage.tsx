@@ -43,7 +43,7 @@ import { HostTagsTab } from './hosts/HostTagsTab'
 
 const ROW_HEIGHT = 40
 
-type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'component' | 'component_state' | 'tag' | 'policy'>
+type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'status_reason' | 'component' | 'component_state' | 'tag' | 'policy'>
 
 const COMPONENT_STATES: { key: ComponentState; label: string }[] = [
   { key: 'on', label: 'работает' },
@@ -53,8 +53,9 @@ const COMPONENT_STATES: { key: ComponentState; label: string }[] = [
 ]
 const COMPONENT_STATE_LABELS = Object.fromEntries(COMPONENT_STATES.map((c) => [c.key, c.label])) as Record<ComponentState, string>
 const KSC_STATUS_LABELS: Record<string, string> = { ok: 'ок', warning: 'предупреждение', critical: 'критично' }
+const REASONS_NOT_PARSED = 'причины не разобраны — пересчитайте снапшот'
 
-type MultiKey = 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'tag'
+type MultiKey = 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'status_reason' | 'tag'
 
 const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
 
@@ -68,6 +69,7 @@ const REST: ColumnDef[] = [
   { key: 'bases', label: 'Базы', width: 128 },
   { key: 'fullscan', label: 'Полный поиск', width: 112 },
   { key: 'threats', label: 'Угрозы', width: 64, align: 'right' },
+  { key: 'status', label: 'Статус KSC', width: 144 },
   { key: 'in_ad', label: 'AD', width: 96 },
   { key: 'findings', label: 'Находок', width: 80, align: 'right' },
   // Стрелка в конце строки: 14 px и отступ 8 px.
@@ -82,7 +84,7 @@ function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
 }
 
-type HostRemembered = Partial<Record<'group' | 'product' | 'in_ad' | 'tag' | 'component', FacetValue[]>>
+type HostRemembered = Partial<Record<'group' | 'product' | 'in_ad' | 'status_reason' | 'tag' | 'component', FacetValue[]>>
 
 /** Значения перечислимых фасетов ответа для useRememberedFacets; у компонента число — хостов, где он не работает. */
 function hostFacetValues(facets: NonNullable<HostsResponse['facets']>) {
@@ -91,6 +93,7 @@ function hostFacetValues(facets: NonNullable<HostsResponse['facets']>) {
     group: facetValues(facets.group),
     product: facetValues(facets.product),
     in_ad: facetValues(facets.in_ad),
+    status_reason: facetValues(facets.status_reason),
     tag: Object.entries(facets.tag ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru')).map(([value, count]) => ({ value, count })),
     component: Object.keys(componentFacet).sort((a, b) => (componentFacet[b]?.off ?? 0) - (componentFacet[a]?.off ?? 0) || a.localeCompare(b, 'ru'))
       .map((value) => ({ value, count: componentFacet[value]?.off ?? 0 })),
@@ -113,6 +116,7 @@ function HostFacetPanel({ facets, remembered, filters, onToggle, onComponent, ta
   const groups = remembered.group ?? []
   const products = remembered.product ?? []
   const inAd = remembered.in_ad ?? []
+  const statusReasons = remembered.status_reason ?? []
   const tags = remembered.tag ?? []
   const components = (remembered.component ?? []).map((c) => c.value)
   for (const c of filters.component ?? []) if (!components.includes(c)) components.push(c)
@@ -147,6 +151,13 @@ function HostFacetPanel({ facets, remembered, filters, onToggle, onComponent, ta
           <FacetRow key={s} active={has(filters.status, s)} count={facets?.status[s] ?? 0} onClick={() => pick('status', s)}>{KSC_STATUS_LABELS[s]}</FacetRow>
         ))}
       </FacetSection>
+      {statusReasons.length > 0 && (
+        <FacetSection title="Причина статуса">
+          {statusReasons.map(({ value: r, count }) => (
+            <FacetRow key={r} active={has(filters.status_reason, r)} count={count} onClick={() => pick('status_reason', r)}>{r}</FacetRow>
+          ))}
+        </FacetSection>
+      )}
       <FacetSection title="Компонент защиты">
         <div className="mb-1 px-2 text-[10px] text-text-secondary">число — хостов, где компонент не работает</div>
         {components.map((name) => (
@@ -195,6 +206,17 @@ function TagChips({ tags }: { tags: string[] }) {
   )
 }
 
+/** Ячейка статуса KSC: слово статуса и число причин; сами причины — в подсказке. */
+function StatusCell({ host: h }: { host: Host }) {
+  const reasons = h.status_reasons
+  const title = reasons === null ? REASONS_NOT_PARSED : reasons.join('\n')
+  return (
+    <div className={cn('min-w-0 truncate px-2', h.status === 'critical' ? 'text-risk-high' : h.status === 'warning' ? 'text-risk-medium' : 'text-text-secondary')} title={title}>
+      {KSC_STATUS_LABELS[h.status]}{reasons && reasons.length > 0 ? ` · ${reasons.length}` : ''}
+    </div>
+  )
+}
+
 function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, serverId, tagsCollected }: { items: Host[]; selectedIndex: number; onSelectIndex: (i: number) => void; onOpen: (i: number) => void; onReachEnd?: () => void; serverId: number; tagsCollected: boolean }) {
   const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
   const cols = useColumnWidths('ksc-hosts-columns', tagsCollected ? COLUMNS_WITH_TAGS : COLUMNS)
@@ -224,6 +246,7 @@ function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, s
               <div className={cn('min-w-0 truncate px-2', h.bases === 'old' && 'text-risk-high')}>{h.bases_at ? new Date(h.bases_at).toLocaleDateString('ru-RU') : '—'} · {BASES_LABELS[h.bases]}</div>
               <div className="min-w-0 truncate px-2 text-text-secondary">{h.last_fullscan_at ? new Date(h.last_fullscan_at).toLocaleDateString('ru-RU') : 'никогда'}</div>
               <div className={cn('min-w-0 px-2 text-right font-mono tabular-nums', h.threats > 0 && 'text-risk-high')}>{h.threats}</div>
+              <StatusCell host={h} />
               <div className="min-w-0 truncate px-2 text-text-secondary">{h.in_ad ? IN_AD_LABELS[h.in_ad] : '—'}</div>
               <div role="presentation" className="min-w-0 px-2 text-right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation() }}>
                 {h.findings > 0 ? (
@@ -325,6 +348,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
     bases: listFrom<HostBases>(params, 'bases', Object.keys(BASES_LABELS) as HostBases[]),
     in_ad: listFrom(params, 'in_ad'),
     status: listFrom(params, 'status'),
+    status_reason: listFrom(params, 'status_reason'),
     component: listFrom(params, 'component'),
     // Состояние без компонента сервер отвергает (422), поэтому из адреса оно читается только вместе с компонентом.
     component_state: params.get('component') ? COMPONENT_STATES.find((c) => c.key === params.get('component_state'))?.key : undefined,
@@ -362,6 +386,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
     ...valueChips('Базы', filters.bases, (b) => BASES_LABELS[b], (v) => toggle('bases', v)),
     ...valueChips('AD', filters.in_ad, (k) => IN_AD_LABELS[k] ?? k, (v) => toggle('in_ad', v)),
     ...valueChips('Статус KSC', filters.status, (s) => KSC_STATUS_LABELS[s] ?? s, (v) => toggle('status', v)),
+    ...valueChips('Причина статуса', filters.status_reason, (r) => r, (v) => toggle('status_reason', v)),
     ...valueChips('Компонент', filters.component, (c) => c, setComponent),
   ]
   if (filters.component_state) chips.push({ label: `Состояние компонента: ${COMPONENT_STATE_LABELS[filters.component_state]}`, clear: () => toggle('component_state', undefined) })

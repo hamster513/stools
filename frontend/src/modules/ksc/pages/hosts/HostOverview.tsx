@@ -41,7 +41,16 @@ export function HostOverview({ host: h, serverId }: { host: HostDetail; serverId
         <dt className="text-text-secondary">Защита</dt><dd className="text-text">{PROTECTION_LABELS[h.protection]}{h.protection === 'off' ? ` · ${RTP_STATE_LABELS[h.rtp_state] ?? h.rtp_state}` : ''}</dd>
         <dt className="text-text-secondary">Базы</dt><dd className="text-text">{when(h.bases_at)} · {BASES_LABELS[h.bases]}</dd>
         <dt className="text-text-secondary">Полный поиск</dt><dd className="text-text">{when(h.last_fullscan_at)}</dd>
-        <dt className="text-text-secondary">Статус KSC</dt><dd className="text-text">{h.status === 'ok' ? 'ок' : h.status === 'warning' ? 'предупреждение' : 'критично'}</dd>
+        <dt className="text-text-secondary">Статус KSC</dt>
+        <dd className="text-text">
+          {h.status === 'ok' ? 'ок' : h.status === 'warning' ? 'предупреждение' : 'критично'}
+          {h.status_reasons === null && <div className="text-text-secondary">причины не разобраны — пересчитайте снапшот</div>}
+          {h.status_reasons && h.status_reasons.length > 0 && (
+            <ul className="mt-0.5 list-disc pl-4">
+              {h.status_reasons.map((r) => <li key={r}>{r}</li>)}
+            </ul>
+          )}
+        </dd>
         <dt className="text-text-secondary">Угрозы</dt><dd className="text-text">{h.threats}</dd>
         <dt className="text-text-secondary">Без группы</dt><dd className="text-text">{h.unassigned ? 'да' : 'нет'}</dd>
         <dt className="text-text-secondary">AD</dt><dd className="text-text">{h.in_ad ? IN_AD_LABELS[h.in_ad] : 'нет данных'}</dd>
