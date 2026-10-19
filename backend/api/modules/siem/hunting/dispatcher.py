@@ -132,13 +132,17 @@ def nightly_handler(db: Session, _sched: PlatformSchedule) -> int | None:
     """Обработчик `siem/th_nightly`: прогон на дату ночи (если его ещё нет) и `kick`.
     Если раздел занят большим хантом, прогон ждёт в очереди в базе, а планировщику уходит id
     занявшей задачи: None он понял бы как «повторить через минуту», и запоздалый успех сдвинул
-    бы следующий срок за окно — на ночь позже."""
+    бы следующий срок за окно — на ночь позже. Прогон на дату уже завершён — ночь обработана:
+    планировщику уходит его задача, `kick` не зовётся (он завёл бы большой хант, и планировщик
+    записал бы его задачу как ночную)."""
     settings = load_th_settings(db)
     tz = get_settings().tz
     target = target_date_for(clock(), settings.window_from, tz)
     run = db.scalar(select(ThRun).where(ThRun.target_date == target, ThRun.status != "superseded"))
     if run is None:
         run = create_run(db, target, settings, tz)
+    elif run.status not in ("queued", "running"):
+        return run.job_id
     job_id = kick(db)
     if job_id is None:
         busy = active_job(db, ThJob, KINDS)

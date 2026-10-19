@@ -196,3 +196,17 @@ def test_retention_purges_events_only(db_session: Any) -> None:
     assert db_session.get(ThFinding, fresh_id).events_purged is False
     assert db_session.scalar(select(func.count()).select_from(ThEvent).where(ThEvent.finding_id == fresh_id)) == 1
     assert purge(db_session, 180, now=NOW) == 0
+
+
+def test_nightly_handler_done_night_does_not_kick(db_session: Any, controlled: list[Any]) -> None:
+    """Ночь уже обработана: обработчик отдаёт задачу её прогона и ничего не запускает — иначе
+    `kick` завёл бы большой хант, и планировщик записал бы его задачу как ночную."""
+    ensure_th_schedules(db_session)
+    db_session.commit()
+    sched = db_session.scalar(select(PlatformSchedule).where(PlatformSchedule.kind == "th_nightly"))
+    done = create_run(db_session, TODAY, ThSettings(), TZ)
+    done.status, done.job_id = "done", 77
+    db_session.commit()
+    new_deep(db_session, NOW - D)
+    assert nightly_handler(db_session, sched) == 77
+    assert controlled == [] and db_session.scalar(select(func.count()).select_from(ThJob)) == 0
