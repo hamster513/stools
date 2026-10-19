@@ -1,12 +1,12 @@
 # Сборщик AD для доменной машины
 
-Скрипт `STools-AD-Collector.ps1` (версия 2.1) скачивается в интерфейсе: Active Directory →
+Скрипт `STools-AD-Collector.ps1` (версия 2.2) скачивается в интерфейсе: Active Directory →
 Настройки и данные → «Скачать». Он ничего не анализирует и не меняет в домене и пишет
 файлы двух видов:
 
 | Файл | Формат | Что внутри |
 |---|---|---|
-| `ad-<NETBIOS>-<дата>.json.gz` | `stools-ad/1` | выгрузка AD: учётные записи, группы, ACL, `GptTmpl.inf` политик из SYSVOL, шаблоны сертификатов, центры сертификации и контейнеры PKI, политики выдачи, доверенные домены, настройки домена и леса, политики паролей (PSO), зоны DNS, сайты и подсети |
+| `ad-<NETBIOS>-<дата>.json.gz` | `stools-ad/1` | выгрузка AD: учётные записи, группы, ACL, ссылки GPO, файлы GPO из SYSVOL и права на их папки, шаблоны сертификатов, центры сертификации и контейнеры PKI, политики выдачи, доверенные домены, настройки домена и леса, политики паролей (PSO), зоны DNS, сайты и подсети |
 | `adca-<NETBIOS>-<дата>.json.gz` | `stools-ad-ca/1` | данные ЦС: флаги и права центров сертификации, два значения реестра контроллеров домена, ответ веб-выдачи |
 
 Данных ЦС в LDAP нет, и STools сам их не собирает — ни онлайн-сбором по LDAP, ни иначе.
@@ -51,7 +51,7 @@
 | `-Mode Menu \| All \| AD \| CA` | `Menu` — меню и подтверждение; `All` — выгрузка AD и данные ЦС; `AD` — только выгрузка AD; `CA` — только данные ЦС. С `All`, `AD`, `CA` меню и вопроса нет — так скрипт запускается без участия человека. Без `-Mode` режим выбирается по остальным параметрам: `-SkipComputerAcl`, `-SkipSysvol` или `-OutputPath` — `AD` (команды сборщика 1.x вроде `-SkipSysvol -OutputPath x.json.gz` работают как раньше); `-Sections` — `CA`, а вместе с `-SkipComputerAcl` или `-SkipSysvol` — `All`; ничего из этого — `Menu` |
 | `-Sections ca,dc,web` | разделы данных ЦС для `All` и `CA`; по умолчанию все три |
 | `-SkipComputerAcl` | выгрузка AD без дескрипторов компьютеров (быстрее; проверка ACL компьютеров пуста) |
-| `-SkipSysvol` | выгрузка AD без `GptTmpl.inf` (проверка User Rights Assignment пуста) |
+| `-SkipSysvol` | выгрузка AD без SYSVOL: без файлов GPO и прав на их папки (блока `gpo` в файле нет, проверки по содержимому GPO, в том числе User Rights Assignment, пусты) |
 | `-Server` | контроллер домена для запросов LDAP (по умолчанию — ближайший) |
 | `-OutputPath` | файл или каталог. По умолчанию — текущий каталог. Каталог — оба файла в нём под именами по умолчанию. Файл — в него пишется выгрузка AD (или данные ЦС в режиме `CA`); если файлов два, данные ЦС ложатся в тот же каталог под именем по умолчанию |
 | `-Yes` | в режиме меню не спрашивать подтверждение после плана |
@@ -67,7 +67,7 @@
 
 | Раздел | Откуда | Права |
 |---|---|---|
-| выгрузка AD | LDAP контроллера домена; `GptTmpl.inf` из SYSVOL; что именно — список под таблицей | учётная запись домена с правом чтения каталога (обычный пользователь читает дескрипторы большинства объектов и срок пароля LAPS; SYSVOL доступен всем доменным пользователям). PSO видит только администратор домена |
+| выгрузка AD | LDAP контроллера домена; файлы GPO из SYSVOL (раздел «Что читается из SYSVOL»); что именно — список под таблицей | учётная запись домена с правом чтения каталога (обычный пользователь читает дескрипторы большинства объектов и срок пароля LAPS; SYSVOL доступен всем доменным пользователям). PSO видит только администратор домена |
 | `ca` — настройки и права ЦС | `certutil -config "<сервер>\<ЦС>" -getreg` для `policy\EditFlags`, `policy\DisableExtensionList`, `CA\InterfaceFlags`; при отказе certutil — те же значения удалённым реестром. Права ЦС (`Security`) — всегда удалённым реестром (`HKLM\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\<ЦС>`). Сборка ОС — из объекта компьютера ЦС в AD | администратор ЦС или локальный администратор сервера ЦС; на сервере ЦС запущена служба «Удалённый реестр» (Remote Registry) |
 | `dc` — реестр контроллеров | удалённый реестр каждого контроллера (`Get-ADDomainController -Filter *`): `HKLM\SYSTEM\CurrentControlSet\Services\Kdc\StrongCertificateBindingEnforcement` и `HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\Schannel\CertificateMappingMethods`; отсутствующее значение пишется как `null`. Единственный раздел, который обращается к контроллерам не по LDAP | чтение удалённого реестра контроллеров (обычно — администратор домена или делегированное право на эти ключи) |
 | `web` — веб-выдача | запрос `GET` без учётных данных и без перенаправлений (таймаут 10 с) к `http://<ЦС>/certsrv/`, `https://<ЦС>/certsrv/` и адресам из `msPKI-Enrollment-Servers`; записываются код ответа и схемы из `WWW-Authenticate` | сетевой доступ к серверам ЦС по портам 80 и 443 |
@@ -98,7 +98,11 @@ User Rights Assignment.
   пуст, и выгрузка несёт пометку «PSO не найдены: при сборе не администратором домена они не видны»;
 - у доверий — направление, тип, партнёр, время изменения и типы шифрования;
 - зоны DNS из `DomainDnsZones`, `ForestDnsZones` и `CN=MicrosoftDNS,CN=System` — режим динамических
-  обновлений и дескриптор;
+  обновлений и дескриптор. Раздела `DomainDnsZones` или `ForestDnsZones` может не быть (DNS не
+  интегрирован с AD): есть ли он, скрипт смотрит по `crossRef` в `CN=Partitions` и отсутствующий раздел
+  пропускает без пометки; пометка в `collector.notes` — только при отказе чтения;
+- привязка GPO: `gPLink` и `gPOptions` у корня домена, OU и сайтов (нет атрибута — пустая строка), `flags`
+  у GPO (выключенные части политики);
 - сайты и подсети;
 - дескрипторы критичных объектов: групп 512, 517, 518, 519, 520, 526, 527, 571 домена, встроенных 544,
   548–552 и `DnsAdmins`, их рекурсивных участников (запрос
@@ -106,6 +110,51 @@ User Rights Assignment.
   `collector.notes`) и учёток RID 500 и 502. Выгрузка несёт `collector.critical_acl: true`.
 
 Для всего этого, кроме PSO, хватает прав обычного пользователя домена.
+
+## Что читается из SYSVOL
+
+С версии 2.2 — те же файлы, что онлайн-сбор по LDAP 1.2, плюс права на папки GPO. Для каждой GPO
+скрипт один раз перечисляет её папку (`gPCFileSysPath`) и читает только найденные файлы из списка
+(регистр имён не важен):
+
+- `MACHINE\Microsoft\Windows NT\SecEdit\GptTmpl.inf` — текстом, как раньше (блок `sysvol`);
+- `Machine\Registry.pol` и `User\Registry.pol` — только значения белого списка (ниже);
+- настройки GPP `Groups`, `Services` (только у компьютера), `ScheduledTasks`, `DataSources`, `Drives`
+  (только у пользователя), `Printers`, `Files` — `<Machine|User>\Preferences\<вид>\<вид>.xml`:
+  вид, имя, учётка, действие, участники группы, путь и факт наличия `cpassword`. XML с `DOCTYPE` не
+  разбирается, внешние ресурсы не загружаются;
+- `Machine\Microsoft\Windows NT\Audit\audit.csv` — подкатегории расширенного аудита и их значения;
+- `scripts.ini` и `psscripts.ini` в `Machine\Scripts` и `User\Scripts` — фаза, команда, параметры;
+- права (`Get-Acl`) на саму папку GPO и на файлы скриптов из `scripts.ini` и `psscripts.ini`, лежащие
+  в этой папке: SID всех, кроме владельца, у кого есть разрешающее право записи (запись данных, Modify,
+  FullControl, смена прав или владельца). Скрипты вне папки GPO здесь не проверяются.
+
+Файлы в UTF-16 (по BOM) и в UTF-8 читаются одинаково. Файл больше 4 МБ не читается — пометка в
+`notes` записи GPO, как и любой другой отказ по файлу (битый `Registry.pol`, неразборчивый XML,
+непрочитанная папка); сбор продолжается. Если `Get-Acl` отказал, у записи `acl` пусто (`null`) и
+пометка «права SYSVOL не прочитаны».
+
+**Что не покидает домен.** Значения паролей: у GPP в выгрузку идёт только `cpassword: true`, у
+автологона (`Winlogon\DefaultPassword`) — пустая строка вместо значения. Из `Registry.pol` — только
+значения белого списка; остальные ключи (в том числе ключи приложений с секретами) в выгрузку не
+попадают. Белый список:
+
+| Ключ | Значения |
+|---|---|
+| `Software\Policies\Microsoft\Windows NT\DNSClient` | `EnableMultiCast` |
+| `Software\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths` | все |
+| `Software\Policies\Microsoft\Windows\WindowsUpdate` | `WUServer`, `SetProxyBehaviorForUpdateDetection`, `DoNotEnforceEnterpriseTLSCertPinningForUpdateDetection` |
+| `Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging` | `EnableScriptBlockLogging` |
+| `Software\Policies\Microsoft\Windows\PowerShell\ModuleLogging` | `EnableModuleLogging` |
+| `Software\Microsoft\Windows NT\CurrentVersion\Winlogon` | `AutoAdminLogon`, `DefaultUserName`, `DefaultPassword` (данные — `""`) |
+| `System\CurrentControlSet\Control\Lsa` | `LmCompatibilityLevel`, `NoLMHash`, `RestrictAnonymous`, `EveryoneIncludesAnonymous`, `LimitBlankPasswordUse` |
+| `System\CurrentControlSet\Services\NTDS\Parameters` | `LDAPServerIntegrity` |
+| `System\CurrentControlSet\Services\Netlogon\Parameters` | `RefusePasswordChange` |
+| `Software\Microsoft\Windows NT\CurrentVersion\Setup\RecoveryConsole` | `SecurityLevel` |
+
+Прав хватает тех же, что на чтение SYSVOL: обычный пользователь домена читает и файлы GPO, и их
+списки управления доступом. Онлайн-сбор по LDAP права на папки не читает (у его записей `acl`
+пусто).
 
 ## Ход работы и отказы
 
