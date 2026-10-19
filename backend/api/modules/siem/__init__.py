@@ -13,6 +13,7 @@ from api.modules.siem.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.siem.hunting import (
     models as _hunting_models,  # noqa: F401 — таблицы Threat Hunting в Base.metadata
 )
+from api.modules.siem.hunting.attack_layer import TH_LAYER
 from api.modules.siem.hunting.dispatcher import dispatch_handler, nightly_handler
 from api.modules.siem.hunting.findings_adapter import TH_ADAPTER, keys_by_filter
 from api.modules.siem.routers import (
@@ -57,6 +58,8 @@ for sub in (
 # Покрытие правилами — слой платформенной матрицы: модуль знает про
 # `attack`, `attack` про модули — нет.
 register_layer(ATTACK_LAYER)
+# Ханты с техникой — второй слой покрытия того же модуля.
+register_layer(TH_LAYER)
 register_adapter(FINDINGS_ADAPTER)
 # Находки Threat Hunting — отдельный модуль статусов (`siem_th`): своя область и свои ключи.
 register_adapter(TH_ADAPTER)
