@@ -27,6 +27,9 @@ from api.modules.siem.routers import (
     snapshots,
     tables,
 )
+
+# Под другим именем: `hunting` в этом пакете — подпакет с моделями и сервисами, имя нельзя занимать.
+from api.modules.siem.routers.hunting import router as hunting_router
 from api.modules.siem.services.attack_layer import LAYER as ATTACK_LAYER
 from api.platform.findings.adapters import register_adapter
 
@@ -37,6 +40,7 @@ for sub in (
     divergences.router,
     findings.router,
     graph.router,
+    hunting_router,
     jobs.router,
     kb.router,
     profile.router,
