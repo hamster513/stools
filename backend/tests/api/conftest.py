@@ -29,6 +29,7 @@ import api.db.base as db_base
 import api.modules.ad.models
 import api.modules.attack.models
 import api.modules.ksc.models
+import api.modules.siem.hunting.models
 import api.modules.vm.models  # noqa: F401 — модели модулей должны быть в реестре
 from api.db.models import AppUser
 from api.security import hash_password

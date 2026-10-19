@@ -10,6 +10,9 @@ from fastapi import APIRouter
 
 from api.modules.attack.layers import register_layer
 from api.modules.siem.findings_adapter import ADAPTER as FINDINGS_ADAPTER
+from api.modules.siem.hunting import (
+    models as _hunting_models,  # noqa: F401 — таблицы Threat Hunting в Base.metadata
+)
 from api.modules.siem.routers import (
     attack,
     clones,
