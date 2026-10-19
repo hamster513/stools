@@ -49,6 +49,7 @@ from api.modules.ad.core.checks.computers import (
     check_obsolete_os,
 )
 from api.modules.ad.core.checks.critical_acl import check_domain_root_acl
+from api.modules.ad.core.checks.dns import check_dns_zones
 from api.modules.ad.core.checks.domain import (
     check_backup_age,
     check_ds_heuristics,
@@ -67,6 +68,8 @@ from api.modules.ad.core.checks.groups import (
     check_privileged_groups,
     check_protected_users_coverage,
 )
+from api.modules.ad.core.checks.rodc import check_rodc_password_replication
+from api.modules.ad.core.checks.trusts import check_trust_security
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
@@ -127,6 +130,9 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("BackupAge", "Давность резервной копии AD", "Без свежей резервной копии AD после шифровальщика или порчи каталога восстанавливать нечего. Дата берётся из метаданных репликации dSASignature корня домена.", check_backup_age, ()),
     CheckSpec("NtfrsSysvol", "Репликация SYSVOL через FRS", "FRS — устаревшая служба репликации SYSVOL: контроллер новых версий Windows Server в такой домен не вводится, а сама служба не получает исправлений.", check_ntfrs_sysvol, ()),
     CheckSpec("SchemaVulnerableClass", "Уязвимый класс схемы Exchange", "Если в possSuperiors класса msExchStorageGroup есть computer (CVE-2021-34470), пользователь, управляющий объектом компьютера, может создать под ним объект этого класса и повысить привилегии в домене.", check_schema_vulnerable_class, ("T1068",)),
+    CheckSpec("TrustSecurity", "Безопасность доверий", "Доверия без фильтрации SID пропускают чужие SID из sIDHistory, доверие к домену Windows NT 4.0 работает только по NTLM, делегирование TGT через лесное доверие отдаёт билеты наших пользователей службам партнёра. Давно не менявшийся объект доверия говорит о том, что доверие не работает; без AES межсферные билеты шифруются RC4.", check_trust_security, ("T1134.005", "T1482")),
+    CheckSpec("DnsZones", "Зоны DNS в AD", "Небезопасные динамические обновления позволяют без входа менять записи зоны и уводить трафик на себя; в зоне домена и _msdcs это записи контроллеров. Создание записей Authenticated Users (настройка по умолчанию) позволяет занимать несуществующие имена, например WPAD.", check_dns_zones, ("T1557",)),
+    CheckSpec("RodcPasswordReplication", "Репликация паролей на RODC", "Пароли, которые кэширует RODC, достаются тому, кто захватил сам RODC. Привилегированные учётки не должны кэшироваться, Denied RODC Password Replication Group должна запрещать кэширование контроллеров, администраторов и krbtgt, а учётки krbtgt_NNNNN удалённых RODC — удаляться.", check_rodc_password_replication, ("T1003",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

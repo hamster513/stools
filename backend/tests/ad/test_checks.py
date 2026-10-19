@@ -40,6 +40,7 @@ def test_registry_codes() -> None:
         "TooManyAdmins", "FunctionalLevel", "PreWin2000Access", "DomainRootAcl", "Clusters",
         "PrimaryGroup", "SidHistory", "SmartcardPassword", "UnixPasswords", "ComputerCreators", "LapsDeployment",
         "PasswordPolicy", "RecycleBin", "DsHeuristics", "BackupAge", "NtfrsSysvol", "SchemaVulnerableClass",
+        "TrustSecurity", "DnsZones", "RodcPasswordReplication",
     }
 
 

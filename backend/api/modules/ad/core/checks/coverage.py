@@ -59,6 +59,7 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     if level_reasons:
         gaps["FunctionalLevel"] = "; ".join(level_reasons)
     gaps.update(_domain_settings_gaps(export, users or computers, has_primary_group))
+    gaps.update(_trust_dns_gaps(export))
     if (users or computers) and not has_primary_group:
         # Ни у одной учётки нет primaryGroupID — атрибуты сборщика 1.1/2.1 не собраны вовсе.
         for code in ("SidHistory", "UnixPasswords", "ComputerCreators"):
@@ -123,6 +124,17 @@ def _domain_settings_gaps(export: AdExport, accounts: int, has_primary_group: bo
         gaps["PasswordPolicy"] = PSO_UNREAD
     if accounts and not has_primary_group:
         gaps["PrimaryGroup"] = "ни у одной учётной записи нет primaryGroupID (сборщик старой версии)"
+    return gaps
+
+
+def _trust_dns_gaps(export: AdExport) -> dict[str, str]:
+    gaps: dict[str, str] = {}
+    trusts = [o for o in export.objects if o.cls == "trustedDomain"]
+    if trusts and all(t.trustDirection is None for t in trusts):
+        gaps["TrustSecurity"] = "доверия собраны старым сборщиком"
+    if not any(o.cls == "dnsZone" for o in export.objects):
+        notes = [n for n in export.collector.notes if "зоны DNS не прочитаны" in n]
+        gaps["DnsZones"] = f"зоны DNS не собраны: {'; '.join(notes)}" if notes else "зоны DNS не собраны (сборщик старой версии)"
     return gaps
 
 

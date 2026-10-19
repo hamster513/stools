@@ -84,6 +84,7 @@
 | `DcCount` | в домене один контроллер | Low | `uac` компьютеров | A-NotEnoughDC |
 | `DcDelegation` | контроллер с `msDS-AllowedToDelegateTo` или protocol transition | High | `uac`, `msDS-AllowedToDelegateTo` | P-DelegationDCa2d2, P-DelegationDCt2a4d |
 | `DcOwner` | владелец объекта контроллера — небезопасный субъект | Medium | ACL контроллеров | P-DCOwner |
+| `RodcPasswordReplication` | по виду: `reveal_privileged` привилегированная группа или админ в `revealOnDemand` RODC; `never_reveal_missing` в `neverReveal` нет группы 572; `admin_revealed` админ в `revealedUsers`; `krbtgt_orphan` учётка `krbtgt_NNNNN` не связана ни с одним RODC (`krbTgtLink`); при наличии RODC — `allowed_group_not_empty` в группе 571 есть члены (находка на члена), `denied_group_incomplete` в группе 572 (с вложенными) нет 512, 518, 519, 516 или 502 из тех, что есть в выгрузке | Medium | `uac`, `msDS-RevealOnDemandGroup`, `msDS-NeverRevealGroup`, `msDS-RevealedUsers`, `msDS-KrbTgtLink`, `member` | P-RODC* |
 
 ## Настройки домена и леса — `domain`
 
@@ -98,6 +99,7 @@
 | `BackupAge` | последний бэкап (`dSASignature` корня) старше `backup_max_age_days` (7) или отметки нет | Medium | `msDS-ReplAttributeMetaData` корня | A-BackupMetadata |
 | `NtfrsSysvol` | SYSVOL реплицируется через FRS | Low | DFSR-GlobalSettings | A-NTFRSOnSysvol |
 | `SchemaVulnerableClass` | `possSuperiors` класса `msExchStorageGroup` содержит `computer` (CVE-2021-34470) | Medium | схема | S-ADRegistrationSchema |
+| `DnsZones` | зона DNS (кроме `RootDNSServers`, `..TrustAnchors`), по виду: `insecure_update` `allowUpdate = 1` (небезопасные обновления); `au_create` Authenticated Users могут создавать записи (ACE не только для наследования) | High для зоны домена и `_msdcs.*`, прочая Medium; Info | `dNSProperty` (`allowUpdate`), ACL зоны | A-DnsZoneUpdate1, -2, A-DnsZoneAUCreateChild |
 | `PreWin2000Access` | член группы Pre-Windows 2000 Compatible Access (`S-1-5-32-554`) | High Anonymous Logon и Everyone; Authenticated Users и прочие Low | `member` группы | A-PreWin2000Anonymous, -AuthenticatedUsers, -Other |
 
 ## Доверие — `trust`
@@ -105,6 +107,7 @@
 | Код | Условие | Серьёзность | Данные | PingCastle |
 |---|---|---|---|---|
 | `AzureSsoKeyAge` | пароль компьютера `AZUREADSSOACC` старше `azure_sso_key_max_age_days` (90) | Medium | `pwdLastSet` | T-AzureADSSO |
+| `TrustSecurity` | объект доверия, по виду: `sid_filtering` исходящее доверие (`trustDirection & 2`) вне своего леса, внешнее без карантина (`0x4`) либо лесное (`0x8`) с «как внешнее» (`0x40`); `downlevel` `trustType = 1` (NT 4.0); `tgt_delegation` лесное с `0x800`; `inactive` `whenChanged` старше `trust_inactive_days` (40); `no_aes` нет AES (`0x18`) в `supportedEncryptionTypes`; доверия своего леса (`0x20`) проверяются только на `downlevel` и `inactive` | High; High; Medium; Medium; Low | `trustAttributes`, `trustDirection`, `trustType`, `whenChanged`, `msDS-SupportedEncryptionTypes` | T-SIDFiltering, T-Downlevel, T-TGTDelegation, T-Inactive, T-AlgsAES |
 
 ## AD CS и сертификаты — `pki`
 

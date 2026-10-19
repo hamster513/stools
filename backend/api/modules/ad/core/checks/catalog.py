@@ -429,4 +429,34 @@ GUIDANCE: dict[str, Guidance] = {
             _attack("T1068", "Exploitation for Privilege Escalation"),
         ),
     ),
+    "TrustSecurity": Guidance(
+        "trust",
+        "Включите фильтрацию SID на внешнем доверии (netdom trust <наш домен> /domain:<партнёр> /quarantine:yes), снимите флаг «как внешнее» с лесного (/enablesidhistory:no) и выключите делегирование TGT (/EnableTGTDelegation:no). Доверие к домену Windows NT 4.0 и неработающие доверия удалите. Для доверия включите AES («Другой домен поддерживает шифрование Kerberos AES» в свойствах доверия). Порог давности задаётся в настройках.",
+        (
+            ("Microsoft: атрибут trustAttributes", f"{_LEARN}/windows/win32/adschema/a-trustattributes"),
+            ("Microsoft: атрибут trustDirection", f"{_LEARN}/windows/win32/adschema/a-trustdirection"),
+            ("Microsoft: атрибут trustType", f"{_LEARN}/windows/win32/adschema/a-trusttype"),
+            _attack("T1134.005", "Access Token Manipulation: SID-History Injection"),
+            _attack("T1482", "Domain Trust Discovery"),
+        ),
+    ),
+    "DnsZones": Guidance(
+        "domain",
+        "Переведите зону на безопасные динамические обновления (Set-DnsServerPrimaryZone -Name <зона> -DynamicUpdate Secure). Право Authenticated Users создавать записи — настройка по умолчанию: если записи регистрирует DHCP, снимите его, а имена WPAD и ISATAP держите в глобальном списке блокировки запросов DNS.",
+        (
+            ("Microsoft: Set-DnsServerPrimaryZone", f"{_LEARN}/powershell/module/dnsserver/set-dnsserverprimaryzone"),
+            ("Microsoft: класс dnsZone", f"{_LEARN}/windows/win32/adschema/c-dnszone"),
+            _attack("T1557", "Adversary-in-the-Middle"),
+        ),
+    ),
+    "RodcPasswordReplication": Guidance(
+        "dc",
+        "Уберите привилегированные группы и администраторов из списка разрешённого кэширования RODC (msDS-RevealOnDemandGroup) и добавьте в список запрета (msDS-NeverRevealGroup) Denied RODC Password Replication Group; закэшированным администраторам смените пароли. Верните в Denied RODC Password Replication Group Domain Admins, Enterprise Admins, Schema Admins, Domain Controllers и krbtgt, очистите Allowed RODC Password Replication Group и разрешайте кэширование группами конкретного филиала. Учётки krbtgt_NNNNN удалённых RODC удалите.",
+        (
+            ("Microsoft: Get-ADDomainControllerPasswordReplicationPolicy", f"{_LEARN}/powershell/module/activedirectory/get-addomaincontrollerpasswordreplicationpolicy"),
+            ("Microsoft: Remove-ADDomainControllerPasswordReplicationPolicy", f"{_LEARN}/powershell/module/activedirectory/remove-addomaincontrollerpasswordreplicationpolicy"),
+            ("Microsoft: атрибут msDS-RevealOnDemandGroup", f"{_LEARN}/windows/win32/adschema/a-msds-revealondemandgroup"),
+            _attack("T1003", "OS Credential Dumping"),
+        ),
+    ),
 }
