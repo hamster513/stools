@@ -745,7 +745,7 @@ export const handlers = [
   http.post('/api/siem/mp/test', () => {
     if (!sessionActive) return HttpResponse.json({ detail: 'Сессия не найдена, войдите заново' }, { status: 401 })
     if (!KB_CONNECTION.configured) return HttpResponse.json({ detail: 'подключение не настроено' }, { status: 400 })
-    const response: KbTestResponse = { ok: true, message: 'база знаний 27.1.1234 отвечает, БД контента: Default', version: '27.1.1234', database: 'Default' }
+    const response: KbTestResponse = { ok: true, message: 'база знаний 27.1.1234 отвечает, БД контента: Default', version: '27.1.1234', database: 'Default', events_ok: true, events_message: 'события отвечают, за минуту: 1' }
     return HttpResponse.json(response)
   }),
 

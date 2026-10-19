@@ -120,10 +120,17 @@ function KbForm({ c }: { c: KbConnectionView }) {
             <ServerCog size={13} aria-hidden /> Собрать правила
           </Button>
           {test.data && (
-            <span className={cn('inline-flex items-center gap-1.5 text-xs', test.data.ok ? 'text-kind-accepted' : 'text-kind-1')}>
-              {test.data.ok ? <CheckCircle2 size={14} aria-hidden /> : <XCircle size={14} aria-hidden />}
-              {test.data.message}
-            </span>
+            <div className="flex flex-col gap-0.5">
+              {[
+                { label: 'База знаний', ok: test.data.ok, message: test.data.message },
+                { label: 'События', ok: test.data.events_ok, message: test.data.events_message },
+              ].map((r) => (
+                <span key={r.label} className={cn('inline-flex items-center gap-1.5 text-xs', r.ok ? 'text-kind-accepted' : 'text-kind-1')}>
+                  {r.ok ? <CheckCircle2 size={14} aria-hidden /> : <XCircle size={14} aria-hidden />}
+                  {r.label}: {r.message}
+                </span>
+              ))}
+            </div>
           )}
         </div>
       )}

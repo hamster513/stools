@@ -9,8 +9,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.fake_kb import TOKEN, FakeKb
+from tests.siem_hunting.fake_events import FakeEvents
 
 BODY = {"host": "mp.corp.local", "api_token": TOKEN}
+
+
+@pytest.fixture(autouse=True)
+def fake_events(monkeypatch: pytest.MonkeyPatch) -> FakeEvents:
+    """События проверяются «Проверить» отдельным клиентом; в сеть тесты не ходят."""
+    fake = FakeEvents({"msgid != null": [{"time": "2026-10-19T01:00:00Z"}]})
+    monkeypatch.setattr("api.modules.siem.routers.kb.make_events_client", fake.http_factory)
+    return fake
 
 
 def test_defaults_hide_secrets(auth_client: TestClient) -> None:
@@ -70,8 +79,28 @@ def test_test_reports_version_and_database(auth_client: TestClient, monkeypatch:
     assert body == {
         "ok": True, "message": "база знаний 27.1.1234 отвечает, БД контента: Default",
         "version": "27.1.1234", "database": "Default",
+        "events_ok": True, "events_message": "события отвечают, за минуту: 1",
     }
     assert fake.calls[0].headers["Authorization"] == f"Bearer {TOKEN}"
+
+
+def test_test_events_failure_does_not_break_kb_line(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch, fake_events: FakeEvents,
+) -> None:
+    monkeypatch.setattr("api.modules.siem.routers.kb.make_client", FakeKb().http_factory)
+    fake_events.status_once["msgid != null"] = [401]
+    auth_client.put("/api/siem/mp", json=BODY)
+    body = auth_client.post("/api/siem/mp/test").json()
+    assert body["ok"] is True and body["events_ok"] is False and body["events_message"] == "вход отклонён"
+
+
+def test_test_kb_failure_does_not_break_events_line(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeKb()
+    fake.unauthorized = True
+    monkeypatch.setattr("api.modules.siem.routers.kb.make_client", fake.http_factory)
+    auth_client.put("/api/siem/mp", json=BODY)
+    body = auth_client.post("/api/siem/mp/test").json()
+    assert body["ok"] is False and body["events_ok"] is True
 
 
 def test_test_reports_error_class_only(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
