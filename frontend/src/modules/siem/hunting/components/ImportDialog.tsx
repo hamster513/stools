@@ -50,7 +50,9 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
     })
   }
 
-  const rows = preview.data?.rows ?? []
+  // Предпросмотр принимается, только если он построен по выбранному сейчас файлу: ответ по прежнему файлу при быстрой смене выбора игнорируется.
+  const shown = preview.data && preview.variables === file ? preview.data : undefined
+  const rows = shown?.rows ?? []
   const always = rows.filter((r) => r.action === 'new' || r.action === 'revive').length
   const replaced = rows.filter((r) => r.action === 'changed' && replace.has(r.code)).map((r) => r.code)
   const nothing = always + replaced.length === 0
@@ -78,7 +80,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           {preview.isPending && <p className="mt-3 text-xs text-text-secondary">Разбираю файл…</p>}
           {preview.isError && <p className="mt-3 text-xs text-kind-1" role="alert">{message(preview.error, 'Не удалось разобрать файл')}</p>}
 
-          {preview.data && !result && (
+          {shown && !result && (
             <div className="mt-3">
               {rows.length === 0 ? (
                 <p className="text-xs text-text-secondary">В файле нет хантов.</p>
@@ -124,7 +126,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
                 </table>
               )}
               <p className="mt-2 text-[11px] text-text-secondary">
-                В файле хантов: {preview.data.hunts}. Изменённый хант заменяется только по галочке — иначе остаётся как в интерфейсе.
+                В файле хантов: {shown.hunts}. Изменённый хант заменяется только по галочке — иначе остаётся как в интерфейсе.
               </p>
             </div>
           )}
@@ -152,8 +154,8 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
               <Button
                 variant="primary"
                 loading={apply.isPending}
-                disabled={!file || !preview.data || nothing}
-                title={preview.data && nothing ? 'Нечего применять: отметьте «заменить» у изменённых хантов' : undefined}
+                disabled={!file || !shown || nothing}
+                title={shown && nothing ? 'Нечего применять: отметьте «заменить» у изменённых хантов' : undefined}
                 onClick={() => file && apply.mutate({ file, replace: replaced })}
               >
                 Применить

@@ -38,8 +38,9 @@ export function emptyQuery(taken: QueryDraft[]): QueryDraft {
   return { key: `new-${counter}`, pk: null, query_id: `Q${n}`, query: '', fields: '', fields_label: '', limit: '', enabled: true }
 }
 
+/** Новый хант включён, как и по умолчанию на сервере: гипотеза идёт в ближайшую ночь; снять галочку можно до создания. */
 export function emptyHunt(): HuntDraft {
-  return { code: '', name: '', description: '', technique_id: '', enabled: false, queries: [emptyQuery([])] }
+  return { code: '', name: '', description: '', technique_id: '', enabled: true, queries: [emptyQuery([])] }
 }
 
 export function fromHunt(h: HuntView): HuntDraft {
