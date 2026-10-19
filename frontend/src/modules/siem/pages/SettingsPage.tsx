@@ -11,6 +11,7 @@ import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
 import { useLlm } from '@/platform/settings/api/queries'
+import { HuntingSettings } from '../hunting/pages/settings/HuntingSettings'
 import { DataSources } from './settings/DataSources'
 
 export function SettingsPage() {
@@ -153,6 +154,8 @@ export function SettingsPage() {
             )}
           </div>
         </section>
+
+        <HuntingSettings />
       </div>
 
       {/* Все файлы продукта в одном месте: выгрузка правил, матрица,

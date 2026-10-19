@@ -17,7 +17,9 @@ import { FindingPage } from './hunting/pages/FindingPage'
 import { FindingsPage } from './hunting/pages/FindingsPage'
 import { HuntPage } from './hunting/pages/HuntPage'
 import { LibraryPage } from './hunting/pages/LibraryPage'
-import { SectionPlaceholder } from './hunting/pages/SectionPlaceholder'
+import { DeepHuntPage } from './hunting/pages/DeepHuntPage'
+import { DeepPage } from './hunting/pages/DeepPage'
+import { RunsPage } from './hunting/pages/RunsPage'
 
 const SECTIONS = new Set(['overview', 'rules', 'clones', 'attack', 'profile', 'hygiene'])
 
@@ -85,6 +87,8 @@ function HuntingRoute() {
   let page: ReactNode
   const finding = matchPath('/siem/hunting/findings/:id', path)
   const hunt = matchPath('/siem/hunting/library/:id', path)
+  const deep = matchPath('/siem/hunting/deep/:id', path)
+  const run = matchPath('/siem/hunting/runs/:id', path)
   if (path === '/siem/hunting') {
     // Фильтры страницы стартуют из адреса: смена строки запроса (ссылка «все находки ханта») открывает её заново.
     section = `findings${search}`
@@ -98,12 +102,19 @@ function HuntingRoute() {
   } else if (hunt) {
     section = path
     page = <HuntPage id={hunt.id === 'new' ? 'new' : Number(hunt.id)} />
-  } else if (path === '/siem/hunting/deep' || matchPath('/siem/hunting/deep/:id', path)) {
+  } else if (path === '/siem/hunting/deep') {
+    // Адрес с `?from=<запрос>` открывает форму с подстановкой: смена строки запроса собирает страницу заново.
+    section = `deep${search}`
+    page = <DeepPage key={search} />
+  } else if (deep) {
     section = path
-    page = <SectionPlaceholder title="Большой хант" />
+    page = <DeepHuntPage id={Number(deep.id)} />
   } else if (path === '/siem/hunting/runs') {
     section = path
-    page = <SectionPlaceholder title="Прогоны" />
+    page = <RunsPage />
+  } else if (run) {
+    section = path
+    page = <RunsPage id={Number(run.id)} />
   } else {
     return <Redirect to="/siem/hunting" />
   }

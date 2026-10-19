@@ -4,7 +4,7 @@
  * Статусы, исполнителей, сроки и комментарии находок меняет платформа (`/api/findings/*`,
  * модуль `siem_th`) — после её мутации страница сама сбрасывает `TH_FINDINGS_KEY`.
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, ApiRequestError, buildQuery } from '@/api/client'
 import {
   DEEP_ACTIVE,
@@ -63,6 +63,24 @@ export function useHunt(id: number | undefined) {
     queryFn: () => api.get(`${BASE}/hunts/${id}`),
     enabled: id !== undefined,
   })
+}
+
+/**
+ * Хант, в котором лежит запрос с номером `queryPk` (`QueryView.id`): ссылка «в большой хант» знает только номер запроса.
+ * Прямого адреса нет — ханты читаются по одному в общий кэш карточек, как при открытии карточки.
+ */
+export function useHuntOfQuery(queryPk: number | undefined) {
+  const list = useHunts()
+  const ids = queryPk === undefined ? [] : (list.data ?? []).map((h) => h.id)
+  const one = useQueries({
+    queries: ids.map((id) => ({
+      queryKey: [...TH_HUNTS_KEY, 'one', id],
+      queryFn: (): Promise<HuntView> => api.get(`${BASE}/hunts/${id}`),
+    })),
+  })
+  const hunt = one.map((q) => q.data).find((h) => h?.queries.some((q) => q.id === queryPk)) ?? null
+  const loading = queryPk !== undefined && !hunt && (list.isLoading || one.some((q) => q.isLoading))
+  return { hunt, loading }
 }
 
 /** Ответом хант приходит целиком: кладём его в кэш карточки, список обновится запросом. */
