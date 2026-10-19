@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from api.hosts import LOGIN_REJECTED
@@ -59,6 +59,11 @@ log = logging.getLogger(__name__)
 NO_DEADLINE = dt.datetime.max.replace(tzinfo=dt.UTC)
 
 Slice = tuple[dt.datetime, dt.datetime]
+
+
+class RowCancelled(JobCancelled):
+    """Строку ханта уже отменили (ручка отмены), а задача об этом ещё не узнала: задача
+    закрывается отменённой, строка не трогается — отмена уже записала в неё итог."""
 
 
 def slices(
@@ -111,15 +116,17 @@ def create_deep(
     period_to: dt.datetime,
     login: str,
     now: dt.datetime | None = None,
+    query_id: str | None = None,
 ) -> ThDeepHunt:
-    """Большой хант в очереди со своей копией запроса: правка библиотеки его не меняет."""
+    """Большой хант в очереди со своей копией запроса: правка библиотеки его не меняет.
+    `query_id` — номер запроса без самого запроса: повтор ханта, чей запрос библиотеки уже удалён."""
     if period_from >= period_to:
         raise ValueError("период: начало должно быть раньше конца")
     settings = load_th_settings(db)
     deep = ThDeepHunt(
         title=title,
         hunt_id=hunt.id if hunt else None,
-        query_id=query.query_id if query else None,
+        query_id=query.query_id if query else query_id,
         query=query_text,
         fields_json=json.dumps(fields, ensure_ascii=False),
         labels_json=json.dumps(labels, ensure_ascii=False),
@@ -170,7 +177,7 @@ def run_deep(
         return
     try:
         _execute(db, handle, deep, load_th_settings(db), sleeper, clock)
-    except RunStopped:
+    except (RunStopped, RowCancelled):
         raise
     except JobCancelled:
         db.rollback()
@@ -241,8 +248,15 @@ def _execute(
             if index:
                 wait(settings.slice_pause_s)
             if nightly_due(db, clock()):
-                deep.status = "paused"
+                # Условно: отмена могла записать `cancelled` после нашего чтения, и «пауза» поверх
+                # неё вернула бы хант в очередь диспетчера.
+                paused = db.execute(
+                    update(ThDeepHunt).where(ThDeepHunt.id == deep.id, ThDeepHunt.status == "running")
+                    .values(status="paused").returning(ThDeepHunt.id).execution_options(synchronize_session=False),
+                ).scalar()
                 db.commit()
+                if paused is None:
+                    raise RowCancelled()
                 log.info("большой хант %s уступил ночному прогону на куске %s из %s", deep.id, deep.slices_done + 1, total)
                 return
             handle.tick(deep.slices_done, message=f"кусок {deep.slices_done + 1} из {total}, {_span(start, end)}")

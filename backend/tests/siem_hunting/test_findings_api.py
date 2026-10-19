@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from api.jobs import start_job
 from api.modules.siem.hunting import dispatcher
+from api.modules.siem.hunting.deep import create_deep
 from api.modules.siem.hunting.models import (
     ThDeepHunt,
     ThEvent,
@@ -340,6 +341,13 @@ def test_deep_rerun_copies_parameters(auth_client: TestClient, db_session: Any, 
     assert (new["title"], new["query"], new["fields"], new["labels"], new["limit"]) == (
         "первый", "q-deep", ["time", "event_src.host"], ["Время", "Узел"], 100)
     assert new["source"] == {"hunt_code": "TH-WIN-001", "query_id": "Q1"}
+    db_session.expire_all()
+    assert db_session.get(ThDeepHunt, new["id"]).query_id == "Q1"
+    # Номер запроса пишется той же транзакцией, что и сам хант.
+    direct = create_deep(db_session, title="t", hunt=hunt, query=None, query_text="q", fields=["time"], labels=["Время"],
+                         limit=10, period_from=NOW - D, period_to=NOW, login="t", query_id="Q7")
+    db_session.expire_all()
+    assert db_session.get(ThDeepHunt, direct.id).query_id == "Q7"
     period = (dt.datetime.fromisoformat(new["period_from"]), dt.datetime.fromisoformat(new["period_to"]))
     assert period == (NOW - D, NOW)
     assert len(started) == 1
@@ -381,6 +389,7 @@ def test_mine_shows_th_finding(auth_client: TestClient, db_session: Any) -> None
     nightly = mine[f"th:{finding.id}"]
     assert nightly["link"] == f"/siem/hunting/findings/{finding.id}"
     assert nightly["title"].startswith("TH-WIN-009 Q1: ") and nightly["severity"] == "medium"
+    assert nightly["module_title"] == "Threat Hunting"
     assert mine[f"th:{deep_finding.id}"]["link"] == f"/siem/hunting/deep/{deep.id}"
 
     listed = auth_client.get(f"{BASE}/findings").json()["items"]
@@ -395,3 +404,62 @@ def test_jobs_router_mounted(auth_client: TestClient, db_session: Any) -> None:
     assert r.status_code == 200, r.text
     assert [j["id"] for j in r.json()] == [job_id] and r.json()[0]["kind"] == "deep"
     assert auth_client.get(f"{BASE}/jobs/{job_id}").json()["status"] == "running"
+    # Общей отмены задач у раздела нет: она обошла бы строку прогона или большого ханта.
+    assert auth_client.post(f"{BASE}/jobs/{job_id}/cancel").status_code in (404, 405)
+    assert db_session.get(ThJob, job_id).cancel_requested is False
+
+
+def test_deep_cancel_after_done_conflicts(auth_client: TestClient, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Задача закрыла хант (`done`) между чтением строки и отменой: 409, итог не затирается."""
+    deep = new_deep(db_session, NOW - D)
+    job_id = start_job(db_session, ThJob, "deep", "t")
+    deep.status, deep.job_id = "running", job_id
+    db_session.commit()
+    deep_id = deep.id
+
+    def finished_meanwhile(db: Any, model: Any, jid: int) -> None:
+        db_session.execute(update(ThDeepHunt).where(ThDeepHunt.id == deep_id).values(status="done"))
+        db_session.commit()
+        from fastapi import HTTPException
+        raise HTTPException(409, detail="задача уже завершена")
+
+    monkeypatch.setattr("api.modules.siem.routers.hunting.deep.cancel_job", finished_meanwhile)
+    r = auth_client.post(f"{BASE}/deep/{deep_id}/cancel")
+    assert r.status_code == 409 and r.json()["detail"] == "большой хант уже завершён"
+    db_session.expire_all()
+    got = db_session.get(ThDeepHunt, deep_id)
+    assert (got.status, got.finished_at) == ("done", None)
+
+
+def test_run_cancel(auth_client: TestClient, db_session: Any, client_as: Callable[[str], TestClient],
+                    started: list[Any]) -> None:
+    queued = create_run(db_session, NIGHT, ThSettings(), TZ)
+    r = auth_client.post(f"{BASE}/runs/{queued.id}/cancel")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "cancelled" and r.json()["finished_at"] is not None
+    assert auth_client.post(f"{BASE}/runs/{queued.id}/cancel").status_code == 409
+    assert auth_client.post(f"{BASE}/runs/999999/cancel").status_code == 404
+
+    # Идущий: задача заведена диспетчером, поток её ещё не взял — снимаются и задача, и строка;
+    # поток потом ничего не запускает.
+    running = create_run(db_session, NIGHT + dt.timedelta(days=1), ThSettings(), TZ)
+    job_id = dispatcher.kick(db_session)
+    assert job_id is not None
+    running.status, running.job_id = "running", job_id
+    db_session.commit()
+    assert auth_client.post(f"{BASE}/runs/{running.id}/cancel").json()["status"] == "cancelled"
+    drain(started)
+    db_session.expire_all()
+    assert db_session.get(ThRun, running.id).status == "cancelled"
+    assert db_session.get(ThJob, job_id).status == "cancelled"
+
+    # Прогон, который задача уже закрыла, отменой не затирается.
+    done = create_run(db_session, NIGHT + dt.timedelta(days=2), ThSettings(), TZ)
+    done.status = "done"
+    db_session.commit()
+    assert auth_client.post(f"{BASE}/runs/{done.id}/cancel").status_code == 409
+    db_session.expire_all()
+    assert db_session.get(ThRun, done.id).status == "done"
+
+    other = create_run(db_session, NIGHT + dt.timedelta(days=3), ThSettings(), TZ)
+    assert client_as("auditor").post(f"{BASE}/runs/{other.id}/cancel").status_code == 403

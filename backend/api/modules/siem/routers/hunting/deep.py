@@ -17,7 +17,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
@@ -239,13 +239,18 @@ def cancel_deep(
             # её всё равно надо снять, иначе диспетчер продолжит хант.
             if exc.status_code not in (status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT):
                 raise
-    deep = _deep(db, deep_id)
-    partial = deep.slices_done > 0
-    deep.status, deep.partial, deep.finished_at = "cancelled", partial, utcnow()
-    finding = db.scalar(select(ThFinding).where(ThFinding.deep_id == deep.id))
-    if finding is not None:
-        finding.partial = partial
+    # Условно: между чтением и записью задача могла закрыть хант (`done`) — итог не затираем.
+    slices_done = db.execute(
+        update(ThDeepHunt).where(ThDeepHunt.id == deep_id, ThDeepHunt.status.in_(ACTIVE))
+        .values(status="cancelled", partial=ThDeepHunt.slices_done > 0, finished_at=utcnow())
+        .returning(ThDeepHunt.slices_done).execution_options(synchronize_session=False),
+    ).scalar()
+    if slices_done is None:
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="большой хант уже завершён")
+    db.execute(update(ThFinding).where(ThFinding.deep_id == deep_id).values(partial=slices_done > 0))
     db.commit()
+    db.refresh(deep)
     request.state.audit_summary = f"большой хант #{deep.id} отменён"
     return _views(db, [deep])[0]
 
@@ -260,11 +265,9 @@ def rerun_deep(
     new = create_deep(
         db, title=old.title, hunt=hunt, query=None, query_text=old.query, fields=json.loads(old.fields_json),
         labels=json.loads(old.labels_json), limit=old.limit, period_from=old.period_from, period_to=old.period_to,
-        login=user.login,
+        # Запрос библиотеки мог быть уже удалён — номер запроса берётся из копии, а не из библиотеки.
+        login=user.login, query_id=old.query_id,
     )
-    # Запрос библиотеки мог быть уже удалён — номер запроса берётся из копии, а не из библиотеки.
-    new.query_id = old.query_id
-    db.commit()
     request.state.audit_summary = f"большой хант #{old.id} запущен ещё раз: #{new.id}"
     dispatcher.kick(db, started_by=user.login)
     db.refresh(new)

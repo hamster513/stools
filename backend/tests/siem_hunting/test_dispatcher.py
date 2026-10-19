@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from api.jobs import RESTART_ERROR, run_job, start_job
 from api.modules.siem.hunting import dispatcher
@@ -210,3 +210,37 @@ def test_nightly_handler_done_night_does_not_kick(db_session: Any, controlled: l
     new_deep(db_session, NOW - D)
     assert nightly_handler(db_session, sched) == 77
     assert controlled == [] and db_session.scalar(select(func.count()).select_from(ThJob)) == 0
+
+
+def test_pause_does_not_overwrite_cancel(db_session: Any, fake: FakeEvents, controlled: list[Any]) -> None:
+    """Отмена записала `cancelled` в строку перед проверкой «пора уступить ночи»: пауза её не затирает,
+    задача закрывается отменённой, диспетчер хант не продолжает."""
+    set_th(db_session, hot_days=1, slice_hours=3)
+    deep = new_deep(db_session, NOW - D - 6 * H)
+    deep_id = deep.id
+    fake.events_by_time_from = {ts(NOW - D): events(2)}
+    job_id = start_job(db_session, ThJob, "deep", "t")
+    cancelled_at = NOW - H
+
+    def cancel_then_night(seconds: float) -> None:
+        # Ручка отмены успела записать строку, а флаг задачи поток ещё не увидел; тут же приходит ночь.
+        if db_session.scalar(select(func.count()).select_from(ThRun)) == 0:
+            db_session.execute(update(ThDeepHunt).where(ThDeepHunt.id == deep_id)
+                               .values(status="cancelled", finished_at=cancelled_at))
+            db_session.commit()
+            create_run(db_session, TODAY, ThSettings(), TZ)
+
+    run_job(ThJob, job_id, lambda db, h: run_deep(db, h, deep_id, sleeper=cancel_then_night, clock=Clock(NOW)))
+    db_session.expire_all()
+    got = db_session.get(ThDeepHunt, deep_id)
+    assert (got.status, got.finished_at, got.slices_done) == ("cancelled", cancelled_at, 1)
+    assert db_session.get(ThJob, job_id).status == "cancelled"
+
+    drain(controlled)
+    night_job = kick(db_session)
+    drain(controlled)
+    db_session.expire_all()
+    assert db_session.get(ThJob, night_job).kind == "nightly"
+    assert kick(db_session) is None
+    assert db_session.get(ThDeepHunt, deep_id).status == "cancelled"
+    assert [j.kind for j in db_session.scalars(select(ThJob).order_by(ThJob.id))] == ["deep", "nightly"]

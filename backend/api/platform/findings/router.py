@@ -187,7 +187,8 @@ class MineCount(BaseModel):
 
 
 #: Подписи модулей для «Моих находок» — как в рейке интерфейса (frontend/src/platform/modules.ts).
-MODULE_TITLES = {"ad": "Active Directory", "ksc": "Антивирус", "siem": "SIEM", "vm": "VM", "assets": "Assets"}
+MODULE_TITLES = {"ad": "Active Directory", "ksc": "Антивирус", "siem": "SIEM", "vm": "VM", "assets": "Assets",
+                 "siem_th": "Threat Hunting"}
 #: Порядок тяжести для «Моих находок»; у модулей регистр разный (AD — `High`, VM — `high`).
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 

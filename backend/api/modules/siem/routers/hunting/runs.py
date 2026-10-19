@@ -10,17 +10,19 @@ import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.jobs import cancel_job
 from api.modules.siem.hunting import dispatcher
-from api.modules.siem.hunting.models import ThRun, ThRunQuery
+from api.modules.siem.hunting.models import ThJob, ThRun, ThRunQuery
 from api.modules.siem.hunting.nightly import supersede_and_rerun
 from api.modules.siem.hunting.settings import load_th_settings
 from api.settings import get_settings
+from api.timeutil import utcnow
 
 router = APIRouter(prefix="/runs", tags=["siem"])
 
@@ -129,3 +131,31 @@ def rerun(
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
     request.state.audit_summary = f"повтор ночного прогона за {target:%d.%m.%Y}: прогон #{new.id}"
     return RerunOut(run_id=new.id, job_id=dispatcher.kick(db, started_by=user.login))
+
+
+@router.post("/{run_id}/cancel", response_model=RunRow)
+def cancel_run(
+    run_id: int, request: Request, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+) -> RunRow:
+    """Ждущий прогон — `cancelled` сразу; идущий — ещё и просьба задаче остановиться. Строка
+    меняется условно: прогон, который задача успела закрыть, остаётся со своим итогом — 409."""
+    run = _run(db, run_id)
+    if run.status == "running" and run.job_id is not None:
+        try:
+            cancel_job(db, ThJob, run.job_id)
+        except HTTPException as exc:
+            # Задача уже закрыта, а строка осталась «идёт»: снять её всё равно надо,
+            # иначе диспетчер продолжит прогон.
+            if exc.status_code not in (status.HTTP_404_NOT_FOUND, status.HTTP_409_CONFLICT):
+                raise
+    matched = db.execute(
+        update(ThRun).where(ThRun.id == run_id, ThRun.status.in_(("queued", "running")))
+        .values(status="cancelled", finished_at=utcnow()).returning(ThRun.id)
+        .execution_options(synchronize_session=False),
+    ).scalar()
+    db.commit()
+    if matched is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="прогон уже завершён")
+    db.refresh(run)
+    request.state.audit_summary = f"ночной прогон за {run.target_date:%d.%m.%Y} отменён"
+    return _row(run, _errors(db, [run.id]).get(run.id, 0))
