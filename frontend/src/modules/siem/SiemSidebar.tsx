@@ -1,6 +1,7 @@
-import { Copy, Crosshair, LayoutDashboard, ListTree, Settings2, SlidersHorizontal } from 'lucide-react'
+import { Copy, Crosshair, History, LayoutDashboard, Library, ListTree, Radar, Settings2, SlidersHorizontal, Telescope } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import { useThFindings } from './hunting/api/queries'
 
 //: Разбор находок отдельным разделом не стоит: путь к находке начинается
 //: с правила, у которого что-то не так, а не с общего списка. Экран
@@ -11,6 +12,14 @@ const NAV_ITEMS = [
   { key: 'clones', label: 'Клоны правил', icon: Copy },
   { key: 'attack', label: 'Разметка ATT&CK', icon: Crosshair },
   { key: 'profile', label: 'Профиль инсталляции', icon: SlidersHorizontal },
+] as const
+
+//: Threat Hunting от снапшота правил не зависит — пункты всегда активны.
+const HUNTING_ITEMS = [
+  { key: 'findings', label: 'Находки', to: '/siem/hunting', prefix: '/siem/hunting/findings', icon: Radar },
+  { key: 'library', label: 'Библиотека хантов', to: '/siem/hunting/library', prefix: '/siem/hunting/library', icon: Library },
+  { key: 'deep', label: 'Большой хант', to: '/siem/hunting/deep', prefix: '/siem/hunting/deep', icon: Telescope },
+  { key: 'runs', label: 'Прогоны', to: '/siem/hunting/runs', prefix: '/siem/hunting/runs', icon: History },
 ] as const
 
 const LINK =
@@ -25,6 +34,8 @@ const LINK =
  */
 export function SiemSidebar({ snapshotId }: { snapshotId: number | null }) {
   const { path } = useRouter()
+  // Счётчик новых находок; пока не загрузился (или запрос упал) — без значка.
+  const newFindings = useThFindings({ status: ['new'], limit: 1 }).data?.total ?? 0
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-grid bg-surface">
@@ -71,6 +82,33 @@ export function SiemSidebar({ snapshotId }: { snapshotId: number | null }) {
             Разделы откроются, когда в настройках будет загружена выгрузка правил.
           </p>
         )}
+        <div className="mt-2 border-t border-grid px-3 pt-3 pb-1 text-sm font-semibold tracking-wide text-text">Threat Hunting</div>
+        {HUNTING_ITEMS.map(({ key, label, to, prefix, icon: Icon }) => {
+          const active = path === to || path.startsWith(`${prefix}/`)
+          return (
+            <Link
+              key={key}
+              to={to}
+              className={cn(
+                LINK,
+                active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
+              )}
+              aria-current={active ? 'page' : undefined}
+            >
+              <Icon size={16} strokeWidth={2} aria-hidden />
+              {label}
+              {key === 'findings' && newFindings > 0 && (
+                <span
+                  className="ml-auto rounded-full bg-primary px-1.5 font-mono text-[11px] leading-5 tabular-nums text-primary-text"
+                  title="Новых находок"
+                  aria-label={`новых находок: ${newFindings}`}
+                >
+                  {newFindings > 99 ? '99+' : newFindings}
+                </span>
+              )}
+            </Link>
+          )
+        })}
         <Link
           to="/siem/settings"
           className={cn(

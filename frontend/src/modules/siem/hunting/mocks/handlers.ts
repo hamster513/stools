@@ -1,12 +1,13 @@
 /**
  * Обработчики MSW раздела Threat Hunting (/api/siem/hunting/*) поверх фикстур ./data.
  * Состояние живёт в памяти страницы: ханты, настройки, прогоны и большие ханты можно менять,
- * до перезагрузки. Статусы находок меняет платформа (`/api/findings/*`) — их мок не трогает.
+ * до перезагрузки. Статусы находок меняет платформа (`/api/findings/*`); здесь — только минимум для карточки
+ * находки (состояние, настройки статусов, справочник исполнителей): смена статуса и исполнителя правит находку в памяти.
  * Подключается в `siem/mocks/browser.ts` рядом с остальными модулями.
  */
 import { http, HttpResponse } from 'msw'
 import { noSession } from '@/modules/siem/mocks/handlers'
-import type { FindingStatus } from '@/platform/findings/types'
+import type { FindingEvent, FindingState, FindingStatus } from '@/platform/findings/types'
 import type {
   DeepCreate,
   DeepDetail,
@@ -739,7 +740,63 @@ export const huntingHandlers = [
     const j = jobs.find((x) => x.id === Number(params.id))
     return j ? HttpResponse.json(j) : fail(404, 'задача не найдена')
   }),
+
+  // Платформа статусов — минимум для FindingWorkBlock в карточке находки
+  http.get('/api/findings/state', ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const f = thFindingByKey(new URL(request.url).searchParams.get('key'))
+    return f ? HttpResponse.json(stateOf(f)) : fail(404, 'находка не найдена')
+  }),
+
+  http.put('/api/findings/state', async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const body = (await request.json()) as { key: string; status?: FindingStatus; assignee?: string | null; due_date?: string | null; risk_until?: string | null; comment?: string }
+    const f = thFindingByKey(body.key)
+    if (!f) return fail(404, 'находка не найдена')
+    const before = f.status
+    if (body.status !== undefined) f.status = body.status
+    if (body.assignee !== undefined) f.assignee = body.assignee
+    if (body.due_date !== undefined) f.due_date = body.due_date
+    if (body.risk_until !== undefined) f.risk_until = body.risk_until
+    const prev = stateEvents.get(f.id) ?? []
+    stateEvents.set(f.id, [
+      { at: new Date().toISOString(), actor: ME, kind: 'status', from_status: before, to_status: f.status, comment: body.comment ?? '', details: {} },
+      ...prev,
+    ])
+    return HttpResponse.json(stateOf(f))
+  }),
+
+  http.get('/api/settings/findings', () => {
+    const denied = noSession()
+    if (denied) return denied
+    const counted = Object.fromEntries(ALL_STATUSES.map((s) => [s, OPEN.includes(s)])) as Record<FindingStatus, boolean>
+    return HttpResponse.json({ counted, risk_max_days: null, risk_accept_role: 'analyst' })
+  }),
+
+  http.get('/api/users/directory', () => {
+    const denied = noSession()
+    if (denied) return denied
+    return HttpResponse.json([{ login: 'analyst', display_name: 'Аналитик' }, { login: 'auditor', display_name: 'Аудитор' }])
+  }),
 ]
+
+/** История решений по находкам, принятых за время жизни страницы. */
+const stateEvents = new Map<number, FindingEvent[]>()
+
+const thFindingByKey = (key: string | null) => findings.find((f) => `th:${f.id}` === key)
+
+function stateOf(f: FindingRecord): FindingState {
+  return {
+    module: 'siem_th', scope_id: 1, key: `th:${f.id}`, status: f.status, status_title: STATUS_TITLES[f.status],
+    assignee: f.assignee, assignee_name: f.assignee, due_date: f.due_date,
+    overdue: OPEN.includes(f.status) && f.due_date !== null && f.due_date < TODAY,
+    risk_until: f.risk_until, reason: '', present: true, first_seen_at: f.created_at,
+    updated_by: stateEvents.has(f.id) ? ME : '', updated_at: stateEvents.get(f.id)?.[0].at ?? null,
+    events: stateEvents.get(f.id) ?? [],
+  }
+}
 
 function settingsView(): ThSettingsView {
   return {
