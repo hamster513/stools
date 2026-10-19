@@ -1,4 +1,4 @@
-"""Сборщик AD 2.3: раздача, поля, которые читают модели, меню и чистые функции скрипта в контейнере PowerShell.
+"""Сборщик AD 2.4: раздача, поля, которые читают модели, меню и чистые функции скрипта в контейнере PowerShell.
 
 Весь скрипт в контейнере не запустить (нужен модуль ActiveDirectory и домен), поэтому из него
 по AST вынимаются отдельные функции без обращений к домену и выполняются сами по себе.
@@ -26,6 +26,8 @@ from fastapi.testclient import TestClient
 from api.modules.ad.core import gpo_files as g
 from api.modules.ad.core import sd
 from api.modules.ad.core.ca_data import parse_ca_data
+from api.modules.ad.core.checks import run_all
+from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import (
     CRITICAL_ACL_UNREAD,
     CRITICAL_BUILTIN_RIDS,
@@ -34,7 +36,9 @@ from api.modules.ad.core.export import (
     ExportIndex,
     load_export,
 )
+from api.modules.ad.core.ldap_collector import CA_STORES
 from tests.ad.gpo_fixtures import AUDIT_CSV, GROUPS, LSA, WINLOGON, dword, preg, sz
+from tests.ad.synthetic import make_cert
 
 SCRIPT = Path("api/modules/ad/collector/STools-AD-Collector.ps1")
 IMAGE = "mcr.microsoft.com/powershell:lts-alpine-3.20"
@@ -53,7 +57,10 @@ def test_script_writes_the_fields_the_models_read() -> None:
                  "msPKI-Certificate-Policy", "msPKI-Certificate-Application-Policy", "msPKI-RA-Application-Policies",
                  "altSecurityIdentities", "flatName", "trustAttributes",
                  "edit_flags", "interface_flags", "disable_extension_list", "security", "os_build",
-                 "strong_binding", "mapping_methods", "StrongCertificateBindingEnforcement", "CertificateMappingMethods"):
+                 "strong_binding", "mapping_methods", "StrongCertificateBindingEnforcement", "CertificateMappingMethods",
+                 # Сертификаты ЦС (сборщик 2.4) — те же хранилища и поля, что у LDAP-сборщика 1.3.
+                 "cACertificate", "certificationAuthority", "store", "function CertList",
+                 *(f'"{c}" = "{s}"' for c, s in CA_STORES.items())):
         assert name in text, name
 
 
@@ -150,7 +157,7 @@ def test_script_keeps_bom_version_and_module_requirement() -> None:
     raw = SCRIPT.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")
     text = raw.decode("utf-8-sig")
-    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.3"' in text
+    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.4"' in text
 
 
 def _image_present() -> bool:
@@ -268,6 +275,20 @@ def _dns_prop(prop_id: int, data: bytes) -> str:
 
 _META = ("<DS_REPL_ATTR_META_DATA><pszAttributeName>{}</pszAttributeName><dwVersion>3</dwVersion>"
          "<ftimeLastOriginatingChange>{}</ftimeLastOriginatingChange></DS_REPL_ATTR_META_DATA>")
+
+
+@needs_pwsh
+def test_cert_list_encodes_each_value(tmp_path: Path) -> None:
+    """cACertificate: модуль отдаёт byte[] на значение, а одно значение может прийти и самим byte[]."""
+    body = """
+$a = [byte[]](1, 2, 3); $b = [byte[]](4, 5)
+[ordered]@{
+  none = CertList $null; one = CertList $a; wrapped = CertList @(,$a); two = CertList @($a, $b)
+} | ConvertTo-Json -Compress
+"""
+    out = _pwsh(tmp_path, body, ("CertList",))
+    one, two = base64.b64encode(b"\x01\x02\x03").decode(), base64.b64encode(b"\x04\x05").decode()
+    assert out == {"none": [], "one": [one], "wrapped": [one], "two": [one, two]}
 
 
 @needs_pwsh
@@ -661,6 +682,8 @@ $trustBytes = [Convert]::FromBase64String($env:STUB_TRUST_SID)
 $creatorBytes = [Convert]::FromBase64String($env:STUB_CREATOR_SID)
 # Дескриптор безопасности — байты: ToBase64Sd сборщика принимает и их.
 $sdBytes = [Convert]::FromBase64String($env:STUB_SD)
+$certBytes = [Convert]::FromBase64String($env:STUB_CERT)
+$weakBytes = [Convert]::FromBase64String($env:STUB_WEAK_CERT)
 $Schema = "CN=Schema,$Conf"
 $Created = [datetime]::new(2025, 1, 2, 3, 4, 5, [DateTimeKind]::Utc)
 # Имена схемы, которых нет в старом лесу (STUB_OLD_SCHEMA): их записи схемы скрыты, а запрос такого
@@ -709,12 +732,14 @@ $Objects = @(
   @{ dn = $Pki; cls = @("container") }
   @{ dn = "CN=Certificate Templates,$Pki"; cls = @("container") }
   @{ dn = "CN=Enrollment Services,$Pki"; cls = @("container") }
-  @{ dn = "CN=NTAuthCertificates,$Pki"; cls = @("certificationAuthority") }
+  @{ dn = "CN=NTAuthCertificates,$Pki"; cls = @("certificationAuthority"); cACertificate = @(,$certBytes) }
+  @{ dn = "CN=CORP-ROOT,CN=Certification Authorities,$Pki"; cls = @("certificationAuthority"); cn = "CORP-ROOT"; cACertificate = @(,$certBytes) }
+  @{ dn = "CN=CORP-SUB,CN=AIA,$Pki"; cls = @("certificationAuthority"); cn = "CORP-SUB"; cACertificate = @($certBytes, $weakBytes) }
   @{ dn = "CN=OID,$Pki"; cls = @("msPKI-Enterprise-Oid") }
   @{ dn = "CN=1.2345,CN=OID,$Pki"; cls = @("msPKI-Enterprise-Oid"); displayName = "Corp Policy"; "msPKI-Cert-Template-OID" = "1.3.6.1.4.1.311.21.8.1.1"
      "msDS-OIDToGroupLink" = "CN=Domain Admins,CN=Users,$Dom" }
   @{ dn = "CN=CORP-CA,CN=Enrollment Services,$Pki"; cls = @("pKIEnrollmentService"); cn = "CORP-CA"; dNSHostName = $Web
-     certificateTemplates = @("VulnTemplate"); "msPKI-Enrollment-Servers" = @("1`n4`n0`nhttp://$Web/ntlm/") }
+     certificateTemplates = @("VulnTemplate"); "msPKI-Enrollment-Servers" = @("1`n4`n0`nhttp://$Web/ntlm/"); cACertificate = $certBytes }
   @{ dn = "CN=other.local,CN=System,$Dom"; cls = @("trustedDomain"); flatName = "OTHER"; securityIdentifier = $trustBytes; trustAttributes = 8
      trustDirection = 3; trustType = 2; trustPartner = "other.local"; whenChanged = $Created; "msDS-SupportedEncryptionTypes" = 24 }
   @{ dn = "CN=Directory Service,CN=Windows NT,CN=Services,$Conf"; cls = @("nTDSService"); dSHeuristics = "0000002" }
@@ -882,6 +907,9 @@ TRUST_SID = "S-1-5-21-111-222-333"
 CREATOR_SID = "S-1-5-21-1-2-3-1106"
 DMSA_GUID = "0feb936f-47b3-49f2-9386-1dedc2c23765"
 STUB_SD = base64.b64encode(sd.build_sd([sd.build_ace("S-1-5-21-1-2-3-1106", sd.WRITE_DACL)])).decode()
+STUB_CERT = base64.b64encode(make_cert("CORP-ROOT")).decode()
+STUB_WEAK_CERT = base64.b64encode(make_cert("OLD-SUB", bits=1024)).decode()
+PKI_DN = "CN=Public Key Services,CN=Services,CN=Configuration,DC=corp,DC=local"
 
 
 def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str | None = None,
@@ -904,6 +932,7 @@ def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str 
     out.mkdir()
     env = {"STUB_WEB": f"host.docker.internal:{port}", "STUB_TRUST_SID": base64.b64encode(sd.str_to_sid(TRUST_SID)).decode(),
            "STUB_CREATOR_SID": base64.b64encode(sd.str_to_sid(CREATOR_SID)).decode(), "STUB_DMSA_GUID": DMSA_GUID, "STUB_SD": STUB_SD,
+           "STUB_CERT": STUB_CERT, "STUB_WEAK_CERT": STUB_WEAK_CERT,
            "STUB_GPO": "/t/modules/gpo", "PSModulePath": "/t/modules", "COMPUTERNAME": "WS01", "USERDOMAIN": "CORP",
            "USERNAME": "auditor", **(env_extra or {})}
     name = f"stools-collector-test-{uuid.uuid4().hex[:12]}"
@@ -953,7 +982,16 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     raw = _gz_json(ad_file)
     assert next(o for o in raw["objects"] if o["class"] == "trustedDomain")["trustAttributes"] == 8
     assert list(export.sysvol) == [GPO_DN]
-    assert export.collector.notes == [] and export.collector.version == "2.3"
+    assert export.collector.notes == [] and export.collector.version == "2.4"
+    # Сертификаты ЦС: одно значение (byte[]) у ЦС выдачи, список у NTAuth и хранилищ.
+    assert ca.cACertificate == [STUB_CERT]
+    [ntauth] = [o for o in by_class["pkiContainer"] if o.dn.startswith("CN=NTAuthCertificates,")]
+    assert ntauth.cACertificate == [STUB_CERT]
+    assert all(o.cACertificate == [] for o in by_class["pkiContainer"] if o is not ntauth)
+    stores = {o.cn: (o.store, o.cACertificate) for o in by_class["certificationAuthority"]}
+    assert stores == {"CORP-ROOT": ("root", [STUB_CERT]), "CORP-SUB": ("intermediate", [STUB_CERT, STUB_WEAK_CERT])}
+    found = [f for f in run_all(ExportIndex(export), AdConfig()) if f.check == "CertificateStrength"]
+    assert [(f.target, f.identity, f.severity) for f in found] == [(f"CN=CORP-SUB,CN=AIA,{PKI_DN}", "CN=OLD-SUB", "Low")]
     # Блок gpo — у каждой GPO; Get-Acl в Linux нет: права не прочитаны, причина в notes записи GPO.
     assert export.gpo is not None and set(export.gpo) == {GPO_DN, GONE_DN}
     assert export.gpo[GPO_DN].registry == [] and export.gpo[GPO_DN].acl is None
@@ -1002,7 +1040,7 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     assert site.name == "Default-First-Site-Name" and subnet.name == "10.0.0.0/24" and subnet.site == site.dn
 
     data = parse_ca_data(_gz_json(ca_file))
-    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.3"
+    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.4"
     [authority] = data.cas
     assert authority.name == "CORP-CA" and authority.os_build == "10.0 (17763)" and authority.error and authority.edit_flags is None
     [dc] = data.dcs

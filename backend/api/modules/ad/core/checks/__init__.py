@@ -36,6 +36,7 @@ from api.modules.ad.core.checks.adcs import check_adcs_templates
 from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
 from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
 from api.modules.ad.core.checks.catalog import with_guidance
+from api.modules.ad.core.checks.certificates import check_certificate_strength
 from api.modules.ad.core.checks.clusters import check_clusters
 from api.modules.ad.core.checks.common import CheckSpec
 from api.modules.ad.core.checks.computers import (
@@ -93,7 +94,7 @@ from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "7"
+ANALYZER_VERSION = "8"
 
 _CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -163,6 +164,7 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("DcAuditPolicy", "Аудит на контроллерах домена", "GPO, применимые к контроллерам, не включают аудит успеха важных подкатегорий (проверка учётных данных, Kerberos, изменения учёток, групп и каталога, вход, создание процессов): без этих событий атаку на домен не видно в журналах.", check_dc_audit_policy, ("T1685.001",)),
     CheckSpec("GpoExternalFiles", "Сценарии и файлы GPO с серверов вне домена", "Сценарий GPO, сценарий входа учётки (scriptPath) или файл из настройки GPP «Файлы» берётся с сервера вне домена и контроллеров: кто управляет этим сервером, тот выполняет код на компьютерах и от имени пользователей, куда применяется GPO.", check_gpo_external_files, ("T1037",)),
     CheckSpec("SysvolAcl", "Права на папки GPO в SYSVOL", "Субъект вне администраторов домена может менять папку GPO или файл её сценария в SYSVOL: подменённые настройки и сценарии выполняются на всех компьютерах и у всех пользователей, куда привязана GPO.", check_sysvol_acl, ("T1484.001",)),
+    CheckSpec("CertificateStrength", "Стойкость сертификатов ЦС", "Сертификаты ЦС в AD (корневые, промежуточные, NTAuth, ЦС выдачи) с ключом RSA короче 2048 бит или с малой экспонентой, с ключом из уязвимой библиотеки (ROCA), с подписью MD2, MD4, MD5 или SHA-1 либо с ключом DSA: такой ключ можно подобрать или вычислить, а подпись подделать и выпускать сертификаты, которым доверяет домен. Просроченные сертификаты не проверяются.", check_certificate_strength, ("T1649",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

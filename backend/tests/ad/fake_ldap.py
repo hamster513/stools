@@ -205,6 +205,8 @@ class FakeLdap:
             raw["dNSProperty"] = [dns_property(1, struct.pack("<I", 1)), dns_property(2, bytes([o["allowUpdate"]]))]
         if o.get("sd"):
             raw["nTSecurityDescriptor"] = [base64.b64decode(o["sd"])]
+        if o.get("cACertificate"):
+            raw["cACertificate"] = [base64.b64decode(c) for c in o["cACertificate"]]
         if o.get("allowedToActOnBehalf"):
             raw["msDS-AllowedToActOnBehalfOfOtherIdentity"] = [base64.b64decode(o["allowedToActOnBehalf"])]
         if o["class"] == "trustedDomain" and o.get("sid"):
@@ -258,6 +260,7 @@ class FakeLdap:
             "(objectClass=pKICertificateTemplate)": "pKICertificateTemplate",
             "(objectClass=pKIEnrollmentService)": "pKIEnrollmentService",
             "(objectClass=msPKI-Enterprise-Oid)": "msPKI-Enterprise-Oid",
+            "(objectClass=certificationAuthority)": "certificationAuthority",
             "(objectClass=trustedDomain)": "trustedDomain",
             "(objectClass=msDS-PasswordSettings)": "msDS-PasswordSettings",
             "(objectClass=dnsZone)": "dnsZone",

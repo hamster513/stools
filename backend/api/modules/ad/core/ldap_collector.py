@@ -63,7 +63,9 @@ TEMPLATE_ATTRS = [
     "msPKI-Certificate-Application-Policy", "msPKI-RA-Application-Policies", "msPKI-Cert-Template-OID",
     "nTSecurityDescriptor",
 ]
-CA_ATTRS = ["cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor"]
+CA_ATTRS = ["cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor", "cACertificate"]
+#: Хранилища сертификатов ЦС под контейнером PKI: корневые и промежуточные (спека §5).
+CA_STORES = {"Certification Authorities": "root", "AIA": "intermediate"}
 OID_ATTRS = ["displayName", "msPKI-Cert-Template-OID", "msDS-OIDToGroupLink"]
 EXTENDED_RIGHTS = ["DS-Replication-Get-Changes", "DS-Replication-Get-Changes-All", "DS-Replication-Get-Changes-In-Filtered-Set", "Enroll", "AutoEnroll"]
 PSO_ATTRS = [
@@ -157,6 +159,10 @@ def _raw_list(entry: Entry, attr: str) -> list[bytes]:
     if value is None:
         return []
     return [bytes(v) for v in (value if isinstance(value, list) else [value])]
+
+
+def _b64_list(entry: Entry, attr: str) -> list[str]:
+    return [base64.b64encode(v).decode() for v in _raw_list(entry, attr) if v]
 
 
 def _bool(value: Any) -> bool | None:
@@ -465,7 +471,7 @@ class LdapCollector:
         return {
             "format": FORMAT,
             "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "collector": {"kind": "ldap", "version": "1.2", "host": self.host, "account": self.account, "notes": self.notes, "critical_acl": True},
+            "collector": {"kind": "ldap", "version": "1.3", "host": self.host, "account": self.account, "notes": self.notes, "critical_acl": True},
             "domain": domain,
             "guids": {"extended_rights": ext, "schema_attributes": schema_attrs, "schema_classes": schema_classes},
             "objects": objects,
@@ -612,15 +618,25 @@ class LdapCollector:
                     "dNSHostName": str(_first(a.get("dNSHostName")) or ""),
                     "certificateTemplates": _list(a.get("certificateTemplates")),
                     "msPKI-Enrollment-Servers": _list(a.get("msPKI-Enrollment-Servers")),
+                    "cACertificate": _b64_list(e, "cACertificate"),
                     "sd": _b64(csd),
                 }
             )
             self._note_sd(csd)
         for scope in ("BASE", "LEVEL"):
-            for e in self._search_optional(pki, "(objectClass=*)", ["nTSecurityDescriptor"], scope):
+            # cACertificate есть только у CN=NTAuthCertificates.
+            for e in self._search_optional(pki, "(objectClass=*)", ["nTSecurityDescriptor", "cACertificate"], scope):
                 psd = _raw(e, "nTSecurityDescriptor")
-                out.append({"dn": e["dn"], "class": "pkiContainer", "sd": _b64(psd)})
+                rec: dict[str, Any] = {"dn": e["dn"], "class": "pkiContainer", "sd": _b64(psd)}
+                if certs := _b64_list(e, "cACertificate"):
+                    rec["cACertificate"] = certs
+                out.append(rec)
                 self._note_sd(psd)
+        for container, store in CA_STORES.items():
+            base = f"CN={container},{pki}"
+            for e in self._read(f"сертификаты ЦС (CN={container}) не прочитаны", base, "(objectClass=certificationAuthority)", ["cn", "cACertificate"], "LEVEL") or []:
+                cn = str(_first(e["attributes"].get("cn")) or "")
+                out.append({"dn": e["dn"], "class": "certificationAuthority", "cn": cn, "store": store, "cACertificate": _b64_list(e, "cACertificate")})
         # На один уровень: сам контейнер CN=OID тоже класса msPKI-Enterprise-Oid и уже записан как pkiContainer.
         for e in self._search_optional(f"CN=OID,{pki}", "(objectClass=msPKI-Enterprise-Oid)", OID_ATTRS, "LEVEL"):
             a = e["attributes"]

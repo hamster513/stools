@@ -87,7 +87,7 @@ Import-Module ActiveDirectory
 
 $FormatVersion = "stools-ad/1"
 $CaFormatVersion = "stools-ad-ca/1"
-$CollectorVersion = "2.3"
+$CollectorVersion = "2.4"
 # Критичные объекты: группы домена (Domain Admins, Cert Publishers, Schema Admins, Enterprise Admins,
 # Group Policy Creator Owners, Key Admins, Enterprise Key Admins, Allowed RODC Password Replication Group),
 # встроенные (Administrators, Account, Server, Print, Backup Operators, Replicator), DnsAdmins по имени.
@@ -155,6 +155,14 @@ function AsList($value) {
   if ($null -eq $value) { return ,@() }
   if ($value -is [string]) { return ,@($value) }
   return ,@($value | ForEach-Object { [string]$_ })
+}
+
+# cACertificate: модуль отдаёт byte[] на каждое значение, а одно значение может прийти и самим byte[]
+# (перебор по конвейеру развернул бы его в байты).
+function CertList($value) {
+  if ($null -eq $value) { return ,@() }
+  if ($value -is [byte[]]) { return ,@([Convert]::ToBase64String($value)) }
+  return ,@($value | ForEach-Object { [Convert]::ToBase64String([byte[]]$_) })
 }
 
 function AsInt64($value) {
@@ -940,11 +948,12 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
 
   Write-Step "Центры сертификации и контейнеры PKI"
   $n0 = $objects.Count
-  Get-AdOptional "центры сертификации" @{ SearchBase = "CN=Enrollment Services," + $pki; LDAPFilter = "(objectClass=pKIEnrollmentService)"; Properties = @("cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor") } | ForEach-Object {
+  Get-AdOptional "центры сертификации" @{ SearchBase = "CN=Enrollment Services," + $pki; LDAPFilter = "(objectClass=pKIEnrollmentService)"; Properties = @("cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor", "cACertificate") } | ForEach-Object {
     $objects.Add(@{
       dn = $_.DistinguishedName; class = "pKIEnrollmentService"; cn = [string]$_.cn; dNSHostName = [string]$_.dNSHostName
       certificateTemplates = AsList $_.certificateTemplates
       "msPKI-Enrollment-Servers" = AsList $_."msPKI-Enrollment-Servers"
+      cACertificate = CertList $_.cACertificate
       sd = ToBase64Sd $_.nTSecurityDescriptor
     }) | Out-Null
     Register-AceSids $_.nTSecurityDescriptor
@@ -952,12 +961,25 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   Write-Step ("  центров сертификации: {0}" -f ($objects.Count - $n0))
   $n0 = $objects.Count
   foreach ($scope in @("Base", "OneLevel")) {
-    Get-AdOptional "контейнеры PKI" @{ SearchBase = $pki; SearchScope = $scope; LDAPFilter = "(objectClass=*)"; Properties = @("nTSecurityDescriptor") } | ForEach-Object {
-      $objects.Add(@{ dn = $_.DistinguishedName; class = "pkiContainer"; sd = ToBase64Sd $_.nTSecurityDescriptor }) | Out-Null
+    # cACertificate есть только у CN=NTAuthCertificates.
+    Get-AdOptional "контейнеры PKI" @{ SearchBase = $pki; SearchScope = $scope; LDAPFilter = "(objectClass=*)"; Properties = @("nTSecurityDescriptor", "cACertificate") } | ForEach-Object {
+      $rec = @{ dn = $_.DistinguishedName; class = "pkiContainer"; sd = ToBase64Sd $_.nTSecurityDescriptor }
+      $certs = CertList $_.cACertificate
+      if ($certs.Count) { $rec.cACertificate = $certs }
+      $objects.Add($rec) | Out-Null
       Register-AceSids $_.nTSecurityDescriptor
     }
   }
   Write-Step ("  контейнеров PKI: {0}" -f ($objects.Count - $n0))
+  # Хранилища сертификатов ЦС: корневые и промежуточные.
+  $n0 = $objects.Count
+  $caStores = [ordered]@{ "Certification Authorities" = "root"; "AIA" = "intermediate" }
+  foreach ($store in $caStores.GetEnumerator()) {
+    Get-AdOptional ("сертификаты ЦС (CN={0}) не прочитаны" -f $store.Key) @{ SearchBase = ("CN={0},{1}" -f $store.Key, $pki); SearchScope = "OneLevel"; LDAPFilter = "(objectClass=certificationAuthority)"; Properties = @("cn", "cACertificate") } | ForEach-Object {
+      $objects.Add(@{ dn = $_.DistinguishedName; class = "certificationAuthority"; cn = [string]$_.cn; store = $store.Value; cACertificate = CertList $_.cACertificate }) | Out-Null
+    }
+  }
+  Write-Step ("  сертификатов ЦС в хранилищах: {0}" -f ($objects.Count - $n0))
   # На один уровень: сам CN=OID тоже класса msPKI-Enterprise-Oid и уже записан как pkiContainer.
   $n0 = $objects.Count
   Get-AdOptional "политики выдачи (CN=OID)" @{ SearchBase = "CN=OID," + $pki; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=msPKI-Enterprise-Oid)"; Properties = @("displayName", "msPKI-Cert-Template-OID", "msDS-OIDToGroupLink") } | ForEach-Object {

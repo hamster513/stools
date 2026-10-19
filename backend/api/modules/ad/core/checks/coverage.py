@@ -22,8 +22,9 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     users = gpos = templates = pki_objects = enrollment_services = computers = 0
     has_os = has_primary_group = False
     dcs = dc_acl = dc_owner = 0
-    logon_dates = False
+    logon_dates = ca_certs = False
     for o in export.objects:
+        ca_certs = ca_certs or bool(o.cACertificate)
         if o.cls in ("user", "computer"):
             has_primary_group = has_primary_group or o.primaryGroupID is not None
         if o.cls == "user":
@@ -90,6 +91,8 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     if not templates and not enrollment_services:
         # В домене нет AD CS: проверкам ЦС и привязки проверять нечего, они честно чистые.
         return gaps
+    if not ca_certs:
+        gaps["CertificateStrength"] = "сертификаты ЦС не собраны (сборщик старой версии)"
     ca_reasons: list[str] = []
     if templates and not pki_objects:
         ca_reasons.append("ESC5 не проверен: выгрузка собрана без объектов PKI (старый сборщик)")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import struct
@@ -19,7 +20,19 @@ from api.modules.ad.core.ldap_collector import (
 )
 from tests.ad.fake_ldap import DC_OU, DDCP_DN, DDP_DN, DDP_PATH, FakeLdap, sysvol_access
 from tests.ad.gpo_fixtures import AUDIT_CSV, GROUPS, LSA, WINLOGON, dword, preg, sz
-from tests.ad.synthetic import DN, EXT_SID, NOW, OTHER_SID, PKI, b64sd, export_bytes, rid, user_dn
+from tests.ad.synthetic import (
+    CA_CERT,
+    DN,
+    EXT_SID,
+    NOW,
+    OTHER_SID,
+    PKI,
+    b64sd,
+    export_bytes,
+    make_cert,
+    rid,
+    user_dn,
+)
 
 
 def test_ldap_collector_matches_powershell_export() -> None:
@@ -116,6 +129,42 @@ def test_collector_reads_pki_objects_and_trusts() -> None:
     assert trusts["EXT"]["sid"] == EXT_SID and trusts["EXT"]["trustAttributes"] == 0x4
     tpl = next(o for o in raw["objects"] if o["class"] == "pKICertificateTemplate")
     assert tpl["cn"] and "msPKI-Certificate-Policy" in tpl and "msPKI-Cert-Template-OID" in tpl
+
+
+def _with_ca_stores(fake: FakeLdap) -> tuple[str, str, str]:
+    """Сертификаты ЦС в каталоге: корневой в CN=Certification Authorities, два в CN=AIA, один в NTAuth."""
+    root, sub, weak = (base64.b64encode(make_cert(cn, **kw)).decode() for cn, kw in (("CORP-ROOT", {}), ("CORP-SUB", {"issuer": "CORP-ROOT"}), ("OLD-SUB", {"bits": 1024})))
+    next(o for o in fake.objects if o["dn"] == f"CN=NTAuthCertificates,{PKI}")["cACertificate"] = [sub]
+    fake.objects += [
+        {"dn": f"CN=CORP-ROOT,CN=Certification Authorities,{PKI}", "class": "certificationAuthority", "cn": "CORP-ROOT", "cACertificate": [root]},
+        {"dn": f"CN=CORP-SUB,CN=AIA,{PKI}", "class": "certificationAuthority", "cn": "CORP-SUB", "cACertificate": [sub, weak]},
+    ]
+    return root, sub, weak
+
+
+def test_collector_reads_ca_certificates() -> None:
+    """Сборщик 1.3: cACertificate у ЦС выдачи, NTAuthCertificates и хранилищ CN=Certification Authorities (root), CN=AIA (intermediate)."""
+    fake = FakeLdap()
+    root, sub, weak = _with_ca_stores(fake)
+    raw = LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb).collect()
+    by_dn = {o["dn"]: o for o in raw["objects"]}
+    assert raw["collector"]["version"] == "1.3" and not [n for n in raw["collector"]["notes"] if "сертификаты ЦС" in n]
+    assert by_dn[f"CN=CORP-CA,CN=Enrollment Services,{PKI}"]["cACertificate"] == [CA_CERT]
+    assert by_dn[f"CN=NTAuthCertificates,{PKI}"]["cACertificate"] == [sub] and "cACertificate" not in by_dn[PKI]
+    stores = {o["cn"]: (o["store"], o["cACertificate"]) for o in raw["objects"] if o["class"] == "certificationAuthority"}
+    assert stores == {"CORP-ROOT": ("root", [root]), "CORP-SUB": ("intermediate", [sub, weak])}
+    raw["collected_at"] = NOW.isoformat()
+    export = load_export(json.dumps(raw).encode())
+    found = [f for f in run_all(ExportIndex(export), AdConfig()) if f.check == "CertificateStrength"]
+    assert [(f.target, f.identity, f.severity) for f in found] == [(f"CN=CORP-SUB,CN=AIA,{PKI}", "CN=OLD-SUB", "Low")]
+
+
+def test_denied_ca_store_is_a_note() -> None:
+    fake = FakeLdap(deny=(f"CN=AIA,{PKI}",))
+    _with_ca_stores(fake)
+    raw = LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb).collect()
+    assert [o["cn"] for o in raw["objects"] if o["class"] == "certificationAuthority"] == ["CORP-ROOT"]
+    assert [n for n in raw["collector"]["notes"] if "сертификаты ЦС" in n] == ["сертификаты ЦС (CN=AIA) не прочитаны: insufficientAccessRights (50)"]
 
 
 def test_oid_container_is_recorded_as_container_only() -> None:
@@ -304,7 +353,7 @@ def test_collector_reads_gpo_files_with_whitelist_and_redaction() -> None:
     assert data["acl"] is None and any("Registry.pol" in n for n in data["notes"])
     assert "secret" not in json.dumps(out) and "P@ssw0rd" not in json.dumps(out) and "j1Uyj3Vx8TY9" not in json.dumps(out)
     root = next(o for o in out["objects"] if o["class"] == "domainDNS")
-    assert "gpLink" in root and out["collector"]["version"] == "1.2"
+    assert "gpLink" in root and out["collector"]["version"] == "1.3"
     # Блок доходит до модели: у GPO без файлов — пустая запись, а не «не прочитано».
     export = load_export(json.dumps(out).encode())
     assert export.gpo is not None and export.gpo[DDP_DN].registry[0].scope == "machine" and export.gpo[DDCP_DN].registry == []
@@ -426,7 +475,7 @@ def test_last_backup_from_metadata() -> None:
 def test_collector_reads_hygiene_data() -> None:
     out = collect_with(FakeLdap())             # существующий помощник теста сборщика
     d = out["domain"]
-    assert out["collector"]["version"] == "1.2"
+    assert out["collector"]["version"] == "1.3"
     assert d["min_pwd_length"] == 12 and d["recycle_bin"] is True and d["sysvol_replication"] == "dfsr" and d["backup_read"] is True
     assert out["guids"]["schema_classes"] == {"msDS-DelegatedManagedServiceAccount": ""}
     by_class: dict[str, list[dict[str, Any]]] = {}

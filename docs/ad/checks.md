@@ -1,6 +1,6 @@
 # Проверки модуля Active Directory
 
-Версия анализатора — 7. Реестр — `backend/api/modules/ad/core/checks/__init__.py`, «Как исправить» и
+Версия анализатора — 8. Реестр — `backend/api/modules/ad/core/checks/__init__.py`, «Как исправить» и
 ссылки — `checks/catalog.py`, пороги и списки — настройки правил (Active Directory → Настройки и
 данные → «Правила проверок»).
 
@@ -132,6 +132,9 @@
 | `ADCS_ESC` | шаблон, по которому небезопасный заявитель выпускает сертификат для входа от чужого имени или меняет шаблон (ESC1–4, 9, 13, 15) | по ESC; широкий заявитель — базовая, прочий — на ступень ниже; неопубликованный шаблон Low | шаблоны сертификатов, ЦС | — |
 | `ADCS_CA` | права на объекты PKI и ЦС, настройки ЦС и веб-выдачи (ESC5–8, 11, 16) | по ESC | объекты PKI, данные ЦС (`stools-ad-ca/1`) | — |
 | `ADCS_MAPPING` | слабая привязка сертификатов на контроллерах и слабые `altSecurityIdentities` (ESC10, 14) | по ESC | реестр контроллеров (данные ЦС), `altSecurityIdentities` | — |
+| `CertificateStrength` | сертификат ЦС в AD, по виду: `rsa_weak` модуль RSA < 1024 бит или 1024–2047; `rsa_exponent` экспонента < 65537; `hash` подпись MD2, MD4, MD5 или SHA-1 (по OID алгоритма подписи, в том числе OIW); `dsa` ключ DSA; `roca` модуль проходит тест отпечатка ROCA (остаток по каждому простому 3…167 — степень 65537). Корневой — самоподписанный сертификат в любом хранилище; иначе хранилище первого держателя (`root` — `CN=Certification Authorities`, `intermediate` — `CN=AIA`), у ЦС выдачи и `NTAuthCertificates` — промежуточный. Просроченные на дату выгрузки и неразборчивые сертификаты пропускаются. Одна находка на пару «сертификат × вид» по всей выгрузке: цель — DN первого держателя (корневое хранилище, AIA, NTAuth, ЦС выдачи; внутри — по DN), в `details.holders` — все держатели, субъект — субъект сертификата (RFC 4514), `key_extra` — `<вид>|<SHA-256, первые 16 символов>`; allowlist не действует | `rsa_weak` High (< 1024) или Low; `rsa_exponent` Low; `hash` MD* High, SHA-1 Low, у корневого Info; `dsa` Info; `roca` High | `cACertificate` у `pKIEnrollmentService`, `CN=NTAuthCertificates` и `certificationAuthority` (LDAP-сборщик 1.3, PowerShell 2.4) | A-WeakRSARootCert, A-WeakRSARootCert2, A-CertWeakRsaComponent, A-MD*IntermediateCert, A-MD*RootCert, A-SHA1IntermediateCert, A-SHA1RootCert, A-CertWeakDSA, A-CertROCA |
+
+В домене с AD CS (есть шаблоны или ЦС выдачи) `CertificateStrength` не проверена, если `cACertificate` нет ни у одного объекта выгрузки: «сертификаты ЦС не собраны (сборщик старой версии)».
 
 ## Инвентарь — `inventory`
 

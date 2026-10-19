@@ -167,6 +167,10 @@ class AdObject(BaseModel):
     flatName: str | None = None
     trustAttributes: int | None = None
     altSecurityIdentities: StrList = Field(default_factory=list)
+    # Сертификаты ЦС (DER в base64): у pKIEnrollmentService, NTAuthCertificates и certificationAuthority;
+    # у certificationAuthority — хранилище: root (CN=Certification Authorities) или intermediate (CN=AIA).
+    cACertificate: StrList = Field(default_factory=list)
+    store: str | None = None
     sd: str | None = None
     # Учётные записи.
     primaryGroupID: int | None = None

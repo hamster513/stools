@@ -32,6 +32,16 @@ def test_full_export_has_no_gaps() -> None:
     assert _gaps(build_export()) == {}
 
 
+def test_old_collector_without_ca_certificates_marks_certificate_strength_unchecked() -> None:
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("cACertificate", None)
+    assert _gaps(raw) == {"CertificateStrength": "сертификаты ЦС не собраны (сборщик старой версии)"}
+    # Без AD CS (нет шаблонов и ЦС выдачи) проверять нечего: пустые контейнеры PKI — не пробел.
+    raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pKICertificateTemplate", "pKIEnrollmentService")]
+    assert "CertificateStrength" not in _gaps(raw)
+
+
 def test_old_collector_accounts_mark_new_attribute_checks_unchecked() -> None:
     raw = build_export()
     for o in raw["objects"]:
@@ -136,7 +146,8 @@ def test_old_export_without_pki_objects_marks_esc5_unchecked() -> None:
     raw = build_export()
     raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pkiContainer", "pKIEnrollmentService")]
     gaps = _gaps(raw)
-    assert set(gaps) == {"ADCS_CA"} and "ESC5" in gaps["ADCS_CA"]
+    # Шаблоны есть, а сертификатов ЦС нет ни у одного объекта: стойкость сертификатов тоже не проверена.
+    assert set(gaps) == {"ADCS_CA", "CertificateStrength"} and "ESC5" in gaps["ADCS_CA"]
 
 
 def test_ca_object_alone_is_enough_for_esc5() -> None:
@@ -190,7 +201,8 @@ def test_domain_without_adcs_has_no_ca_data_reasons() -> None:
 def test_templates_without_ca_objects_still_need_ca_data() -> None:
     raw = build_export()
     raw["objects"] = [o for o in raw["objects"] if o["class"] != "pKIEnrollmentService"]
-    assert set(_gaps(raw, None)) == {"ADCS_CA", "ADCS_MAPPING", "DcHardening"}
+    # Сертификат был только у ЦС выдачи: в контейнерах PKI его нет.
+    assert set(_gaps(raw, None)) == {"ADCS_CA", "ADCS_MAPPING", "DcHardening", "CertificateStrength"}
 
 
 def test_ca_object_without_templates_still_needs_ca_data() -> None:

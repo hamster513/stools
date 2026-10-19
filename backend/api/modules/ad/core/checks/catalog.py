@@ -578,4 +578,14 @@ GUIDANCE: dict[str, Guidance] = {
             _attack("T1484.001", "Domain or Tenant Policy Modification: Group Policy Modification"),
         ),
     ),
+    "CertificateStrength": Guidance(
+        "pki",
+        "Перевыпустите сертификат ЦС с ключом RSA не короче 2048 бит (экспонента 65537) и подписью SHA-256: для ЦС предприятия — продление сертификата ЦС с новым ключом (RenewalKeyLength в CAPolicy.inf, certutil -setreg ca\\csp\\CNGHashAlgorithm SHA256, затем certutil -renewCert без ReuseKeys), для ключа на смарт-карте или токене Infineon (ROCA) — также замена носителя или обновление его прошивки. Старый сертификат удалите из AD: certutil -viewdelstore \"ldap:///CN=NTAuthCertificates,CN=Public Key Services,CN=Services,CN=Configuration,<лес>?cACertificate?base?objectClass=certificationAuthority\" и certutil -dsdel для CN=Certification Authorities и CN=AIA, когда выданные им сертификаты заменены.",
+        (
+            ("Microsoft: certutil", f"{_LEARN}/windows-server/administration/windows-commands/certutil"),
+            ("Microsoft: ADV170012, уязвимость ROCA в TPM Infineon", "https://msrc.microsoft.com/update-guide/vulnerability/ADV170012"),
+            CERT_ASSESSMENTS,
+            CERT_T1649,
+        ),
+    ),
 }
