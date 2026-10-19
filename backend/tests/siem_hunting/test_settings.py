@@ -42,7 +42,9 @@ def test_put_upserts_schedule(db_session):
     db_session.expire_all()
     sched = nightly_schedule(db_session)
     assert sched is not None and sched.enabled is False
-    assert db_session.execute(select(PlatformSchedule)).scalars().all() == [sched]
+    # Одна строка ночного расписания (правится, а не добавляется) и диспетчер очереди раздела.
+    kinds = sorted(s.kind for s in db_session.execute(select(PlatformSchedule)).scalars())
+    assert kinds == ["th_dispatch", "th_nightly"]
     assert load_th_settings(db_session).nightly_enabled is False
 
 

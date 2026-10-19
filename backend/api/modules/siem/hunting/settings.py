@@ -25,6 +25,9 @@ SCHEDULE_KIND = "th_nightly"
 SCHEDULE_TARGET = 1
 #: Раз в сутки: окно задаёт час, интервал — период.
 SCHEDULE_INTERVAL_H = 24
+#: Диспетчер очереди раздела: подбирает задачи, оставшиеся после перезапуска, и чистит события по сроку.
+DISPATCH_KIND = "th_dispatch"
+DISPATCH_INTERVAL_H = 1
 
 _HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
@@ -72,6 +75,15 @@ def save_th_settings(db: Session, data: ThSettings, login: str) -> ThSettings:
     row.value_json = data.model_dump_json()
     row.updated_at = dt.datetime.now(dt.UTC)
     row.updated_by = login
+    ensure_th_schedules(db, data)
+    db.commit()
+    return data
+
+
+def ensure_th_schedules(db: Session, data: ThSettings | None = None) -> None:
+    """Расписания раздела по настройкам: ночное (окно и выключатель из настроек) и диспетчер
+    очереди (раз в час, без окна, всегда включён). Фиксирует вызывающий."""
+    data = data or load_th_settings(db)
     upsert_schedule(
         db,
         module=SCHEDULE_MODULE,
@@ -82,15 +94,31 @@ def save_th_settings(db: Session, data: ThSettings, login: str) -> ThSettings:
         window_to=data.window_to,
         enabled=data.nightly_enabled,
     )
-    db.commit()
-    return data
+    upsert_schedule(
+        db,
+        module=SCHEDULE_MODULE,
+        kind=DISPATCH_KIND,
+        target_id=SCHEDULE_TARGET,
+        interval_hours=DISPATCH_INTERVAL_H,
+        window_from=None,
+        window_to=None,
+        enabled=True,
+    )
 
 
-def nightly_schedule(db: Session) -> PlatformSchedule | None:
+def _schedule(db: Session, kind: str) -> PlatformSchedule | None:
     return db.execute(
         select(PlatformSchedule).where(
             PlatformSchedule.module == SCHEDULE_MODULE,
-            PlatformSchedule.kind == SCHEDULE_KIND,
+            PlatformSchedule.kind == kind,
             PlatformSchedule.target_id == SCHEDULE_TARGET,
         )
     ).scalar_one_or_none()
+
+
+def nightly_schedule(db: Session) -> PlatformSchedule | None:
+    return _schedule(db, SCHEDULE_KIND)
+
+
+def dispatch_schedule(db: Session) -> PlatformSchedule | None:
+    return _schedule(db, DISPATCH_KIND)

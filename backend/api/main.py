@@ -46,6 +46,7 @@ from api.db.base import get_sessionmaker
 from api.jobs import fail_interrupted_jobs
 from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
+from api.modules.siem.hunting.dispatcher import ensure_hunting_schedules
 from api.origin import OriginMiddleware
 from api.platform import router as settings_router
 from api.platform.findings.expiry import ensure_platform_schedules
@@ -69,6 +70,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     scheduler.start(get_sessionmaker())
     # Расписания самой платформы (истечение принятых рисков) — если их ещё нет.
     ensure_platform_schedules()
+    ensure_hunting_schedules()
     try:
         yield
     finally:

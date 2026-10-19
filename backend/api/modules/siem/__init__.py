@@ -13,6 +13,7 @@ from api.modules.siem.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.siem.hunting import (
     models as _hunting_models,  # noqa: F401 — таблицы Threat Hunting в Base.metadata
 )
+from api.modules.siem.hunting.dispatcher import dispatch_handler, nightly_handler
 from api.modules.siem.routers import (
     attack,
     clones,
@@ -31,6 +32,7 @@ from api.modules.siem.routers import (
 # Под другим именем: `hunting` в этом пакете — подпакет с моделями и сервисами, имя нельзя занимать.
 from api.modules.siem.routers.hunting import router as hunting_router
 from api.modules.siem.services.attack_layer import LAYER as ATTACK_LAYER
+from api.platform import scheduler
 from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/siem")
@@ -55,3 +57,6 @@ for sub in (
 # `attack`, `attack` про модули — нет.
 register_layer(ATTACK_LAYER)
 register_adapter(FINDINGS_ADAPTER)
+# Ночной прогон заводит задачу; диспетчер очереди работает в тике (без своей задачи).
+scheduler.register_schedule_kind("siem", "th_nightly", nightly_handler)
+scheduler.register_schedule_kind("siem", "th_dispatch", dispatch_handler, jobless=True)

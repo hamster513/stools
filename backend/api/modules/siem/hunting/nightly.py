@@ -19,7 +19,7 @@ import datetime as dt
 import json
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
@@ -209,13 +209,17 @@ def persist_finding(
     )
     db.add(finding)
     db.flush()
-    rows = (
-        {"finding_id": finding.id, "position": i,
-         "data_json": json.dumps({f: "" if event.get(f) is None else event[f] for f in fields}, ensure_ascii=False)}
-        for i, event in enumerate(kept)
-    )
-    insert_chunked(db, ThEvent, rows, len(kept), None, "событий")
+    insert_chunked(db, ThEvent, event_rows(finding.id, kept, fields), len(kept), None, "событий")
     return finding
+
+
+def event_rows(
+    finding_id: int, events: list[dict[str, Any]], fields: list[str], start: int = 0,
+) -> Iterator[dict[str, Any]]:
+    """Строки `th_event` с позиции `start`: большой хант дописывает события кусок за куском в ту же находку."""
+    for i, event in enumerate(events, start):
+        yield {"finding_id": finding_id, "position": i,
+               "data_json": json.dumps({f: "" if event.get(f) is None else event[f] for f in fields}, ensure_ascii=False)}
 
 
 def run_nightly(
@@ -240,6 +244,8 @@ def run_nightly(
         raise
     except Exception as exc:
         db.rollback()
+        # В задачу уходит только класс; полный текст и трассировка — в журнал сервера для разбора.
+        log.exception("сбой ночного прогона")
         error = f"сбой прогона: {type(exc).__name__}"
         for row in current:
             if row.status == "running":

@@ -17,6 +17,8 @@ class FakeEvents:
         self.events_by_query = events_by_query or {}
         #: Подстрока запроса → очередь кодов, которые вернутся до обычного ответа (500, 500, затем 200).
         self.status_once: dict[str, list[int]] = {}
+        #: Начало окна запроса (`timeFrom`, секунды) → события: куски большого ханта отвечают по-разному.
+        self.events_by_time_from: dict[int, list[dict[str, Any]]] = {}
         #: Сколько первых вызовов закончатся таймаутом.
         self.timeouts = 0
         self.calls: list[httpx.Request] = []
@@ -31,10 +33,13 @@ class FakeEvents:
         if self.timeouts > 0:
             self.timeouts -= 1
             raise httpx.ReadTimeout("timeout", request=request)
-        pdql = json.loads(request.content)["filter"]
+        body = json.loads(request.content)
+        pdql = body["filter"]
         for needle, codes in self.status_once.items():
             if needle in pdql and codes:
                 return httpx.Response(codes.pop(0), json={"detail": "по сценарию теста"})
+        if body["timeFrom"] in self.events_by_time_from:
+            return httpx.Response(200, json={"events": self.events_by_time_from[body["timeFrom"]]})
         for needle, events in self.events_by_query.items():
             if needle in pdql:
                 return httpx.Response(200, json={"events": events})
