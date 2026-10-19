@@ -5,6 +5,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { AdSidebar } from './AdSidebar'
 import { OverviewPage } from './pages/OverviewPage'
+import { SummaryPage } from './pages/SummaryPage'
 import { FindingsPage } from './pages/FindingsPage'
 import { SnapshotsPage } from './pages/SnapshotsPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -27,6 +28,7 @@ export function AdModule() {
   } else if (path === '/ad/settings') page = <SettingsPage />
   else if (path === '/ad/jobs') page = <JobsPage />
   else if (domainId !== null && section === '') page = <OverviewPage domainId={domainId} />
+  else if (domainId !== null && section === 'summary') page = <SummaryPage domainId={domainId} />
   else if (domainId !== null && section === 'findings') page = <FindingsPage domainId={domainId} />
   else if (domainId !== null && section === 'snapshots') page = <SnapshotsPage domainId={domainId} />
   else return <Redirect to="/ad" />

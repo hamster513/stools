@@ -1,4 +1,4 @@
-import { Camera, LayoutDashboard, ListChecks, Settings2, ShieldAlert } from 'lucide-react'
+import { BarChart3, Camera, LayoutDashboard, ListChecks, Settings2, ShieldAlert } from 'lucide-react'
 import type { Domain } from '@/modules/ad/api/types'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -13,6 +13,7 @@ export function AdSidebar({ domains, domainId }: { domains: Domain[]; domainId: 
   const items = base
     ? [
         { to: base, label: 'Обзор', icon: LayoutDashboard, exact: true },
+        { to: `${base}/summary`, label: 'Сводка', icon: BarChart3, exact: false },
         { to: `${base}/findings`, label: 'Находки', icon: ShieldAlert, exact: false },
         { to: `${base}/snapshots`, label: 'Снапшоты', icon: Camera, exact: false },
       ]

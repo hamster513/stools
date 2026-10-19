@@ -16,6 +16,7 @@ import type {
   Overview,
   SettingsView,
   Snapshot,
+  Summary,
 } from './types'
 
 export const FINDINGS_PAGE_SIZE = 200
@@ -50,6 +51,16 @@ export function useSnapshot(snapshotId: number | undefined) {
     queryKey: ['ad-snapshots', 'one', snapshotId],
     queryFn: () => api.get(`/api/ad/snapshots/${snapshotId}`),
     enabled: snapshotId !== undefined,
+  })
+}
+
+/** Сводка снапшота. 409 — сводка не посчитана (снапшот прежней версии анализатора): повтор не поможет, нужен пересчёт. */
+export function useSummary(snapshotId: number | undefined) {
+  return useQuery<Summary, ApiRequestError>({
+    queryKey: ['ad-snapshots', 'summary', snapshotId],
+    queryFn: () => api.get(`/api/ad/snapshots/${snapshotId}/summary`),
+    enabled: !!snapshotId,
+    retry: (count, err) => err.status !== 409 && count < 1,
   })
 }
 

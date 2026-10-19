@@ -1,13 +1,17 @@
 /**
  * Обработчики MSW модуля AD — ровно столько, чтобы в `npm run dev` открывались
- * обзор домена и настройки: проверки двух категорий, три из них AD CS (две
+ * обзор домена, сводка и настройки: проверки двух категорий, три из них AD CS (две
  * проверены частично), и загрузки данных ЦС. Находки и снапшоты не отвечаются.
+ * Второй домен — со снапшотом, посчитанным до сводки: его сводка отвечает 409.
  */
 import { http, HttpResponse } from 'msw'
 import { noSession } from '@/modules/siem/mocks/handlers'
-import type { AdConfig, CaData, CheckSummary, Domain, Overview, SettingsView } from '@/modules/ad/api/types'
+import type { AdConfig, CaData, CheckSummary, Domain, Overview, SettingsView, Summary, SummaryBucket } from '@/modules/ad/api/types'
 
 const DOMAIN: Domain = { id: 1, sid: 'S-1-5-21-1000-2000-3000', dns_root: 'corp.local', netbios: 'CORP', dn: 'DC=corp,DC=local', snapshots: 1, last_snapshot_id: 1, last_snapshot_at: '2026-09-30T09:00:00Z' }
+const STALE_DOMAIN: Domain = { id: 2, sid: 'S-1-5-21-1000-2000-4000', dns_root: 'lab.corp.local', netbios: 'LAB', dn: 'DC=lab,DC=corp,DC=local', snapshots: 1, last_snapshot_id: 2, last_snapshot_at: '2026-09-12T09:00:00Z' }
+/** Снапшот, посчитанный до сводки (анализатор до версии 9). */
+const STALE_SNAPSHOT_ID = 2
 
 const NONE = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 }
 
@@ -27,12 +31,12 @@ const CHECKS: CheckSummary[] = [
   check('ADCS_MAPPING', 'Привязка сертификатов к учётным записям (ESC10, 14)', 'Слабая привязка сертификата к учётной записи на контроллерах и слабые явные сопоставления.', 'pki', {}, 'ESC10 не проверен: нужен реестр контроллеров (сборщик, пункт 6)'),
 ]
 
-function overview(): Overview {
+function overview(domain: Domain): Overview {
   const by_severity = { ...NONE }
   for (const c of CHECKS) for (const [s, n] of Object.entries(c.by_severity)) by_severity[s as keyof typeof NONE] += n
   return {
-    domain: { id: DOMAIN.id, dns_root: DOMAIN.dns_root, netbios: DOMAIN.netbios },
-    snapshot: { id: 1, collected_at: '2026-09-30T09:00:00Z', source: 'file', collector: 'powershell 2.0', findings: CHECKS.reduce((a, c) => a + c.total, 0), by_severity, objects: 1840 },
+    domain: { id: domain.id, dns_root: domain.dns_root, netbios: domain.netbios },
+    snapshot: { id: domain.last_snapshot_id ?? 1, collected_at: domain.last_snapshot_at ?? '2026-09-30T09:00:00Z', source: 'file', collector: 'powershell 2.0', findings: CHECKS.reduce((a, c) => a + c.total, 0), by_severity, objects: 1840 },
     compared_to: { previous_id: null, collected_at: null, new: 0, fixed: 0 },
     counted: { total: CHECKS.reduce((a, c) => a + c.total, 0), by_severity, statuses: ['new', 'in_work', 'fixed', 'reopened'] },
     summary: {
@@ -41,6 +45,67 @@ function overview(): Overview {
     },
     checks: CHECKS,
   }
+}
+
+const buckets = (...n: number[]): SummaryBucket[] => [30, 90, 180, 365, 730, 1095, null].map((le, i) => ({ le, n: n[i] ?? 0 }))
+const counts = (total: number, enabled: number, active: number, flags: Partial<Summary['accounts']['users']> = {}) => ({
+  total, enabled, disabled: total - enabled, active, inactive: enabled - active,
+  pwd_never_expires: 0, pwd_not_required: 0, no_preauth: 0, sid_history: 0, delegation: 0, laps: 0, ...flags,
+})
+const OU = 'OU=Servers,DC=corp,DC=local'
+
+// 64 GPO — больше первой страницы в 50, чтобы видна была кнопка «показать все».
+const SUMMARY: Summary = {
+  version: 1,
+  accounts: {
+    users: counts(1240, 1105, 860, { pwd_never_expires: 37, pwd_not_required: 4, no_preauth: 2, sid_history: 3, delegation: 1 }),
+    computers: counts(600, 571, 498, { delegation: 2, laps: 512 }),
+  },
+  password_age: { all: buckets(180, 260, 210, 190, 140, 60, 65), admins: buckets(3, 4, 2, 1, 1, 0, 1) },
+  last_logon: { all: buckets(820, 40, 30, 60, 55, 40, 60), admins: buckets(9, 1, 0, 1, 0, 0, 1) },
+  os: [
+    { name: 'Windows 10 Enterprise', build: '19045', total: 380, enabled: 366, active: 330 },
+    { name: 'Windows 11 Enterprise', build: '22631', total: 140, enabled: 139, active: 131 },
+    { name: 'Windows Server 2022 Standard', build: '20348', total: 52, enabled: 50, active: 28 },
+    { name: 'Windows Server 2012 R2 Standard', build: '9600', total: 16, enabled: 12, active: 6 },
+    { name: '', build: '', total: 12, enabled: 4, active: 3 },
+  ],
+  dcs: [
+    { name: 'DC01', dn: 'CN=DC01,OU=Domain Controllers,DC=corp,DC=local', dns: 'dc01.corp.local', os: 'Windows Server 2022 Standard', build: '20348', rodc: false, last_logon_days: 0, pwd_age_days: 12, owner: 'CORP\\Domain Admins' },
+    { name: 'DC02', dn: 'CN=DC02,OU=Domain Controllers,DC=corp,DC=local', dns: 'dc02.corp.local', os: 'Windows Server 2019 Standard', build: '17763', rodc: false, last_logon_days: 1, pwd_age_days: 27, owner: 'CORP\\Domain Admins' },
+    { name: 'RODC01', dn: 'CN=RODC01,OU=Domain Controllers,DC=corp,DC=local', dns: 'rodc01.branch.corp.local', os: 'Windows Server 2016 Standard', build: '14393', rodc: true, last_logon_days: 3, pwd_age_days: 41, owner: '' },
+  ],
+  groups: [
+    { name: 'Domain Admins', sid: 'S-1-5-21-1000-2000-3000-512', members: 9, enabled: 8, inactive: 2, pwd_never_expires: 3, delegable: 7, protected_users: 1 },
+    { name: 'Enterprise Admins', sid: 'S-1-5-21-1000-2000-3000-519', members: 2, enabled: 2, inactive: 0, pwd_never_expires: 1, delegable: 2, protected_users: 0 },
+    { name: 'Schema Admins', sid: 'S-1-5-21-1000-2000-3000-518', members: 1, enabled: 1, inactive: 1, pwd_never_expires: 1, delegable: 1, protected_users: 0 },
+    { name: 'Administrators', sid: 'S-1-5-32-544', members: 14, enabled: 11, inactive: 2, pwd_never_expires: 4, delegable: 10, protected_users: 1 },
+  ],
+  trusts: [
+    { partner: 'partner.example', flat_name: 'PARTNER', direction: 3, type: 2, within_forest: false, changed: '2025-11-04T10:00:00Z' },
+    { partner: 'branch.corp.local', flat_name: 'BRANCH', direction: 3, type: 2, within_forest: true, changed: '2026-08-20T07:30:00Z' },
+    { partner: 'LEGACY.REALM', flat_name: '', direction: 1, type: 3, within_forest: false, changed: null },
+  ],
+  password_policies: [
+    { name: 'Политика домена', min_length: 8, lockout_threshold: 0, complexity: true, reversible: false, precedence: null },
+    { name: 'PSO-Admins', min_length: 15, lockout_threshold: 5, complexity: true, reversible: false, precedence: 10 },
+    { name: 'PSO-ServiceAccounts', min_length: 20, lockout_threshold: 0, complexity: false, reversible: true, precedence: 20 },
+  ],
+  gpos: [
+    { name: 'Default Domain Policy', dn: 'CN={31B2F340-016D-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=corp,DC=local', machine_disabled: false, user_disabled: false, links: [{ dn: 'DC=corp,DC=local', enforced: false, disabled: false }] },
+    { name: 'Default Domain Controllers Policy', dn: 'CN={6AC1786C-016F-11D2-945F-00C04FB984F9},CN=Policies,CN=System,DC=corp,DC=local', machine_disabled: false, user_disabled: true, links: [{ dn: 'OU=Domain Controllers,DC=corp,DC=local', enforced: true, disabled: false }] },
+    ...Array.from({ length: 62 }, (_, i) => ({
+      name: `Servers baseline ${String(i + 1).padStart(2, '0')}`,
+      dn: `CN={00000000-0000-0000-0000-${String(i + 1).padStart(12, '0')}},CN=Policies,CN=System,DC=corp,DC=local`,
+      machine_disabled: false,
+      user_disabled: i % 3 === 0,
+      links: i % 10 === 9 ? [] : [{ dn: OU, enforced: false, disabled: i % 7 === 0 }],
+    })),
+  ],
+  subnets: [
+    { name: '10.10.0.0/16', site: 'Default-First-Site-Name' },
+    { name: '10.20.0.0/24', site: 'Branch' },
+  ],
 }
 
 const DEFAULTS: AdConfig = {
@@ -88,8 +153,14 @@ let caData: CaData[] = [
 ]
 
 export const adHandlers = [
-  http.get('/api/ad/domains', () => noSession() ?? HttpResponse.json([DOMAIN])),
-  http.get('/api/ad/domains/:id/overview', () => noSession() ?? HttpResponse.json(overview())),
+  http.get('/api/ad/domains', () => noSession() ?? HttpResponse.json([DOMAIN, STALE_DOMAIN])),
+  http.get('/api/ad/domains/:id/overview', ({ params }) => noSession() ?? HttpResponse.json(overview(Number(params.id) === STALE_DOMAIN.id ? STALE_DOMAIN : DOMAIN))),
+  http.get('/api/ad/snapshots/:id/summary', ({ params }) =>
+    noSession() ??
+    (Number(params.id) === STALE_SNAPSHOT_ID
+      ? HttpResponse.json({ detail: 'сводка не посчитана: пересчитайте снапшот' }, { status: 409 })
+      : HttpResponse.json(SUMMARY)),
+  ),
   http.get('/api/ad/domains/:id/ca-data', () => noSession() ?? HttpResponse.json(caData)),
   http.delete('/api/ad/ca-data/:id', ({ params }) => {
     const denied = noSession()
