@@ -448,6 +448,13 @@ def datetime_to_filetime(value: dt.datetime) -> int:
     return int((value - dt.datetime(1601, 1, 1, tzinfo=dt.UTC)).total_seconds() * 10_000_000)
 
 
+def fsp_sid(dn: str) -> str | None:
+    """SID из DN вида CN=S-1-5-11,CN=ForeignSecurityPrincipals,… — самих FSP в выгрузке нет."""
+    first, _, rest = dn.partition(",")
+    value = first.partition("=")[2]
+    return value if rest.upper().startswith("CN=FOREIGNSECURITYPRINCIPALS,") and value.upper().startswith("S-") else None
+
+
 @dataclass(frozen=True)
 class GpoLink:
     container_dn: str

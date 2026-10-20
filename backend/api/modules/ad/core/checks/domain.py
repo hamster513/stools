@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from api.modules.ad.core.checks import principals
-from api.modules.ad.core.checks.adcs_rules import _fsp_sid
 from api.modules.ad.core.checks.common import date_str, days_between
 from api.modules.ad.core.config import AdConfig
-from api.modules.ad.core.export import RID_KRBTGT, ExportIndex
+from api.modules.ad.core.export import RID_KRBTGT, ExportIndex, fsp_sid
 from api.modules.ad.core.findings import Finding, finalize
 
 
@@ -112,7 +111,7 @@ def check_pre_win2000_access(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
         return []
     out = []
     for dn in grp.member:
-        sid = _fsp_sid(dn)
+        sid = fsp_sid(dn)
         if sid is None and (obj := idx.get(dn)) is not None:
             sid = obj.sid
         anonymous = sid in PRE_WIN2000_ANONYMOUS

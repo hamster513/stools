@@ -12,7 +12,7 @@ from typing import Literal
 
 from api.modules.ad.core import sd
 from api.modules.ad.core.config import AdConfig
-from api.modules.ad.core.export import AdObject, ExportIndex
+from api.modules.ad.core.export import AdObject, ExportIndex, fsp_sid
 from api.modules.ad.core.findings import SEVERITIES, short_name
 from api.modules.ad.core.sd import Ace, SecurityDescriptor
 
@@ -72,13 +72,6 @@ def _broad(cfg: AdConfig, sid: str | None, name: str) -> bool:
     )
 
 
-def _fsp_sid(dn: str) -> str | None:
-    """SID из DN вида CN=S-1-5-11,CN=ForeignSecurityPrincipals,… — самих FSP в выгрузке нет."""
-    first, _, rest = dn.partition(",")
-    value = first.partition("=")[2]
-    return value if rest.upper().startswith("CN=FOREIGNSECURITYPRINCIPALS,") and value.upper().startswith("S-") else None
-
-
 def _nested_broad(idx: ExportIndex, cfg: AdConfig, group: AdObject) -> bool:
     """Среди прямых или вложенных членов своей группы есть широкая группа."""
     seen: set[str] = set()
@@ -89,7 +82,7 @@ def _nested_broad(idx: ExportIndex, cfg: AdConfig, group: AdObject) -> bool:
             continue
         seen.add(g.dn.lower())
         for dn in g.member:
-            sid = _fsp_sid(dn)
+            sid = fsp_sid(dn)
             m = None if sid else idx.get(dn)
             if m is not None:
                 sid = m.sid
