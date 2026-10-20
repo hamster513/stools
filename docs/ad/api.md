@@ -103,6 +103,89 @@ S-DC-SubnetMissing), `null` — адресов или подсетей нет; `
 `null` — хоста в VM нет; `ksc_agent` — есть ли хост с этим именем в KSC, `null` — данных KSC
 нет. Сбой чтения чужого модуля даёт `null` в его поле, а не ошибку запроса.
 
+## Группы учёток и права через GPO
+
+Контракт с модулем Активы: кто в каких группах домена и кто через GPO входит в какие
+локальные группы на каких компьютерах. Считается при запросе по файлу выгрузки снапшота,
+в базе не хранится.
+
+```
+GET  /snapshots/{id}/account-groups/{sid}
+                                       {snapshot_id, collected_at, sid, name, groups: [GroupRef], notes: [str]}
+                                       404 — снапшота или учётки нет; 409 «файл выгрузки снапшота недоступен»
+GET  /snapshots/{id}/gpo-rights?group_sid=&local_group=&host=&hosts_limit=1000
+                                       объект gpo_rights (ниже) + snapshot_id, collected_at
+                                       404 — снапшота нет; 409 «файл выгрузки снапшота недоступен»;
+                                       422 — hosts_limit вне 0…10000
+```
+
+`collected_at` — время сбора снапшота. `name` учётки — `DOMAIN\name` из выгрузки (или
+well-known, иначе сам SID). Учётка без групп отдаётся с `groups: []`; SID, которого нет
+среди учёток выгрузки, — 404. Фильтры `gpo-rights` без учёта регистра и точным
+совпадением: `group_sid` — по `group_sid` записи, `local_group` — по `local_group`,
+`host` — запись остаётся, если хоть один хост из её полного списка равен `host` (до
+обрезки). Пустой фильтр не применяется. `hosts_limit` (0…10000, по умолчанию 1000) режет
+`hosts` каждой записи, `hosts_total` — число хостов до обрезки.
+
+Python (для Assets) — те же данные без HTTP:
+
+```python
+from api.modules.ad.core.account_groups import account_groups   # (idx: ExportIndex) -> AccountGroups
+from api.modules.ad.core.gpo_rights import gpo_rights           # (idx: ExportIndex) -> dict[str, Any]
+```
+`AccountGroups` — dataclass: `groups: dict[str, list[GroupRef]]` (ключ — SID учётки), `notes: list[str]`.
+`GroupRef` — TypedDict: `{"sid": str, "name": str, "direct": bool, "primary": bool}`.
+
+`ExportIndex` — `api.modules.ad.core.export.ExportIndex(export)`, выгрузка —
+`load_export_path(snapshot_path(data_dir, snapshot_id))` (`api.modules.ad.core.export`,
+`api.modules.ad.services.snapshots`). В `account_groups` у каждой учётки сначала прямые
+группы, затем вложенные, внутри — по имени; `primary` — первичная группа
+(`primaryGroupID`, она же прямая). Списки общие: записи `GroupRef` одни на все учётки,
+списки `hosts` и `scope` в `gpo_rights` одни на все записи одной GPO — **не изменять**;
+потребитель режет (`hosts[:n]`) или копирует. Функция `gpo_rights` отдаёт полные списки
+хостов, обрезка — только в HTTP.
+
+Ответ `gpo_rights`:
+
+```
+{"links_known": bool,            # false — в выгрузке нет gPLink (сборщик старой версии)
+ "files_known": bool,            # false — файлы GPO (GptTmpl.inf, Groups.xml) не собраны
+ "notes": [str],                 # общие оговорки: очистка групп, доменные цели, user-часть GPP, непривязанные GPO
+ "rights": [{
+   "group_sid": "S-1-5-21-…" | "",          # субъект: кто становится членом (группа ИЛИ учётка); "" — записан именем без SID
+   "group_name": "CORP\\name",
+   "subject_class": "group" | "user" | "computer" | "",   # по выгрузке; "" — не найден
+   "local_group": "Administrators",          # по RID для S-1-5-32-*, иначе как записано (суффикс " (built-in)" снят)
+   "local_group_sid": "S-1-5-32-544" | "",
+   "via": "restricted_groups" | "gpp",
+   "gpo": {"name": "<displayName>", "dn": "<DN GPO>"},
+   "action": "member" | "memberof" | "add" | "replace" | "delete",
+   "filtered": bool | null,                  # GPP: есть item-level targeting; null — сборщик < 1.4/2.5; restricted_groups — false
+   "scope": [{"dn": "<OU, домен или сайт>", "enforced": bool}],
+   "hosts": ["pc01.corp.local", …],          # отсортированы; в HTTP обрезаются до hosts_limit
+   "hosts_total": int,
+   "notes": [str]}]}                         # по записи: ссылка на сайт и т. п.
+```
+
+Семантика `action`: `member` — `X__Members` в `GptTmpl.inf` (состав X заменяется
+перечисленными); `memberof` — `X__Memberof` (X добавляется в цель); `add` — GPP ADD;
+`replace` — GPP ADD при `deleteAllUsers`/`deleteAllGroups` = 1 (прочие участники
+удаляются); `delete` — GPP REMOVE.
+
+Оговорки — чего ответ не знает:
+
+- WMI-фильтры и security filtering GPO (права на применение) не учитываются: хосты — все
+  компьютеры под ссылками GPO.
+- Item-level targeting GPP не вычисляется — виден только как `filtered: true`.
+- Порядок применения GPO и конфликты не разрешаются: две GPO с `__Members` на одну
+  локальную группу дают две записи, обе выдаются.
+- Групп других доменов леса и доверий в выгрузке нет: их участники и вложенность там не
+  видны.
+- Список участников больших групп мог быть обрезан сборщиком — тогда об этом говорит
+  `notes` в `account-groups`.
+- Ссылка GPO на сайт хостов не даёт (компьютеры сайта по выгрузке не определяются) —
+  в `scope` она есть, в `notes` записи — оговорка.
+
 ## Данные центра сертификации
 
 Файл `stools-ad-ca/1` от PowerShell-сборщика (JSON, можно gzip; поля `format`,

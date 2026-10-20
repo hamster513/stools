@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import Row, func, select
 from sqlalchemy.orm import Session
@@ -26,11 +26,13 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.export_files import file_sha256
 from api.jobs import JobCancelled, JobHandle
+from api.modules.ad.core.account_groups import account_groups
 from api.modules.ad.core.ca_data import load_ca_data_path, sniff_format
 from api.modules.ad.core.checks import ANALYZER_VERSION, CHECK_BY_CODE, CHECKS
 from api.modules.ad.core.checks.common import CATEGORIES
-from api.modules.ad.core.export import ExportFormatError
+from api.modules.ad.core.export import ExportFormatError, ExportIndex, load_export_path
 from api.modules.ad.core.findings import SEVERITIES
+from api.modules.ad.core.gpo_rights import gpo_rights
 from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
 from api.modules.ad.services.ca_data import store_ca_data
 from api.modules.ad.services.dc_links import dc_links
@@ -44,6 +46,7 @@ from api.modules.ad.services.snapshots import (
     reanalyze,
     score_history,
     severity_counts,
+    snapshot_path,
 )
 from api.platform.findings import service as finding_svc
 from api.settings import Settings, get_settings
@@ -198,6 +201,59 @@ def get_summary(snapshot_id: int, db: Session = Depends(get_db), _user: AppUser 
         raise HTTPException(status.HTTP_409_CONFLICT, detail="сводка не посчитана: пересчитайте снапшот")
     summary: dict[str, Any] = json.loads(snap.summary_json)
     return summary
+
+
+def _export_index(data_dir: Path, snapshot_id: int) -> ExportIndex:
+    try:
+        return ExportIndex(load_export_path(snapshot_path(data_dir, snapshot_id)))
+    except (OSError, ExportFormatError, ValueError) as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="файл выгрузки снапшота недоступен") from exc
+
+
+@router.get("/snapshots/{snapshot_id}/account-groups/{sid}")
+def get_account_groups(
+    snapshot_id: int,
+    sid: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Группы учётки по выгрузке снапшота: прямые, вложенные, первичная (контракт — docs/ad/api.md)."""
+    snap = snapshot_or_404(db, AdSnapshot, snapshot_id)
+    idx = _export_index(settings.data_dir, snap.id)
+    found = account_groups(idx)
+    groups = found.groups.get(sid)
+    if groups is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="учётки с таким SID в снапшоте нет")
+    return {"snapshot_id": snap.id, "collected_at": snap.collected_at, "sid": sid, "name": idx.principal_name(sid),
+            "groups": groups, "notes": found.notes}
+
+
+@router.get("/snapshots/{snapshot_id}/gpo-rights")
+def get_gpo_rights(
+    snapshot_id: int,
+    group_sid: str = "",
+    local_group: str = "",
+    host: str = "",
+    hosts_limit: int = Query(1000, ge=0, le=10000),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Кто входит в какие локальные группы на каких компьютерах по GPO (контракт — docs/ad/api.md).
+    Фильтры без учёта регистра; host — по полному списку хостов записи, до обрезки до hosts_limit."""
+    snap = snapshot_or_404(db, AdSnapshot, snapshot_id)
+    found = gpo_rights(_export_index(settings.data_dir, snap.id))
+    sid_key, group_key, host_key = group_sid.lower(), local_group.lower(), host.lower()
+    # Списки hosts и scope общие для записей одной GPO: запись собирается заново, hosts — срезом.
+    rights = [
+        {**r, "hosts": r["hosts"][:hosts_limit]}
+        for r in found["rights"]
+        if (not sid_key or r["group_sid"].lower() == sid_key)
+        and (not group_key or r["local_group"].lower() == group_key)
+        and (not host_key or any(h.lower() == host_key for h in r["hosts"]))
+    ]
+    return {"snapshot_id": snap.id, "collected_at": snap.collected_at, **found, "rights": rights}
 
 
 @router.post("/snapshots/file", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
