@@ -20,6 +20,7 @@ from api.modules.assets.routers import (
     racktables,
     scan,
     settings,
+    users,
     zones,
 )
 from api.modules.assets.services.dns import schedule_handler as dns_schedule_handler
@@ -33,7 +34,7 @@ from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 for sub in (
-    assets.router, dns.router, networks.router, overview.router, racktables.router, scan.router, settings.router, zones.router,
+    assets.router, dns.router, networks.router, overview.router, racktables.router, scan.router, settings.router, users.router, zones.router,
     make_jobs_router(AssetJob, "assets"),
 ):
     router.include_router(sub)

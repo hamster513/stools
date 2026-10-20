@@ -132,6 +132,11 @@ def observations_from_vm(db: Session) -> Iterator[Observed]:
         )
 
 
+def _owner_unresolved(owner: Any) -> bool:
+    """Владелец задан в KSC, но среди пользователей хоста не найден: `{"owner_id": …}` без SID и имени."""
+    return isinstance(owner, dict) and bool(owner.get("owner_id")) and not (owner.get("sid") or owner.get("sam"))
+
+
 def observations_from_ksc(db: Session) -> Iterator[Observed]:
     from api.modules.ksc.models import KscHost, KscServer
     from api.modules.ksc.services.snapshots import latest_snapshot
@@ -150,8 +155,10 @@ def observations_from_ksc(db: Session) -> Iterator[Observed]:
                 extra={
                     "group_path": h.group_path, "tags": extra.get("tags", []), "components": json.loads(h.components_json or "[]"),
                     "agent_alive": h.agent_alive, "protection": h.protection, "server_id": server.id,
-                    # Пользователи хоста (§2.1): собраны ли и группы с сеансом — только показ.
+                    # Пользователи хоста (§2.1): собраны ли, группы с сеансом и владелец вне списка
+                    # (`{owner_id}`, ссылки на него нет) — только показ.
                     "users_collected": users_collected, "session_groups": session_groups,
+                    "owner_unresolved": _owner_unresolved(extra.get("owner")),
                 },
             )
 

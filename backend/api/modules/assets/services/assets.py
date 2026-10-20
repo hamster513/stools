@@ -882,7 +882,11 @@ def _links(db: Session, rows: list[AssetObservation]) -> dict[str, Any]:
 
 
 def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> dict[str, Any]:
-    """Карточка: каноническое, наблюдения с подсветкой ячеек, расхождения, ссылки в модули."""
+    """Карточка: каноническое, наблюдения с подсветкой ячеек, расхождения, ссылки в модули,
+    пользователи хоста (`services.user_views.host_users`)."""
+    # Импорт здесь: services.users (его берёт user_views) сам импортирует этот модуль.
+    from api.modules.assets.services.user_views import host_users
+
     now = now or utcnow()
     asset = _asset_or_404(db, asset_id)
     settings = load_settings(db)
@@ -917,4 +921,5 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
             for t in tracked
         ],
         "links": _links(db, rows),
+        **host_users(db, asset.id, rows),
     }

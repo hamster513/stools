@@ -54,7 +54,12 @@ GET   /assets/{id}                     + network_manual, note, merged_into, crea
                                        status, status_title, assignee, due_date, overdue, risk_until,
                                        counted}] — все, и с неучитываемым статусом (counted: false),
                                        links: {ad_finding_count, ad_domain_id, ad_query, ksc_host_id,
-                                       ksc_server_id, vm_host_id, vm_cve_count}
+                                       ksc_server_id, vm_host_id, vm_cve_count},
+                                       users: [{user_id, sam, display_name, domain, local, kind: session|owner|local_group,
+                                       active, seen_at, gone}] | null — пользователи хоста (раздел «Пользователи»);
+                                       null — не собраны (нет живого наблюдения KSC с users_collected);
+                                       session_groups: [{sid, sam, active}] | null — группы с сеансом из KSC (только показ);
+                                       owner_unresolved — владелец задан в KSC, но среди пользователей хоста его нет
 PATCH /assets/{id}  {criticality?, tags?, note?, network_id?, network_manual?}   → карточка
                                        только ручные поля; network_id без network_manual — сеть ручная;
                                        network_id: null, network_manual: false — вернуть расчёт по адресу
@@ -150,6 +155,76 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 Каноническое значение поля — из самого свежего по `seen_at` живого
 наблюдения, где оно заполнено (при равенстве: `dns` > `scan` > `ksc` > `ad` >
 `vm`); закреплённое (`pin`) не пересчитывается.
+
+## Пользователи
+
+```
+GET   /users                           q, source (ad|ksc), state (enabled|disabled|unknown),
+                                       session (active|past|none), local (yes|no), privileged (yes|no),
+                                       code (код ниже или any), host_id (числа), limit≤500 (200), offset
+                                       → {total, items, facets|null}
+                                       items: [{id, sam, upn, display_name, domain, local, enabled: bool|null,
+                                       privileged, sources: [{source, live, fresh, seen_at}], hosts_active,
+                                       hosts_total, last_seen, codes}]
+                                       facets: {source, state, session, local, privileged, code: {…, any}}
+                                       — только при offset=0
+                                       неизвестное значение фильтра — 422
+GET   /users/{id}                      {id, sid, name_key, sam, upn, display_name, domain, local, enabled,
+                                       privileged, first_seen, last_seen, merged_into, note, tags, created_at,
+                                       updated_at, sources, hosts_active, hosts_total, codes,
+                                       observations: [{id, source, source_key, seen_at, gone_at, data}],
+                                       groups: [{sid, name, direct, source}] — прямые, затем вложенные, по имени,
+                                       group_notes: [текст] — оговорки домена AD учётки,
+                                       devices: [{asset_id, name, ip, os, kind: session|owner|local_group, active,
+                                       seen_at, gone_at, users_collected, stale}] — живые сначала,
+                                       discrepancies: [{code, host_asset_id|null, text}]}
+                                       404 — нет; слитый отдаётся как есть, с merged_into
+PATCH /users/{id}  {note?, tags?}      → карточка; только ручные поля, синхронизация их не трогает
+GET   /users/export                    format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
+```
+
+Пользователь — отдельный вид актива (спека «Пользователи как активы»):
+учётки из AD и сеансы, владельцы устройств из KSC, связанные с активами-хостами.
+Данные — из последней синхронизации, ни AD, ни KSC при просмотре не
+спрашиваются. Слитые (`merged_into`) в список не попадают.
+
+`q` ищет подстроку в sam, UPN, отображаемом имени и SID без учёта регистра.
+`source` — источник видит учётку сейчас (живое наблюдение). `state` —
+включённость по AD, `unknown` — AD учётку не видел (KSC-only, локальная,
+домен без выгрузки). `session`: `active` — хоть один живой сеанс «в системе
+на момент сбора» на хосте, где пользователи собраны; `past` — живые сеансы
+есть, но все прошлые («заходил раньше»); `none` — сеансов нет (например,
+только владелец). `host_id` — пользователи со связью с этими активами, и
+пропавшей тоже (как блок `users` карточки хоста). Многозначные — повтором
+ключа, внутри оси «или», между осями «и»; фасет оси считается по
+пользователям под всеми фильтрами, кроме фильтра этой оси. `hosts_active` —
+хостов, где учётка в системе на момент сбора, `hosts_total` — хостов с
+живыми связями любого вида.
+
+«Собраны» у хоста — есть живое наблюдение KSC с `users_collected`
+(сборщик ≥ 1.4 и запрос по хосту ответил). У устройства в карточке
+`users_collected: false` — сеанс считается прошлым; `stale: true` — живая
+связь на таком хосте старше `stale_days`: в расхождениях не участвует (иначе
+«заходил раньше» на хосте, снятом с агента, висело бы вечно), но
+показывается.
+
+Выгрузка `/users/export` — все пользователи под фильтрами списка в его
+порядке, любой роли; колонки «Учётка, Имя, UPN, Домен, Локальная,
+Состояние, Привилегированная, Источники, В системе, Хостов, Виден,
+Расхождения» (состояние — включена | отключена | неизвестно, расхождения —
+подписями через запятую).
+
+### Коды расхождений пользователей
+
+Считаются при чтении и пока не становятся находками платформы (статусов нет).
+Сеанс — живая связь `session`, в системе или заходил раньше.
+
+| Код | Условие | Текст |
+|---|---|---|
+| `disabled_session` | сеанс учётки, отключённой в AD | «учётка отключена в AD, сеанс на WS01: заходил раньше» |
+| `not_in_ad` | сеансы есть, учётка не локальная, живого наблюдения AD нет, а выгрузка её домена прочитана | «учётки нет в AD corp.local, сеансы на WS01 (заходил раньше)» |
+| `privileged_on_workstation` | привилегированная (admin_rids, privileged_rids, privileged_groups настроек AD или RID 500) с сеансом на рабочей станции (ОС Windows/macOS без «server») | «привилегированная учётка на рабочей станции WS01: в системе на момент сбора» |
+| `owner_without_session` | владелец устройства по KSC без сеанса на нём; хост, где пользователи не собраны, не судится | «владелец WS02 по KSC, но сеансов на нём нет» |
 
 ## Синхронизация с модулями
 
