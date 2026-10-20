@@ -186,3 +186,28 @@ def test_empty_members_note():
     got = _run([_ou(WS, gpLink=link(g["dn"]))], g, _inf("*S-1-5-32-544__Members ="))
     assert got["rights"] == []
     assert got["notes"] == ["GPO «Clear»: Restricted Groups очищает группу Administrators"]
+
+
+def test_localized_builtin_target():
+    g = gpo("Local")
+    adm = {"dn": f"CN=Администраторы,CN=Builtin,{DN}", "class": "group", "sid": "S-1-5-32-544", "sam": "Администраторы", "name": "Администраторы"}
+    rdp = {"dn": f"CN=Пользователи удаленного рабочего стола,CN=Builtin,{DN}", "class": "group", "sid": "S-1-5-32-555",
+           "sam": "Пользователи удаленного рабочего стола", "name": "Пользователи удаленного рабочего стола"}
+    inf = _inf(f"Администраторы__Members = *{G1}", f"BUILTIN\\Пользователи удаленного рабочего стола__Members = *{G2}")
+    # GPP без groupSid: имя с префиксом BUILTIN\.
+    gpp = _gpp([{"name": "CORP\\G2", "sid": G2, "action": "ADD"}], group_sid="", name="BUILTIN\\Администраторы", group_name="BUILTIN\\Администраторы")
+    got = _run([adm, rdp, _ou(WS, gpLink=link(g["dn"]))], g, inf, gpp=gpp)
+    assert got["notes"] == []
+    assert sorted((r["via"], r["local_group"], r["local_group_sid"], r["group_sid"]) for r in got["rights"]) == [
+        ("gpp", "Administrators", "S-1-5-32-544", G2),
+        ("restricted_groups", "Administrators", "S-1-5-32-544", G1),
+        ("restricted_groups", "Remote Desktop Users", "S-1-5-32-555", G2)]
+
+
+def test_dn_matching():
+    g = gpo("Ws")
+    old_ws = f"OU=OldWs,{DN}"
+    objs = [_ou(WS, gpLink=link(g["dn"])), _ou(old_ws), _pc("PC1", 1101, old_ws),
+            computer("PC2", 1102, dn="CN=PC2,ou=ws,dc=CORP,dc=local")]
+    got = _run(objs, g, _inf(f"*S-1-5-32-544__Members = *{G1}"))
+    assert got["rights"][0]["hosts"] == ["pc2.corp.local"]

@@ -149,9 +149,13 @@ class _Resolver:
         builtin = _BUILTIN_BY_NAME.get(short.lower())
         if builtin is not None:
             return BUILTIN_LOCAL_GROUPS[builtin], f"{_BUILTIN}{builtin}", None
-        obj = self.own(written)
-        if obj is not None and obj.cls == "group" and obj.sid and not obj.sid.startswith(_BUILTIN):
-            return "", "", self.idx.principal_name(obj.sid)
+        # Группы CN=Builtin есть в выгрузке с локализованным sam («Администраторы») и SID S-1-5-32-*.
+        obj = self.own(short)
+        if obj is not None and obj.cls == "group" and obj.sid:
+            if obj.sid.startswith(_BUILTIN):
+                return self.target(obj.sid)
+            if short == written:
+                return "", "", self.idx.principal_name(obj.sid)
         return written, "", None
 
 
@@ -213,7 +217,7 @@ def _assignments(idx: ExportIndex, res: _Resolver, g: AdObject, label: str) -> t
 
 
 def gpo_rights(idx: ExportIndex) -> dict[str, Any]:
-    """Ответ по контракту `gpo_rights`. Списки hosts общие для записей одной GPO — не изменять."""
+    """Ответ по контракту `gpo_rights`. Списки hosts и scope общие для записей одной GPO — не изменять (потребитель режет или копирует)."""
     links_known = idx.gpo_link_map is not None
     res = _Resolver(idx)
     rights: list[dict[str, Any]] = []
