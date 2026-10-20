@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, Monitor, Network, Settings2 } from 'lucide-react'
+import { LayoutDashboard, ListChecks, Monitor, Network, Settings2, Users } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
@@ -8,6 +8,7 @@ const LINK =
 const ITEMS = [
   { to: '/assets', label: 'Обзор', icon: LayoutDashboard, exact: true },
   { to: '/assets/list', label: 'Активы', icon: Monitor, exact: false },
+  { to: '/assets/users', label: 'Пользователи', icon: Users, exact: false },
   { to: '/assets/networks', label: 'Сети', icon: Network, exact: false },
 ]
 

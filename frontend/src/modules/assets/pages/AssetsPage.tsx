@@ -107,7 +107,7 @@ function day(iso: string | null): string {
  * Строка — переключатель значения в мультивыборе. `noCount` — у строки нет счётчика (например, «мои»: сервер его не
  * считает); значение, ушедшее в ноль под другими фильтрами, приглушено, но выбирается.
  */
-function FacetRow({ active, count, onClick, children, noCount }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode; noCount?: boolean }) {
+export function FacetRow({ active, count, onClick, children, noCount }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode; noCount?: boolean }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={active} className={cn('flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text', !active && !noCount && count === 0 && 'opacity-60')}>
       <span className="min-w-0 flex-1 truncate">{children}</span>
@@ -116,7 +116,7 @@ function FacetRow({ active, count, onClick, children, noCount }: { active: boole
   )
 }
 
-function FacetSection({ title, children }: { title: string; children: ReactNode }) {
+export function FacetSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="border-b border-grid px-2 py-3">
       <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{title}</div>

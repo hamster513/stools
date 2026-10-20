@@ -14,6 +14,7 @@ import {
   type AssetDetail,
   type Criticality,
   type Discrepancy,
+  type HostUser,
   type Observation,
   type PinnableField,
 } from '@/modules/assets/api/types'
@@ -57,7 +58,7 @@ function title(a: { id: number; name: string; fqdn: string; ip: string }): strin
   return a.name || a.fqdn || a.ip || `актив #${a.id}`
 }
 
-function SectionTitle({ children }: { children: ReactNode }) {
+export function SectionTitle({ children }: { children: ReactNode }) {
   return <div className="mt-4 mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{children}</div>
 }
 
@@ -283,6 +284,64 @@ function LinksBlock({ a }: { a: AssetDetail }) {
   )
 }
 
+function UserLinks({ users }: { users: HostUser[] }) {
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {users.map((u) => (
+        <li key={`${u.user_id}:${u.kind}`} className="flex items-baseline gap-2">
+          <Link to={`/assets/users?user=${u.user_id}`} className="font-mono text-text hover:text-primary hover:underline">{u.sam || `пользователь #${u.user_id}`}</Link>
+          {u.display_name && <span className="min-w-0 truncate text-text-secondary">{u.display_name}</span>}
+          {u.local && <span className="shrink-0 rounded border border-grid px-1 text-[10px] text-text-secondary">локальная</span>}
+          {u.gone && <span className="shrink-0 text-text-secondary">{u.kind === 'owner' ? 'был владельцем' : u.kind === 'session' ? (u.active ? 'был в системе' : 'заходил раньше') : 'был в локальной группе'}, до {day(u.seen_at)}</span>}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/**
+ * Пользователи хоста из последней синхронизации (KSC): в системе на момент сбора, заходившие раньше, владелец;
+ * `users: null` — пользователи по хосту не собраны (это не «пусто»). Пропавшие связи — приглушённо, внизу.
+ */
+function UsersBlock({ a }: { a: AssetDetail }) {
+  const live = (a.users ?? []).filter((u) => !u.gone)
+  const groups: { label: string; users: HostUser[] }[] = [
+    { label: 'В системе на момент сбора', users: live.filter((u) => u.kind === 'session' && u.active) },
+    { label: 'Заходили раньше', users: live.filter((u) => u.kind === 'session' && !u.active) },
+    { label: 'Владелец по KSC', users: live.filter((u) => u.kind === 'owner') },
+    { label: 'В локальных группах', users: live.filter((u) => u.kind === 'local_group') },
+  ]
+  const gone = (a.users ?? []).filter((u) => u.gone)
+  return (
+    <>
+      <SectionTitle>Пользователи</SectionTitle>
+      {a.users === null && <p className="text-text-secondary">пользователи не собраны — нет снапшота антивируса со сбором пользователей по этому хосту</p>}
+      {a.users?.length === 0 && <p className="text-text-secondary">пользователей нет</p>}
+      <div className="flex flex-col gap-2">
+        {groups.filter((g) => g.users.length > 0).map((g) => (
+          <div key={g.label}>
+            <div className="mb-0.5 text-text-secondary">{g.label} ({g.users.length})</div>
+            <UserLinks users={g.users} />
+          </div>
+        ))}
+        {gone.length > 0 && (
+          <div className="opacity-60">
+            <div className="mb-0.5 text-text-secondary">Больше не видны ({gone.length})</div>
+            <UserLinks users={gone} />
+          </div>
+        )}
+      </div>
+      {a.owner_unresolved && <p className="mt-1 text-kind-1">владелец задан в KSC, но его нет в списке пользователей хоста</p>}
+      {a.session_groups && a.session_groups.length > 0 && (
+        <p className="mt-1 text-text-secondary">
+          Группы с сеансом: {a.session_groups.map((g) => `${g.sam || g.sid}${g.active ? ' (в системе)' : ''}`).join(', ')}
+        </p>
+      )}
+      {a.users?.length !== 0 && <Link to={`/assets/users?host_id=${a.id}`} className="mt-1 inline-block text-primary hover:underline">все пользователи хоста</Link>}
+    </>
+  )
+}
+
 function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
   const patch = usePatchAsset(a.id)
   // Начальные значения — из карточки; после сохранения форма пересоздаётся по updated_at (key у вызова).
@@ -413,6 +472,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
 
                   <ScannerBlock a={a} />
                   <LinksBlock a={a} />
+                  <UsersBlock a={a} />
 
                   <SectionTitle>Ручные поля</SectionTitle>
                   <ManualFields key={`${a.id}:${a.updated_at}`} a={a} write={write && a.merged_into === null} />

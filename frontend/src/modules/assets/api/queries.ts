@@ -6,7 +6,7 @@ import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/quer
 import type { FindingSummary } from '@/platform/findings/types'
 import type {
   AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, Job, Network, NetworkIn,
-  NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScanStarted, ScheduleIn, SyncStatus, Zone, ZoneIn,
+  NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScanStarted, ScheduleIn, SyncStatus, UserDetail, UserPatch, UsersQuery, UsersResponse, Zone, ZoneIn,
 } from './types'
 
 export const ASSETS_PAGE_SIZE = 200
@@ -73,6 +73,33 @@ export function useMergeAssets(id: number) {
 
 export function useDetachObservation() {
   return useAssetMutation<number>((observationId) => api.post(`/api/assets/observations/${observationId}/detach`))
+}
+
+export function useUsers(query: UsersQuery) {
+  return useInfiniteQuery<UsersResponse, ApiRequestError>({
+    queryKey: ['assets-users', query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get(`/api/assets/users${buildQuery({ ...query, limit: ASSETS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useUser(id: number | null) {
+  return useQuery<UserDetail, ApiRequestError>({
+    queryKey: ['assets-user', id],
+    queryFn: () => api.get(`/api/assets/users/${id}`),
+    enabled: id !== null,
+  })
+}
+
+/** Ручные поля пользователя (заметка, теги): в списке их нет — обновляется только карточка, из ответа. */
+export function usePatchUser(id: number) {
+  const qc = useQueryClient()
+  return useMutation<UserDetail, ApiRequestError, UserPatch>({
+    mutationFn: (body) => api.patch(`/api/assets/users/${id}`, body),
+    onSuccess: (detail) => qc.setQueryData(['assets-user', detail.id], detail),
+  })
 }
 
 /** Удалённые карточки не перезапрашиваются (иначе 404 в консоли), а забываются; список и обзор — обновляются. */

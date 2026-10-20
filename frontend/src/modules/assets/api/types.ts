@@ -209,6 +209,27 @@ export interface AssetDetail extends AssetItem {
   observations: Observation[]
   discrepancies: Discrepancy[]
   links: AssetLinks
+  /** Пользователи хоста, и пропавшие (`gone`); null — не собраны (нет живого наблюдения KSC с users_collected). */
+  users: HostUser[] | null
+  /** Группы с сеансом из KSC — только показ; null — не собраны. */
+  session_groups: { sid: string; sam: string; active: boolean }[] | null
+  /** Владелец задан в KSC, но среди пользователей хоста его нет. */
+  owner_unresolved: boolean
+}
+
+/** Связь пользователя с хостом: сеанс (в системе на момент сбора / заходил раньше), владелец по KSC, локальная группа. */
+export type UserHostKind = 'session' | 'owner' | 'local_group'
+
+export interface HostUser {
+  user_id: number
+  sam: string
+  display_name: string
+  domain: string
+  local: boolean
+  kind: UserHostKind
+  active: boolean
+  seen_at: string | null
+  gone: boolean
 }
 
 export interface AssetPatch {
@@ -384,4 +405,152 @@ export interface AssetsOverview {
   last_scans: { network_id: number; cidr: string; title: string; last_scan_at: string | null; last_scan_alive: number | null }[]
   last_dns: { dns_id: number; title: string; last_run_at: string | null }[]
   sync: { last_sync_at: string | null; running_job_id: number | null }
+}
+
+// ---- Пользователи как активы ----
+
+export type UserSource = 'ad' | 'ksc'
+export const USER_SOURCES: UserSource[] = ['ad', 'ksc']
+
+/** Включённость по AD; `unknown` — AD учётку не видел (только KSC, локальная, домен без выгрузки). */
+export type UserState = 'enabled' | 'disabled' | 'unknown'
+export const USER_STATES: UserState[] = ['enabled', 'disabled', 'unknown']
+export const USER_STATE_LABELS: Record<UserState, string> = { enabled: 'включена', disabled: 'отключена', unknown: 'неизвестно' }
+export function userState(enabled: boolean | null): UserState {
+  return enabled === null ? 'unknown' : enabled ? 'enabled' : 'disabled'
+}
+
+/** active — хоть один сеанс «в системе на момент сбора»; past — сеансы только прошлые; none — сеансов нет. */
+export type UserSession = 'active' | 'past' | 'none'
+export const USER_SESSIONS: UserSession[] = ['active', 'past', 'none']
+export const USER_SESSION_LABELS: Record<UserSession, string> = { active: 'в системе на момент сбора', past: 'заходил раньше', none: 'сеансов нет' }
+
+export type YesNo = 'yes' | 'no'
+export const YES_NO: YesNo[] = ['yes', 'no']
+export const YES_NO_LABELS: Record<YesNo, string> = { yes: 'да', no: 'нет' }
+
+export type UserCode = 'disabled_session' | 'not_in_ad' | 'privileged_on_workstation' | 'owner_without_session'
+export const USER_CODES: UserCode[] = ['disabled_session', 'not_in_ad', 'privileged_on_workstation', 'owner_without_session']
+/** Те же подписи, что в выгрузке `/users/export`. */
+export const USER_CODE_LABELS: Record<UserCode, string> = {
+  disabled_session: 'сеанс отключённой учётки',
+  not_in_ad: 'нет в AD',
+  privileged_on_workstation: 'привилегированная на рабочей станции',
+  owner_without_session: 'владелец без сеанса',
+}
+export type UserCodeFilter = UserCode | 'any'
+
+export interface UserSourceBadge {
+  source: UserSource
+  live: boolean
+  fresh: boolean
+  seen_at: string
+}
+
+export interface UserItem {
+  id: number
+  sam: string
+  upn: string
+  display_name: string
+  domain: string
+  local: boolean
+  enabled: boolean | null
+  privileged: boolean
+  sources: UserSourceBadge[]
+  /** Хостов, где учётка в системе на момент сбора. */
+  hosts_active: number
+  /** Хостов с живыми связями любого вида. */
+  hosts_total: number
+  last_seen: string | null
+  codes: UserCode[]
+}
+
+export interface UsersFacets {
+  source: Record<UserSource, number>
+  state: Record<UserState, number>
+  session: Record<UserSession, number>
+  local: Record<YesNo, number>
+  privileged: Record<YesNo, number>
+  code: Record<UserCodeFilter, number>
+}
+
+export interface UsersResponse {
+  total: number
+  items: UserItem[]
+  facets: UsersFacets | null
+}
+
+/** Многозначные — повторением ключа: внутри оси «или», между осями «и». */
+export interface UsersQuery {
+  q?: string
+  source?: UserSource[]
+  state?: UserState[]
+  session?: UserSession[]
+  local?: YesNo[]
+  privileged?: YesNo[]
+  code?: UserCodeFilter[]
+  /** Пользователи со связью с этими активами-хостами (и пропавшей тоже). */
+  host_id?: number[]
+}
+
+export interface UserObservation {
+  id: number
+  source: UserSource
+  source_key: string
+  seen_at: string | null
+  gone_at: string | null
+  data: Record<string, unknown>
+}
+
+export interface UserGroup {
+  sid: string
+  name: string
+  /** true — прямое членство (и основная группа), false — через вложенную группу. */
+  direct: boolean
+  source: string
+}
+
+export interface UserDevice {
+  asset_id: number
+  name: string
+  ip: string
+  os: string
+  kind: UserHostKind
+  active: boolean
+  seen_at: string | null
+  gone_at: string | null
+  /** false — пользователи на хосте не собраны: сеанс считается прошлым. */
+  users_collected: boolean
+  /** Живая связь на хосте без сбора старше stale_days: показывается, в расхождениях не участвует. */
+  stale: boolean
+}
+
+export interface UserDiscrepancy {
+  code: UserCode
+  host_asset_id: number | null
+  text: string
+}
+
+export interface UserDetail extends UserItem {
+  sid: string
+  name_key: string
+  first_seen: string | null
+  merged_into: number | null
+  note: string
+  tags: string[]
+  created_at: string | null
+  updated_at: string | null
+  observations: UserObservation[]
+  /** Прямые, затем вложенные, по имени. */
+  groups: UserGroup[]
+  /** Оговорки домена AD учётки (список участников группы мог быть обрезан). */
+  group_notes: string[]
+  /** Живые сначала. */
+  devices: UserDevice[]
+  discrepancies: UserDiscrepancy[]
+}
+
+export interface UserPatch {
+  note?: string
+  tags?: string[]
 }
