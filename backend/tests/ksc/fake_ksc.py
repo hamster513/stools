@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from tests.ksc.synthetic import (
+    HOST_USER_RECORDS,
     add_empty_objects,
     add_inactive_policy,
     add_secret_bait,
@@ -111,7 +112,7 @@ class FakeKsc:
                  deny: set[str] | None = None, deny_cert_functions: set[int] | None = None,
                  fail_cert_functions: set[int] | None = None, deny_policy_contents: set[int] | None = None,
                  fail_policy_sections: dict[int, set[str]] | None = None, deny_tags_batch: bool = False, fail_host_tags: set[str] | None = None, foreign_tag_items: bool = False,
-                 fail_profiles: dict[str, set[str]] | None = None) -> None:
+                 fail_profiles: dict[str, set[str]] | None = None, fail_host_users: set[str] | None = None) -> None:
         self.data = data or (sparse_export() if variant == "sparse" else build_export())
         if data is None and variant == "params":
             # KLPOL_ACTIVE как типизированный ноль — сборщики не должны читать его как безусловную правду.
@@ -139,6 +140,12 @@ class FakeKsc:
         #: variant="profiles_denied" — 403 на PolicyProfiles.EnumProfiles (политики читаются, профили — нет).
         if variant == "profiles_denied":
             self.deny.add("PolicyProfiles.EnumProfiles")
+        #: Пользователи устройств (`SrvView.ResetIterator` с `pParams.strHostId`): идентификаторы хостов, на которые
+        #: отвечать PxgError; variant="users_host_failed" — h-ws02, variant="users_denied" — 403 на запрос по любому хосту.
+        self.fail_host_users: set[str] = set(fail_host_users) if fail_host_users is not None else ({"h-ws02"} if variant == "users_host_failed" else set())
+        self.deny_host_users = variant == "users_denied"
+        #: Записи пользователей по хосту; хост не в словаре — пусто.
+        self.host_user_records: dict[str, list[dict[str, Any]]] = HOST_USER_RECORDS
         #: KLPOL_ID (строкой) → имена профилей, на которые GetProfile и GetProfileSettings отвечают PxgError.
         self.fail_profiles: dict[str, set[str]] = fail_profiles or {}
         #: Номера функций CertPoolCtrl.GetCertificateInfo, на которые отвечать 403 (остальные — как обычно).
@@ -156,6 +163,10 @@ class FakeKsc:
         self.calls: list[str] = []
         #: (wstrViewName, wstrFilter) каждого SrvView.ResetIterator — проверить, что сборщик не потерял фильтр.
         self.srvview_filters: list[tuple[str, str]] = []
+        #: `pParams.strHostId` каждого SrvView.ResetIterator по пользователям устройства — по порядку запросов.
+        self.host_user_queries: list[str] = []
+        #: `vecFieldsToReturn` последнего HostGroup.FindHosts.
+        self.host_fields: list[str] = []
         self.accessors: dict[str, list[dict[str, Any]]] = {}
         self.iterators: dict[str, list[dict[str, Any]]] = {}
         self.fail_login = False
@@ -222,6 +233,7 @@ class FakeKsc:
             self.accessors["g1"] = d["groups"]
             return 200, {"PxgRetVal": len(d["groups"]), "strAccessor": "g1"}
         if method == "HostGroup.FindHosts":
+            self.host_fields = list(body.get("vecFieldsToReturn") or [])
             self.accessors["h1"] = d["hosts"]
             return 200, {"PxgRetVal": len(d["hosts"]), "strAccessor": "h1"}
         if method == "ChunkAccessor.GetItemsCount":
@@ -256,6 +268,17 @@ class FakeKsc:
             view = body.get("wstrViewName", "")
             flt = body.get("wstrFilter", "")
             self.srvview_filters.append((view, flt))
+            host_id = (body.get("pParams") or {}).get("strHostId")
+            if view == "GlobalUsersListSrvViewName" and host_id:
+                # Пользователи одного устройства: фильтра нет, хост — в pParams.
+                self.host_user_queries.append(str(host_id))
+                if self.deny_host_users:
+                    return 403, {}
+                if host_id in self.fail_host_users:
+                    return 200, {"PxgError": {"code": 1, "message": "хост не найден"}}
+                iid = f"sv{len(self.iterators)}"
+                self.iterators[iid] = list(self.host_user_records.get(str(host_id), []))
+                return 200, {"wstrIteratorId": iid}
             records = list(d.get(SRVVIEW_SECTIONS.get(view, ""), []))
             # Фильтр потерян или не тот — учётки, кроме внутренних, тоже попадают в ответ:
             # так тест видит, что сборщик не запросил минимум персональных данных.

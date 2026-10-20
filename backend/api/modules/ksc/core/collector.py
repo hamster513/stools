@@ -1,6 +1,8 @@
 """Онлайн-сбор: те же вызовы Open API, что в STools-KSC-Collector.ps1, тот же формат файла."""
 from __future__ import annotations
 
+import base64
+import binascii
 import datetime as dt
 import json
 from collections.abc import Callable
@@ -18,7 +20,7 @@ from api.modules.ksc.core.export import (
 )
 from api.modules.ksc.core.secrets import hide_secrets, hide_task_params
 
-COLLECTOR_VERSION = "1.3"
+COLLECTOR_VERSION = "1.4"
 
 #: Не больше стольки политик собираем за один сбор — предупреждение при превышении.
 POLICY_CONTENTS_MAX_POLICIES = 200
@@ -28,6 +30,8 @@ POLICY_CONTENTS_SECTION_MAX_BYTES = 2 * 1024 * 1024
 TAGS_BATCH = 500
 #: Вызовов `HostTagsApi.GetHostTags` подряд, если все они отказали, достаточно, чтобы бросить чтение тегов по одному хосту.
 TAGS_FALLBACK_GIVE_UP = 20
+#: Отказов подряд при чтении пользователей устройств, после которых остальные хосты не запрашиваются (у них `null`).
+HOST_USERS_GIVE_UP = 20
 
 HOST_FIELDS = [
     "KLHST_WKS_HOSTNAME", "KLHST_WKS_DN", "KLHST_WKS_WINHOSTNAME", "KLHST_WKS_WINDOMAIN", "KLHST_WKS_DNSDOMAIN", "KLHST_WKS_DNSNAME", "KLHST_WKS_FQDN",
@@ -38,6 +42,7 @@ HOST_FIELDS = [
     "KLHST_WKS_FROM_UNASSIGNED", "KLHST_WKS_RBT_REQUIRED", "KLHST_WKS_LAST_SYSTEM_START", "KLHST_WKS_CREATED",
     "KLHST_WKS_OS_BUILD_NUMBER", "KLHST_WKS_CPU_ARCH", "KLHST_WKS_RBT_REQUEST_REASON", "KLHST_WKS_RBT_REQUEST_TIME",
     "HST_VM_TYPE", "KLHST_MANAGED_OTHER_SERVER", "KLHST_WKS_EDR_STATUS", "KLHST_WKS_KEEP_CONNECTION",
+    "KLHST_WKS_OWNER_ID", "KLHST_WKS_OWNER_IS_CUSTOM",
 ]
 GROUP_FIELDS = ["id", "name", "parentId", "grp_full_name", "level", "hostsNum", "childGroupsNum", "creationDate", "lastUpdate"]
 LICENSE_FIELDS = [
@@ -46,6 +51,9 @@ LICENSE_FIELDS = [
 ]
 STATIC_FIELDS = ["KLADMSRV_SERVER_VERSION_ID", "KLADMSRV_SERVER_HOSTNAME", "KLADMSRV_PRODUCT_FULL_VERSION"]
 ROLE_FIELDS = ["nRoleId", "wstrRoleName", "wstrRoleDisplayName", "nInternalUserId", "wstrTrusteeDisplayName", "wstrUserPrincipalName", "nGroupId", "wstrGroupName"]
+#: Пользователи одного устройства (`GlobalUsersListSrvViewName` с `pParams.strHostId`), секция `host_users`.
+HOST_USER_FIELDS = ["ul_binId", "ul_nVServer", "ul_bUser", "ul_Local", "ul_imgSid", "ul_wstrSamAccountName", "ul_wstrPrincipalName",
+                    "ul_wstrDisplayName", "ul_wstrDomainSAM", "ul_wstrDomain2000", "ul_bVisited"]
 USER_FIELDS = ["ul_llTrusteeId", "ul_nSplUserId", "ul_wstrDisplayName", "ul_wstrSamAccountName", "ul_wstrPrincipalName", "ul_bUser", "ul_Builtin", "ul_InternalUser"]
 
 Progress = Callable[[int, int], None]
@@ -63,9 +71,9 @@ def _task_body(task: dict[str, Any]) -> dict[str, Any]:
     return task
 
 
-def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = "") -> list[dict[str, Any]]:
+def _read_srvview(client: KscClient, view: str, fields: list[str], flt: str = "", params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """SrvView: итератор постранично по 500 записей, `ReleaseIterator` всегда, даже при ошибке чтения."""
-    reset = client.call("SrvView.ResetIterator", {"wstrViewName": view, "wstrFilter": flt, "vecFieldsToReturn": fields, "vecFieldsToOrder": [], "pParams": {}, "lifetimeSec": 600})
+    reset = client.call("SrvView.ResetIterator", {"wstrViewName": view, "wstrFilter": flt, "vecFieldsToReturn": fields, "vecFieldsToOrder": [], "pParams": params or {}, "lifetimeSec": 600})
     it = reset.get("wstrIteratorId")
     if not it:
         raise KscError(f"SrvView.ResetIterator ({view}): KSC не выдал итератор")
@@ -236,6 +244,72 @@ def _host_tags(client: KscClient, hosts: list[dict[str, Any]], warnings: list[st
         return out
 
 
+def sid_string(value: Any) -> str:
+    """SID из `ul_imgSid` строкой `S-1-5-21-…`: двоичный (base64 из `{"type": "binary"}`) — разбирается (ревизия,
+    число подчинённых значений, 6 байт старшинства big-endian, подчинённые по 4 байта little-endian); уже строка
+    `S-…` — как есть; пусто или не разбирается — `""`. То же правило — `SidString` в скрипте."""
+    text = _str(value)
+    if not text:
+        return ""
+    if text.upper().startswith("S-"):
+        return text
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return ""
+    if len(raw) < 8 or len(raw) < 8 + 4 * raw[1]:
+        return ""
+    subs = [str(int.from_bytes(raw[8 + 4 * i:12 + 4 * i], "little")) for i in range(raw[1])]
+    return "-".join(["S", str(raw[0]), str(int.from_bytes(raw[2:8], "big")), *subs])
+
+
+def _host_user(record: dict[str, Any]) -> dict[str, Any]:
+    """Запись `GlobalUsersListSrvViewName` по хосту → элемент секции `host_users` (контракт спеки «Пользователи как
+    активы» §2.1) и `bin_id` — `ul_binId` как пришёл (base64): по нему разбор связывает владельца устройства
+    (`KLHST_WKS_OWNER_ID`) с пользователем. `group` — только явное `ul_bUser = false`. То же — `Convert-HostUser` в скрипте."""
+    r = strip_params(record)
+    domain_sam = _str(r.get("ul_wstrDomainSAM"))
+    name = _str(r.get("ul_wstrSamAccountName"))
+    is_user = unwrap(r.get("ul_bUser"))
+    return {
+        "sid": sid_string(r.get("ul_imgSid")), "sam": f"{domain_sam}\\{name}" if domain_sam and name else name,
+        "upn": _str(r.get("ul_wstrPrincipalName")), "display_name": _str(r.get("ul_wstrDisplayName")),
+        "domain": _str(r.get("ul_wstrDomain2000")) or domain_sam, "local": bool(unwrap(r.get("ul_Local"))),
+        "group": is_user is not None and not bool(is_user), "active": bool(unwrap(r.get("ul_bVisited"))),
+        "bin_id": _str(r.get("ul_binId")),
+    }
+
+
+def _host_users(client: KscClient, hosts: list[dict[str, Any]], warnings: list[str]) -> dict[str, list[dict[str, Any]] | None]:
+    """Пользователи каждого хоста с агентом: `GlobalUsersListSrvViewName` с `pParams.strHostId`. Отказ по хосту — у него
+    `None` («не собрано для этого хоста»), остальные читаются; `HOST_USERS_GIVE_UP` отказов подряд — чтение бросается,
+    остальные хосты получают `None` без запроса. Предупреждение — одна строка `host_users: …` на весь шаг."""
+    ids = [str(h["KLHST_WKS_HOSTNAME"]) for h in _hosts_with_agent(hosts)]
+    out: dict[str, list[dict[str, Any]] | None] = {}
+    failed = streak = 0
+    first_error: KscError | None = None
+    for host_id in ids:
+        if streak >= HOST_USERS_GIVE_UP:
+            out[host_id] = None
+            continue
+        try:
+            records = _read_srvview(client, "GlobalUsersListSrvViewName", HOST_USER_FIELDS, params={"strHostId": host_id})
+        except KscError as exc:
+            out[host_id] = None
+            failed += 1
+            streak += 1
+            first_error = first_error or exc
+            continue
+        out[host_id] = [_host_user(r) for r in records]
+        streak = 0
+    if streak >= HOST_USERS_GIVE_UP:
+        missing = sum(1 for v in out.values() if v is None)
+        warnings.append(f"host_users: {HOST_USERS_GIVE_UP} отказов подряд, чтение прекращено; пользователи не собраны у {missing} хостов: {first_error}")
+    elif failed:
+        warnings.append(f"host_users: пользователи не прочитаны у {failed} хостов: {first_error}")
+    return out
+
+
 def collect(client: KscClient, *, skip_products: bool = False, skip_policy_contents: bool = False, max_policies: int | None = None, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
     warnings: list[str] = []
 
@@ -282,6 +356,7 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
                 progress(n, len(with_agent))
 
     host_tags = _host_tags(client, hosts, warnings)
+    host_users = _host_users(client, hosts, warnings)
 
     policies = _ret(client.call("Policy.GetPoliciesForGroup", {"nGroupId": -1})) or []
     effective: dict[str, Any] = {}
@@ -364,7 +439,7 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
         "policies": policies, "effective_policies": effective, "tasks": tasks, "licenses": licenses, "static": static, "domains": domains,
         "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
-        "policy_contents": policy_contents,
+        "policy_contents": policy_contents, "host_users": host_users,
     }
     # Секции «не собрано» в файл не попадают вовсе — «не собрано» отличается от «пусто».
     if host_tags is not None:

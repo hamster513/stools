@@ -186,6 +186,74 @@ def _host_tags(hosts: list[dict[str, Any]]) -> dict[str, list[str]]:
     return tags
 
 
+#: Вымышленный домен пользователей устройств: SID-основа и имена `LAB\userNN`.
+LAB_SID = "S-1-5-21-1111111111-2222222222-3333333333"
+
+
+def sid_bytes(sid: str) -> bytes:
+    """`S-1-5-21-…` → двоичный SID, как его отдаёт KSC в `ul_imgSid`: ревизия, число подчинённых
+    значений, 6 байт старшинства (big-endian), подчинённые значения по 4 байта (little-endian)."""
+    parts = sid.split("-")
+    subs = [int(p) for p in parts[3:]]
+    return bytes([int(parts[1]), len(subs)]) + int(parts[2]).to_bytes(6, "big") + b"".join(s.to_bytes(4, "little") for s in subs)
+
+
+def binary(raw: bytes) -> dict[str, str]:
+    return {"type": "binary", "value": base64.b64encode(raw).decode("ascii")}
+
+
+def user_bin_id(n: int) -> dict[str, str]:
+    """`ul_binId` пользователя n (он же `KLHST_WKS_OWNER_ID` хоста, у которого этот пользователь — владелец)."""
+    return binary(f"uid-{n:04d}".encode())
+
+
+def _ksc_user(n: int, sam: str, *, visited: bool, sid: str | None = None, domain_sam: str = "LAB", domain: str = "lab.local", upn: str = "",
+              display_name: str = "", local: bool = False, user: bool = True) -> dict[str, Any]:
+    """Запись `GlobalUsersListSrvViewName` по хосту (`pParams.strHostId`) — как её отдаёт KSC; `sid=None` — поля `ul_imgSid` нет."""
+    rec: dict[str, Any] = {"ul_binId": user_bin_id(n), "ul_nVServer": 0, "ul_bUser": user, "ul_Local": local, "ul_wstrSamAccountName": sam,
+                           "ul_wstrPrincipalName": upn, "ul_wstrDisplayName": display_name, "ul_wstrDomainSAM": domain_sam,
+                           "ul_wstrDomain2000": domain, "ul_bVisited": visited}
+    if sid is not None:
+        rec["ul_imgSid"] = binary(sid_bytes(sid))
+    return rec
+
+
+#: Ответы KSC по пользователям устройств (сырые записи, по хосту с агентом; у остальных хостов с агентом — пусто):
+#: WS01 — пользователь в системе, пользователь, заходивший раньше, и группа; WS03 — один пользователь в системе;
+#: SRV01 — тот же пользователь, что на WS01, и локальная учётка без SID и домена. У user02 нет `ul_wstrDomain2000` —
+#: домен берётся из `ul_wstrDomainSAM`.
+HOST_USER_RECORDS: dict[str, list[dict[str, Any]]] = {
+    "h-ws01": [
+        _ksc_user(1001, "user01", visited=True, sid=f"{LAB_SID}-1001", upn="user01@lab.local", display_name="Пользователь 01"),
+        _ksc_user(1002, "user02", visited=False, sid=f"{LAB_SID}-1002", domain="", display_name="Пользователь 02"),
+        _ksc_user(513, "Domain Users", visited=True, sid=f"{LAB_SID}-513", user=False),
+    ],
+    "h-ws03": [_ksc_user(1002, "user02", visited=True, sid=f"{LAB_SID}-1002", domain="", display_name="Пользователь 02")],
+    "h-srv01": [
+        _ksc_user(1001, "user01", visited=True, sid=f"{LAB_SID}-1001", upn="user01@lab.local", display_name="Пользователь 01"),
+        _ksc_user(2001, "svc-local", visited=False, domain_sam="", domain="", local=True),
+    ],
+}
+
+
+def _hu(n: int, sid: str, sam: str, *, active: bool, upn: str = "", display_name: str = "", domain: str = "lab.local",
+        local: bool = False, group: bool = False) -> dict[str, Any]:
+    return {"sid": sid, "sam": sam, "upn": upn, "display_name": display_name, "domain": domain, "local": local, "group": group,
+            "active": active, "bin_id": user_bin_id(n)["value"]}
+
+
+def _host_users(hosts: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]] | None]:
+    """Секция `host_users` (сборщик 1.4, контракт спеки «Пользователи как активы» §2.1), какой её дают оба сборщика
+    из `HOST_USER_RECORDS`: ключи — хосты с агентом, у хоста без пользователей — `[]`."""
+    users: dict[str, list[dict[str, Any]] | None] = {h["KLHST_WKS_HOSTNAME"]: [] for h in hosts if h["KLHST_WKS_STATUS"] & 4}
+    user01 = _hu(1001, f"{LAB_SID}-1001", "LAB\\user01", active=True, upn="user01@lab.local", display_name="Пользователь 01")
+    users["h-ws01"] = [user01, _hu(1002, f"{LAB_SID}-1002", "LAB\\user02", active=False, display_name="Пользователь 02", domain="LAB"),
+                       _hu(513, f"{LAB_SID}-513", "LAB\\Domain Users", active=True, group=True)]
+    users["h-ws03"] = [_hu(1002, f"{LAB_SID}-1002", "LAB\\user02", active=True, display_name="Пользователь 02", domain="LAB")]
+    users["h-srv01"] = [user01, _hu(2001, "", "svc-local", active=False, domain="", local=True)]
+    return users
+
+
 def _policy_profiles() -> dict[str, Any]:
     return {
         "1": {"profiles": [P_NOTEBOOKS, P_DISABLED], "priorities": ["Ноутбуки", "Выключенный"], "errors": []},
@@ -200,9 +268,11 @@ PRODUCT_STATUS_TEXT = "Требуется обновление компонен�
 def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
     ok = 1 | 4 | 8 | 16
     hosts = [
-        _host(1, "WS01", 2, ok, 7, now=now),
+        # Владелец WS01 — пользователь из её списка; владелец WS03 задан вручную, но в её списке пользователей его нет.
+        _host(1, "WS01", 2, ok, 7, now=now, KLHST_WKS_OWNER_ID=user_bin_id(1001), KLHST_WKS_OWNER_IS_CUSTOM=False),
         _host(2, "WS02", 2, ok, 1, now=now),
-        _host(3, "WS03", 2, ok, 7, now=now, KLHST_WKS_RTP_AV_BASES_TIME=dtv(now - dt.timedelta(days=10))),
+        _host(3, "WS03", 2, ok, 7, now=now, KLHST_WKS_RTP_AV_BASES_TIME=dtv(now - dt.timedelta(days=10)),
+              KLHST_WKS_OWNER_ID=user_bin_id(1003), KLHST_WKS_OWNER_IS_CUSTOM=True),
         # WS04 — «предупреждение» по KSC с двумя битами маски: давно не было полного поиска (6) и требуется перезагрузка (11).
         _host(4, "WS04", 2, ok, 7, now=now, KLHST_WKS_LAST_FULLSCAN=dtv(now - dt.timedelta(days=45)),
               KLHST_WKS_RBT_REQUIRED=True, KLHST_WKS_RBT_REQUEST_TIME=dtv(now - dt.timedelta(days=15)), KLHST_WKS_RBT_REQUEST_REASON=4,
@@ -300,13 +370,13 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
         "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
         "policy_contents": _policy_contents(),
-        "host_tags": _host_tags(hosts), "policy_profiles": _policy_profiles(),
+        "host_tags": _host_tags(hosts), "policy_profiles": _policy_profiles(), "host_users": _host_users(hosts),
     }
 
 
 def without_new_sections(export: dict[str, Any]) -> dict[str, Any]:
-    """Копия выгрузки без `host_tags` и `policy_profiles` — как у старого сборщика."""
-    return {k: v for k, v in export.items() if k not in ("host_tags", "policy_profiles")}
+    """Копия выгрузки без `host_tags`, `policy_profiles` и `host_users` — как у старого сборщика."""
+    return {k: v for k, v in export.items() if k not in ("host_tags", "policy_profiles", "host_users")}
 
 
 def expected_policy_contents() -> dict[str, Any]:

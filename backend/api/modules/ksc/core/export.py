@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import zlib
@@ -157,6 +158,10 @@ class KscExport(BaseModel):
     #: {"<KLPOL_ID>": {"profiles": [{"name", "attrs", "sections", "errors"}], "priorities": [...], "errors": [...]}};
     #: None — секции нет (не собрано).
     policy_profiles: dict[str, dict[str, Any]] | None = None
+    #: Сборщик 1.4: {"<KLHST_WKS_HOSTNAME>": [{"sid", "sam", "upn", "display_name", "domain", "local", "group", "active",
+    #: "bin_id"}] | None} — по хостам с агентом; None у хоста — запрос по нему отказал; None целиком — секции нет
+    #: (сборщик до 1.4), «не собрано», а не «пусто».
+    host_users: dict[str, list[dict[str, Any]] | None] | None = None
 
 
 class ExportFormatError(ValueError):
@@ -288,6 +293,39 @@ def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(out)
 
 
+@dataclasses.dataclass(frozen=True)
+class HostUser:
+    """Пользователь устройства из секции `host_users` (поля контракта спеки «Пользователи как активы» §2.1):
+    `active` — в системе на момент сбора, иначе заходил раньше; `group` — группа, а не пользователь (KSC отдаёт их
+    в том же списке)."""
+
+    sid: str
+    sam: str
+    upn: str
+    display_name: str
+    domain: str
+    local: bool
+    group: bool
+    active: bool
+
+    @classmethod
+    def parse(cls, item: dict[str, Any]) -> HostUser:
+        return cls(sid=_str(item.get("sid")), sam=_str(item.get("sam")), upn=_str(item.get("upn")), display_name=_str(item.get("display_name")),
+                   domain=_str(item.get("domain")), local=bool(item.get("local")), group=bool(item.get("group")), active=bool(item.get("active")))
+
+
+def _owner(owner_id: str, items: list[dict[str, Any]] | None) -> dict[str, str] | None:
+    """Владелец устройства: `KLHST_WKS_OWNER_ID` связывается с пользователем того же хоста по `bin_id` (`ul_binId`) —
+    `{"sid", "sam", "display_name"}`; не задан — None; задан, но в списке пользователей хоста его нет (или список не
+    собран) — только `{"owner_id": <base64>}`."""
+    if not owner_id:
+        return None
+    for item in items or []:
+        if isinstance(item, dict) and _str(item.get("bin_id")) == owner_id:
+            return {"sid": _str(item.get("sid")), "sam": _str(item.get("sam")), "display_name": _str(item.get("display_name"))}
+    return {"owner_id": owner_id}
+
+
 class HostRecord:
     """Разобранный хост KSC: флаги статуса, даты, продукт, компоненты."""
 
@@ -344,6 +382,12 @@ class HostRecord:
         tags_raw = export.host_tags.get(self.host_id) if export.host_tags is not None else None
         self.tags: list[str] = sorted({str(t) for t in (tags_raw or []) if str(t).strip()})
         self.tags_collected = export.host_tags is not None
+        # Пользователи (сборщик 1.4) — «не собрано» на трёх уровнях: секции нет (`users_collected` False), у хоста нет
+        # списка (`users` None: запрос отказал или у хоста нет агента), пустой список — никто не заходил.
+        self.users_collected = export.host_users is not None
+        users_raw = export.host_users.get(self.host_id) if export.host_users is not None else None
+        self.users: list[HostUser] | None = None if users_raw is None else [HostUser.parse(u) for u in users_raw if isinstance(u, dict)]
+        self.owner = _owner(_str(raw.get("KLHST_WKS_OWNER_ID")), users_raw)
 
     @property
     def extra(self) -> dict[str, Any]:
@@ -359,6 +403,9 @@ class HostRecord:
         }
         if self.tags_collected:
             extra["tags"] = self.tags
+        extra["users"] = None if self.users is None else [dataclasses.asdict(u) for u in self.users]
+        extra["owner"] = self.owner
+        extra["users_collected"] = self.users_collected
         return extra
 
     @property

@@ -194,7 +194,9 @@ def test_collect_survives_denied_sections(monkeypatch: Any) -> None:
     assert export.security == {"two_factor_required_for_all": None}
     assert export.server_certs == {} and export.secondary_servers == [] and export.update_agents == []
     assert len(export.hosts) == 14 and len(export.policies) == 3
-    assert len(export.server.warnings) == 6  # каждая из шести новых секций предупреждает отдельно
+    # каждая из шести новых секций предупреждает отдельно; отказ SrvView.ResetIterator — и пользователям устройств (седьмая строка)
+    assert len(export.server.warnings) == 7 and sum(w.startswith("host_users: ") for w in export.server.warnings) == 1
+    assert raw["host_users"] == {h: None for h in build_export()["host_users"]}
 
 
 def test_collect_certs_empty_when_no_rights(monkeypatch: Any) -> None:
@@ -242,7 +244,8 @@ def test_collect_survives_srvview_without_iterator(monkeypatch: Any) -> None:
         raw = collect(c, username=USER)
     export = load_export(__import__("json").dumps(raw).encode())
     assert export.role_assignments == [] and export.internal_users == []
-    assert len(export.server.warnings) == 2 and all("итератор" in w for w in export.server.warnings)
+    # роли, внутренние учётки и пользователи устройств (одна строка на все хосты)
+    assert len(export.server.warnings) == 3 and all("итератор" in w for w in export.server.warnings)
     assert len(export.hosts) == 14  # остальной сбор дошёл до конца
 
 
@@ -394,7 +397,7 @@ def test_collect_reads_tags_in_batches(fake: FakeKsc) -> None:
         raw = collect(c, username=USER)
     assert raw["host_tags"] == build_export()["host_tags"] and len(raw["host_tags"]) == 12
     assert "HostsTags.ListTags.GetTags" in fake.calls and "HostTagsApi.GetHostTags" not in fake.calls
-    assert raw["server"]["collector_version"] == "1.3"
+    assert raw["server"]["collector_version"] == "1.4"
 
 
 def test_collect_falls_back_to_per_host_tags(monkeypatch: Any) -> None:
@@ -477,6 +480,64 @@ def test_collect_tag_fallback_gives_up_early(monkeypatch: Any) -> None:
 def test_collect_batch_tags_ignore_foreign_ids(monkeypatch: Any) -> None:
     raw = _collect_with(monkeypatch, FakeKsc(foreign_tag_items=True))
     assert raw["host_tags"] == build_export()["host_tags"]
+
+
+def test_collect_reads_host_users_per_host_with_agent(fake: FakeKsc) -> None:
+    """Сборщик 1.4: пользователи каждого хоста с агентом — `GlobalUsersListSrvViewName` с `pParams.strHostId`,
+    поля по контракту; владелец устройства — атрибуты хоста."""
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as c:
+        raw = collect(c, username=USER)
+    expected = build_export()
+    assert raw["host_users"] == expected["host_users"] and len(raw["host_users"]) == 12
+    assert fake.host_user_queries == [h["KLHST_WKS_HOSTNAME"] for h in expected["hosts"] if h["KLHST_WKS_STATUS"] & 4]
+    assert {"KLHST_WKS_OWNER_ID", "KLHST_WKS_OWNER_IS_CUSTOM"} <= set(fake.host_fields)
+    assert fake.calls.count("SrvView.ResetIterator") == fake.calls.count("SrvView.ReleaseIterator")
+    # учётки устройств не попадают во внутренние учётки KSC и наоборот
+    assert raw["internal_users"] == expected["internal_users"] and not raw["server"]["warnings"]
+
+
+def test_collect_host_users_through_live_params_wrappers(monkeypatch: Any) -> None:
+    raw = _collect_with(monkeypatch, FakeKsc(variant="params"))
+    assert raw["host_users"] == build_export()["host_users"]
+    assert load_export(__import__("json").dumps(raw).encode()).host_users == build_export()["host_users"]
+
+
+def test_collect_host_users_single_host_failure_is_null(monkeypatch: Any) -> None:
+    """Отказ по одному хосту: у него `null` («не собрано»), у остальных — списки; одно предупреждение."""
+    raw = _collect_with(monkeypatch, FakeKsc(fail_host_users={"h-ws02"}))
+    expected = build_export()["host_users"]
+    assert raw["host_users"] == {**expected, "h-ws02": None}
+    warnings = [w for w in raw["server"]["warnings"] if w.startswith("host_users")]
+    assert len(warnings) == 1 and warnings[0].startswith("host_users: пользователи не прочитаны у 1 хостов: ")
+    assert len(raw["server"]["warnings"]) == 1
+
+
+def test_collect_host_users_gives_up_after_failures_in_a_row(monkeypatch: Any) -> None:
+    """`HOST_USERS_GIVE_UP` отказов подряд — чтение бросается: остальные хосты не запрашиваются и получают `null`.
+    Отказы вперемешку с ответами чтения не прерывают."""
+    ids = list(build_export()["host_users"])
+    monkeypatch.setattr(collector_mod, "HOST_USERS_GIVE_UP", 3)
+    f = FakeKsc(fail_host_users=set(ids[:3]))
+    raw = _collect_with(monkeypatch, f)
+    assert raw["host_users"] == {i: None for i in ids} and f.host_user_queries == ids[:3]
+    assert len(raw["server"]["warnings"]) == 1
+    assert raw["server"]["warnings"][0].startswith("host_users: 3 отказов подряд, чтение прекращено; пользователи не собраны у 12 хостов: ")
+    f = FakeKsc(fail_host_users=set(ids[::2]))
+    raw = _collect_with(monkeypatch, f)
+    assert f.host_user_queries == ids and [i for i, v in raw["host_users"].items() if v is None] == ids[::2]
+    assert len(raw["server"]["warnings"]) == 1 and raw["server"]["warnings"][0].startswith("host_users: пользователи не прочитаны у 6 хостов: ")
+
+
+def test_collect_host_users_default_give_up_is_twenty() -> None:
+    assert collector_mod.HOST_USERS_GIVE_UP == 20
+
+
+def test_collect_host_users_without_rights_marks_every_host(monkeypatch: Any) -> None:
+    """Нет прав на пользователей устройств (403): секция есть, у каждого хоста `null`; внутренние учётки на месте."""
+    raw = _collect_with(monkeypatch, FakeKsc(variant="users_denied"))
+    assert raw["host_users"] == {h: None for h in build_export()["host_users"]}
+    assert raw["internal_users"] == build_export()["internal_users"]
+    assert len(raw["server"]["warnings"]) == 1 and "нет прав на SrvView.ResetIterator" in raw["server"]["warnings"][0]
 
 
 def _create(auth_client: TestClient, **extra: Any) -> int:

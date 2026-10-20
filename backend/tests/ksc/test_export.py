@@ -10,12 +10,14 @@ import pytest
 from api.modules.ksc.core.export import (
     ExportFormatError,
     ExportIndex,
+    HostUser,
     ip_from_long,
     load_export,
     load_export_path,
     unwrap,
 )
 from tests.ksc.synthetic import (
+    LAB_SID,
     NOTEBOOKS_EXPRESSION,
     NOW,
     PRODUCT_STATUS_TEXT,
@@ -23,6 +25,7 @@ from tests.ksc.synthetic import (
     build_export,
     expected_policy_contents,
     export_bytes,
+    user_bin_id,
     without_new_sections,
 )
 
@@ -222,3 +225,65 @@ def test_host_tags_are_normalised() -> None:
     raw["host_tags"]["h-ws01"] = ["", " ", "VIP", "VIP"]
     by = {h.name: h for h in ExportIndex(load_export(json.dumps(raw).encode())).hosts}
     assert by["WS01"].tags == ["VIP"]
+
+
+USER01 = HostUser(sid=f"{LAB_SID}-1001", sam="LAB\\user01", upn="user01@lab.local", display_name="Пользователь 01", domain="lab.local",
+                  local=False, group=False, active=True)
+
+
+def test_export_reads_host_users_and_owner() -> None:
+    """Сборщик 1.4: пользователи хоста — поля контракта (§2.1), владелец связан со списком хоста по `ul_binId`."""
+    export = load_export(export_bytes())
+    assert export.host_users is not None and set(export.host_users) == set(build_export()["host_users"])
+    by = {h.name: h for h in ExportIndex(export).hosts}
+    ws01 = by["WS01"]
+    assert ws01.users_collected and ws01.users is not None and [u.sam for u in ws01.users] == ["LAB\\user01", "LAB\\user02", "LAB\\Domain Users"]
+    assert ws01.users[0] == USER01 and ws01.users[1].active is False and ws01.users[1].domain == "LAB" and ws01.users[2].group is True
+    assert ws01.owner == {"sid": f"{LAB_SID}-1001", "sam": "LAB\\user01", "display_name": "Пользователь 01"}
+    assert ws01.extra["users"] == [
+        {"sid": f"{LAB_SID}-1001", "sam": "LAB\\user01", "upn": "user01@lab.local", "display_name": "Пользователь 01", "domain": "lab.local",
+         "local": False, "group": False, "active": True},
+        {"sid": f"{LAB_SID}-1002", "sam": "LAB\\user02", "upn": "", "display_name": "Пользователь 02", "domain": "LAB",
+         "local": False, "group": False, "active": False},
+        {"sid": f"{LAB_SID}-513", "sam": "LAB\\Domain Users", "upn": "", "display_name": "", "domain": "lab.local",
+         "local": False, "group": True, "active": True},
+    ]
+    assert ws01.extra["owner"] == ws01.owner and ws01.extra["users_collected"] is True
+    # владелец задан, но в списке пользователей хоста его нет — только идентификатор
+    assert by["WS03"].owner == {"owner_id": user_bin_id(1003)["value"]} and by["WS03"].extra["owner"] == by["WS03"].owner
+    srv = by["SRV01"]
+    assert srv.users is not None and srv.users[0] == USER01
+    assert srv.users[1] == HostUser(sid="", sam="svc-local", upn="", display_name="", domain="", local=True, group=False, active=False)
+    # никто не заходил — пустой список; без агента пользователей не спрашивали — «не собрано»
+    assert by["WS02"].users == [] and by["WS02"].extra["users"] == [] and by["WS02"].owner is None and by["WS02"].extra["owner"] is None
+    assert by["WS06"].users is None and by["WS06"].users_collected and by["WS06"].extra["users"] is None
+
+
+def test_export_host_users_null_host_is_not_collected() -> None:
+    raw = build_export()
+    raw["host_users"]["h-ws01"] = None
+    by = {h.name: h for h in ExportIndex(load_export(json.dumps(raw).encode())).hosts}
+    assert by["WS01"].users is None and by["WS01"].users_collected and by["WS01"].extra["users"] is None
+    # список не собран — владельца не с чем связать, остаётся идентификатор
+    assert by["WS01"].owner == {"owner_id": user_bin_id(1001)["value"]}
+    assert by["WS03"].users is not None and len(by["WS03"].users) == 1
+
+
+def test_export_without_host_users_marks_not_collected() -> None:
+    raw = build_export()
+    raw.pop("host_users")
+    for h in raw["hosts"]:
+        h.pop("KLHST_WKS_OWNER_ID", None)
+    export = load_export(json.dumps(raw).encode())
+    assert export.host_users is None
+    for h in ExportIndex(export).hosts:
+        assert h.users is None and h.users_collected is False and h.owner is None
+        assert h.extra["users"] is None and h.extra["owner"] is None and h.extra["users_collected"] is False
+
+
+def test_export_host_users_tolerates_partial_items() -> None:
+    """Запись без части полей (файл, поправленный руками) разбирается пустыми значениями, а не отказом."""
+    raw = build_export()
+    raw["host_users"]["h-ws02"] = [{"sam": "LAB\\user09", "active": True}]
+    by = {h.name: h for h in ExportIndex(load_export(json.dumps(raw).encode())).hosts}
+    assert by["WS02"].users == [HostUser(sid="", sam="LAB\\user09", upn="", display_name="", domain="", local=False, group=False, active=True)]

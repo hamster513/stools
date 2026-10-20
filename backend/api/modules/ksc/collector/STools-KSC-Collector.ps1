@@ -11,12 +11,15 @@
 
   Что собирается: группы, хосты (включая сборку ОС, архитектуру, тип
   виртуализации, признак ожидающей перезагрузки), продукты и компоненты,
-  теги хостов, политики с содержимым и профилями, задачи со статистикой,
-  лицензии, а также роли и внутренние
+  теги хостов, пользователи устройств (кто в системе и кто заходил раньше,
+  владелец устройства), политики с содержимым и профилями, задачи со
+  статистикой, лицензии, а также роли и внутренние
   учётные записи KSC, состояние обязательной двухэтапной проверки,
   сертификат сервера, подчинённые серверы и точки распространения. Из
-  учётных записей — только отображаемое имя, логин, UPN и признаки
-  внутренней/встроенной учётки; весь каталог AD не выгружается. Учётке без
+  учётных записей KSC — только отображаемое имя, логин, UPN и признаки
+  внутренней/встроенной учётки; у пользователей устройств — SID, логин,
+  UPN, отображаемое имя, домен и признаки (локальная, группа, в системе
+  сейчас); весь каталог AD не выгружается. Учётке без
   прав на отдельную секцию сбор не мешает: секция остаётся пустой, а
   причина попадает в предупреждения (Write-Warning и server.warnings).
 
@@ -77,7 +80,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $FormatVersion = "stools-ksc/1"
-$CollectorVersion = "1.3"
+$CollectorVersion = "1.4"
 #: Имя секции или ключ на любой глубине её параметров с одним из этих слов (подстрокой, без учёта
 #: регистра) — всё поддерево под ним в режиме скрытия: непустые строки → "<скрыто>", ключи остаются;
 #: двоичные значения скрываются, кроме адресов под ключами BinaryKeep вне режима (см. Hide-Value). Списки совпадают
@@ -91,6 +94,8 @@ $PolicyContentsSectionMaxBytes = 2097152
 #: которых чтение тегов по одному хосту бросается (TAGS_BATCH, TAGS_FALLBACK_GIVE_UP онлайн-сбора).
 $TagsBatch = 500
 $TagsFallbackGiveUp = 20
+#: Отказов подряд при чтении пользователей устройств, после которых остальные хосты не запрашиваются (HOST_USERS_GIVE_UP).
+$HostUsersGiveUp = 20
 
 if ($InitConfig) {
   if (-not [System.IO.Path]::IsPathRooted($InitConfig)) { $InitConfig = Join-Path $PWD.ProviderPath $InitConfig }
@@ -215,6 +220,42 @@ function AsInt($v) { if ($null -eq $v) { return 0 }; if ($v -is [psobject] -and 
 # KSC отдаёт булевы и как $true/$false, и как @{ type = "boolean"; value = $false } — типизированный
 # ноль не должен читаться как безусловная правда.
 function AsBool($v) { if ($null -eq $v) { return $false }; if ($v -is [psobject] -and $v.PSObject.Properties["value"]) { $v = $v.value }; try { return [bool]$v } catch { return $false } }
+# Значение без типизированной обёртки KSC (@{ type = "binary"; value = <base64> } → <base64>); остальное — как есть.
+function Plain($v) { if ($null -ne $v -and $v -is [psobject] -and $v.PSObject.Properties["type"] -and $v.PSObject.Properties["value"]) { return $v.value }; return $v }
+# SID из ul_imgSid строкой S-1-5-21-…: двоичный (base64) разбирается — ревизия, число подчинённых значений, 6 байт
+# старшинства (big-endian), подчинённые по 4 байта (little-endian); уже строка S-… — как есть; пусто или не разбирается — "".
+# То же правило — sid_string в api/modules/ksc/core/collector.py.
+function SidString($v) {
+  $text = [string](Plain $v)
+  if (-not $text) { return "" }
+  if ($text.ToUpper().StartsWith("S-")) { return $text }
+  try { $b = [Convert]::FromBase64String($text) } catch { return "" }
+  if ($b.Length -lt 8 -or $b.Length -lt (8 + 4 * $b[1])) { return "" }
+  $authority = [int64]0
+  for ($i = 2; $i -lt 8; $i++) { $authority = $authority * 256 + $b[$i] }
+  $parts = New-Object System.Collections.ArrayList
+  [void]$parts.Add("S"); [void]$parts.Add([string]$b[0]); [void]$parts.Add([string]$authority)
+  for ($i = 0; $i -lt $b[1]; $i++) { [void]$parts.Add([string][BitConverter]::ToUInt32($b, 8 + 4 * $i)) }
+  return ($parts -join "-")
+}
+# Запись GlobalUsersListSrvViewName по хосту → элемент секции host_users (контракт спеки «Пользователи как активы» §2.1)
+# и bin_id — ul_binId как пришёл (base64): по нему разбор связывает владельца устройства с пользователем. group — только
+# явное ul_bUser = false. То же — _host_user в api/modules/ksc/core/collector.py.
+function Convert-HostUser($record) {
+  $r = Unwrap $record
+  $domainSam = [string](Plain (Prop $r "ul_wstrDomainSAM"))
+  $name = [string](Plain (Prop $r "ul_wstrSamAccountName"))
+  $sam = $name
+  if ($domainSam -and $name) { $sam = "$domainSam\$name" }
+  $domain = [string](Plain (Prop $r "ul_wstrDomain2000"))
+  if (-not $domain) { $domain = $domainSam }
+  $isUser = Prop $r "ul_bUser"
+  return [ordered]@{
+    sid = (SidString (Prop $r "ul_imgSid")); sam = $sam; upn = [string](Plain (Prop $r "ul_wstrPrincipalName"))
+    display_name = [string](Plain (Prop $r "ul_wstrDisplayName")); domain = $domain; local = (AsBool (Prop $r "ul_Local"))
+    group = (($null -ne $isUser) -and -not (AsBool $isUser)); active = (AsBool (Prop $r "ul_bVisited")); bin_id = [string](Plain (Prop $r "ul_binId"))
+  }
+}
 # SecretMarkers подстрокой в имени, без учёта регистра: PASSWORD_HASH, KLPRSS_Password, AdminPassword — да.
 function Test-SecretMarker([string]$name) {
   $upper = $name.ToUpper()
@@ -391,8 +432,8 @@ function Read-Accessor([string]$accessor) {
 }
 
 # SrvView: тот же итератор, что ChunkAccessor, но с ResetIterator/GetRecordRange (nEnd включительно) и своим ReleaseIterator.
-function Read-SrvView([string]$view, [string[]]$fields, [string]$filter = "") {
-  $it = (Invoke-Ksc "SrvView.ResetIterator" @{ wstrViewName = $view; wstrFilter = $filter; vecFieldsToReturn = $fields; vecFieldsToOrder = @(); pParams = @{}; lifetimeSec = 600 }).wstrIteratorId
+function Read-SrvView([string]$view, [string[]]$fields, [string]$filter = "", $params = @{}) {
+  $it = (Invoke-Ksc "SrvView.ResetIterator" @{ wstrViewName = $view; wstrFilter = $filter; vecFieldsToReturn = $fields; vecFieldsToOrder = @(); pParams = $params; lifetimeSec = 600 }).wstrIteratorId
   try {
     $total = (Invoke-Ksc "SrvView.GetRecordCount" @{ wstrIteratorId = $it }).PxgRetVal
     $items = New-Object System.Collections.ArrayList
@@ -441,12 +482,16 @@ $HostFields = @(
   "KLHST_WKS_LAST_UPDATE","KLHST_WKS_LAST_INFOUDATE","KLHST_WKS_NAG_VERSION","KLHST_WKS_VIRUS_COUNT","KLHST_WKS_UNCURED_COUNT",
   "KLHST_WKS_FROM_UNASSIGNED","KLHST_WKS_RBT_REQUIRED","KLHST_WKS_LAST_SYSTEM_START","KLHST_WKS_CREATED",
   "KLHST_WKS_OS_BUILD_NUMBER","KLHST_WKS_CPU_ARCH","KLHST_WKS_RBT_REQUEST_REASON","KLHST_WKS_RBT_REQUEST_TIME",
-  "HST_VM_TYPE","KLHST_MANAGED_OTHER_SERVER","KLHST_WKS_EDR_STATUS","KLHST_WKS_KEEP_CONNECTION"
+  "HST_VM_TYPE","KLHST_MANAGED_OTHER_SERVER","KLHST_WKS_EDR_STATUS","KLHST_WKS_KEEP_CONNECTION",
+  "KLHST_WKS_OWNER_ID","KLHST_WKS_OWNER_IS_CUSTOM"
 )
 $GroupFields = @("id","name","parentId","grp_full_name","level","hostsNum","childGroupsNum","creationDate","lastUpdate")
 $LicenseFields = @("KLLIC_SERIAL","KLLIC_PROD_NAME","KLLIC_KEY_TYPE","KLLIC_CREATION_DATE","KLLIC_LIMIT_DATE","KLLIC_LICENSE_PERIOD","KLLIC_LIC_COUNT",
   "KLLIC_NHOSTS_ASCURRENT","KLLIC_NHOSTS_ASNEXT","KLLIC_USED_BY_ADM_SRV","KLLICSRV_KEY_INSTALLED","KLLIC_APP_ID","KLLIC_MAJ_VER")
 $RoleFields = @("nRoleId","wstrRoleName","wstrRoleDisplayName","nInternalUserId","wstrTrusteeDisplayName","wstrUserPrincipalName","nGroupId","wstrGroupName")
+# Пользователи одного устройства (GlobalUsersListSrvViewName с pParams.strHostId), секция host_users.
+$HostUserFields = @("ul_binId","ul_nVServer","ul_bUser","ul_Local","ul_imgSid","ul_wstrSamAccountName","ul_wstrPrincipalName",
+  "ul_wstrDisplayName","ul_wstrDomainSAM","ul_wstrDomain2000","ul_bVisited")
 $UserFields = @("ul_llTrusteeId","ul_nSplUserId","ul_wstrDisplayName","ul_wstrSamAccountName","ul_wstrPrincipalName","ul_bUser","ul_Builtin","ul_InternalUser")
 
 if ($tlsHook) { [STools.KscTls]::Enable($Server) }
@@ -557,6 +602,43 @@ try {
       }
     }
     if ($null -ne $hostTags) { Write-Step ("  Теги: {0} хостов" -f $hostTags.Count) }
+
+    # Пользователи устройств — у тех же хостов с агентом, по одному хосту. Отказ по хосту — у него null («не собрано»),
+    # остальные читаются; $HostUsersGiveUp отказов подряд — чтение бросается, остальные хосты получают null без
+    # запроса. Секция host_users в файле есть всегда, предупреждение — одно на весь шаг.
+    Write-Step "Пользователи устройств"
+    $hostUsers = [ordered]@{}
+    $failed = 0
+    $streak = 0
+    $skipped = 0
+    $firstError = $null
+    $n = 0
+    foreach ($hid in $tagIds) {
+      $n++
+      if ($streak -ge $HostUsersGiveUp) { $hostUsers[$hid] = $null; $skipped++; continue }
+      try {
+        $records = Read-SrvView "GlobalUsersListSrvViewName" $HostUserFields "" @{ strHostId = $hid }
+        $list = New-Object System.Collections.ArrayList
+        foreach ($rec in $records) { [void]$list.Add((Convert-HostUser $rec)) }
+        $hostUsers[$hid] = @($list.ToArray())
+        $streak = 0
+      } catch {
+        $hostUsers[$hid] = $null
+        $failed++
+        $streak++
+        if ($null -eq $firstError) { $firstError = $_.Exception.Message }
+      }
+      if ($n % 100 -eq 0) { Write-Step ("  {0} из {1}" -f $n, $tagIds.Count) }
+    }
+    if ($streak -ge $HostUsersGiveUp) {
+      $missing = $failed + $skipped
+      Write-Warning ("пользователи устройств: {0} отказов подряд, чтение прекращено: {1}" -f $HostUsersGiveUp, $firstError)
+      [void]$warnings.Add("host_users: $($HostUsersGiveUp) отказов подряд, чтение прекращено; пользователи не собраны у $($missing) хостов: $($firstError)")
+    } elseif ($failed -gt 0) {
+      Write-Warning ("пользователи устройств: не прочитаны у {0} хостов: {1}" -f $failed, $firstError)
+      [void]$warnings.Add("host_users: пользователи не прочитаны у $($failed) хостов: $($firstError)")
+    }
+    Write-Step ("  Пользователи: {0} хостов" -f $hostUsers.Count)
 
     Write-Step "Политики"
     $policies = @((Prop (Invoke-Ksc "Policy.GetPoliciesForGroup" @{ nGroupId = -1 }) "PxgRetVal") | Where-Object { $null -ne $_ })
@@ -755,7 +837,7 @@ try {
     static = $static; domains = $domains
     role_assignments = @($roleAssignments); internal_users = @($internalUsers); security = $security
     server_certs = $serverCerts; secondary_servers = @($secondaryServers); update_agents = @($updateAgents)
-    policy_contents = $policyContents
+    policy_contents = $policyContents; host_users = $hostUsers
   }
   # «Не собрано» отличается от «пусто»: несобранной секции в файле нет вовсе.
   if ($null -ne $hostTags) { $export["host_tags"] = $hostTags }

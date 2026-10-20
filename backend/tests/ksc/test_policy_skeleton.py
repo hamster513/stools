@@ -89,6 +89,18 @@ def test_skeleton_names_keys_and_types_without_values(tmp_path: Path) -> None:
     assert "ServicePassword : str (скрыто), замок" in lines
 
 
+def test_skeleton_does_not_print_host_users(tmp_path: Path) -> None:
+    """Пользователи устройств (сборщик 1.4) — персональные данные: ни имён, ни SID, ни UPN в скелете."""
+    export = _export()
+    path = tmp_path / "export.json"
+    path.write_text(json.dumps(export, ensure_ascii=False), encoding="utf-8")
+    for flags in ((), ("--numbers",), ("--calibrate",)):
+        out = _run(path, *flags)
+        values = {str(v) for users in export["host_users"].values() for u in users or [] for k, v in u.items() if k not in ("domain", "local", "group", "active")}
+        assert {v for v in values if v} and not [v for v in values if v and v in out]
+        assert "user01" not in out and synthetic.LAB_SID not in out
+
+
 def test_skeleton_lists_component_names_and_states(tmp_path: Path) -> None:
     path = tmp_path / "export.json"
     path.write_text(json.dumps(_export(), ensure_ascii=False), encoding="utf-8")

@@ -493,7 +493,7 @@ def test_script_reports_progress_and_where_it_failed(tmp_path: Path) -> None:
     """Ход работы виден по шагам со счётчиками, а отказ называет шаг и строку скрипта."""
     _run_script(tmp_path, 18362, "")
     console = (tmp_path / "default.console.txt").read_text(encoding="utf-8")
-    for line in ("Хосты: 14", "Теги хостов", "Политики: 3", "профилей прочитано: 2", "Задачи: 2", "Лицензии: 1"):
+    for line in ("Хосты: 14", "Теги хостов", "Пользователи устройств", "Пользователи: 12 хостов", "Политики: 3", "профилей прочитано: 2", "Задачи: 2", "Лицензии: 1"):
         assert line in console, console
     assert re.search(r"\[\d\d:\d\d\]", console), console   # время от начала у каждого шага
     failed = _run_script(tmp_path, 18363, "hosts_failed", expect_ok=False)
@@ -537,8 +537,10 @@ def test_script_and_online_tags_and_profiles_match(tmp_path: Path) -> None:
     """Скрипт 1.2 и онлайн-сбор против одного поддельного KSC: те же `host_tags` и `policy_profiles`;
     политика без профилей — пустые списки, а не null; секрет профиля скрыт."""
     script_raw, online_raw = _script_and_online(tmp_path, 18370, "")
-    assert script_raw["server"]["collector_version"] == "1.3"
+    assert script_raw["server"]["collector_version"] == online_raw["server"]["collector_version"] == "1.4"
     assert script_raw["host_tags"] == online_raw["host_tags"] == build_export()["host_tags"]
+    # пользователи устройств (сборщик 1.4): одна и та же секция у обоих сборщиков, SID из двоичного вида — строкой
+    assert script_raw["host_users"] == online_raw["host_users"] == build_export()["host_users"]
     assert strip_params(script_raw["policy_profiles"]) == strip_params(online_raw["policy_profiles"]) == expected_policy_profiles()
     assert script_raw["policy_profiles"]["3"] == {"profiles": [], "priorities": [], "errors": []}
     assert "profile-secret" not in json.dumps(script_raw["policy_profiles"], ensure_ascii=False)
@@ -551,6 +553,7 @@ def test_script_and_online_tags_and_profiles_match_with_params_wrappers(tmp_path
     обёртки, сырой JSON профилей совпадает с онлайн-сбором, после снятия обёрток — с эталоном."""
     script_raw, online_raw = _script_and_online(tmp_path, 18371, "params")
     assert script_raw["host_tags"] == online_raw["host_tags"] == build_export()["host_tags"]
+    assert script_raw["host_users"] == online_raw["host_users"] == build_export()["host_users"]
     assert script_raw["policy_profiles"] == online_raw["policy_profiles"]
     assert strip_params(script_raw["policy_profiles"]) == expected_policy_profiles()
 
@@ -595,3 +598,41 @@ def test_script_skip_policy_contents_skips_profiles(tmp_path: Path) -> None:
     raw = json.loads(gzip.decompress(_run_script(tmp_path, 18376, "", extra_args=("-SkipPolicyContents",)).read_bytes()))
     assert "policy_profiles" not in raw and raw["policy_contents"] == {}
     assert raw["host_tags"] == build_export()["host_tags"]
+
+
+def test_script_host_fields_match_online_collector() -> None:
+    """Атрибуты хоста у скрипта и онлайн-сбора одни и те же — с владельцем устройства (сборщик 1.4)."""
+    from api.modules.ksc.core.collector import HOST_FIELDS, HOST_USER_FIELDS
+
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    m = re.search(r"^\$HostFields = @\(([^)]*)\)", text, re.MULTILINE)
+    assert m is not None and re.findall(r'"([^"]+)"', m.group(1)) == HOST_FIELDS
+    assert {"KLHST_WKS_OWNER_ID", "KLHST_WKS_OWNER_IS_CUSTOM"} <= set(HOST_FIELDS)
+    u = re.search(r"^\$HostUserFields = @\(([^)]*)\)", text, re.MULTILINE)
+    assert u is not None and re.findall(r'"([^"]+)"', u.group(1)) == HOST_USER_FIELDS
+    assert re.search(r"^\$CollectorVersion = \"1\.4\"$", text, re.MULTILINE)
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_and_online_host_users_match_on_single_host_failure(tmp_path: Path) -> None:
+    """Отказ по одному хосту (h-ws02): у обоих сборщиков у него `null`, у остальных — списки, одно предупреждение."""
+    script_raw, online_raw = _script_and_online(tmp_path, 18377, "users_host_failed")
+    assert script_raw["host_users"] == online_raw["host_users"] == {**build_export()["host_users"], "h-ws02": None}
+    for raw in (script_raw, online_raw):
+        assert len(raw["server"]["warnings"]) == 1 and raw["server"]["warnings"][0].startswith("host_users: пользователи не прочитаны у 1 хостов: ")
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_host_users_give_up_after_failures_in_a_row(tmp_path: Path) -> None:
+    """Копия скрипта с порогом 3: три отказа подряд (403) — чтение бросается, у всех хостов `null`, секция есть,
+    предупреждение одно, остальной сбор на месте."""
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    assert text.count("$HostUsersGiveUp = 20") == 1
+    (script_dir / SCRIPT.name).write_text(text.replace("$HostUsersGiveUp = 20", "$HostUsersGiveUp = 3"), encoding="utf-8-sig")
+    raw = json.loads(gzip.decompress(_run_script(tmp_path, 18378, "users_denied", script_dir=script_dir).read_bytes()))
+    assert raw["host_users"] == {h: None for h in build_export()["host_users"]}
+    assert len(raw["server"]["warnings"]) == 1
+    assert raw["server"]["warnings"][0].startswith("host_users: 3 отказов подряд, чтение прекращено; пользователи не собраны у 12 хостов: ")
+    assert raw["internal_users"] == build_export()["internal_users"] and len(raw["hosts"]) == 14
