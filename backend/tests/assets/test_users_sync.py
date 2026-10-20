@@ -5,18 +5,19 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from api.jobs import run_job, start_job
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import datetime_to_filetime
-from api.modules.ad.models import AdSnapshot
+from api.modules.ad.models import AdDomain, AdSnapshot
 from api.modules.ad.services.snapshots import import_export as import_ad
 from api.modules.ad.services.snapshots import snapshot_path as ad_snapshot_path
 from api.modules.assets.models import (
@@ -29,15 +30,17 @@ from api.modules.assets.models import (
     AssetUserHost,
     AssetUserObservation,
 )
+from api.modules.assets.services import sync as sync_service
 from api.modules.assets.services.assets import delete_assets
 from api.modules.assets.services.sync import run_sync
-from api.modules.assets.services.users import ad_domains, sync_users
+from api.modules.assets.services.users import ad_domains, ad_group_notes, sync_users
 from api.modules.ksc.models import KscHost, KscSnapshot
 from tests.ad.synthetic import build_export as build_ad_export
 from tests.assets.synthetic import load_ksc
 
 CORP_SID = "S-1-5-21-1111111111-2222222222-3333333333"
 LAB_SID = "S-1-5-21-1111111111-2222222222-4444444444"
+LAB2_SID = "S-1-5-21-1111111111-2222222222-5555555555"
 CORP_DN = "DC=corp,DC=local"
 LAB_DN = "DC=lab,DC=local"
 #: Участники групп из ForeignSecurityPrincipals: well-known и учётка чужого домена — не пользователи.
@@ -326,10 +329,13 @@ def test_privileged_via_nested_group_and_rid_500(loaded: Session) -> None:
     assert u3.enabled is None and u3.privileged is False
 
 
-def test_group_notes_preserved(loaded: Session) -> None:
+def test_group_notes_once_per_domain(loaded: Session) -> None:
     sync(loaded)
     data = loaded.execute(select(AssetUserObservation.data).where(AssetUserObservation.source_key == csid(1101))).scalar_one()
-    assert any("Big" in n and "1500" in n for n in data["group_notes"])
+    assert "group_notes" not in data
+    notes = ad_group_notes(loaded)
+    assert list(notes) == [data["domain_id"]]
+    assert any("Big" in n and "1500" in n for n in notes[data["domain_id"]])
 
 
 def test_resync_makes_no_duplicates(loaded: Session) -> None:
@@ -418,7 +424,8 @@ def test_orphan_local_user_removed_after_host_deletion(loaded: Session, data_dir
 
 
 def test_per_domain_completeness(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
-    lab = ad_raw([account("user09", f"{LAB_SID}-1109", base=LAB_DN)], now - dt.timedelta(hours=3), sid=LAB_SID, dns="lab.local", netbios="LAB", base=LAB_DN)
+    lab = ad_raw([account("user09", f"{LAB_SID}-1109", base=LAB_DN), group("LabStaff", f"{LAB_SID}-1301", [dn("user09", LAB_DN)], base=LAB_DN)],
+                 now - dt.timedelta(hours=3), sid=LAB_SID, dns="lab.local", netbios="LAB", base=LAB_DN)
     lab_snap = load_ad(loaded, data_dir, lab)
     sync(loaded)
     assert ad_domains(loaded) == {"corp.local", "lab.local"}
@@ -432,8 +439,138 @@ def test_per_domain_completeness(loaded: Session, data_dir: Path, now: dt.dateti
     assert ad_domains(loaded) == {"corp.local"}
     u2 = user(loaded, sid=csid(1102))
     assert u2.enabled is None and u2.privileged is False
+    # Группы: у пропавшей из AD сняты, у учётки непрочитанного домена — прежние.
+    assert groups(loaded, u2.id) == {}
+    assert groups(loaded, user(loaded, sid=f"{LAB_SID}-1109").id) == {f"{LAB_SID}-1301": ("LAB\\LabStaff", True)}
 
 
+def test_failures_keyed_by_domain_not_dns(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    """Два домена без dns_root: файл одного не читается — учётки другого всё равно пропадают."""
+    def lab(sid: str, netbios: str, users: list[str]) -> dict[str, Any]:
+        base = f"DC={netbios.lower()},DC=local"
+        return ad_raw([account(u, f"{sid}-{1100 + i}", base=base) for i, u in enumerate(users, start=1)],
+                      now - dt.timedelta(hours=3), sid=sid, dns="", netbios=netbios, base=base)
+
+    broken = load_ad(loaded, data_dir, lab(LAB_SID, "LABA", ["usera"]))
+    load_ad(loaded, data_dir, lab(LAB2_SID, "LABB", ["userb", "userc"]))
+    sync(loaded)
+    ad_snapshot_path(data_dir, broken.id).write_bytes(b"broken")
+    later = lab(LAB2_SID, "LABB", ["userb"])
+    later["collected_at"] = (now - dt.timedelta(hours=2)).isoformat()
+    load_ad(loaded, data_dir, later)
+    sync(loaded)
+    gone = dict(loaded.execute(select(AssetUserObservation.source_key, AssetUserObservation.gone_at).where(AssetUserObservation.source == "ad")).tuples().all())
+    assert gone[f"{LAB_SID}-1101"] is None
+    assert gone[f"{LAB2_SID}-1101"] is None and gone[f"{LAB2_SID}-1102"] is not None
+
+
+def test_ad_domain_removed_users_gone(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    lab = ad_raw([account("user09", f"{LAB_SID}-1109", base=LAB_DN)], now - dt.timedelta(hours=3), sid=LAB_SID, dns="lab.local", netbios="LAB", base=LAB_DN)
+    load_ad(loaded, data_dir, lab)
+    sync(loaded)
+    loaded.execute(delete(AdDomain).where(AdDomain.sid == LAB_SID))
+    loaded.commit()
+    sync(loaded)
+    obs = loaded.execute(select(AssetUserObservation).where(AssetUserObservation.source_key == f"{LAB_SID}-1109")).scalar_one()
+    assert obs.gone_at is not None
+    assert ad_domains(loaded) == {"corp.local"}
+
+
+def test_privileged_by_group_name_like_ad_module(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    """Группа из `privileged_groups` по CN (sAMAccountName другой) — как `ExportIndex.group_by_name`."""
+    extra = [account("user06", csid(1106)),
+             {"dn": dn("DnsAdmins"), "class": "group", "sid": csid(1305), "sam": "DNSADM01", "name": "DnsAdmins", "member": [dn("user06")]}]
+    load_ad(loaded, data_dir, ad_raw(corp_objects(now) + extra, now - dt.timedelta(hours=2)))
+    sync(loaded)
+    assert user(loaded, sid=csid(1106)).privileged is True
+    assert user(loaded, sid=csid(1101)).privileged is False
+
+
+def test_link_gone_when_host_leaves_ksc(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    sync(loaded)
+    u2, ws02 = user(loaded, sid=csid(1102)), asset_id(loaded, "ws02")
+    load_ksc_users(loaded, data_dir, now - dt.timedelta(minutes=10), ksc_users(), hosts=[h for h in HOSTS if h[0] != "WS02"])
+    sync(loaded)
+    assert asset_id(loaded, "ws02") == ws02  # актив остался, наблюдение KSC пропало
+    assert links(loaded, u2.id)[(ws02, "session")].gone_at is not None
+    assert ksc_extra(loaded, "h-ws02")["users_collected"] is False
+
+
+def test_two_ksc_servers_same_sid_and_one_asset(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    """Второй сервер KSC видит тот же WS01: user01 — один пользователь; связь user07, видимая только вторым
+    сервером, не пропадает, пока он хост не собрал, хотя первый сервер тот же актив собрал."""
+    user07 = rec("CORP\\user07", sid=csid(1107))
+    snap2 = load_ksc(loaded, data_dir, [("WS01", "10.10.0.21")], now - dt.timedelta(minutes=50), server="ksc02")
+    for h in loaded.execute(select(KscHost).where(KscHost.snapshot_id == snap2.id)).scalars():
+        h.extra_json = json.dumps({**json.loads(h.extra_json or "{}"), "users": [USER01, user07], "users_collected": True, "owner": None})
+    loaded.commit()
+    sync(loaded)
+    ws01 = asset_id(loaded, "ws01")
+    u1 = user(loaded, sid=csid(1101))
+    servers = {k.split(":", 1)[0] for (k,) in loaded.execute(select(AssetUserObservation.source_key).where(
+        AssetUserObservation.user_id == u1.id, AssetUserObservation.source == "ksc", AssetUserObservation.source_key.like(f"%{csid(1101)}"))).all()}
+    assert len(servers) == 2
+    assert links(loaded, u1.id)[(ws01, "session")].active is True
+    u7 = user(loaded, sid=csid(1107))
+    assert links(loaded, u7.id)[(ws01, "session")].gone_at is None
+    # Второй сервер пользователей WS01 не собрал, первый собрал (user07 у него нет).
+    snap3 = load_ksc(loaded, data_dir, [("WS01", "10.10.0.21")], now - dt.timedelta(minutes=20), server="ksc02")
+    for h in loaded.execute(select(KscHost).where(KscHost.snapshot_id == snap3.id)).scalars():
+        h.extra_json = json.dumps({**json.loads(h.extra_json or "{}"), "users": None, "users_collected": True, "owner": None})
+    loaded.commit()
+    sync(loaded)
+    assert links(loaded, u7.id)[(ws01, "session")].gone_at is None
+
+
+def test_ksc_record_without_sid_moves_to_ad_user(db_session: Session, data_dir: Path, now: dt.datetime) -> None:
+    """KSC раньше AD: `CORP\\user05` без SID и без карты доменов — свой пользователь; после выгрузки AD
+    запись переезжает к учётке AD, прежний пользователь без живого удаляется."""
+    db_session.add(AssetSettings(data={"sync_after_import": False}))
+    db_session.commit()
+    load_ksc_users(db_session, data_dir, now - dt.timedelta(hours=2),
+                   {"h-ws01": {"users": [rec("CORP\\user05", domain="")], "users_collected": True, "owner": None}})
+    sync(db_session)
+    early = user(db_session, name_key="corp\\user05").id
+    load_ad(db_session, data_dir, ad_raw(corp_objects(now) + [account("user05", csid(1105))], now - dt.timedelta(hours=1)))
+    load_ksc_users(db_session, data_dir, now - dt.timedelta(minutes=30),
+                   {"h-ws01": {"users": [rec("CORP\\user05", domain="")], "users_collected": True, "owner": None}})
+    sync(db_session)
+    found = [u for u in users(db_session) if u.sam == "user05"]
+    assert [u.sid for u in found] == [csid(1105)]
+    assert db_session.get(AssetUser, early) is None
+    ws01 = asset_id(db_session, "ws01")
+    assert links(db_session, found[0].id)[(ws01, "session")].gone_at is None
+
+
+def test_overlong_strings_are_trimmed(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    long_user = rec("CORP\\user08", sid=csid(1108), upn="u" * 1100 + "@corp.local", display_name="Д" * 400)
+    load_ksc_users(loaded, data_dir, now - dt.timedelta(minutes=10), ksc_users(**{
+        "h-ws01": {"users": [USER01, long_user], "users_collected": True, "owner": None}}))
+    objs = corp_objects(now)
+    objs[0] = {**objs[0], "displayName": "x" * 300, "userPrincipalName": "y" * 1024}
+    load_ad(loaded, data_dir, ad_raw(objs, now - dt.timedelta(hours=2)))
+    counts = sync(loaded)
+    assert "users_failed" not in counts
+    u8 = user(loaded, sid=csid(1108))
+    assert len(u8.display_name) == 255 and len(u8.upn) == 255
+    assert len(user(loaded, sid=csid(1101)).display_name) <= 255
+
+
+def test_failed_users_step_keeps_hosts_and_reconcile(loaded: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def boom(*args: Any, **kwargs: Any) -> dict[str, int]:
+        raise RuntimeError("сбой")
+
+    monkeypatch.setattr(sync_service, "sync_users", boom)
+    monkeypatch.setattr(sync_service, "reconcile_findings", lambda db, why: calls.append(why))
+    counts = sync(loaded)
+    assert counts["users_failed"] == 1 and counts["ksc"] == 3
+    assert {"ws01", "srv01", "ws02"} <= {a.name_key for a in loaded.execute(select(Asset)).scalars()}
+    assert calls and users(loaded) == []
+
+
+@pytest.mark.skipif(not os.environ.get("STOOLS_SLOW_TESTS"), reason="замер времени: STOOLS_SLOW_TESTS=1")
 def test_sync_users_timing_on_larger_case(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
     """Не порог, а замер для отчёта: 2000 учёток AD и по 3 пользователя на 300 хостах KSC."""
     many = [account(f"user{i:04d}", csid(5000 + i)) for i in range(2000)]

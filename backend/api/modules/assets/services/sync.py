@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import Engine, func, select, text
 from sqlalchemy.orm import Session
 
-from api.jobs import JobHandle, active_job, run_job, start_job
+from api.jobs import JobCancelled, JobHandle, active_job, run_job, start_job
 from api.modules.assets.core.matching import Observed, is_ip, normalize_fqdn, normalize_name
 from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import Asset, AssetJob, AssetObservation
@@ -34,7 +34,12 @@ from api.modules.assets.services.assets import (
     settings_row,
 )
 from api.modules.assets.services.networks import load_networks
-from api.modules.assets.services.users import sync_users
+from api.modules.assets.services.users import (
+    AdExportCache,
+    ksc_host_users,
+    read_ad_export,
+    sync_users,
+)
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
 
@@ -42,8 +47,10 @@ log = logging.getLogger("stools.assets")
 
 SYNC_SOURCES = ("vm", "ksc", "ad")
 SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD"}
-#: Итог задачи: после источников — пользователи (`services.users`).
+#: Итог задачи: после источников — пользователи (`services.users`); `users_failed` — шаг пользователей не удался.
 COUNT_TITLES = {**SOURCE_TITLES, "users": "пользователи"}
+USERS_FAILED = "users_failed"
+USERS_FAILED_TEXT = "пользователи: сбой, см. журнал"
 #: Кто запустил задачу после импорта модуля: человека у неё нет.
 AUTO_STARTED_BY = "после импорта"
 #: Прогресс и проверка отмены — раз в столько наблюдений.
@@ -94,7 +101,8 @@ def sync_job(db: Session, handle: JobHandle, trigger: str) -> None:
     counts = run_sync(db, handle)
     if counts is None:
         return
-    handle.stage("done", message=f"{trigger}: " + " · ".join(f"{COUNT_TITLES[s]} {n}" for s, n in counts.items()))
+    parts = [USERS_FAILED_TEXT if s == USERS_FAILED else f"{COUNT_TITLES[s]} {n}" for s, n in counts.items()]
+    handle.stage("done", message=f"{trigger}: " + " · ".join(parts))
 
 
 # ---- Чтение источников ----------------------------------------------------
@@ -135,23 +143,27 @@ def observations_from_ksc(db: Session) -> Iterator[Observed]:
         for h in db.execute(select(KscHost).where(KscHost.snapshot_id == snap.id).order_by(KscHost.id)).scalars():
             fqdn = normalize_fqdn(h.fqdn)
             extra = json.loads(h.extra_json or "{}")
+            users_collected, _people, session_groups = ksc_host_users(extra)
             yield Observed(
                 source="ksc", source_key=f"{server.id}:{h.host_id}", name=h.name or fqdn.partition(".")[0], fqdn=fqdn, domain=h.domain,
                 ip=h.ip, ips=[h.ip] if h.ip else [], os=h.os, seen_at=snap.collected_at,
                 extra={
                     "group_path": h.group_path, "tags": extra.get("tags", []), "components": json.loads(h.components_json or "[]"),
                     "agent_alive": h.agent_alive, "protection": h.protection, "server_id": server.id,
+                    # Пользователи хоста (§2.1): собраны ли и группы с сеансом — только показ.
+                    "users_collected": users_collected, "session_groups": session_groups,
                 },
             )
 
 
-def _ad_observations(db: Session, data_dir: Path) -> tuple[list[Observed], bool]:
+def _ad_observations(db: Session, data_dir: Path, cache: AdExportCache | None = None) -> tuple[list[Observed], bool]:
     """Компьютеры последнего снапшота каждого домена из файла выгрузки; второе — все ли файлы
-    прочитаны: без файла домена его компьютеры нельзя считать пропавшими."""
+    прочитаны: без файла домена его компьютеры нельзя считать пропавшими. `cache` — разобранные
+    выгрузки прохода: их же берёт шаг пользователей."""
     from api.modules.ad.core.checks.clusters import cluster_kind
-    from api.modules.ad.core.export import ExportFormatError, filetime_to_datetime, load_export_path
+    from api.modules.ad.core.export import ExportFormatError, filetime_to_datetime
     from api.modules.ad.models import AdDomain
-    from api.modules.ad.services.snapshots import latest_snapshot, snapshot_path
+    from api.modules.ad.services.snapshots import latest_snapshot
 
     out: list[Observed] = []
     complete = True
@@ -160,7 +172,7 @@ def _ad_observations(db: Session, data_dir: Path) -> tuple[list[Observed], bool]
         if snap is None:
             continue
         try:
-            export = load_export_path(snapshot_path(data_dir, snap.id))
+            export = read_ad_export(cache, data_dir, snap.id)
         except (ExportFormatError, OSError, ValueError) as exc:
             complete = False
             log.warning("снапшот AD #%s не прочитан: %s", snap.id, type(exc).__name__)
@@ -189,13 +201,13 @@ def observations_from_ad(db: Session, data_dir: Path) -> Iterator[Observed]:
     yield from _ad_observations(db, data_dir)[0]
 
 
-def _read(db: Session, source: str, data_dir: Path) -> tuple[list[Observed], bool]:
+def _read(db: Session, source: str, data_dir: Path, cache: AdExportCache | None = None) -> tuple[list[Observed], bool]:
     if source == "vm":
         return list(observations_from_vm(db)), True
     if source == "ksc":
         return list(observations_from_ksc(db)), True
     if source == "ad":
-        return _ad_observations(db, data_dir)
+        return _ad_observations(db, data_dir, cache)
     raise ValueError(f"неизвестный источник «{source}»")
 
 
@@ -308,9 +320,10 @@ def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict
     index = MatchIndex.load(db)
     rows = {(r.source, r.source_key): r for r in db.execute(select(AssetObservation)).scalars()}
     networks = load_networks(db)
+    ad_cache: AdExportCache = {}
     counts: dict[str, int] = {}
     for source in sources:
-        found, complete = _read(db, source, data_dir)
+        found, complete = _read(db, source, data_dir, ad_cache)
         handle.stage("sync", total=len(found), message=f"{SOURCE_TITLES.get(source, source)}: хостов {len(found)}")
         seen: set[str] = set()
         for i, obs in enumerate(found, start=1):
@@ -327,6 +340,8 @@ def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict
                 if src == source and key not in seen and row.gone_at is None:
                     row.gone_at = now
                     touched.add(row.asset_id)
+                    if (row.extra or {}).get("users_collected"):
+                        row.extra = {**row.extra, "users_collected": False}  # хоста в KSC нет — и пользователей
             db.flush()
             # Наблюдения задетых активов группируются одним проходом: перебор всех строк
             # на каждый актив был бы квадратичным на тысячах пропавших хостов.
@@ -342,9 +357,17 @@ def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict
         db.commit()
         counts[source] = len(seen)
     # Пользователи — последним шагом: связям с хостами нужны уже сопоставленные активы.
+    # Сбой шага не ломает проход: хосты уже записаны, сверка находок и повторный проход идут дальше.
     if "ad" in sources or "ksc" in sources:
-        counts["users"] = sync_users(db, handle, data_dir, now)["users"]
-        db.commit()
+        try:
+            counts["users"] = sync_users(db, handle, data_dir, now, ad_cache)["users"]
+            db.commit()
+        except JobCancelled:
+            raise
+        except Exception:
+            db.rollback()
+            log.exception("синхронизация пользователей не удалась, хосты синхронизированы")
+            counts[USERS_FAILED] = 1
     return counts
 
 

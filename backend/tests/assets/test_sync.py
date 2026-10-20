@@ -284,11 +284,11 @@ def test_request_during_sync_runs_one_more_pass(loaded: Session, monkeypatch: py
     reads: list[str] = []
     asked: list[int | None] = []
 
-    def read(db: Session, source: str, data_dir: Path) -> Any:
+    def read(db: Session, source: str, data_dir: Path, cache: Any = None) -> Any:
         reads.append(source)
         if len(reads) == 1:
             asked.append(request_sync(loaded, "ksc"))  # импорт KSC закончился посреди синхронизации
-        return real_read(db, source, data_dir)
+        return real_read(db, source, data_dir, cache)
 
     monkeypatch.setattr(sync_service, "_read", read)
     sync(loaded)
