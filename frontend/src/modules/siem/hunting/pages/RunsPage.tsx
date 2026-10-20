@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
-import { FullPageSpinner } from '@/components/ui/Spinner'
+import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link, useRouter } from '@/lib/router'
@@ -70,9 +70,9 @@ function missingNights(items: RunView[], from: string, to: string): string[] {
 type ListRow = { kind: 'run'; run: RunView } | { kind: 'gap'; date: string }
 const rowDate = (r: ListRow) => (r.kind === 'run' ? r.run.target_date : r.date)
 
-/** Ночные прогоны: список ночей (без `id`) или карточка прогона с построчной историей запросов. */
-export function RunsPage({ id }: { id?: number }) {
-  return id === undefined ? <RunsList /> : <RunCard id={id} />
+/** Карточка ночного прогона с построчной историей запросов; список ночей — `RunsHistory` в планировщике. */
+export function RunsPage({ id }: { id: number }) {
+  return <RunCard id={id} />
 }
 
 /**
@@ -177,7 +177,11 @@ function Messages({ actions }: { actions: Actions }) {
 
 // --- Список -------------------------------------------------------------------
 
-function RunsList() {
+/**
+ * История ночей без шапки страницы: живёт в свёрнутом блоке планировщика. Пропуски, «Запустить за дату»
+ * и переход в карточку ночи — здесь же, чтобы расписание и его итоги были на одном экране.
+ */
+export function RunsHistory() {
   const { navigate } = useRouter()
   const runs = useRuns()
   const expected = useExpectedNights()
@@ -193,19 +197,18 @@ function RunsList() {
   ].sort((a, b) => (rowDate(a) < rowDate(b) ? 1 : rowDate(a) > rowDate(b) ? -1 : 0))
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
-        <h1 className="text-sm font-semibold text-text">Ночные прогоны</h1>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         {runs.data && <div className="font-mono text-xs tabular-nums text-text-secondary">всего: {items.length}</div>}
         {gaps.length > 0 && <div className="font-mono text-xs tabular-nums text-kind-1">пропущено ночей: {gaps.length}</div>}
         <div className="flex basis-full flex-col gap-1 empty:hidden"><Messages actions={actions} /></div>
-      </header>
+      </div>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-app-bg p-4">
-        {runs.isLoading && <FullPageSpinner />}
+      <div>
+        {runs.isLoading && <div className="flex justify-center py-6"><Spinner /></div>}
         {runs.isError && <ErrorState message={apiMessage(runs.error, 'Не удалось загрузить прогоны')} onRetry={() => runs.refetch()} />}
         {runs.data && rows.length === 0 && (
-          <EmptyState icon={History} title="Прогонов ещё не было" description="Ночной прогон стартует в окне из настроек Threat Hunting; пропущенная ночь появится здесь пробелом с кнопкой «Запустить за дату»." />
+          <EmptyState icon={History} title="Прогонов ещё не было" description="Ночной прогон стартует по расписанию выше; пропущенная ночь появится здесь пробелом с кнопкой «Запустить за дату»." />
         )}
         {runs.data && rows.length > 0 && (
           <div data-col-resize-root className="overflow-x-auto rounded border border-grid bg-surface">
@@ -259,7 +262,7 @@ function RunCard({ id }: { id: number }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
       <header className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-grid bg-surface px-4 py-2.5">
-        <Link to="/siem/hunting/runs" className={LINK}><ArrowLeft size={13} aria-hidden /> Прогоны</Link>
+        <Link to="/siem/hunting/scheduler" className={LINK}><ArrowLeft size={13} aria-hidden /> Планировщик</Link>
         <h1 className="text-sm font-semibold text-text">Ночь {ruDay(r.target_date)}</h1>
         <RunStatusText status={r.status} className="text-xs" />
         <div className="ml-auto"><RunButtons run={r} actions={actions} others={all.data ?? []} /></div>

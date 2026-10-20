@@ -23,10 +23,13 @@ import {
   type ImportApplyIn,
   type ImportPreview,
   type ImportResult,
+  type OrderIn,
   type RerunDateIn,
   type RerunOut,
   type RunDetail,
   type RunView,
+  type SchedulerIn,
+  type SchedulerOut,
   type ThFindingList,
   type ThFindingsFilters,
   type ThFindingView,
@@ -42,6 +45,8 @@ export const TH_FINDINGS_KEY = ['th', 'findings'] as const
 export const TH_RUNS_KEY = ['th', 'runs'] as const
 export const TH_DEEP_KEY = ['th', 'deep'] as const
 export const TH_JOBS_KEY = ['th', 'jobs'] as const
+export const TH_SCHEDULER_KEY = ['th', 'scheduler'] as const
+export const TH_SETTINGS_KEY = ['th', 'settings'] as const
 
 /** Размер страницы таблицы событий находки; предел сервера — 1000. */
 export const EVENTS_PAGE_SIZE = 100
@@ -108,6 +113,9 @@ function useHuntCache() {
   return (hunt: HuntView) => {
     qc.setQueryData([...TH_HUNTS_KEY, 'one', hunt.id], hunt)
     qc.invalidateQueries({ queryKey: [...TH_HUNTS_KEY, 'list'] })
+    // Очередь планировщика показывает те же ханты: галочка «в очереди» встаёт сразу, остальное — запросом.
+    qc.setQueryData<SchedulerOut>(TH_SCHEDULER_KEY, (old) => old && { ...old, hunts: old.hunts.map((h) => (h.id === hunt.id ? { ...h, enabled: hunt.enabled } : h)) })
+    qc.invalidateQueries({ queryKey: TH_SCHEDULER_KEY })
   }
 }
 
@@ -185,7 +193,7 @@ export const LIBRARY_EXPORT_URL = `${BASE}/library/export`
 
 export function useThSettings() {
   return useQuery<ThSettingsView, ApiRequestError>({
-    queryKey: ['th', 'settings'],
+    queryKey: TH_SETTINGS_KEY,
     queryFn: () => api.get(`${BASE}/settings`),
   })
 }
@@ -194,7 +202,47 @@ export function useSaveThSettings() {
   const qc = useQueryClient()
   return useMutation<ThSettingsView, ApiRequestError, ThSettings>({
     mutationFn: (body) => api.put(`${BASE}/settings`, body),
-    onSuccess: (view) => qc.setQueryData(['th', 'settings'], view),
+    onSuccess: (view) => {
+      qc.setQueryData(TH_SETTINGS_KEY, view)
+      // Расписание живёт в тех же настройках: планировщик перечитает его.
+      qc.invalidateQueries({ queryKey: TH_SCHEDULER_KEY })
+    },
+  })
+}
+
+// --- Планировщик -----------------------------------------------------------
+
+export function useScheduler() {
+  return useQuery<SchedulerOut, ApiRequestError>({
+    queryKey: TH_SCHEDULER_KEY,
+    queryFn: () => api.get(`${BASE}/scheduler`),
+  })
+}
+
+/** Расписание: ответ — весь планировщик; настройки раздела держат то же время и паузу, их кэш сбрасывается. */
+export function useSaveScheduler() {
+  const qc = useQueryClient()
+  return useMutation<SchedulerOut, ApiRequestError, SchedulerIn>({
+    mutationFn: (body) => api.put(`${BASE}/scheduler`, body),
+    onSuccess: (out) => {
+      qc.setQueryData(TH_SCHEDULER_KEY, out)
+      qc.invalidateQueries({ queryKey: TH_SETTINGS_KEY })
+    },
+  })
+}
+
+/** Порядок очереди: полный список id; 422 «набор хантов не совпадает», если ханты успели смениться. */
+export function useSaveQueueOrder() {
+  const qc = useQueryClient()
+  return useMutation<SchedulerOut, ApiRequestError, OrderIn>({
+    mutationFn: (body) => api.put(`${BASE}/scheduler/order`, body),
+    onSuccess: (out) => {
+      qc.setQueryData(TH_SCHEDULER_KEY, out)
+      // Библиотека показывает ханты в порядке очереди.
+      qc.invalidateQueries({ queryKey: [...TH_HUNTS_KEY, 'list'] })
+    },
+    // Отказ (чаще всего ханты сменились в другой вкладке) — экран перечитывает очередь, а не держит устаревшую.
+    onError: () => qc.invalidateQueries({ queryKey: TH_SCHEDULER_KEY }),
   })
 }
 

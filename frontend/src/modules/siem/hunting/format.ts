@@ -5,11 +5,19 @@ export function ruDay(value: string | null | undefined): string {
   return value ? value.split('-').reverse().join('.') : '—'
 }
 
-/** Момент времени (ISO) — в местных дате и времени. */
-export function ruStamp(value: string | null | undefined): string {
+/**
+ * Момент времени (ISO) — в местных дате и времени. С `timeZone` — по часам этого пояса: расписание задано
+ * в поясе сервера, и срок запуска в нём совпадает с введённым временем старта. Неизвестный браузеру пояс — местное время.
+ */
+export function ruStamp(value: string | null | undefined, timeZone?: string): string {
   if (!value) return '—'
   const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  if (Number.isNaN(d.getTime())) return value
+  try {
+    return d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short', timeZone })
+  } catch {
+    return d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  }
 }
 
 /** Сколько прошло между двумя моментами (ISO); конец не задан — до сейчас. Пустое начало — прочерк. */

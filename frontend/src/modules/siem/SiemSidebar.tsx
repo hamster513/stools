@@ -1,4 +1,4 @@
-import { Copy, Crosshair, History, LayoutDashboard, Library, ListTree, Radar, Settings2, SlidersHorizontal, Telescope } from 'lucide-react'
+import { CalendarClock, Copy, Crosshair, LayoutDashboard, Library, ListTree, Radar, Settings2, SlidersHorizontal, Telescope } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { useThFindings } from './hunting/api/queries'
@@ -19,7 +19,7 @@ const HUNTING_ITEMS = [
   { key: 'findings', label: 'Находки', to: '/siem/hunting', prefix: '/siem/hunting/findings', icon: Radar },
   { key: 'library', label: 'Библиотека хантов', to: '/siem/hunting/library', prefix: '/siem/hunting/library', icon: Library },
   { key: 'deep', label: 'Большой хант', to: '/siem/hunting/deep', prefix: '/siem/hunting/deep', icon: Telescope },
-  { key: 'runs', label: 'Прогоны', to: '/siem/hunting/runs', prefix: '/siem/hunting/runs', icon: History },
+  { key: 'scheduler', label: 'Планировщик', to: '/siem/hunting/scheduler', prefix: '/siem/hunting/scheduler', icon: CalendarClock },
 ] as const
 
 const LINK =
@@ -84,7 +84,8 @@ export function SiemSidebar({ snapshotId }: { snapshotId: number | null }) {
         )}
         <div className="mt-2 border-t border-grid px-3 pt-3 pb-1 text-sm font-semibold tracking-wide text-text">Threat Hunting</div>
         {HUNTING_ITEMS.map(({ key, label, to, prefix, icon: Icon }) => {
-          const active = path === to || path.startsWith(`${prefix}/`)
+          // Карточка ночи (`/siem/hunting/runs/:id`) открывается из истории планировщика — подсвечивается он.
+          const active = path === to || path.startsWith(`${prefix}/`) || (key === 'scheduler' && path.startsWith('/siem/hunting/runs/'))
           return (
             <Link
               key={key}

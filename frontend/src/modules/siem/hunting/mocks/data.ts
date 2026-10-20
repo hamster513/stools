@@ -41,6 +41,8 @@ export interface HuntRecord {
   technique_id: string | null
   enabled: boolean
   deleted: boolean
+  /** Место в очереди ночного прогона; у удалённых место сохраняется и не переиспользуется. */
+  position: number
   updated_at: string
   updated_by: string
   queries: QueryRecord[]
@@ -68,8 +70,7 @@ export interface FindingRecord {
 export const SETTINGS: ThSettings = {
   nightly_enabled: true,
   window_from: '01:00',
-  window_to: '02:00',
-  query_pause_s: 30,
+  hunt_pause_s: 30,
   request_timeout_s: 300,
   retry_minutes: [10, 20, 30, 30, 30, 30, 30],
   nightly_deadline_h: 20,
@@ -117,6 +118,7 @@ export const HUNTS: HuntRecord[] = [
     technique_id: 'T1543.003',
     enabled: true,
     deleted: false,
+    position: 0,
     updated_at: '2026-10-08T12:20:00Z',
     updated_by: 'analyst',
     queries: [
@@ -136,6 +138,7 @@ export const HUNTS: HuntRecord[] = [
     technique_id: 'T1003.001',
     enabled: true,
     deleted: false,
+    position: 1,
     updated_at: '2026-10-01T10:00:00Z',
     updated_by: 'analyst',
     queries: [
@@ -152,6 +155,7 @@ export const HUNTS: HuntRecord[] = [
     technique_id: 'T1059.001',
     enabled: true,
     deleted: false,
+    position: 2,
     updated_at: '2026-10-05T09:45:00Z',
     updated_by: 'analyst',
     queries: [
@@ -171,6 +175,7 @@ export const HUNTS: HuntRecord[] = [
     technique_id: 'T1070.001',
     enabled: false,
     deleted: false,
+    position: 3,
     updated_at: '2026-09-28T15:10:00Z',
     updated_by: 'analyst',
     queries: [
@@ -185,6 +190,7 @@ export const HUNTS: HuntRecord[] = [
     technique_id: 'T1046',
     enabled: true,
     deleted: false,
+    position: 4,
     updated_at: '2026-10-03T08:00:00Z',
     updated_by: 'analyst',
     queries: [
@@ -201,6 +207,7 @@ export const HUNTS: HuntRecord[] = [
     technique_id: 'T1053.003',
     enabled: true,
     deleted: false,
+    position: 5,
     updated_at: '2026-10-02T11:30:00Z',
     updated_by: 'analyst',
     queries: [
@@ -212,7 +219,7 @@ export const HUNTS: HuntRecord[] = [
 ]
 
 /** Что мок импорта «находит» в файле: новый хант, который можно создать. */
-export const IMPORT_NEW: Omit<HuntRecord, 'id' | 'updated_at' | 'updated_by' | 'deleted' | 'queries' | 'enabled'> & { query: Omit<QueryRecord, 'id' | 'position' | 'enabled'> } = {
+export const IMPORT_NEW: Omit<HuntRecord, 'id' | 'updated_at' | 'updated_by' | 'deleted' | 'position' | 'queries' | 'enabled'> & { query: Omit<QueryRecord, 'id' | 'position' | 'enabled'> } = {
   code: 'TH-WIN-005',
   name: 'Запуск исполняемого файла из Temp (T1204.002)',
   description: 'Процессы, стартовавшие из каталогов Temp и Downloads.',

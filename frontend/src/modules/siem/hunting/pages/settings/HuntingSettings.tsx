@@ -17,8 +17,7 @@ const SUBTITLE = 'mb-2 text-[11px] font-semibold tracking-wide text-text-seconda
 interface Draft {
   nightly_enabled: boolean
   window_from: string
-  window_to: string
-  query_pause_s: string
+  hunt_pause_s: string
   request_timeout_s: string
   retry_minutes: string
   nightly_deadline_h: string
@@ -30,11 +29,11 @@ interface Draft {
   retention_days: string
 }
 
-type NumberKey = Exclude<keyof Draft, 'nightly_enabled' | 'window_from' | 'window_to' | 'retry_minutes'>
+type NumberKey = Exclude<keyof Draft, 'nightly_enabled' | 'window_from' | 'retry_minutes'>
 
 /** Границы те же, что у сервера (`ThSettings`). */
 const RANGES: Record<NumberKey, [number, number]> = {
-  query_pause_s: [1, Infinity],
+  hunt_pause_s: [1, Infinity],
   request_timeout_s: [1, Infinity],
   nightly_deadline_h: [1, Infinity],
   default_limit: [1, 100_000],
@@ -49,8 +48,7 @@ function toDraft(s: ThSettings): Draft {
   return {
     nightly_enabled: s.nightly_enabled,
     window_from: s.window_from,
-    window_to: s.window_to,
-    query_pause_s: String(s.query_pause_s),
+    hunt_pause_s: String(s.hunt_pause_s),
     request_timeout_s: String(s.request_timeout_s),
     retry_minutes: s.retry_minutes.join(', '),
     nightly_deadline_h: String(s.nightly_deadline_h),
@@ -74,7 +72,6 @@ function parseRetries(text: string): number[] | null {
 function errorsOf(d: Draft): Partial<Record<keyof Draft, string>> {
   const out: Partial<Record<keyof Draft, string>> = {}
   if (!HHMM.test(d.window_from)) out.window_from = 'время в формате ЧЧ:ММ'
-  if (!HHMM.test(d.window_to)) out.window_to = 'время в формате ЧЧ:ММ'
   if (parseRetries(d.retry_minutes) === null) out.retry_minutes = 'от 1 до 20 чисел через запятую, каждое от 1 до 1440 минут'
   for (const key of Object.keys(RANGES) as NumberKey[]) {
     const [min, max] = RANGES[key]
@@ -89,8 +86,7 @@ function toSettings(d: Draft): ThSettings {
   return {
     nightly_enabled: d.nightly_enabled,
     window_from: d.window_from,
-    window_to: d.window_to,
-    query_pause_s: Number(d.query_pause_s),
+    hunt_pause_s: Number(d.hunt_pause_s),
     request_timeout_s: Number(d.request_timeout_s),
     retry_minutes: parseRetries(d.retry_minutes) ?? [],
     nightly_deadline_h: Number(d.nightly_deadline_h),
@@ -174,11 +170,8 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
             <input type="checkbox" checked={draft.nightly_enabled} disabled={!write} onChange={(e) => set('nightly_enabled', e.target.checked)} className="accent-primary" />
             Ночной прогон включён
           </label>
-          <Row label="Окно запуска" hint="Время суток по часам сервера, по умолчанию 01:00–02:00. Прогон ищет предыдущие сутки." error={errors.window_from ?? errors.window_to}>
-            <div className="flex items-center gap-2 text-xs text-text-secondary">
-              с <div className="w-32"><input type="time" value={draft.window_from} onChange={(e) => set('window_from', e.target.value)} disabled={!write} aria-label="Окно с" className={cn(FIELD, 'font-mono')} /></div>
-              по <div className="w-32"><input type="time" value={draft.window_to} onChange={(e) => set('window_to', e.target.value)} disabled={!write} aria-label="Окно по" className={cn(FIELD, 'font-mono')} /></div>
-            </div>
+          <Row label="Начинать в" hint="Время суток по часам сервера, по умолчанию 01:00. Прогон ищет предыдущие сутки." error={errors.window_from}>
+            <div className="w-32"><input type="time" value={draft.window_from} onChange={(e) => set('window_from', e.target.value)} disabled={!write} className={cn(FIELD, 'font-mono')} /></div>
           </Row>
           <p className="text-xs text-text-secondary">
             {schedule?.next_run_at && view.nightly_enabled
@@ -187,7 +180,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
             {schedule?.last_run_at && <> Прошлый запуск: {ruStamp(schedule.last_run_at)}.</>}
             {' '}Расписание обновляется после сохранения.
           </p>
-          {number('query_pause_s', 'Пауза между запросами', 'По умолчанию 30. Не нагружает MaxPatrol.', 'с')}
+          {number('hunt_pause_s', 'Интервал между хантами', 'По умолчанию 30. Не нагружает MaxPatrol; запросы одного ханта идут подряд.', 'с')}
           {number('request_timeout_s', 'Таймаут запроса', 'По умолчанию 300.', 'с')}
           <Row label="График повторов" hint="Минуты ожидания перед каждым повтором упавшего запроса через запятую; сколько чисел — столько повторов. По умолчанию 10, 20, 30, 30, 30, 30, 30." error={errors.retry_minutes}>
             <input value={draft.retry_minutes} onChange={(e) => set('retry_minutes', e.target.value)} disabled={!write} aria-invalid={errors.retry_minutes ? true : undefined} className={cn(FIELD, 'font-mono')} />

@@ -20,6 +20,7 @@ import { LibraryPage } from './hunting/pages/LibraryPage'
 import { DeepHuntPage } from './hunting/pages/DeepHuntPage'
 import { DeepPage } from './hunting/pages/DeepPage'
 import { RunsPage } from './hunting/pages/RunsPage'
+import { SchedulerPage } from './hunting/pages/SchedulerPage'
 
 const SECTIONS = new Set(['overview', 'rules', 'clones', 'attack', 'profile', 'hygiene'])
 
@@ -109,9 +110,12 @@ function HuntingRoute() {
   } else if (deep) {
     section = path
     page = <DeepHuntPage id={Number(deep.id)} />
-  } else if (path === '/siem/hunting/runs') {
+  } else if (path === '/siem/hunting/scheduler') {
     section = path
-    page = <RunsPage />
+    page = <SchedulerPage />
+  } else if (path === '/siem/hunting/runs') {
+    // Список ночей переехал в планировщик (блок «История ночей»): старые закладки ведут туда.
+    return <Redirect to="/siem/hunting/scheduler" />
   } else if (run) {
     section = path
     page = <RunsPage id={Number(run.id)} />
