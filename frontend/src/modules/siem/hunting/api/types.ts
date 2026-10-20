@@ -153,10 +153,10 @@ export interface ImportResult {
 
 export interface ThSettings {
   nightly_enabled: boolean
-  /** Окно ночного прогона, ЧЧ:ММ местного времени. */
+  /** Время старта ночного прогона, ЧЧ:ММ по поясу сервера; конец окна сервер выводит сам. */
   window_from: string
-  window_to: string
-  query_pause_s: number
+  /** Пауза между хантами ночного прогона; запросы одного ханта идут подряд. */
+  hunt_pause_s: number
   request_timeout_s: number
   /** Пауза в минутах перед каждым повтором упавшего запроса; длина списка — число повторов. */
   retry_minutes: number[]
@@ -171,6 +171,43 @@ export interface ThSettings {
 
 export interface ThSettingsView extends ThSettings {
   schedule: ScheduleView | null
+}
+
+// --- Планировщик -------------------------------------------------------------
+
+/** Строка очереди ночного прогона: хант в порядке `position`. */
+export interface QueueRow {
+  id: number
+  code: string
+  name: string
+  technique_id: string | null
+  /** «В очереди»: выключенный хант ночью пропускается, но место в порядке сохраняет. */
+  enabled: boolean
+  queries: number
+  last_run: HuntLastRun | null
+  position: number
+}
+
+/** `GET /scheduler`: расписание и очередь одним ответом. `next_run_at` пуст, пока расписание не сохранялось. */
+export interface SchedulerOut {
+  nightly_enabled: boolean
+  window_from: string
+  hunt_pause_s: number
+  next_run_at: string | null
+  /** Пояс сервера (`STOOLS_TZ`): в нём задано время старта. */
+  tz: string
+  hunts: QueueRow[]
+}
+
+export interface SchedulerIn {
+  nightly_enabled: boolean
+  window_from: string
+  hunt_pause_s: number
+}
+
+/** `PUT /scheduler/order`: полный список id хантов в новом порядке; иной набор — 422. */
+export interface OrderIn {
+  ids: number[]
 }
 
 // --- Находки -----------------------------------------------------------------

@@ -41,6 +41,8 @@ class ThHunt(Base):
     #: Техника ATT&CK (T1059 и т. п.), если хант к ней привязан.
     technique_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: Место ханта в очереди ночного прогона; порядок задаёт человек, новый хант встаёт в конец.
+    position: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
     updated_by: Mapped[str] = mapped_column(String(255), default="")

@@ -11,8 +11,8 @@ from fastapi import APIRouter
 
 from api.jobs import make_jobs_router
 from api.modules.siem.hunting.models import ThJob
-from api.modules.siem.routers.hunting import deep, findings, library, runs, settings
+from api.modules.siem.routers.hunting import deep, findings, library, runs, scheduler, settings
 
 router = APIRouter(prefix="/hunting")
-for sub in (library.router, settings.router, findings.router, runs.router, deep.router, make_jobs_router(ThJob, "siem_th", cancel=False)):
+for sub in (library.router, settings.router, findings.router, runs.router, deep.router, scheduler.router, make_jobs_router(ThJob, "siem_th", cancel=False)):
     router.include_router(sub)

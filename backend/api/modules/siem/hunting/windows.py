@@ -21,6 +21,13 @@ def _local_at(day: dt.date, hhmm: str, tz: str) -> dt.datetime:
     return dt.datetime.combine(day, dt.time(hour, minute), tzinfo=ZoneInfo(tz))
 
 
+def window_end(window_from: str) -> str:
+    """Конец окна расписания — час после начала: человек задаёт только время старта, а
+    платформенному планировщику нужно окно, чтобы опоздавший запуск не ушёл в день."""
+    hour, minute = (int(part) for part in window_from.split(":"))
+    return f"{(hour + 1) % 24:02d}:{minute:02d}"
+
+
 def nightly_window(target_date: dt.date, window_from: str, tz: str) -> tuple[dt.datetime, dt.datetime]:
     """(накануне в `window_from`, `target_date` в `window_from`) по поясу `tz`, в UTC."""
     start = _local_at(target_date - dt.timedelta(days=1), window_from, tz)

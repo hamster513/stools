@@ -20,8 +20,11 @@ import type {
   HuntView,
   ImportRow,
   QueryView,
+  QueueRow,
   RunDetail,
   RunView,
+  SchedulerIn,
+  SchedulerOut,
   ThFindingList,
   ThFindingListItem,
   ThFindingView,
@@ -73,7 +76,8 @@ function alignLabels(fields: string[], labels: string): string[] {
 
 // --- Виды ---------------------------------------------------------------------
 
-const liveHunts = () => hunts.filter((h) => !h.deleted)
+// Порядок как у сервера: очередь ночного прогона по `position`, равные разводит id.
+const liveHunts = () => hunts.filter((h) => !h.deleted).sort((a, b) => a.position - b.position || a.id - b.id)
 
 function lastRunOf(rows: typeof runQueries) {
   return rows.reduce<(typeof runQueries)[number] | null>((best, r) => (best === null || r.id > best.id ? r : best), null)
@@ -251,7 +255,10 @@ function syncQueries(h: HuntRecord, incoming: HuntIn['queries']): void {
 function createHunt(body: HuntIn, enabled: boolean): HuntRecord {
   const h: HuntRecord = {
     id: maxId(hunts) + 1, code: body.code.trim(), name: body.name.trim(), description: body.description ?? '',
-    technique_id: body.technique_id || null, enabled, deleted: false, updated_at: NOW, updated_by: ME, queries: [],
+    technique_id: body.technique_id || null, enabled, deleted: false,
+    // В конец очереди; места удалённых не переиспользуются — как `next_position` сервера.
+    position: hunts.reduce((m, x) => Math.max(m, x.position), -1) + 1,
+    updated_at: NOW, updated_by: ME, queries: [],
   }
   syncQueries(h, body.queries)
   hunts.push(h)
@@ -508,9 +515,39 @@ export const huntingHandlers = [
     const denied = noSession()
     if (denied) return denied
     const body = (await request.json()) as ThSettings
-    if (!HHMM.test(body.window_from) || !HHMM.test(body.window_to)) return fail(422, 'время в формате ЧЧ:ММ (00:00–23:59)')
+    if (!HHMM.test(body.window_from)) return fail(422, 'время в формате ЧЧ:ММ (00:00–23:59)')
     settings = { ...body }
     return HttpResponse.json(settingsView())
+  }),
+
+  // Планировщик: расписание из настроек раздела и очередь хантов одним ответом.
+  http.get(`${P}/scheduler`, () => {
+    const denied = noSession()
+    if (denied) return denied
+    return HttpResponse.json(schedulerView())
+  }),
+
+  http.put(`${P}/scheduler`, async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const body = (await request.json()) as SchedulerIn
+    if (!HHMM.test(body.window_from)) return fail(422, 'время в формате ЧЧ:ММ (00:00–23:59)')
+    if (!Number.isInteger(body.hunt_pause_s) || body.hunt_pause_s < 1) return fail(422, 'интервал между хантами — целое число, не меньше 1')
+    // Остальные настройки раздела страница не присылает и не трогает — как у сервера.
+    settings = { ...settings, nightly_enabled: body.nightly_enabled, window_from: body.window_from, hunt_pause_s: body.hunt_pause_s }
+    return HttpResponse.json(schedulerView())
+  }),
+
+  http.put(`${P}/scheduler/order`, async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const { ids } = (await request.json()) as { ids: number[] }
+    const live = liveHunts()
+    // Длина тоже сверяется: дубль id оставил бы чей-то хант без места.
+    if (ids.length !== live.length || !live.every((h) => ids.includes(h.id))) return fail(422, 'набор хантов не совпадает')
+    const byId = new Map(live.map((h) => [h.id, h]))
+    ids.forEach((id, index) => { const h = byId.get(id); if (h) h.position = index })
+    return HttpResponse.json(schedulerView())
   }),
 
   // Находки (экспорт и список объявлены до `/findings/:id`)
@@ -868,12 +905,33 @@ function settingsView(): ThSettingsView {
       id: 1,
       interval_hours: 24,
       window_from: settings.window_from,
-      window_to: settings.window_to,
+      window_to: windowEnd(settings.window_from),
       enabled: settings.nightly_enabled,
       next_run_at: settings.nightly_enabled ? `2026-10-20T${settings.window_from}:00Z` : null,
       last_run_at: '2026-10-19T01:03:00Z',
       last_job_id: 7,
       tz: 'UTC',
     },
+  }
+}
+
+/** Конец окна для планировщика — час после начала, как `window_end` сервера. */
+function windowEnd(from: string): string {
+  const [h, m] = from.split(':')
+  return `${String((Number(h) + 1) % 24).padStart(2, '0')}:${m}`
+}
+
+function schedulerView(): SchedulerOut {
+  const rows: QueueRow[] = liveHunts().map((h) => {
+    const { id, code, name, technique_id, enabled, queries, last_run } = huntListItem(h)
+    return { id, code, name, technique_id, enabled, queries, last_run, position: h.position }
+  })
+  return {
+    nightly_enabled: settings.nightly_enabled,
+    window_from: settings.window_from,
+    hunt_pause_s: settings.hunt_pause_s,
+    next_run_at: settings.nightly_enabled ? `2026-10-20T${settings.window_from}:00Z` : null,
+    tz: 'UTC',
+    hunts: rows,
   }
 }

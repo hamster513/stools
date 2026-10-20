@@ -20,6 +20,9 @@ from api.modules.siem.hunting.settings import (
 from api.platform.schedule_views import ScheduleView, schedule_view
 
 router = APIRouter(prefix="/settings", tags=["siem"])
+
+#: Поля, которыми владеет Планировщик (`PUT /scheduler`); здесь они не меняются.
+SCHEDULER_FIELDS = ("nightly_enabled", "window_from", "hunt_pause_s")
 log = logging.getLogger(__name__)
 
 
@@ -51,6 +54,9 @@ def put_settings(
     payload: ThSettings, request: Request, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
 ) -> ThSettingsView:
     current = _load(db)
+    # Расписание (включатель, время старта, интервал) правится только в Планировщике: страница настроек
+    # шлёт свою копию этих полей, и залежавшаяся вкладка откатила бы чужую правку.
+    payload = payload.model_copy(update={name: getattr(current, name) for name in SCHEDULER_FIELDS})
     request.state.audit_summary = changes_summary(
         [name for name in ThSettings.model_fields if getattr(payload, name) != getattr(current, name)],
     )

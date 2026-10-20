@@ -17,7 +17,7 @@ import json
 import re
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db.models import _utcnow
@@ -108,8 +108,16 @@ def hunt_by_code(db: Session, code: str) -> ThHunt | None:
     return db.scalar(select(ThHunt).where(ThHunt.code == code))
 
 
+def next_position(db: Session) -> int:
+    """Место в конце очереди. Удалённые ханты тоже считаются: их места не переиспользуются,
+    и ожившему ханту не достанется чужое."""
+    top = db.scalar(select(func.max(ThHunt.position)))
+    return 0 if top is None else top + 1
+
+
 def list_hunts(db: Session, *, include_deleted: bool = False) -> list[ThHunt]:
-    stmt = select(ThHunt).order_by(ThHunt.code)
+    # Порядок списка — порядок очереди ночного прогона (его задаёт планировщик); id разводит равные позиции.
+    stmt = select(ThHunt).order_by(ThHunt.position, ThHunt.id)
     if not include_deleted:
         stmt = stmt.where(ThHunt.deleted_at.is_(None))
     return list(db.scalars(stmt))
@@ -162,7 +170,9 @@ def apply_head(hunt: ThHunt, data: HuntIn, login: str, *, keep_technique: bool =
 
 
 def revive_hunt(db: Session, hunt: ThHunt, data: HuntIn, login: str, *, from_ui: bool) -> ThHunt:
-    """Вернуть удалённый хант; включённость остаётся как была до удаления."""
+    """Вернуть удалённый хант; включённость остаётся как была до удаления, а место в очереди —
+    в конце: за время отсутствия порядок могли переставить, прежнее место ничего не значит."""
+    hunt.position = next_position(db)
     hunt.deleted_at = None
     apply_head(hunt, data, login, keep_technique=not from_ui)
     db.flush()
@@ -179,7 +189,7 @@ def create_hunt(db: Session, data: HuntIn, login: str) -> ThHunt:
     if existing is not None:
         hunt = revive_hunt(db, existing, data, login, from_ui=True)
     else:
-        hunt = ThHunt(code=code, enabled=data.enabled)
+        hunt = ThHunt(code=code, enabled=data.enabled, position=next_position(db))
         apply_head(hunt, data, login)
         db.add(hunt)
         db.flush()

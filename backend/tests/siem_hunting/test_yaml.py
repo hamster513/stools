@@ -130,6 +130,8 @@ def test_apply_creates_new_enabled_with_technique(db_session):
     assert result == {"created": 2, "replaced": 0, "skipped": 0}
     hunt = hunt_by_code(db_session, "TH-WIN-001")
     assert (hunt.enabled, hunt.technique_id) == (True, "T1546.002")
+    # Новые ханты встают в конец очереди в порядке файла.
+    assert (hunt.position, hunt_by_code(db_session, "TH-WIN-002").position) == (0, 1)
     queries = hunt_queries(db_session, hunt)
     assert [q.enabled for q in queries] == [True, True]
     assert json.loads(queries[1].labels_json) == ["Время", "object.process.cmdline"]  # подписи выровнены
@@ -188,6 +190,7 @@ def test_apply_with_replace_updates_text_but_not_enabled(db_session):
     assert queries["Q2"].enabled is False  # включённость из интерфейса не тронута
     assert queries["Q9"].query == "ui = 'added'"  # запрос, которого нет в файле, не удалён
     assert hunt.updated_by == LOGIN
+    assert hunt.position == 0  # замена из файла не двигает хант в очереди
 
 
 def test_apply_revive_keeps_old_enabled_and_never_deletes(db_session):
@@ -204,6 +207,7 @@ def test_apply_revive_keeps_old_enabled_and_never_deletes(db_session):
     assert hunt.deleted_at is None
     assert hunt.enabled is False
     assert {q.query_id for q in hunt_queries(db_session, hunt)} == {"Q1", "Q2", "Q9"}
+    assert hunt.position == 2  # ожившему — место в конце, после TH-WIN-002
 
 
 def test_export_roundtrip(db_session):

@@ -14,16 +14,17 @@ import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { LIBRARY_EXPORT_URL, useHunts, useToggleHunt } from '../api/queries'
+import { LIBRARY_EXPORT_URL, useHunts } from '../api/queries'
 import type { HuntQueryStatus } from '../api/types'
 import { ImportDialog } from '../components/ImportDialog'
 import { QueryStatus } from '../components/QueryStatus'
+import { ScheduleLink } from '../components/ScheduleLink'
 import { ruStamp } from '../format'
 
 const ROW_HEIGHT = 36
 
 const COLUMNS: ColumnDef[] = [
-  { key: 'enabled', label: 'Вкл', width: 56, resizable: false },
+  { key: 'schedule', label: 'Расписание', width: 112 },
   { key: 'code', label: 'Код', width: 120 },
   { key: 'name', label: 'Название', width: 380, flex: true },
   { key: 'technique', label: 'Техника', width: 104 },
@@ -41,7 +42,7 @@ const HEADER_LINK =
   'flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 
 /**
- * Библиотека хантов Threat Hunting: включённые ханты и их запросы, итог последнего прогона и число новых находок.
+ * Библиотека хантов Threat Hunting: ханты и их запросы, состояние в расписании ночных прогонов (меняется в планировщике), итог последнего прогона и число новых находок.
  * «+ хант» и «Загрузить YAML» — только тем, кто пишет; выгрузка в YAML доступна всем.
  */
 export function LibraryPage() {
@@ -56,7 +57,6 @@ export function LibraryPage() {
   const query = useHunts({ enabled: enabled === 'all' ? undefined : enabled === 'on', technique: technique || undefined })
   // Техники для фильтра берём из всей библиотеки, а не из отобранного: иначе выбранную технику не снять.
   const everything = useHunts()
-  const toggle = useToggleHunt()
 
   const techniques = useMemo(
     () => [...new Set([...(everything.data ?? []).map((h) => h.technique_id).filter((t): t is string => !!t), ...(technique ? [technique] : [])])].sort(),
@@ -64,7 +64,7 @@ export function LibraryPage() {
   )
 
   const chips: FilterChip[] = []
-  if (enabled !== 'all') chips.push({ label: enabled === 'on' ? 'Включён: да' : 'Включён: нет', clear: () => setEnabled('all') })
+  if (enabled !== 'all') chips.push({ label: enabled === 'on' ? 'В расписании: да' : 'В расписании: нет', clear: () => setEnabled('all') })
   if (technique) chips.push({ label: `Техника: ${technique}`, clear: () => setTechnique('') })
   if (errorsOnly) chips.push({ label: 'Есть ошибки', clear: () => setErrorsOnly(false) })
 
@@ -100,8 +100,8 @@ export function LibraryPage() {
         {filtersPanel.open && (
           <div className="flex h-full w-60 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
             <div className="border-b border-grid px-2 py-3">
-              <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Включён</div>
-              {([['all', 'Любые'], ['on', 'Включённые'], ['off', 'Выключенные']] as const).map(([value, label]) => (
+              <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">В расписании</div>
+              {([['all', 'Любые'], ['on', 'В расписании'], ['off', 'Не запускаются']] as const).map(([value, label]) => (
                 <button
                   key={value}
                   type="button"
@@ -145,9 +145,6 @@ export function LibraryPage() {
               />
             </div>
           )}
-          {toggle.isError && (
-            <p className="px-4 py-2 text-xs text-kind-1" role="alert">{toggle.error instanceof ApiRequestError ? toggle.error.message : 'Не удалось переключить хант'}</p>
-          )}
           {data && !errorMessage && items.length > 0 && (
             <div data-col-resize-root className="min-h-0 flex-1 overflow-auto">
               <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
@@ -160,16 +157,7 @@ export function LibraryPage() {
                   className={cn(ROW_FOCUS, 'grid cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover', !h.enabled && 'text-text-secondary')}
                   style={{ ...cols.gridStyle, height: ROW_HEIGHT }}
                 >
-                  <div className="min-w-0 px-2" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={h.enabled}
-                      disabled={!write || (toggle.isPending && toggle.variables?.id === h.id)}
-                      onChange={(e) => toggle.mutate({ id: h.id, enabled: e.target.checked })}
-                      aria-label={`${h.enabled ? 'Выключить' : 'Включить'} хант ${h.code}`}
-                      className="accent-primary"
-                    />
-                  </div>
+                  <div className="min-w-0 truncate px-2"><ScheduleLink enabled={h.enabled} /></div>
                   <div className="min-w-0 truncate px-2 font-mono text-text">{h.code}</div>
                   <div className="min-w-0 truncate px-2 text-text" title={h.name}>{h.name}</div>
                   <div className="min-w-0 truncate px-2 font-mono text-text-secondary">{h.technique_id ?? '—'}</div>

@@ -136,7 +136,8 @@ def supersede_and_rerun(db: Session, target_date: dt.date, login: str, settings:
 
 
 def queue_for(db: Session, run: ThRun) -> list[ThQuery]:
-    """Включённые запросы включённых хантов без итога в этом прогоне; хант по `created_at`, запрос по `position`."""
+    """Включённые запросы включённых хантов без итога в этом прогоне; хант и запрос — по `position`
+    (порядок хантов задаёт человек в планировщике)."""
     finished = select(ThRunQuery.query_pk).where(ThRunQuery.run_id == run.id, ThRunQuery.status.in_(FINAL))
     return list(db.scalars(
         select(ThQuery)
@@ -145,7 +146,7 @@ def queue_for(db: Session, run: ThRun) -> list[ThQuery]:
             ThHunt.enabled.is_(True), ThHunt.deleted_at.is_(None), ThQuery.enabled.is_(True),
             ThQuery.id.not_in(finished),
         )
-        .order_by(ThHunt.created_at, ThHunt.id, ThQuery.position, ThQuery.id)
+        .order_by(ThHunt.position, ThHunt.id, ThQuery.position, ThQuery.id)
     ))
 
 
@@ -314,8 +315,10 @@ def _execute(
         client = EventsClient(conn.unsealed(), http)
         try:
             for index, query in enumerate(queue):
-                if index:
-                    wait(settings.query_pause_s)
+                # Пауза — только при смене ханта: запросы одной гипотезы идут подряд, а нагрузку
+                # на MaxPatrol разводит перерыв между хантами.
+                if index and query.hunt_id != queue[index - 1].hunt_id:
+                    wait(settings.hunt_pause_s)
                 hunt = db.get(ThHunt, query.hunt_id)
                 assert hunt is not None
                 handle.tick(finished + index, message=f"{finished + index + 1} из {total}, {hunt.code}")
