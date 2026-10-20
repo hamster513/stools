@@ -23,7 +23,7 @@ from api.modules.siem.hunting.models import (
     ThRun,
 )
 from api.modules.siem.hunting.nightly import create_run, persist_finding
-from api.modules.siem.hunting.settings import ThSettings
+from api.modules.siem.hunting.settings import ThSettings, save_th_settings
 from api.modules.siem.hunting.windows import nightly_window, target_date_for
 from api.settings import get_settings
 from tests.api.conftest import TEST_LOGIN
@@ -246,6 +246,10 @@ def test_rerun_date_creates_run_for_missing_night(
     create_run(db_session, missing - dt.timedelta(days=1), ThSettings(), tz)
     expected = auth_client.get(f"{BASE}/runs/expected").json()
     assert expected == {"from": (missing - dt.timedelta(days=1)).isoformat(), "to": last.isoformat()}
+    # Ночной прогон выключен — ночи после последнего прогона не ждут, пропуски не копятся.
+    save_th_settings(db_session, ThSettings(nightly_enabled=False), "admin")
+    assert auth_client.get(f"{BASE}/runs/expected").json()["to"] == (missing - dt.timedelta(days=1)).isoformat()
+    save_th_settings(db_session, ThSettings(), "admin")
 
     r = auth_client.post(f"{BASE}/runs/rerun-date", json={"target_date": missing.isoformat()})
     assert r.status_code == 202, r.text

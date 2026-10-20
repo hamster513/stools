@@ -120,9 +120,13 @@ def _last_night(db: Session) -> dt.date:
 
 @router.get("/expected", response_model=ExpectedOut, response_model_by_alias=True)
 def expected_nights(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> ExpectedOut:
-    """Без истории — только последняя ночь: пробелы до установки раздела пропуском не считаются."""
+    """Без истории — только последняя ночь: пробелы до установки раздела пропуском не считаются.
+    При выключенном ночном прогоне ночи после последнего прогона не ожидаются — иначе счётчик
+    пропусков рос бы каждую ночь, пока расписание выключено."""
     last = _last_night(db)
-    oldest = db.scalar(select(func.min(ThRun.target_date)))
+    oldest, newest = db.execute(select(func.min(ThRun.target_date), func.max(ThRun.target_date))).one()
+    if not load_th_settings(db).nightly_enabled and newest is not None:
+        last = min(newest, last)
     return ExpectedOut.model_validate({"from": min(oldest, last) if oldest is not None else last, "to": last})
 
 
