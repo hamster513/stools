@@ -6,18 +6,18 @@ import { FIELD } from '@/components/ui/Field'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
+import { Link } from '@/lib/router'
 import { useSaveThSettings, useThSettings } from '../../api/queries'
 import type { ThSettings, ThSettingsView } from '../../api/types'
-import { apiMessage, ruStamp } from '../../format'
+import { apiMessage } from '../../format'
 
-const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 const SUBTITLE = 'mb-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase'
 
-/** Поля формы строками: пока человек печатает, число может быть неполным. */
+/**
+ * Поля формы строками: пока человек печатает, число может быть неполным.
+ * Включение ночного прогона, время старта и пауза между хантами здесь не правятся — они в «Планировщике».
+ */
 interface Draft {
-  nightly_enabled: boolean
-  window_from: string
-  hunt_pause_s: string
   request_timeout_s: string
   retry_minutes: string
   nightly_deadline_h: string
@@ -29,11 +29,10 @@ interface Draft {
   retention_days: string
 }
 
-type NumberKey = Exclude<keyof Draft, 'nightly_enabled' | 'window_from' | 'retry_minutes'>
+type NumberKey = Exclude<keyof Draft, 'retry_minutes'>
 
 /** Границы те же, что у сервера (`ThSettings`). */
 const RANGES: Record<NumberKey, [number, number]> = {
-  hunt_pause_s: [1, Infinity],
   request_timeout_s: [1, Infinity],
   nightly_deadline_h: [1, Infinity],
   default_limit: [1, 100_000],
@@ -46,9 +45,6 @@ const RANGES: Record<NumberKey, [number, number]> = {
 
 function toDraft(s: ThSettings): Draft {
   return {
-    nightly_enabled: s.nightly_enabled,
-    window_from: s.window_from,
-    hunt_pause_s: String(s.hunt_pause_s),
     request_timeout_s: String(s.request_timeout_s),
     retry_minutes: s.retry_minutes.join(', '),
     nightly_deadline_h: String(s.nightly_deadline_h),
@@ -71,7 +67,6 @@ function parseRetries(text: string): number[] | null {
 /** Ошибки по полям; пусто — форму можно сохранять. */
 function errorsOf(d: Draft): Partial<Record<keyof Draft, string>> {
   const out: Partial<Record<keyof Draft, string>> = {}
-  if (!HHMM.test(d.window_from)) out.window_from = 'время в формате ЧЧ:ММ'
   if (parseRetries(d.retry_minutes) === null) out.retry_minutes = 'от 1 до 20 чисел через запятую, каждое от 1 до 1440 минут'
   for (const key of Object.keys(RANGES) as NumberKey[]) {
     const [min, max] = RANGES[key]
@@ -81,12 +76,16 @@ function errorsOf(d: Draft): Partial<Record<keyof Draft, string>> {
   return out
 }
 
-/** Тело PUT: сервер принимает настройки целиком, поэтому уходят все поля, в том числе нетронутые. */
-function toSettings(d: Draft): ThSettings {
+/**
+ * Тело PUT: сервер принимает настройки целиком, поэтому уходят все поля. Расписание (`nightly_enabled`,
+ * `window_from`, `hunt_pause_s`) берётся из загруженных настроек без изменений: форма его не правит,
+ * и сохранение здесь не должно его сбросить.
+ */
+function toSettings(d: Draft, base: ThSettings): ThSettings {
   return {
-    nightly_enabled: d.nightly_enabled,
-    window_from: d.window_from,
-    hunt_pause_s: Number(d.hunt_pause_s),
+    nightly_enabled: base.nightly_enabled,
+    window_from: base.window_from,
+    hunt_pause_s: base.hunt_pause_s,
     request_timeout_s: Number(d.request_timeout_s),
     retry_minutes: parseRetries(d.retry_minutes) ?? [],
     nightly_deadline_h: Number(d.nightly_deadline_h),
@@ -119,6 +118,7 @@ export function HuntingSettings() {
       <h2 className="mb-1 text-sm font-semibold text-text">Threat Hunting</h2>
       <p className="mb-4 text-xs text-text-secondary">
         Ночной прогон библиотеки хантов и большие ханты за длинный период. Подключение к MaxPatrol задаётся ниже, в блоке «Подключение к MaxPatrol».
+        {' '}Время старта, интервал и очередь — в <Link to="/siem/hunting/scheduler" className="rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">Планировщике</Link>.
       </p>
       {settings.isLoading && <div className="flex justify-center py-6"><Spinner /></div>}
       {settings.isError && <ErrorState message={apiMessage(settings.error, 'Не удалось загрузить настройки Threat Hunting')} onRetry={() => settings.refetch()} />}
@@ -136,7 +136,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
   const errors = errorsOf(draft)
   const valid = Object.keys(errors).length === 0
   // Несохранённое — по значениям, а не по тексту: «10,20» и «10, 20» одно и то же.
-  const dirty = !valid || !sameSettings(toSettings(draft), plain(view))
+  const dirty = !valid || !sameSettings(toSettings(draft, plain(view)), plain(view))
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setSaved(false)
@@ -145,7 +145,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
 
   function submit() {
     if (!valid || !write) return
-    save.mutate(toSettings(draft), { onSuccess: () => setSaved(true) })
+    save.mutate(toSettings(draft, plain(view)), { onSuccess: () => setSaved(true) })
   }
 
   function number(key: NumberKey, label: string, hint: string, unit?: string) {
@@ -159,28 +159,11 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
     )
   }
 
-  const schedule = view.schedule
-
   return (
     <form onSubmit={(e) => { e.preventDefault(); submit() }} className="grid gap-5">
       <div>
         <div className={SUBTITLE}>Ночной прогон</div>
         <div className="grid gap-3">
-          <label className="flex items-center gap-2 text-xs text-text">
-            <input type="checkbox" checked={draft.nightly_enabled} disabled={!write} onChange={(e) => set('nightly_enabled', e.target.checked)} className="accent-primary" />
-            Ночной прогон включён
-          </label>
-          <Row label="Начинать в" hint="Время суток по часам сервера, по умолчанию 01:00. Прогон ищет предыдущие сутки." error={errors.window_from}>
-            <div className="w-32"><input type="time" value={draft.window_from} onChange={(e) => set('window_from', e.target.value)} disabled={!write} className={cn(FIELD, 'font-mono')} /></div>
-          </Row>
-          <p className="text-xs text-text-secondary">
-            {schedule?.next_run_at && view.nightly_enabled
-              ? <>Следующий запуск: <span className="text-text">{ruStamp(schedule.next_run_at)}</span> (по времени вашего браузера; часовой пояс сервера — {schedule.tz})</>
-              : 'Следующий запуск: не назначен — прогон выключен.'}
-            {schedule?.last_run_at && <> Прошлый запуск: {ruStamp(schedule.last_run_at)}.</>}
-            {' '}Расписание обновляется после сохранения.
-          </p>
-          {number('hunt_pause_s', 'Интервал между хантами', 'По умолчанию 30. Не нагружает MaxPatrol; запросы одного ханта идут подряд.', 'с')}
           {number('request_timeout_s', 'Таймаут запроса', 'По умолчанию 300.', 'с')}
           <Row label="График повторов" hint="Минуты ожидания перед каждым повтором упавшего запроса через запятую; сколько чисел — столько повторов. По умолчанию 10, 20, 30, 30, 30, 30, 30." error={errors.retry_minutes}>
             <input value={draft.retry_minutes} onChange={(e) => set('retry_minutes', e.target.value)} disabled={!write} aria-invalid={errors.retry_minutes ? true : undefined} className={cn(FIELD, 'font-mono')} />

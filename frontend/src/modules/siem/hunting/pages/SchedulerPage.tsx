@@ -20,7 +20,7 @@ const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 const ROW_HEIGHT = 36
 const LINK = 'rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const ICON_BUTTON =
-  'rounded p-0.5 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent'
+  'rounded p-0.5 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring aria-disabled:cursor-not-allowed aria-disabled:opacity-30 aria-disabled:hover:bg-transparent'
 
 const COLUMNS: ColumnDef[] = [
   { key: 'enabled', label: 'В очереди', width: 88, resizable: false },
@@ -181,6 +181,7 @@ function Queue({ data }: { data: SchedulerOut }) {
   const rows: QueueRow[] = pending ? pending.map((id) => byId.get(id)).filter((h): h is QueueRow => h !== undefined) : data.hunts
   const ids = rows.map((h) => h.id)
   // Пока сервер не ответил на прошлую перестановку, новая не начинается: иначе ответы пришли бы вразнобой.
+  // Стрелки при этом остаются в фокусе (`aria-disabled`, не `disabled`): отключённая кнопка роняет фокус с клавиатуры.
   const canMove = write && !saveOrder.isPending
 
   function commit(next: number[]) {
@@ -265,10 +266,10 @@ function Queue({ data }: { data: SchedulerOut }) {
                 <span className="w-5 text-right font-mono tabular-nums text-text-secondary">{index + 1}</span>
                 {write && (
                   <>
-                    <button type="button" className={ICON_BUTTON} disabled={!canMove || index === 0} onClick={() => commit(moveTo(ids, h.id, ids[index - 1]))} aria-label={`Выше: ${h.code}`} title="Выше">
+                    <button type="button" className={ICON_BUTTON} aria-disabled={!canMove || index === 0} onClick={() => { if (canMove && index > 0) commit(moveTo(ids, h.id, ids[index - 1])) }} aria-label={`Выше: ${h.code}`} title="Выше">
                       <ChevronUp size={14} aria-hidden />
                     </button>
-                    <button type="button" className={ICON_BUTTON} disabled={!canMove || index === rows.length - 1} onClick={() => commit(moveTo(ids, h.id, ids[index + 1]))} aria-label={`Ниже: ${h.code}`} title="Ниже">
+                    <button type="button" className={ICON_BUTTON} aria-disabled={!canMove || index === rows.length - 1} onClick={() => { if (canMove && index < rows.length - 1) commit(moveTo(ids, h.id, ids[index + 1])) }} aria-label={`Ниже: ${h.code}`} title="Ниже">
                       <ChevronDown size={14} aria-hidden />
                     </button>
                   </>

@@ -135,6 +135,8 @@ export function useDeleteHunt() {
     onSuccess: (_, id) => {
       qc.removeQueries({ queryKey: [...TH_HUNTS_KEY, 'one', id] })
       qc.invalidateQueries({ queryKey: TH_HUNTS_KEY })
+      // Удалённый хант уходит и из очереди планировщика.
+      qc.invalidateQueries({ queryKey: TH_SCHEDULER_KEY })
     },
   })
 }
@@ -182,7 +184,11 @@ export function useImportApply() {
       form.set('replace', replace.join(','))
       return api.postForm(`${BASE}/library/import`, form)
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: TH_HUNTS_KEY }),
+    // Загрузка добавляет и заменяет ханты — очередь планировщика меняется вместе с библиотекой.
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: TH_HUNTS_KEY })
+      qc.invalidateQueries({ queryKey: TH_SCHEDULER_KEY })
+    },
   })
 }
 
@@ -420,6 +426,8 @@ export function useSaveDeepToLibrary() {
     mutationFn: ({ id, ...body }) => api.post(`${BASE}/deep/${id}/save-to-library`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: TH_HUNTS_KEY })
+      // Новый хант из большого ханта встаёт в конец очереди планировщика.
+      qc.invalidateQueries({ queryKey: TH_SCHEDULER_KEY })
       qc.invalidateQueries({ queryKey: TH_DEEP_KEY })
     },
   })

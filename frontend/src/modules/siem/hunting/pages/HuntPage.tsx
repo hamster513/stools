@@ -10,10 +10,11 @@ import { Link, useRouter } from '@/lib/router'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { useDeleteHunt, useHunt, useSaveHunt, useToggleHunt, useToggleQuery } from '../api/queries'
+import { useDeleteHunt, useHunt, useSaveHunt, useToggleQuery } from '../api/queries'
 import type { HuntView } from '../api/types'
 import { QueryEditor } from '../components/QueryEditor'
 import { QueryStatus } from '../components/QueryStatus'
+import { ScheduleLink } from '../components/ScheduleLink'
 import { draftSignature, emptyHunt, emptyQuery, fromHunt, toHuntIn, type HuntDraft, type QueryDraft } from '../draft'
 import { ruStamp } from '../format'
 
@@ -57,9 +58,10 @@ export function HuntPage({ id }: { id: number | 'new' }) {
 }
 
 /**
- * Форма ханта. Черновик живёт здесь, а выключатели сохранённого ханта и его запросов идут отдельными ручками
+ * Форма ханта. Черновик живёт здесь, а выключатели запросов сохранённого ханта идут отдельной ручкой
  * и не сбрасывают несохранённые правки; при сохранении на сервер уходят текущие значения всех выключателей.
- * Новый хант по умолчанию включён (попадёт в ближайшую ночь); выключатель на форме создания правит черновик.
+ * Включение самого ханта — только в планировщике: здесь оно не правится, новый хант создаётся включённым
+ * (попадёт в ближайшую ночь), у сохранённого уходит текущее значение.
  */
 function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
   const { navigate } = useRouter()
@@ -68,7 +70,6 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const save = useSaveHunt()
   const remove = useDeleteHunt()
-  const toggleHunt = useToggleHunt()
   const toggleQuery = useToggleQuery()
   const runCols = useColumnWidths('siem-th-hunt-runs-columns', RUN_COLUMNS)
   const findingCols = useColumnWidths('siem-th-hunt-findings-columns', FINDING_COLUMNS)
@@ -93,17 +94,12 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
     })
   }
 
-  function onToggleHunt(next: boolean) {
-    if (hunt) toggleHunt.mutate({ id: hunt.id, enabled: next })
-    else patch({ enabled: next })
-  }
-
   function onToggleQuery(q: QueryDraft, next: boolean) {
     if (q.pk === null) patchQuery(q.key, { enabled: next })
     else toggleQuery.mutate({ queryPk: q.pk, enabled: next })
   }
 
-  const errors = ([save.error, toggleHunt.error, toggleQuery.error, remove.error] as unknown[])
+  const errors = ([save.error, toggleQuery.error, remove.error] as unknown[])
     .filter((e) => e instanceof Error)
     .map((e) => (e instanceof ApiRequestError ? e.message : 'Не удалось выполнить'))
 
@@ -114,16 +110,7 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
         <h1 className="text-sm font-semibold text-text">
           {hunt ? <><span className="font-mono">{hunt.code}</span> <span className="font-normal text-text-secondary">{hunt.name}</span></> : 'Новый хант'}
         </h1>
-        <label className="flex items-center gap-1.5 text-xs text-text">
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={readOnly || toggleHunt.isPending}
-            onChange={(e) => onToggleHunt(e.target.checked)}
-            className="accent-primary"
-          />
-          хант включён
-        </label>
+        <ScheduleLink enabled={enabled} />
         {hunt && <span className="text-xs text-text-secondary">изменён {ruStamp(hunt.updated_at)}, {hunt.updated_by}</span>}
         {write && (
           <div className="ml-auto flex items-center gap-2">
