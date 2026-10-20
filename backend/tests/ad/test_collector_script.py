@@ -767,6 +767,11 @@ $Objects = @(
   @{ dn = "CN=ms-DS-Delegated-Managed-Service-Account,$Schema"; cls = @("classSchema"); lDAPDisplayName = "msDS-DelegatedManagedServiceAccount"
      schemaIDGUID = ([Guid]$env:STUB_DMSA_GUID).ToByteArray() }
 )
+# STUB_EVIL_GPO — ещё одна GPO, папка которой указывает на сервер вне домена.
+if ($env:STUB_EVIL_GPO) {
+  $Objects += @{ dn = "CN={33333333-2222-3333-4444-555555555555},CN=Policies,CN=System,$Dom"; cls = @("groupPolicyContainer"); displayName = "Evil"
+                 gPCFileSysPath = $env:STUB_EVIL_GPO; flags = 0 }
+}
 # STUB_NO_CROSSREF — список разделов пуст (crossRef не видны).
 if ($env:STUB_NO_CROSSREF) { $Objects = @($Objects | Where-Object { $_.cls -notcontains "crossRef" }) }
 if ($env:STUB_NO_PARTITION) {
@@ -910,6 +915,9 @@ STUB_SD = base64.b64encode(sd.build_sd([sd.build_ace("S-1-5-21-1-2-3-1106", sd.W
 STUB_CERT = base64.b64encode(make_cert("CORP-ROOT")).decode()
 STUB_WEAK_CERT = base64.b64encode(make_cert("OLD-SUB", bits=1024)).decode()
 PKI_DN = "CN=Public Key Services,CN=Services,CN=Configuration,DC=corp,DC=local"
+GPO_ROOT = "/corp.local/SysVol/corp.local/Policies/{11111111-2222-3333-4444-555555555555}"
+GPO_UNC = "\\" + GPO_ROOT.replace("/", "\\")
+EVIL_ROOT = "/evil.example/share"
 
 
 def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str | None = None,
@@ -933,12 +941,14 @@ def _run_collector(tmp_path: Path, port: int, args: tuple[str, ...], stdin: str 
     env = {"STUB_WEB": f"host.docker.internal:{port}", "STUB_TRUST_SID": base64.b64encode(sd.str_to_sid(TRUST_SID)).decode(),
            "STUB_CREATOR_SID": base64.b64encode(sd.str_to_sid(CREATOR_SID)).decode(), "STUB_DMSA_GUID": DMSA_GUID, "STUB_SD": STUB_SD,
            "STUB_CERT": STUB_CERT, "STUB_WEAK_CERT": STUB_WEAK_CERT,
-           "STUB_GPO": "/t/modules/gpo", "PSModulePath": "/t/modules", "COMPUTERNAME": "WS01", "USERDOMAIN": "CORP",
+           "STUB_GPO": GPO_UNC, "PSModulePath": "/t/modules", "COMPUTERNAME": "WS01", "USERDOMAIN": "CORP",
            "USERNAME": "auditor", **(env_extra or {})}
     name = f"stools-collector-test-{uuid.uuid4().hex[:12]}"
     cmd = ["docker", "run", "--rm", "-i", "--name", name, "--add-host=host.docker.internal:host-gateway",
            *[a for k, v in env.items() for a in ("-e", f"{k}={v}")],
            "-v", f"{SCRIPT.resolve().parent}:/script:ro", "-v", f"{tmp_path / 'modules'}:/t/modules:ro", "-v", f"{out}:/out", "-w", "/out",
+           # pwsh в Linux открывает \\host\share как /host/share: папка GPO видна по UNC-пути домена и чужого сервера.
+           *[a for root in (GPO_ROOT, EVIL_ROOT) for a in ("-v", f"{tmp_path / 'modules' / 'gpo'}:{root}:ro")],
            IMAGE, "pwsh", "-NoProfile", "-File", f"/script/{SCRIPT.name}", *args]
     try:
         run = subprocess.run(cmd, input=stdin or "", capture_output=True, text=True, timeout=timeout, check=False)
@@ -1106,6 +1116,7 @@ def test_script_old_command_line_collects_ad_without_menu(tmp_path: Path, web_se
 
 GPO_DN = "CN={11111111-2222-3333-4444-555555555555},CN=Policies,CN=System,DC=corp,DC=local"
 GONE_DN = "CN={22222222-2222-3333-4444-555555555555},CN=Policies,CN=System,DC=corp,DC=local"
+EVIL_DN = "CN={33333333-2222-3333-4444-555555555555},CN=Policies,CN=System,DC=corp,DC=local"
 HARDENED = "Software\\Policies\\Microsoft\\Windows\\NetworkProvider\\HardenedPaths"
 DRIVES = ('<?xml version="1.0" encoding="utf-16"?><Drives clsid="{8FDDCC1A-0C3C-43cd-A6B4-71A6DF20DA8C}">'
           '<Drive clsid="{935D1B74-9CB8-4e3c-9914-7DD559B7A417}" name="S:"><Properties action="U" path="\\\\fs01.corp.local\\share" '
@@ -1118,12 +1129,12 @@ GPO_TREE = {
     "Machine\\Preferences\\Groups\\Groups.xml": GROUPS.encode(),
     "Machine\\Preferences\\Services\\Services.xml": b" " * (g.MAX_GPO_FILE + 1),
     "MACHINE\\Microsoft\\Windows NT\\Audit\\audit.csv": AUDIT_CSV.encode("utf-16"),
-    "Machine\\Scripts\\psscripts.ini": ("﻿[Startup]\r\n0CmdLine=/t/modules/gpo/Machine/Scripts/Startup/s.ps1\r\n"
+    "Machine\\Scripts\\psscripts.ini": ("﻿[Startup]\r\n0CmdLine=" + GPO_ROOT + "/Machine/Scripts/Startup/s.ps1\r\n"
                                         "1CmdLine=\\\\fs01.corp.local\\share\\x.ps1\r\n").encode(),
     "Machine\\Scripts\\Startup\\s.ps1": b"Write-Host 1\r\n",
     "User\\Registry.pol": b"broken",
     "User\\Preferences\\Drives\\Drives.xml": b"\xfe\xff" + DRIVES.encode("utf-16-be"),
-    "User\\Scripts\\scripts.ini": ("[Logon]\r\n0CmdLine=run.bat\r\n0Parameters=\r\n1CmdLine=\"run two.bat\"\r\n2CmdLine=locked.bat\r\n"
+    "User\\Scripts\\scripts.ini": ("[Logon]\r\n0CmdLine=run.bat\r\n0Parameters=/user:svc S3cretParam\r\n1CmdLine=\"run two.bat\"\r\n2CmdLine=locked.bat\r\n"
                                     "3CmdLine=\"\\\\corp.local\\NETLOGON\\my script.bat\"\r\n").encode("utf-16"),
     "User\\Scripts\\Logon\\run.bat": b"@echo off\r\n",
     "User\\Scripts\\Logon\\run two.bat": b"@echo off\r\n",
@@ -1137,11 +1148,12 @@ def test_script_reads_gpo_files_acl_and_links(tmp_path: Path, web_server: int) -
     аудит, скрипты), права на папку GPO и файлы её скриптов, gPLink и flags. Раздела ForestDnsZones нет —
     зоны из него не читаются и это не отказ."""
     console, out = _run_collector(tmp_path, web_server, ("-Mode", "AD", "-OutputPath", "/out/"), timeout=180,
-                                  env_extra={"STUB_ACL": "1", "STUB_NO_PARTITION": "ForestDnsZones"}, gpo_files=GPO_TREE)
+                                  env_extra={"STUB_ACL": "1", "STUB_NO_PARTITION": "ForestDnsZones", "STUB_EVIL_GPO": "\\\\evil.example\\share"},
+                                  gpo_files=GPO_TREE)
     assert "Сбор прерван" not in console, console
     [ad_file] = list(out.glob("ad-CORP-*.json.gz"))
     text = gzip.decompress(ad_file.read_bytes()).decode()
-    for secret in ("P@ssw0rd", "j1Uyj3Vx8TY9", "secret", "Zm9vYmFyMTIz"):
+    for secret in ("P@ssw0rd", "j1Uyj3Vx8TY9", "secret", "Zm9vYmFyMTIz", "S3cretParam"):
         assert secret not in text, secret
     export = load_export(ad_file.read_bytes())
     assert export.gpo is not None and list(export.sysvol) == [GPO_DN]
@@ -1153,7 +1165,7 @@ def test_script_reads_gpo_files_acl_and_links(tmp_path: Path, web_server: int) -
     assert [i.model_dump() for i in data.gpp] == g.parse_gpp("Groups.xml", "machine", GROUPS) + g.parse_gpp("Drives.xml", "user", DRIVES)
     assert [a.model_dump() for a in data.audit] == g.parse_audit_csv(AUDIT_CSV)
     assert [sc.model_dump() for sc in data.scripts] == [
-        {"scope": "machine", "phase": "startup", "command": "/t/modules/gpo/Machine/Scripts/Startup/s.ps1", "parameters": ""},
+        {"scope": "machine", "phase": "startup", "command": GPO_ROOT + "/Machine/Scripts/Startup/s.ps1", "parameters": ""},
         {"scope": "machine", "phase": "startup", "command": "\\\\fs01.corp.local\\share\\x.ps1", "parameters": ""},
         {"scope": "user", "phase": "logon", "command": "run.bat", "parameters": ""},
         {"scope": "user", "phase": "logon", "command": '"run two.bat"', "parameters": ""},
@@ -1173,6 +1185,10 @@ def test_script_reads_gpo_files_acl_and_links(tmp_path: Path, web_server: int) -
     gone = export.gpo[GONE_DN]
     assert gone.acl is None and len(gone.notes) == 1 and gone.notes[0].startswith("папка GPO не прочитана ("), gone.notes
     assert (gone.registry, gone.gpp, gone.audit, gone.scripts) == ([], [], [], [])
+    # Папка GPO на чужом сервере не открывается вовсе (там те же файлы, что у первой GPO), остаётся пометка.
+    evil = export.gpo[EVIL_DN]
+    assert evil.notes == ["путь GPO вне домена (evil.example) — не читается"]
+    assert (evil.registry, evil.gpp, evil.audit, evil.scripts, evil.acl) == ([], [], [], [], None)
 
     by_dn = {o.dn: o for o in export.objects}
     root = by_dn["DC=corp,DC=local"]

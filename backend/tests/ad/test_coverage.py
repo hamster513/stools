@@ -437,3 +437,34 @@ def test_dc_descriptors_without_owner_mark_dc_owner_unchecked() -> None:
     assert gaps["DcOwner"] == "дескрипторы собраны без владельца (сборщик старой версии)"
     with_owner = base64.b64encode(sd.build_sd([sd.build_ace("S-1-5-18", sd.GENERIC_ALL)])).decode()
     assert "DcOwner" not in coverage_gaps(mini_export([dc("DC01", 1001, sd=with_owner)]))
+
+
+GPO_READ_CHECKS = {"GppPasswords", "GpoSecurityOptions", "DcLogonRights", "RestrictedGroups",
+                   "GpoRegistrySettings", "DcAuditPolicy", "GpoExternalFiles", "SysvolAcl"}
+
+
+def test_gpo_read_failures_mark_gpo_checks_partly_checked() -> None:
+    raw = build_export()
+    dn = next(iter(raw["gpo"]))
+    raw["gpo"][dn]["notes"] = ["Machine/Registry.pol: отказано в доступе"]
+    partial = "проверено частично: 1 GPO с отказами чтения (Default Domain Policy)"
+    assert _gaps(raw) == {code: partial for code in GPO_READ_CHECKS}
+    raw["gpo"][dn].pop("acl")
+    assert _gaps(raw)["SysvolAcl"] == f"права на SYSVOL читает только PowerShell-сборщик; {partial}"
+
+
+def test_gpo_read_failures_name_first_three_gpos() -> None:
+    raw = build_export()
+    for i in range(4):
+        dn = f"CN={{0000000{i}-0000-0000-0000-000000000000}},CN=Policies,CN=System,{raw['domain']['dn']}"
+        raw["objects"].append({"dn": dn, "class": "groupPolicyContainer", "displayName": f"G{i}"})
+        raw["gpo"][dn] = {"acl": [], "notes": ["User/Registry.pol: файл повреждён"]}
+    assert _gaps(raw)["GppPasswords"] == "проверено частично: 4 GPO с отказами чтения (G0, G1, G2)"
+
+
+def test_unread_ca_stores_mark_certificate_strength_partly_checked() -> None:
+    raw = build_export()
+    note = "сертификаты ЦС (CN=AIA) не прочитаны: отказано в доступе"
+    raw["collector"]["notes"] = [note, "PSO не прочитаны: нет прав"]
+    gaps = _gaps(raw)
+    assert gaps["CertificateStrength"] == f"хранилища ЦС прочитаны не полностью ({note})"

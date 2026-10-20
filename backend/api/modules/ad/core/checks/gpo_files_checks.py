@@ -130,7 +130,8 @@ def check_dc_audit_policy(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     for guid, name in DC_AUDIT_SUBCATEGORIES.items():
         if guid in covered:
             continue
-        text = f"Аудит успеха «{name}» не включён ни в одной GPO, применимой к контроллерам домена"
+        text = (f"Аудит успеха «{name}» не включён ни в одной GPO, применимой к контроллерам домена; учтена только расширенная политика "
+                "аудита (audit.csv), старая политика [Event Audit] из GptTmpl.inf не учитывается")
         if idx.gpo_link_map is None:
             text += f"; {LINKS_UNKNOWN}: учтены все GPO"
         f = _domain_finding(idx, cfg, "DcAuditPolicy", "Medium", text, key_extra=guid)
@@ -172,6 +173,12 @@ def _part_enabled(gpo: AdObject, scope: str) -> bool:
 def check_gpo_external_files(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
     out: list[Finding] = []
     for g in idx.objects("groupPolicyContainer"):
+        if g.gpcFileSysPath and is_external(g.gpcFileSysPath, idx):
+            # Папку GPO читает каждый клиент домена: чужой сервер получает их аутентификацию SMB и подменяет политику.
+            path = _clean(g.gpcFileSysPath)
+            text = f"Папка GPO (gPCFileSysPath) на сервере вне домена и контроллеров: {path}"
+            out.append(_finding(idx, cfg, "GpoExternalFiles", "High", g, text, key_extra=f"gpc_path|{path}",
+                                details={"path": path, "source": "gpc_path"}, allowlist=False))
         data = idx.gpo_data(g)
         if data is None:
             continue

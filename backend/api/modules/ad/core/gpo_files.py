@@ -259,23 +259,23 @@ def _audit_rows(text: str) -> list[dict[str, Any]]:
 
 
 _PHASES = ("logon", "logoff", "startup", "shutdown")
-_SCRIPT_KEY = re.compile(r"^(\d+)(cmdline|parameters)$", re.IGNORECASE)
+_SCRIPT_KEY = re.compile(r"^(\d+)cmdline$", re.IGNORECASE)
 
 
 def parse_scripts_ini(text: str, scope: str) -> list[dict[str, str]]:
+    """Команды сценариев. Параметры («<n>Parameters») не собираются: в них бывают пароли; поле — пустое для совместимости."""
     out: list[dict[str, str]] = []
     for section, values in parse_inf(text).items():
         if section not in _PHASES:
             continue
-        entries: dict[int, dict[str, str]] = {}
+        commands: dict[int, str] = {}
         for key, value in values.items():
             m = _SCRIPT_KEY.match(key)
             if m:
-                entries.setdefault(int(m.group(1)), {})[m.group(2).lower()] = value
-        for n in sorted(entries):
-            command = entries[n].get("cmdline", "")
-            if command:
-                out.append({"scope": scope, "phase": section, "command": command, "parameters": entries[n].get("parameters", "")})
+                commands[int(m.group(1))] = value
+        for n in sorted(commands):
+            if commands[n]:
+                out.append({"scope": scope, "phase": section, "command": commands[n], "parameters": ""})
     return out
 
 

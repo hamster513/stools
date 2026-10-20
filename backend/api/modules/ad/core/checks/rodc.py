@@ -16,6 +16,16 @@ RID_ALLOWED_RODC = 571
 RID_DENIED_RODC = 572
 #: Кто должен быть в Denied RODC Password Replication Group: Domain Admins, Schema Admins, Enterprise Admins, Domain Controllers, krbtgt.
 DENIED_REQUIRED_RIDS = (512, 518, 519, 516, RID_KRBTGT)
+#: Виды, которые строятся по атрибутам RODC сборщика 1.1/2.1: в старой выгрузке их нет вовсе.
+RODC_ATTRIBUTE_KINDS = frozenset({"never_reveal_missing", "admin_revealed", "reveal_privileged", "krbtgt_orphan"})
+
+
+def is_rodc(obj: AdObject) -> bool:
+    return bool((obj.uac or 0) & UAC_PARTIAL_SECRETS_ACCOUNT)
+
+
+def is_rodc_krbtgt(obj: AdObject) -> bool:
+    return (obj.sam or "").lower().startswith("krbtgt_")
 
 
 def _finding(cfg: AdConfig, kind: str, target: str, text: str, who: tuple[str, str] = ("", ""), **extra: object) -> Finding:
@@ -68,13 +78,17 @@ def _rodc_findings(idx: ExportIndex, cfg: AdConfig, rodc: AdObject) -> list[Find
 
 
 def check_rodc_password_replication(idx: ExportIndex, cfg: AdConfig) -> list[Finding]:
-    rodcs = [c for c in idx.objects("computer") if (c.uac or 0) & UAC_PARTIAL_SECRETS_ACCOUNT]
+    rodcs = [c for c in idx.objects("computer") if is_rodc(c)]
     out = [f for r in rodcs for f in _rodc_findings(idx, cfg, r)]
     # Учётка krbtgt_NNNNN остаётся после удаления RODC: её ключи — ключи бывшего контроллера.
     linked = {(r.krbTgtLink or "").lower() for r in rodcs}
     for u in idx.objects("user"):
-        if (u.sam or "").lower().startswith("krbtgt_") and u.dn.lower() not in linked:
+        if is_rodc_krbtgt(u) and u.dn.lower() not in linked:
             out.append(_finding(cfg, "krbtgt_orphan", u.dn, f"Учётка {u.label} не связана ни с одним RODC", _who(idx, u)))
+    accounts = idx.objects("user") + idx.objects("computer")
+    if accounts and all(o.primaryGroupID is None for o in accounts):
+        # Старый сборщик: пустые списки RODC и krbtgtLink — «не собрано», пробел покрытия даёт coverage.
+        out = [f for f in out if f.key_extra not in RODC_ATTRIBUTE_KINDS]
     if not rodcs:
         return out
     allowed = idx.group_by_rid(RID_ALLOWED_RODC)

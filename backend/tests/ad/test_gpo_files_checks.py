@@ -38,6 +38,8 @@ def test_dc_audit_policy_reports_missing_subcategories():
     audit = [{"subcategory": g, "setting": 3} for g in guids[:13]] + [{"subcategory": guids[13], "setting": 2}]   # одна — только отказы, одной нет
     got = run("DcAuditPolicy", setup({"audit": audit}))
     assert {f.key_extra for f in got} == set(guids[13:]) and {f.severity for f in got} == {"Medium"}
+    # Старая политика аудита ([Event Audit] в GptTmpl.inf) не читается — в тексте находки это сказано.
+    assert all("только расширенная политика аудита (audit.csv)" in f.details["details"] and "[Event Audit]" in f.details["details"] for f in got)
     assert len(run("DcAuditPolicy", setup({"audit": audit}, linked=False))) == 15      # GPO не применяется к контроллерам
 
 
@@ -78,3 +80,12 @@ def test_internal_hosts_and_disabled_parts():
     g = gpo("Logon", flags=2)   # компьютерная часть выключена: сценарий входа пользователя всё равно применяется
     got = run("GpoExternalFiles", mini_export([g, dc("DC01", 1001)], gpo={g["dn"]: data}, sysvol={}))
     assert [f.key_extra for f in got] == ["\\\\fs01\\share\\d.bat"]
+
+
+def test_gpo_path_outside_domain_is_high():
+    evil = gpo("Evil", guid="{22222222-2222-2222-2222-222222222222}", gpcFileSysPath="\\\\evil.example\\share")
+    ok = gpo("Ok", gpcFileSysPath="\\\\DC01\\SysVol\\corp.local\\Policies\\{11111111-1111-1111-1111-111111111111}")
+    # Путь GPO читается из LDAP: находка не зависит от того, собран ли блок gpo.
+    for export in (mini_export([evil, ok, dc("DC01", 1001)]), mini_export([evil, ok, dc("DC01", 1001)], gpo={evil["dn"]: {}}, sysvol={})):
+        [f] = run("GpoExternalFiles", export)
+        assert (f.key_extra, f.severity, f.target) == ("gpc_path|\\\\evil.example\\share", "High", "Evil")
