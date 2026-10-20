@@ -4,10 +4,12 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Callable
 
+import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.db.models import Base
@@ -69,3 +71,17 @@ def test_user_cascades(db_session: Session) -> None:
     db_session.delete(user)
     db_session.commit()
     assert (count(AssetUserObservation), count(AssetUserGroup)) == (0, 0)
+
+
+def test_one_live_user_per_sid(db_session: Session) -> None:
+    """Пустой SID и слитая строка не мешают; второй живой пользователь с тем же SID — ошибка."""
+    sid = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+    first = AssetUser(sid=sid, name_key="corp.local\\user01")
+    db_session.add_all([first, AssetUser(sid="", name_key="local:1\\admin"), AssetUser(sid="", name_key="local:2\\admin")])
+    db_session.flush()
+    db_session.add(AssetUser(sid=sid, name_key="corp.local\\user01", merged_into=first.id))
+    db_session.commit()
+    db_session.add(AssetUser(sid=sid, name_key="corp.local\\user01"))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()

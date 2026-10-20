@@ -46,6 +46,11 @@ def upgrade() -> None:
     )
     for column in ("sid", "name_key"):
         op.create_index(f"ix_asset_user_{column}", "asset_user", [column])
+    # Один живой пользователь на SID; пустой SID и слитые строки не мешают.
+    op.create_index(
+        "uq_asset_user_sid_live", "asset_user", ["sid"], unique=True,
+        postgresql_where=sa.text("sid <> '' AND merged_into IS NULL"),
+    )
 
     op.create_table(
         "asset_user_observation",
@@ -84,14 +89,17 @@ def upgrade() -> None:
         sa.Column("source", sa.String(16), nullable=False),
         sa.UniqueConstraint("user_id", "group_sid", name="uq_asset_user_group_sid"),
     )
+    op.create_index("ix_asset_user_group_group_sid", "asset_user_group", ["group_sid"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_asset_user_group_group_sid", table_name="asset_user_group")
     op.drop_table("asset_user_group")
     op.drop_index("ix_asset_user_host_asset_id", table_name="asset_user_host")
     op.drop_table("asset_user_host")
     op.drop_index("ix_asset_user_observation_user_id", table_name="asset_user_observation")
     op.drop_table("asset_user_observation")
+    op.drop_index("uq_asset_user_sid_live", table_name="asset_user")
     for column in ("sid", "name_key"):
         op.drop_index(f"ix_asset_user_{column}", table_name="asset_user")
     op.drop_table("asset_user")

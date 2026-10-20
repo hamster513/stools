@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 
 from api.modules.assets.core.users import (
+    MatchResult,
     UserCard,
     UserHostLink,
     UserSeen,
@@ -42,6 +43,22 @@ def test_netbios_domain_field_goes_to_dns_by_map() -> None:
     assert user_key(s, DOMAIN_MAP) == ("", "corp.local\\user01")
 
 
+def test_dns_domain_wins_over_netbios_prefix() -> None:
+    """Префикс `CORP\\` и DNS-домен в поле: берётся DNS-форма, карта не нужна."""
+    s = seen(sam="CORP\\user01", domain="corp.local")
+    assert user_key(s, {}) == ("", "corp.local\\user01")
+
+
+def test_dns_prefix_wins_over_netbios_field() -> None:
+    s = seen(sam="corp.local\\user01", domain="CORP")
+    assert user_key(s, {}) == ("", "corp.local\\user01")
+
+
+def test_unmapped_netbios_stays_lowercase() -> None:
+    s = seen(sam="LAB\\User01")
+    assert user_key(s, DOMAIN_MAP) == ("", "lab\\user01")
+
+
 def test_local_account_on_two_hosts_gives_two_keys() -> None:
     a = seen(sam="admin", local=True, host_asset_id=1)
     b = seen(sam="admin", local=True, host_asset_id=2)
@@ -65,46 +82,79 @@ def test_record_without_sid_and_name_is_not_a_user() -> None:
     assert user_key(seen(sid="", sam=""), DOMAIN_MAP) is None
 
 
-def test_local_without_host_and_sid_is_not_a_user() -> None:
+def test_local_without_host_is_not_a_user() -> None:
     assert user_key(seen(sam="admin", local=True), DOMAIN_MAP) is None
+    assert user_key(seen(sid="S-1-5-21-9-9-9-1001", sam="admin", local=True), DOMAIN_MAP) is None
+
+
+def test_computer_and_gmsa_accounts_are_not_users() -> None:
+    assert user_key(seen(sid=SID.format(2001), sam="CORP\\WS01$"), DOMAIN_MAP) is None
+    assert user_key(seen(source="ad", sid=SID.format(2002), sam="svc-gmsa$", domain="corp.local"), DOMAIN_MAP) is None
+
+
+def test_well_known_sids_are_not_users() -> None:
+    for sid, sam in (("S-1-5-18", "NT AUTHORITY\\SYSTEM"), ("S-1-5-90-0-2", "Window Manager\\DWM-2"),
+                     ("S-1-5-96-0-1", "Font Driver Host\\UMFD-1")):
+        assert user_key(seen(sid=sid, sam=sam), DOMAIN_MAP) is None
+
+
+def test_internal_ksc_account_is_not_a_user() -> None:
+    assert user_key(seen(sid=SID.format(1001), sam="CORP\\user01", internal=True), DOMAIN_MAP) is None
+
+
+NO_MATCH = MatchResult(None)
+AMBIGUOUS = MatchResult(None, ambiguous=True)
 
 
 def test_sid_wins_over_name() -> None:
     key = (SID.format(1001), "corp.local\\user01")
-    assert match_user(key, {SID.format(1001): [1]}, {"corp.local\\user01": [(2, "")]}) == 1
+    assert match_user(key, {SID.format(1001): [1]}, {"corp.local\\user01": [(2, "")]}) == MatchResult(1)
 
 
 def test_name_matches_when_seen_has_no_sid() -> None:
     key = ("", "corp.local\\user01")
-    assert match_user(key, {}, {"corp.local\\user01": [(1, SID.format(1001))]}) == 1
+    assert match_user(key, {}, {"corp.local\\user01": [(1, SID.format(1001))]}) == MatchResult(1)
 
 
 def test_name_does_not_match_user_with_other_sid() -> None:
-    """Учётку пересоздали с тем же именем: новый SID — другой пользователь."""
+    """Учётку пересоздали с тем же именем: новый SID — другой пользователь, это «нет», не неоднозначность."""
     key = (SID.format(1002), "corp.local\\user01")
-    assert match_user(key, {}, {"corp.local\\user01": [(1, SID.format(1001))]}) is None
-    assert match_user(key, {}, {"corp.local\\user01": [(1, "")]}) == 1
+    assert match_user(key, {}, {"corp.local\\user01": [(1, SID.format(1001))]}) == NO_MATCH
+    assert match_user(key, {}, {"corp.local\\user01": [(1, "")]}) == MatchResult(1)
 
 
-def test_ambiguous_name_gives_none() -> None:
+def test_recreated_account_without_sid_is_ambiguous() -> None:
+    """Две строки с одним name_key и SID S1/S2, запись без SID — чья она, не понять."""
     key = ("", "corp.local\\user01")
-    assert match_user(key, {}, {"corp.local\\user01": [(1, ""), (2, "")]}) is None
+    by_name = {"corp.local\\user01": [(1, SID.format(1001)), (2, SID.format(1002))]}
+    assert match_user(key, {}, by_name) == AMBIGUOUS
 
 
-def test_ambiguous_sid_gives_none() -> None:
+def test_ambiguous_name() -> None:
+    key = ("", "corp.local\\user01")
+    assert match_user(key, {}, {"corp.local\\user01": [(1, ""), (2, "")]}) == AMBIGUOUS
+
+
+def test_ambiguous_sid() -> None:
     key = (SID.format(1001), "corp.local\\user01")
-    assert match_user(key, {SID.format(1001): [1, 2]}, {"corp.local\\user01": [(3, "")]}) is None
+    assert match_user(key, {SID.format(1001): [1, 2]}, {"corp.local\\user01": [(3, "")]}) == AMBIGUOUS
 
 
 def test_no_match() -> None:
-    assert match_user(("", "corp.local\\user01"), {}, {}) is None
+    assert match_user(("", "corp.local\\user01"), {}, {}) == NO_MATCH
+    assert match_user((SID.format(1001), ""), {}, {}) == NO_MATCH
 
 
 # --- рабочая станция ---------------------------------------------------------
 
 def test_is_workstation() -> None:
-    assert is_workstation("Microsoft Windows 10 Pro") is True
-    assert is_workstation("Windows SERVER 2022 Standard") is False
+    assert is_workstation("Microsoft Windows 11 Pro") is True
+    assert is_workstation("Windows Server 2019 Standard") is False
+    assert is_workstation("macOS 14 Sonoma") is True
+    assert is_workstation("Mac OS X 10.15") is True
+    # Linux по имени дистрибутива не делится на серверы и станции — не судим.
+    assert is_workstation("Ubuntu 22.04") is None
+    assert is_workstation("Astra Linux 1.7") is None
     assert is_workstation("") is None
 
 
@@ -142,9 +192,21 @@ def test_disabled_without_live_session_is_quiet() -> None:
 
 
 def test_not_in_ad() -> None:
-    found = user_discrepancies(card(enabled=None, in_ad=False), [link(), link(2, name="WS02")], AD_DOMAINS)
+    found = user_discrepancies(card(enabled=None, in_ad=False), [link(), link(2, name="WS02", active=False)],
+                               AD_DOMAINS)
     assert [(d.code, d.host_asset_id) for d in found] == [("not_in_ad", None)]
-    assert "corp.local" in found[0].text and "WS01" in found[0].text and "WS02" in found[0].text
+    assert "corp.local" in found[0].text
+    assert "WS01 (в системе на момент сбора), WS02 (заходил раньше)" in found[0].text
+
+
+def test_session_on_uncollected_host_is_past() -> None:
+    """Пользователи хоста не собраны в последнем сборе: `active` устарел, сеанс — прошлый."""
+    stale = link(active=True, users_collected=False)
+    found = user_discrepancies(card(enabled=False, privileged=True), [stale], AD_DOMAINS)
+    assert [d.code for d in found] == ["disabled_session", "privileged_on_workstation"]
+    assert all("заходил раньше" in d.text and "в системе" not in d.text for d in found)
+    found = user_discrepancies(card(enabled=None, in_ad=False), [stale], AD_DOMAINS)
+    assert "WS01 (заходил раньше)" in found[0].text
 
 
 def test_not_in_ad_needs_collected_domain_session_and_domain_account() -> None:

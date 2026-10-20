@@ -10,7 +10,18 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -132,6 +143,11 @@ class AssetUser(Base):
     `note` и `tags` — ручные, синхронизация их не трогает."""
 
     __tablename__ = "asset_user"
+    #: Один живой пользователь на SID; пустой SID и слитые строки не мешают.
+    __table_args__ = (
+        Index("uq_asset_user_sid_live", "sid", unique=True,
+              postgresql_where=text("sid <> '' AND merged_into IS NULL")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sid: Mapped[str] = mapped_column(String(255), default="", index=True)
@@ -197,7 +213,7 @@ class AssetUserGroup(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("asset_user.id", ondelete="CASCADE"))
-    group_sid: Mapped[str] = mapped_column(String(255))
+    group_sid: Mapped[str] = mapped_column(String(255), index=True)
     group_name: Mapped[str] = mapped_column(String(512), default="")
     direct: Mapped[bool] = mapped_column(Boolean, default=True)
     source: Mapped[str] = mapped_column(String(16), default="ad")
