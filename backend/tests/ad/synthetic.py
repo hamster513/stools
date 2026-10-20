@@ -8,9 +8,15 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import functools
 import json
 import uuid
 from typing import Any
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import dsa, rsa
+from cryptography.x509.oid import NameOID
 
 from api.modules.ad.core import sd
 from api.modules.ad.core.export import datetime_to_filetime
@@ -46,6 +52,89 @@ def ft(days_ago: int) -> int:
 
 def b64sd(aces: list[bytes]) -> str:
     return base64.b64encode(sd.build_sd(aces)).decode()
+
+
+@functools.cache
+def rsa_key(bits: int = 2048, exponent: int = 65537) -> rsa.RSAPrivateKey:
+    return rsa.generate_private_key(exponent, bits)
+
+
+@functools.cache
+def dsa_key() -> dsa.DSAPrivateKey:
+    return dsa.generate_private_key(2048)
+
+
+def _der_len(n: int) -> bytes:
+    if n < 0x80:
+        return bytes([n])
+    raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(raw)]) + raw
+
+
+def _tlv(tag: int, body: bytes) -> bytes:
+    return bytes([tag]) + _der_len(len(body)) + body
+
+
+def _children(data: bytes) -> list[bytes]:
+    """Элементы содержимого SEQUENCE в DER (теги однобайтовые) — целиком, с тегом и длиной."""
+    out, i = [], 0
+    while i < len(data):
+        n, j = data[i + 1], i + 2
+        if n & 0x80:
+            k = n & 0x7F
+            n, j = int.from_bytes(data[j:j + k], "big"), j + k
+        out.append(data[i:j + n])
+        i = j + n
+    return out
+
+
+def _body(tlv: bytes) -> bytes:
+    """Содержимое TLV без тега и длины."""
+    return tlv[2 + (tlv[1] & 0x7F if tlv[1] & 0x80 else 0):]
+
+
+def _oid(dotted: str) -> bytes:
+    arcs = [int(a) for a in dotted.split(".")]
+    out = bytearray([40 * arcs[0] + arcs[1]])
+    for arc in arcs[2:]:
+        chunk = [arc & 0x7F]
+        while arc := arc >> 7:
+            chunk.append(0x80 | (arc & 0x7F))
+        out += bytes(reversed(chunk))
+    return _tlv(0x06, bytes(out))
+
+
+def with_signature_oid(der: bytes, dotted: str) -> bytes:
+    """Подменяет алгоритм подписи (в tbsCertificate и снаружи) с пересчётом длин: подпись не сверяется,
+    проверке важен только OID."""
+    tbs, _, signature = _children(_body(der))
+    alg = _tlv(0x30, _oid(dotted))
+    fields = _children(_body(tbs))
+    fields[2] = alg  # [0] version, serialNumber, signature
+    return _tlv(0x30, _tlv(0x30, b"".join(fields)) + alg + signature)
+
+
+def make_cert(
+    cn: str = "CORP-CA", *, issuer: str | None = None, bits: int = 2048, exponent: int = 65537, use_dsa: bool = False,
+    public_key: Any = None, sig_oid: str | None = None, not_after: dt.datetime = NOW + dt.timedelta(days=3650),
+) -> bytes:
+    """DER сертификата ЦС. Подпись SHA-1 и MD* библиотека не выпускает: `sig_oid` подставляется в готовый DER."""
+    key: Any = dsa_key() if use_dsa else rsa_key(bits, exponent)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)]))
+        .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, issuer or cn)]))
+        .public_key(public_key or key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_after - dt.timedelta(days=7300))
+        .not_valid_after(not_after)
+    )
+    der = builder.sign(key, hashes.SHA256()).public_bytes(serialization.Encoding.DER)
+    return with_signature_oid(der, sig_oid) if sig_oid else der
+
+
+#: Чистый сертификат ЦС синтетического домена: RSA 2048, SHA-256, самоподписанный.
+CA_CERT = base64.b64encode(make_cert()).decode()
 
 
 # Учётные записи: sam → (rid, class)
@@ -104,6 +193,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
             "dn": DN,
             "class": "domainDNS",
             "sid": DOMAIN_SID,
+            "gpLink": f"[LDAP://CN={{31B2F340-016D-11D2-945F-00C04FB984F9}},CN=Policies,CN=System,{DN};0]",
             "sd": b64sd(
                 [
                     sd.build_ace(rid(512), sd.EXTENDED_RIGHT, object_type=uuid.UUID(GUID_GET_CHANGES_ALL)),
@@ -207,6 +297,7 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
             "cn": "CORP-CA",
             "dNSHostName": "ca01.corp.local",
             "certificateTemplates": ["VulnTemplate", "AgentTemplate"],
+            "cACertificate": [CA_CERT],
             "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)]),
         },
         {"dn": PKI, "class": "pkiContainer", "sd": b64sd([sd.build_ace(rid(512), sd.GENERIC_ALL)])},
@@ -289,6 +380,8 @@ def build_export(*, now: dt.datetime = NOW) -> dict[str, Any]:
                 + "\r\nSeBackupPrivilege = *S-1-5-32-551\r\nSeShutdownPrivilege = *S-1-5-32-545\r\n"
             }
         },
+        # Блок gpo, как у сборщика 2.2: у Default Domain Policy нет Registry.pol и настроек GPP, права SYSVOL прочитаны.
+        "gpo": {f"CN={{31B2F340-016D-11D2-945F-00C04FB984F9}},CN=Policies,CN=System,{DN}": {"acl": []}},
         "principals": principals,
     }
 
@@ -318,7 +411,27 @@ def build_ca_data(*, now: dt.datetime = NOW, **overrides: Any) -> dict[str, Any]
                 "error": "",
             }
         ],
-        "dcs": [{"host": "dc01.corp.local", "strong_binding": 2, "mapping_methods": 0x18, "error": ""}],
+        "dcs": [
+            {
+                "host": "dc01.corp.local",
+                "strong_binding": 2,
+                "mapping_methods": 0x18,
+                "lm_compatibility": 5,
+                "no_lm_hash": 1,
+                "ldap_integrity": 2,
+                "ldap_channel_binding": 2,
+                "tls": {"SSL 3.0": 0, "TLS 1.0": 0, "TLS 1.1": 0},
+                "smb1": False,
+                "smb_require_signing": True,
+                "spooler": "disabled",
+                "webclient": "absent",
+                "last_boot": (now - dt.timedelta(days=10)).isoformat(),
+                "os_build": "20348.2340",
+                "registry_read": True,
+                "cim_read": True,
+                "error": "",
+            }
+        ],
         "web": [{"url": "http://ca01.corp.local/certsrv/", "status": 404, "auth": [], "error": ""}],
     }
     data.update(overrides)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import errno
 import re
 import struct
 import time
@@ -25,10 +26,23 @@ from api.modules.ad.core.export import (
     WELL_KNOWN_SIDS,
     datetime_to_filetime,
 )
+from api.modules.ad.core.gpo_files import (
+    GPO_FILES,
+    MAX_GPO_FILE,
+    keep_registry,
+    parse_audit_csv,
+    parse_gpp,
+    parse_registry_pol,
+    parse_scripts_ini,
+    redact,
+)
 
 Entry = dict[str, Any]
 Searcher = Callable[[str, str, list[str], str], Iterable[Entry]]
 SmbReader = Callable[[str], bytes | None]
+#: Папка UNC → имена файлов и папок в ней; None — только «папки нет» (ENOENT, ENOTDIR).
+#: Любой другой отказ (нет доступа, таймаут) — исключение OSError: он не должен выглядеть как пустая папка.
+SmbLister = Callable[[str], list[str] | None]
 
 USER_ATTRS = [
     "sAMAccountName", "name", "objectSid", "userAccountControl", "lastLogonTimestamp", "pwdLastSet",
@@ -49,7 +63,9 @@ TEMPLATE_ATTRS = [
     "msPKI-Certificate-Application-Policy", "msPKI-RA-Application-Policies", "msPKI-Cert-Template-OID",
     "nTSecurityDescriptor",
 ]
-CA_ATTRS = ["cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor"]
+CA_ATTRS = ["cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor", "cACertificate"]
+#: Хранилища сертификатов ЦС под контейнером PKI: корневые и промежуточные (спека §5).
+CA_STORES = {"Certification Authorities": "root", "AIA": "intermediate"}
 OID_ATTRS = ["displayName", "msPKI-Cert-Template-OID", "msDS-OIDToGroupLink"]
 EXTENDED_RIGHTS = ["DS-Replication-Get-Changes", "DS-Replication-Get-Changes-All", "DS-Replication-Get-Changes-In-Filtered-Set", "Enroll", "AutoEnroll"]
 PSO_ATTRS = [
@@ -69,6 +85,8 @@ UNIX_PASSWORD_FILTER = "(&(objectCategory=person)(objectClass=user)(|(userPasswo
 #: dNSProperty: Id свойства DSPROPERTY_ZONE_ALLOW_UPDATE (MS-DNSP 2.3.2.1.1).
 DNS_ZONE_ALLOW_UPDATE = 2
 GPT_TMPL = "\\MACHINE\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf"
+#: Атрибуты привязки GPO у корня домена, OU и сайтов.
+GPLINK_ATTRS = ["gPLink", "gPOptions"]
 #: Рекурсивные члены группы (LDAP_MATCHING_RULE_IN_CHAIN), вложенные группы тоже.
 IN_CHAIN = "1.2.840.113556.1.4.1941"
 #: Дескрипторов участников одной критичной группы читается не больше — остальные в notes.
@@ -141,6 +159,10 @@ def _raw_list(entry: Entry, attr: str) -> list[bytes]:
     if value is None:
         return []
     return [bytes(v) for v in (value if isinstance(value, list) else [value])]
+
+
+def _b64_list(entry: Entry, attr: str) -> list[str]:
+    return [base64.b64encode(v).decode() for v in _raw_list(entry, attr) if v]
 
 
 def _bool(value: Any) -> bool | None:
@@ -253,6 +275,7 @@ class LdapCollector:
         root_dse: dict[str, Any],
         *,
         smb_reader: SmbReader | None = None,
+        smb_lister: SmbLister | None = None,
         host: str = "",
         account: str = "",
         include_computer_sd: bool = True,
@@ -261,6 +284,7 @@ class LdapCollector:
         self.search = search
         self.root = root_dse
         self.smb = smb_reader
+        self.smb_list = smb_lister
         self.host = host
         self.account = account
         self.include_computer_sd = include_computer_sd
@@ -316,7 +340,7 @@ class LdapCollector:
 
         root_attrs = [
             "objectSid", "ms-DS-MachineAccountQuota", "nTSecurityDescriptor", "msDS-Behavior-Version",
-            "minPwdLength", "lockoutThreshold", "pwdProperties", "pwdHistoryLength",
+            "minPwdLength", "lockoutThreshold", "pwdProperties", "pwdHistoryLength", *GPLINK_ATTRS,
         ]
         root_obj = self._one(default_nc, "(objectClass=*)", root_attrs, "BASE", missing_ok=True)
         if root_obj is None:
@@ -366,7 +390,7 @@ class LdapCollector:
 
         objects: list[dict[str, Any]] = []
         root_sd = _raw(root_obj, "nTSecurityDescriptor")
-        objects.append({"dn": default_nc, "class": "domainDNS", "sid": domain_sid, "sd": _b64(root_sd)})
+        objects.append({"dn": default_nc, "class": "domainDNS", "sid": domain_sid, "sd": _b64(root_sd), **_gplink(attrs)})
         self._note_sd(root_sd)
         holder = self._one(f"CN=AdminSDHolder,CN=System,{default_nc}", "(objectClass=*)", ["nTSecurityDescriptor"], "BASE", missing_ok=True)
         if holder is not None:
@@ -393,22 +417,25 @@ class LdapCollector:
             objects.append({"dn": e["dn"], "class": "group", "sid": sid_, "sam": sam, "name": str(_first(a.get("name")) or sam), "member": _list(a.get("member")), "adminCount": _int(a.get("adminCount"))})
             self._register(sid_, f"{netbios}\\{sam}", "group")
         self._critical_acl(default_nc, domain_sid, objects)
-        for e in self.search(default_nc, "(objectClass=organizationalUnit)", ["nTSecurityDescriptor"], "SUBTREE"):
+        for e in self.search(default_nc, "(objectClass=organizationalUnit)", [*GPLINK_ATTRS, "nTSecurityDescriptor"], "SUBTREE"):
             ousd = _raw(e, "nTSecurityDescriptor")
-            objects.append({"dn": e["dn"], "class": "organizationalUnit", "sd": _b64(ousd)})
+            objects.append({"dn": e["dn"], "class": "organizationalUnit", "sd": _b64(ousd), **_gplink(e["attributes"])})
             self._note_sd(ousd)
 
         sysvol: dict[str, dict[str, str]] = {}
-        for e in self.search(f"CN=Policies,CN=System,{default_nc}", "(objectClass=groupPolicyContainer)", ["displayName", "gPCFileSysPath", "nTSecurityDescriptor"], "SUBTREE"):
+        # SYSVOL не читается (выключен или недоступен) — блока gpo нет, причина уже в notes.
+        gpo: dict[str, dict[str, Any]] | None = {} if self.smb is not None else None
+        for e in self.search(f"CN=Policies,CN=System,{default_nc}", "(objectClass=groupPolicyContainer)", ["displayName", "gPCFileSysPath", "flags", "nTSecurityDescriptor"], "SUBTREE"):
             a = e["attributes"]
             gsd = _raw(e, "nTSecurityDescriptor")
             path = str(_first(a.get("gPCFileSysPath")) or "")
-            objects.append({"dn": e["dn"], "class": "groupPolicyContainer", "displayName": str(_first(a.get("displayName")) or ""), "gpcFileSysPath": path, "sd": _b64(gsd)})
+            objects.append({
+                "dn": e["dn"], "class": "groupPolicyContainer", "displayName": str(_first(a.get("displayName")) or ""),
+                "gpcFileSysPath": path, "flags": _int(a.get("flags")), "sd": _b64(gsd),
+            })
             self._note_sd(gsd)
-            if self.smb is not None and path:
-                content = self.smb(path + GPT_TMPL)
-                if content:
-                    sysvol[e["dn"]] = {"GptTmpl.inf": _decode_inf(content)}
+            if gpo is not None and path:
+                gpo[e["dn"]] = self._gpo_files(e["dn"], path, sysvol)
 
         pki = f"CN=Public Key Services,CN=Services,{config_nc}"
         for e in self._search_optional(f"CN=Certificate Templates,{pki}", "(objectClass=pKICertificateTemplate)", TEMPLATE_ATTRS, "SUBTREE"):
@@ -444,13 +471,105 @@ class LdapCollector:
         return {
             "format": FORMAT,
             "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "collector": {"kind": "ldap", "version": "1.1", "host": self.host, "account": self.account, "notes": self.notes, "critical_acl": True},
+            "collector": {"kind": "ldap", "version": "1.3", "host": self.host, "account": self.account, "notes": self.notes, "critical_acl": True},
             "domain": domain,
             "guids": {"extended_rights": ext, "schema_attributes": schema_attrs, "schema_classes": schema_classes},
             "objects": objects,
             "sysvol": sysvol,
             "principals": self.principals,
+            **({"gpo": gpo} if gpo is not None else {}),
         }
+
+    def _gpo_files(self, dn: str, base: str, sysvol: dict[str, dict[str, str]]) -> dict[str, Any]:
+        """Файлы GPO из SYSVOL (спека §3.1): Registry.pol — по белому списку и без паролей,
+        у GPP — только факт cpassword. Отказ на файле — строка в notes записи, сбор продолжается."""
+        data: dict[str, Any] = {"registry": [], "gpp": [], "audit": [], "scripts": [], "acl": None, "notes": []}
+        notes: list[str] = data["notes"]
+        present = self._gpo_listing(base, notes)
+        tmpl_rel = GPT_TMPL.lstrip("\\")
+        content = self._gpo_file(base, tmpl_rel, present, notes)
+        if content:
+            try:
+                sysvol[dn] = {"GptTmpl.inf": _decode_inf(content)}
+            except ValueError as exc:
+                notes.append(f"{tmpl_rel}: {exc}")
+        for name, rel in GPO_FILES.items():
+            content = self._gpo_file(base, rel, present, notes)
+            if content is None:
+                continue
+            scope, file = name.split("/", 1)
+            kind = file.lower()
+            try:
+                if kind.endswith(".pol"):
+                    for v in parse_registry_pol(content):
+                        if keep_registry(v.key, v.value):
+                            v = redact(v)
+                            data["registry"].append({"scope": scope, "key": v.key, "value": v.value, "type": v.type, "data": v.data})
+                elif kind == "audit.csv":
+                    data["audit"].extend(parse_audit_csv(_decode_inf(content)))
+                elif kind.endswith(".ini"):
+                    data["scripts"].extend(parse_scripts_ini(_decode_inf(content), scope))
+                elif kind.endswith(".xml"):
+                    data["gpp"].extend(parse_gpp(file, scope, _decode_inf(content)))
+                else:
+                    notes.append(f"{rel}: неизвестный тип файла")
+            except ValueError as exc:
+                notes.append(f"{rel}: {exc}")
+        return data
+
+    def _gpo_listing(self, base: str, notes: list[str]) -> set[str] | None:
+        """Относительные пути (нижний регистр) файлов, которые показал листинг папки GPO;
+        None — листинга нет, читаются все пути. Папка, которой нет у родителя, не листается."""
+        if self.smb_list is None:
+            return None
+        lister = self.smb_list
+        found: set[str] = set()
+
+        def ls(rel: str) -> set[str] | None:
+            try:
+                names = lister(f"{base}\\{rel}")
+            except OSError as exc:
+                # Пропускается только эта папка; отмена сбора (не OSError) проходит насквозь.
+                notes.append(f"{rel}: папка не прочитана по SMB ({exc.strerror or exc.__class__.__name__})")
+                return set()
+            if names is None:
+                return None
+            low = {n.lower() for n in names}
+            found.update(f"{rel}\\{n}".lower() for n in low)
+            return low
+
+        tops = {part: ls(part) for part in ("Machine", "User")}
+        if tops["Machine"] is None and tops["User"] is None:
+            notes.append("папка GPO не прочитана по SMB: нет Machine и User")
+        for part, top in tops.items():
+            if not top:
+                continue
+            if "preferences" in top:
+                kinds = ls(f"{part}\\Preferences") or set()
+                for kind in sorted(_gpp_kinds(part)):
+                    if kind.lower() in kinds:
+                        ls(f"{part}\\Preferences\\{kind}")
+            if "scripts" in top:
+                ls(f"{part}\\Scripts")
+        if "microsoft" in (tops["Machine"] or set()):
+            ls("MACHINE\\Microsoft\\Windows NT\\SecEdit")
+            ls("MACHINE\\Microsoft\\Windows NT\\Audit")
+        return found
+
+    def _gpo_file(self, base: str, rel: str, present: set[str] | None, notes: list[str]) -> bytes | None:
+        """Байты файла GPO; None — файла нет, он не прочитан или больше потолка (последние два — в notes)."""
+        if self.smb is None or (present is not None and rel.lower() not in present):
+            return None
+        content = self.smb(f"{base}\\{rel}")
+        if content is None:
+            # Без листинга «нет файла» и «не прочитан» не различить — пишется только для показанного листингом.
+            if present is not None:
+                notes.append(f"{rel}: не прочитан по SMB")
+            return None
+        if len(content) > MAX_GPO_FILE:
+            notes.append(f"{rel}: файл больше {MAX_GPO_FILE // (1024 * 1024)} МБ, не разобран")
+            return None
+        return content
 
     def _critical_acl(self, default_nc: str, domain_sid: str, objects: list[dict[str, Any]]) -> None:
         """Дескрипторы критичных групп, их рекурсивных участников и учёток RID 500 и 502 —
@@ -499,15 +618,25 @@ class LdapCollector:
                     "dNSHostName": str(_first(a.get("dNSHostName")) or ""),
                     "certificateTemplates": _list(a.get("certificateTemplates")),
                     "msPKI-Enrollment-Servers": _list(a.get("msPKI-Enrollment-Servers")),
+                    "cACertificate": _b64_list(e, "cACertificate"),
                     "sd": _b64(csd),
                 }
             )
             self._note_sd(csd)
         for scope in ("BASE", "LEVEL"):
-            for e in self._search_optional(pki, "(objectClass=*)", ["nTSecurityDescriptor"], scope):
+            # cACertificate есть только у CN=NTAuthCertificates.
+            for e in self._search_optional(pki, "(objectClass=*)", ["nTSecurityDescriptor", "cACertificate"], scope):
                 psd = _raw(e, "nTSecurityDescriptor")
-                out.append({"dn": e["dn"], "class": "pkiContainer", "sd": _b64(psd)})
+                rec: dict[str, Any] = {"dn": e["dn"], "class": "pkiContainer", "sd": _b64(psd)}
+                if certs := _b64_list(e, "cACertificate"):
+                    rec["cACertificate"] = certs
+                out.append(rec)
                 self._note_sd(psd)
+        for container, store in CA_STORES.items():
+            base = f"CN={container},{pki}"
+            for e in self._read(f"сертификаты ЦС (CN={container}) не прочитаны", base, "(objectClass=certificationAuthority)", ["cn", "cACertificate"], "LEVEL") or []:
+                cn = str(_first(e["attributes"].get("cn")) or "")
+                out.append({"dn": e["dn"], "class": "certificationAuthority", "cn": cn, "store": store, "cACertificate": _b64_list(e, "cACertificate")})
         # На один уровень: сам контейнер CN=OID тоже класса msPKI-Enterprise-Oid и уже записан как pkiContainer.
         for e in self._search_optional(f"CN=OID,{pki}", "(objectClass=msPKI-Enterprise-Oid)", OID_ATTRS, "LEVEL"):
             a = e["attributes"]
@@ -647,9 +776,11 @@ class LdapCollector:
         return out
 
     def _sites(self, config_nc: str) -> list[dict[str, Any]]:
-        sites = self._read("сайты не прочитаны", f"CN=Sites,{config_nc}", "(objectClass=site)", ["name"], "LEVEL")
+        sites = self._read("сайты не прочитаны", f"CN=Sites,{config_nc}", "(objectClass=site)", ["name", *GPLINK_ATTRS], "LEVEL")
         subnets = self._read("подсети не прочитаны", f"CN=Subnets,CN=Sites,{config_nc}", "(objectClass=subnet)", ["name", "siteObject"], "LEVEL")
-        out: list[dict[str, Any]] = [{"dn": e["dn"], "class": "site", "name": str(_first(e["attributes"].get("name")) or "")} for e in sites or []]
+        out: list[dict[str, Any]] = [
+            {"dn": e["dn"], "class": "site", "name": str(_first(e["attributes"].get("name")) or ""), **_gplink(e["attributes"])} for e in sites or []
+        ]
         for e in subnets or []:
             a = e["attributes"]
             site = _first(a.get("siteObject"))
@@ -721,6 +852,17 @@ class LdapCollector:
                     continue
                 cls = "computer" if "computer" in classes else "group" if "group" in classes else "user"
                 self._register(sid_, f"{netbios}\\{sam}", cls)
+
+
+def _gplink(attrs: dict[str, Any]) -> dict[str, Any]:
+    """gPLink без атрибута — пустая строка: сборщик ссылки читал, их нет (None — старый сборщик)."""
+    return {"gpLink": str(_first(attrs.get("gPLink")) or ""), "gpOptions": _int(attrs.get("gPOptions"))}
+
+
+def _gpp_kinds(part: str) -> set[str]:
+    """Папки Preferences\\<вид>, файлы из которых читаются для части GPO (Machine или User)."""
+    prefix = f"{part}\\Preferences\\".lower()
+    return {rel.split("\\")[2] for rel in GPO_FILES.values() if rel.lower().startswith(prefix)}
 
 
 def _decode_inf(content: bytes) -> str:
@@ -831,20 +973,48 @@ def paced_reader(read: SmbReader, pacer: Pacer) -> SmbReader:
     return paced
 
 
-def smb_reader(host: str, username: str, password: str, *, pacer: Pacer | None = None) -> SmbReader:
-    """Чтение файлов SYSVOL через smbprotocol; путь DFS переводится на
-    контроллер домена, к которому уже подключились. Чтения — через дозатор сбора (`paced_reader`)."""
+def paced_lister(ls: SmbLister, pacer: Pacer) -> SmbLister:
+    """Листинги папок SYSVOL — тоже запросы к контроллеру: перед каждым — `pacer()`."""
+
+    def paced(unc: str) -> list[str] | None:
+        pacer()
+        return ls(unc)
+
+    return paced
+
+
+def smb_access(host: str, username: str, password: str, *, pacer: Pacer | None = None) -> tuple[SmbReader, SmbLister]:
+    """Чтение файлов и листинг папок SYSVOL через smbprotocol; путь DFS переводится на
+    контроллер домена, к которому уже подключились. Запросы — через дозатор сбора.
+    Файл читается не больше MAX_GPO_FILE + 1 байт: превышение видно, а память не расходуется."""
     import smbclient
 
     smbclient.register_session(host, username=username, password=password)
 
-    def read(unc: str) -> bytes | None:
+    def local(unc: str) -> str:
         parts = unc.lstrip("\\").split("\\", 1)
-        path = f"\\\\{host}\\{parts[1]}" if len(parts) == 2 else unc
+        return f"\\\\{host}\\{parts[1]}" if len(parts) == 2 else unc
+
+    def read(unc: str) -> bytes | None:
         try:
-            with smbclient.open_file(path, mode="rb") as fh:
-                return bytes(fh.read())
+            with smbclient.open_file(local(unc), mode="rb") as fh:
+                return bytes(fh.read(MAX_GPO_FILE + 1))
         except OSError:
             return None
 
-    return paced_reader(read, pacer or Pacer())
+    def ls(unc: str) -> list[str] | None:
+        try:
+            return [str(n) for n in smbclient.listdir(local(unc))]
+        except OSError as exc:
+            # SMBOSError — OSError с errno из NTSTATUS, но не подкласс FileNotFoundError: смотрим errno.
+            if isinstance(exc, FileNotFoundError | NotADirectoryError) or exc.errno in (errno.ENOENT, errno.ENOTDIR):
+                return None
+            raise
+
+    p = pacer or Pacer()
+    return paced_reader(read, p), paced_lister(ls, p)
+
+
+def smb_reader(host: str, username: str, password: str, *, pacer: Pacer | None = None) -> SmbReader:
+    """Только чтение файлов SYSVOL (`smb_access` без листинга) — для прежних вызовов."""
+    return smb_access(host, username, password, pacer=pacer)[0]

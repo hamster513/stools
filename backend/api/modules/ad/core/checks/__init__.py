@@ -36,6 +36,7 @@ from api.modules.ad.core.checks.adcs import check_adcs_templates
 from api.modules.ad.core.checks.adcs_ca import check_adcs_ca
 from api.modules.ad.core.checks.adcs_mapping import check_adcs_mapping
 from api.modules.ad.core.checks.catalog import with_guidance
+from api.modules.ad.core.checks.certificates import check_certificate_strength
 from api.modules.ad.core.checks.clusters import check_clusters
 from api.modules.ad.core.checks.common import CheckSpec
 from api.modules.ad.core.checks.computers import (
@@ -53,6 +54,7 @@ from api.modules.ad.core.checks.critical_acl import (
     check_critical_object_acl,
     check_domain_root_acl,
 )
+from api.modules.ad.core.checks.dc_hardening import check_dc_hardening
 from api.modules.ad.core.checks.dns import check_dns_zones
 from api.modules.ad.core.checks.domain import (
     check_backup_age,
@@ -68,6 +70,19 @@ from api.modules.ad.core.checks.domain import (
     check_too_many_admins,
 )
 from api.modules.ad.core.checks.gpo import check_user_rights_assignment
+from api.modules.ad.core.checks.gpo_files_checks import (
+    check_dc_audit_policy,
+    check_gpo_external_files,
+    check_gpo_registry_settings,
+    check_sysvol_acl,
+)
+from api.modules.ad.core.checks.gpo_settings import (
+    check_dc_logon_rights,
+    check_gpo_security_options,
+    check_gpp_passwords,
+    check_restricted_groups,
+    check_tiering_logon_deny,
+)
 from api.modules.ad.core.checks.groups import (
     check_privileged_groups,
     check_protected_users_coverage,
@@ -79,7 +94,7 @@ from api.modules.ad.core.export import ExportIndex
 from api.modules.ad.core.findings import Finding
 
 # Поднимать при любой правке логики находок или формата их ключей: по версии сверка статусов отличает настоящие исчезновения от смены правил (docs/platform/findings.md).
-ANALYZER_VERSION = "5"
+ANALYZER_VERSION = "9"
 
 _CHECKS: list[CheckSpec] = [
     CheckSpec("DCSync", "Права DCSync", "Права DCSync позволяют извлекать хэши паролей из AD и дают полный контроль над доменом.", check_dcsync, ("T1003.006",)),
@@ -117,6 +132,7 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("DcCount", "Число контроллеров домена", "Один контроллер домена — единая точка отказа: при его потере домен недоступен, а восстановление затруднено.", check_dc_count, ()),
     CheckSpec("DcDelegation", "Делегация контроллеров домена", "Ограниченная делегация у контроллера (служб или protocol transition) позволяет от имени его учётки получать доступ к службам; контроллер — цель высшей ценности.", check_dc_delegation, ("T1558",)),
     CheckSpec("DcOwner", "Владелец объекта контроллера", "Владелец объекта контроллера домена может менять его права независимо от ACL; владельцем должны быть только администраторы.", check_dc_owner, ("T1098",)),
+    CheckSpec("DcHardening", "Настройки контроллеров домена (NTLM, подпись LDAP и SMB, службы)", "Контроллер, который принимает NTLMv1, не требует подписи LDAP и SMB, держит SMBv1, запущенные Spooler и WebClient или давно не перезагружался (не обновлялся), открывает перехват и ретрансляцию проверки подлинности, принуждение контроллера к входу и известные уязвимости.", check_dc_hardening, ("T1557", "T1187", "T1210")),
     CheckSpec("TooManyAdmins", "Слишком много администраторов", "Чем больше администраторов домена, тем больше учётных записей, захват любой из которых даёт полный контроль над доменом.", check_too_many_admins, ("T1078.002",)),
     CheckSpec("FunctionalLevel", "Функциональный уровень домена и леса", "Низкий функциональный уровень домена или леса не даёт включить защиту новых версий Windows Server: Protected Users, политики и силосы проверки подлинности, AES для Kerberos по умолчанию.", check_functional_level, ()),
     CheckSpec("PreWin2000Access", "Группа Pre-Windows 2000 Compatible Access", "Участники группы читают атрибуты всех пользователей и групп домена; Anonymous Logon или Everyone в ней открывают каталог без входа.", check_pre_win2000_access, ("T1087.002",)),
@@ -139,6 +155,16 @@ _CHECKS: list[CheckSpec] = [
     CheckSpec("RodcPasswordReplication", "Репликация паролей на RODC", "Пароли, которые кэширует RODC, достаются тому, кто захватил сам RODC. Привилегированные учётки не должны кэшироваться, Denied RODC Password Replication Group должна запрещать кэширование контроллеров, администраторов и krbtgt, а учётки krbtgt_NNNNN удалённых RODC — удаляться.", check_rodc_password_replication, ("T1003",)),
     CheckSpec("CriticalObjectAcl", "Опасные права на критичные объекты", "Право менять привилегированную группу (членство, права, владельца) или её участника (сброс пароля, Shadow Credentials) даёт права этой группы. Проверяются группы администраторов и операторов, DnsAdmins, их рекурсивные участники и учётки Administrator и krbtgt; права, совпадающие с AdminSDHolder, показывает ShadowAdmins. Учитывается один шаг: цепочки через вложенные права не строятся.", check_critical_object_acl, ("T1098", "T1222.001")),
     CheckSpec("BadSuccessor", "Создание dMSA в OU (BadSuccessor)", "Кто может создать в OU объект dMSA, тот назначает ему предшественником любую учётку и получает её права, включая администратора домена. Опасно при контроллере Windows Server 2025; без такого контроллера находка Low. Учитываются явные права CreateChild (любых объектов или dMSA) и GenericAll на OU.", check_bad_successor, ("T1098",)),
+    CheckSpec("GppPasswords", "Пароли в GPO (GPP, автологон)", "Пароль в настройках GPP (cpassword) расшифровывается опубликованным ключом, пароль автологона в Registry.pol лежит открытым текстом; файлы SYSVOL читает любой пользователь домена. Значения сборщик не передаёт, только факт.", check_gpp_passwords, ("T1552.006",)),
+    CheckSpec("GpoSecurityOptions", "Параметры безопасности в GPO", "Параметры безопасности из GptTmpl.inf и Registry.pol: разрешённые LM и NTLMv1 и отсутствие режима «только NTLMv2» на контроллерах, хранение хэша LM, анонимный доступ, вход с пустым паролем, LDAP без подписи, запрет смены пароля компьютеров, консоль восстановления без пароля, обратимое хранение паролей.", check_gpo_security_options, ("T1557.001", "T1003", "T1087.002", "T1557")),
+    CheckSpec("DcLogonRights", "Вход на контроллеры для широких групп", "GPO, применимая к контроллерам домена, разрешает широкой группе (Everyone, Authenticated Users, Users, Domain Users, Domain Computers) локальный вход, вход по RDP или как пакетное задание: любая учётка домена получает сеанс на контроллере.", check_dc_logon_rights, ("T1078.002",)),
+    CheckSpec("TieringLogonDeny", "Нет запрета входа администраторов домена", "Ни одна GPO не запрещает Domain Admins локальный вход и вход по RDP: учётные данные администраторов домена остаются на рабочих станциях и серверах, где их можно украсть.", check_tiering_logon_deny, ("T1078.002",)),
+    CheckSpec("RestrictedGroups", "Широкие группы в локальных группах (Restricted Groups, GPP)", "Restricted Groups в GptTmpl.inf или настройка GPP Groups добавляет широкую группу в локальную встроенную группу компьютеров: в Administrators — права администратора на всех компьютерах, куда применяется GPO.", check_restricted_groups, ("T1098",)),
+    CheckSpec("GpoRegistrySettings", "Параметры реестра в GPO (LLMNR, Hardened Paths, WSUS, PowerShell)", "Административные шаблоны GPO: LLMNR не выключен, для SYSVOL и NETLOGON не требуются взаимная проверка подлинности и целостность, WSUS по HTTP или с прокси пользователя, журналирование блоков сценариев PowerShell не включено. Это открывает перехват хэшей и подмену политик и обновлений в сети и скрывает следы атакующего.", check_gpo_registry_settings, ("T1557.001", "T1557")),
+    CheckSpec("DcAuditPolicy", "Аудит на контроллерах домена", "GPO, применимые к контроллерам, не включают аудит успеха важных подкатегорий (проверка учётных данных, Kerberos, изменения учёток, групп и каталога, вход, создание процессов): без этих событий атаку на домен не видно в журналах.", check_dc_audit_policy, ("T1685.001",)),
+    CheckSpec("GpoExternalFiles", "Сценарии и файлы GPO с серверов вне домена", "Сценарий GPO, сценарий входа учётки (scriptPath) или файл из настройки GPP «Файлы» берётся с сервера вне домена и контроллеров: кто управляет этим сервером, тот выполняет код на компьютерах и от имени пользователей, куда применяется GPO.", check_gpo_external_files, ("T1037",)),
+    CheckSpec("SysvolAcl", "Права на папки GPO в SYSVOL", "Субъект вне администраторов домена может менять папку GPO или файл её сценария в SYSVOL: подменённые настройки и сценарии выполняются на всех компьютерах и у всех пользователей, куда привязана GPO.", check_sysvol_acl, ("T1484.001",)),
+    CheckSpec("CertificateStrength", "Стойкость сертификатов ЦС", "Сертификаты ЦС в AD (корневые, промежуточные, NTAuth, ЦС выдачи) с ключом RSA короче 2048 бит или с малой экспонентой, с ключом из уязвимой библиотеки (ROCA), с подписью MD2, MD4, MD5 или SHA-1 либо с ключом DSA: такой ключ можно подобрать или вычислить, а подпись подделать и выпускать сертификаты, которым доверяет домен. Просроченные сертификаты не проверяются.", check_certificate_strength, ("T1649",)),
 ]
 
 CHECKS: list[CheckSpec] = [with_guidance(c) for c in _CHECKS]

@@ -32,6 +32,16 @@ def test_full_export_has_no_gaps() -> None:
     assert _gaps(build_export()) == {}
 
 
+def test_old_collector_without_ca_certificates_marks_certificate_strength_unchecked() -> None:
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("cACertificate", None)
+    assert _gaps(raw) == {"CertificateStrength": "сертификаты ЦС не собраны (сборщик старой версии)"}
+    # Без AD CS (нет шаблонов и ЦС выдачи) проверять нечего: пустые контейнеры PKI — не пробел.
+    raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pKICertificateTemplate", "pKIEnrollmentService")]
+    assert "CertificateStrength" not in _gaps(raw)
+
+
 def test_old_collector_accounts_mark_new_attribute_checks_unchecked() -> None:
     raw = build_export()
     for o in raw["objects"]:
@@ -70,7 +80,8 @@ def test_missing_sysvol_marks_user_rights_unchecked() -> None:
     raw = build_export()
     raw["sysvol"] = {}
     gaps = _gaps(raw)
-    assert set(gaps) == {"UserRightsAssignment"} and "SYSVOL" in gaps["UserRightsAssignment"]
+    assert set(gaps) == {"UserRightsAssignment", "TieringLogonDeny", "DcLogonRights"} and "SYSVOL" in gaps["UserRightsAssignment"]
+    assert gaps["TieringLogonDeny"] == gaps["DcLogonRights"] == "файлы GptTmpl.inf не прочитаны"
 
 
 def test_collector_note_explains_missing_sysvol() -> None:
@@ -78,6 +89,44 @@ def test_collector_note_explains_missing_sysvol() -> None:
     raw["sysvol"] = {}
     raw["collector"]["notes"] = ["SYSVOL недоступен: ConnectionError"]
     assert "ConnectionError" in _gaps(raw)["UserRightsAssignment"]
+
+
+GPO_FILE_CHECKS = {"GpoSecurityOptions", "DcLogonRights", "RestrictedGroups"}
+GPO_BLOCK_CHECKS = {"GppPasswords", "GpoRegistrySettings", "DcAuditPolicy", "GpoExternalFiles", "SysvolAcl"}
+
+
+def test_missing_gpo_block_marks_gpp_passwords_unchecked() -> None:
+    raw = build_export()
+    raw.pop("gpo")
+    assert set(_gaps(raw)) == GPO_BLOCK_CHECKS
+
+
+def test_gpo_block_without_acl_marks_sysvol_acl_unchecked() -> None:
+    raw = build_export()
+    for data in raw["gpo"].values():
+        data.pop("acl")
+    assert _gaps(raw) == {"SysvolAcl": "права на SYSVOL читает только PowerShell-сборщик"}
+
+
+def test_missing_sysvol_and_gpo_block_mark_gpo_file_checks_unchecked() -> None:
+    raw = build_export()
+    raw["sysvol"] = {}
+    raw.pop("gpo")
+    gaps = _gaps(raw)
+    assert set(gaps) == {"UserRightsAssignment", "TieringLogonDeny"} | GPO_BLOCK_CHECKS | GPO_FILE_CHECKS
+    assert all(gaps[code] == "файлы GPO из SYSVOL не прочитаны" for code in GPO_FILE_CHECKS)
+    assert gaps["TieringLogonDeny"] == "файлы GptTmpl.inf не прочитаны"
+
+
+def test_unknown_gpo_links_are_noted() -> None:
+    raw = build_export()
+    for o in raw["objects"]:
+        o.pop("gpLink", None)
+    links = "привязка GPO неизвестна (сборщик старой версии)"
+    assert _gaps(raw) == {code: links for code in ("GpoSecurityOptions", "DcLogonRights", "DcAuditPolicy")}
+    raw["sysvol"] = {}
+    raw.pop("gpo")
+    assert _gaps(raw)["DcLogonRights"] == f"файлы GPO из SYSVOL не прочитаны; {links}"
 
 
 def test_missing_logon_dates_mark_inactive_users_unchecked() -> None:
@@ -97,7 +146,8 @@ def test_old_export_without_pki_objects_marks_esc5_unchecked() -> None:
     raw = build_export()
     raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pkiContainer", "pKIEnrollmentService")]
     gaps = _gaps(raw)
-    assert set(gaps) == {"ADCS_CA"} and "ESC5" in gaps["ADCS_CA"]
+    # Шаблоны есть, а сертификатов ЦС нет ни у одного объекта: стойкость сертификатов тоже не проверена.
+    assert set(gaps) == {"ADCS_CA", "CertificateStrength"} and "ESC5" in gaps["ADCS_CA"]
 
 
 def test_ca_object_alone_is_enough_for_esc5() -> None:
@@ -115,7 +165,7 @@ def test_domain_without_gpo_is_not_a_gap() -> None:
 
 def test_without_ca_data_ca_checks_are_unchecked() -> None:
     gaps = _gaps(build_export(), None)
-    assert set(gaps) == {"ADCS_CA", "ADCS_MAPPING"}
+    assert set(gaps) == {"ADCS_CA", "ADCS_MAPPING", "DcHardening"}
     assert gaps["ADCS_CA"] == (
         "ESC6, 7, 11, 16 не проверены: нужны данные ЦС (сборщик, пункт 5); "
         "ESC8 не проверен: нужна проверка веб-выдачи (сборщик, пункт 7)"
@@ -144,19 +194,25 @@ def test_domain_without_adcs_has_no_ca_data_reasons() -> None:
     """Нет ни шаблонов, ни ЦС — в домене нет AD CS: проверкам ЦС и привязки проверять нечего."""
     raw = build_export()
     raw["objects"] = [o for o in raw["objects"] if o["class"] not in ("pKICertificateTemplate", "pKIEnrollmentService")]
-    assert set(_gaps(raw, None)) == {"ADCS_ESC"}
+    # Состоянию контроллеров AD CS не нужен: его причина остаётся.
+    assert set(_gaps(raw, None)) == {"ADCS_ESC", "DcHardening"}
 
 
 def test_templates_without_ca_objects_still_need_ca_data() -> None:
     raw = build_export()
     raw["objects"] = [o for o in raw["objects"] if o["class"] != "pKIEnrollmentService"]
-    assert set(_gaps(raw, None)) == {"ADCS_CA", "ADCS_MAPPING"}
+    # Сертификат был только у ЦС выдачи: в контейнерах PKI его нет.
+    assert set(_gaps(raw, None)) == {"ADCS_CA", "ADCS_MAPPING", "DcHardening", "CertificateStrength"}
 
 
 def test_ca_object_without_templates_still_needs_ca_data() -> None:
     raw = build_export()
     raw["objects"] = [o for o in raw["objects"] if o["class"] != "pKICertificateTemplate"]
-    assert set(_gaps(raw, None)) == {"ADCS_ESC", "ADCS_CA", "ADCS_MAPPING"}
+    assert set(_gaps(raw, None)) == {"ADCS_ESC", "ADCS_CA", "ADCS_MAPPING", "DcHardening"}
+
+
+#: Прочитанная CIM-часть записи контроллера: без неё каждое null-поле — своя причина DcHardening.
+_CIM = {k: build_ca_data()["dcs"][0][k] for k in ("smb1", "smb_require_signing", "spooler", "webclient", "last_boot")}
 
 
 def _ca_entry(**fields: Any) -> dict[str, Any]:
@@ -170,9 +226,11 @@ def test_broken_ca_security_is_a_reason(security: str) -> None:
 
 
 def test_unread_dc_is_a_reason() -> None:
-    dcs = [{"host": "dc01.corp.local", "error": "нет доступа к реестру"}, {"host": "dc02.corp.local", "strong_binding": 2, "mapping_methods": 0x18}]
+    dcs = [{"host": "dc01.corp.local", "registry_read": False, "cim_read": True, **_CIM, "error": "нет доступа к реестру"},
+           {"host": "dc02.corp.local", "strong_binding": 2, "mapping_methods": 0x18, "registry_read": True, "cim_read": True, **_CIM}]
     gaps = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
-    assert gaps == {"ADCS_MAPPING": "контроллер dc01.corp.local: реестр не прочитан (нет доступа к реестру)"}
+    assert gaps == {"ADCS_MAPPING": "контроллер dc01.corp.local: реестр не прочитан (нет доступа к реестру)",
+                    "DcHardening": "контроллер dc01.corp.local: реестр не прочитан (нет доступа к реестру)"}
 
 
 def test_unchecked_web_is_a_reason() -> None:
@@ -182,7 +240,7 @@ def test_unchecked_web_is_a_reason() -> None:
 
 
 def test_records_with_data_and_error_are_checked() -> None:
-    dcs = [{"host": "dc01.corp.local", "strong_binding": 0, "error": "CertificateMappingMethods не прочитан"}]
+    dcs = [{"host": "dc01.corp.local", "strong_binding": 0, "registry_read": False, "cim_read": True, **_CIM, "error": "CertificateMappingMethods не прочитан"}]
     web = [{"url": "http://ca01.corp.local/certsrv/", "status": 401, "auth": ["NTLM"], "error": "сертификат не проверен"}]
     ca = parse_ca_data(build_ca_data(dcs=dcs, web=web))
     idx = ExportIndex(load_export(json.dumps(build_export()).encode()), ca)
@@ -191,6 +249,7 @@ def test_records_with_data_and_error_are_checked() -> None:
     # Веб-выдача с ответом проверена; у контроллера непрочитанное значение — своя причина.
     assert _gaps(build_export(), ca) == {
         "ADCS_MAPPING": "контроллер dc01.corp.local: сопоставление по UPN (ESC10) не проверено (CertificateMappingMethods не прочитан)",
+        "DcHardening": "контроллер dc01.corp.local: реестр не прочитан (CertificateMappingMethods не прочитан)",
     }
 
 
@@ -228,8 +287,75 @@ def test_ca_field_missing_without_error_is_not_a_reason() -> None:
     ids=["mapping_methods", "strong_binding"],
 )
 def test_partly_read_dc_names_unchecked_value(dc: dict[str, Any], reason: str) -> None:
-    ca = parse_ca_data(build_ca_data(dcs=[{"host": "dc01.corp.local", **dc, "error": "частично"}]))
-    assert _gaps(build_export(), ca) == {"ADCS_MAPPING": reason}
+    ca = parse_ca_data(build_ca_data(dcs=[{"host": "dc01.corp.local", **dc, "registry_read": False, "cim_read": True, **_CIM, "error": "частично"}]))
+    assert _gaps(build_export(), ca) == {"ADCS_MAPPING": reason, "DcHardening": "контроллер dc01.corp.local: реестр не прочитан (частично)"}
+
+
+DC_STATE_NEEDED = "нужно состояние контроллеров (сборщик, пункт 6)"
+
+
+def test_without_dc_section_dc_hardening_needs_collector() -> None:
+    assert _gaps(build_export(), None)["DcHardening"] == DC_STATE_NEEDED
+    ca = parse_ca_data(build_ca_data(sections=["ca", "web"], dcs=[]))
+    assert _gaps(build_export(), ca) == {"ADCS_MAPPING": "ESC10 не проверен: нужен реестр контроллеров (сборщик, пункт 6)",
+                                         "DcHardening": DC_STATE_NEEDED}
+
+
+def _dc(**fields: Any) -> dict[str, Any]:
+    return {**build_ca_data()["dcs"][0], **fields}
+
+
+def test_dc_with_unread_channels_names_each() -> None:
+    dcs = [_dc(host="dc01.corp.local", registry_read=False, error="реестр: доступ запрещён"),
+           _dc(host="dc02.corp.local", cim_read=False, error="CIM: WinRM и DCOM недоступны"), _dc(host="dc03.corp.local")]
+    reasons = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))["DcHardening"].split("; ")
+    assert reasons == ["контроллер dc01.corp.local: реестр не прочитан (реестр: доступ запрещён)",
+                       "контроллер dc02.corp.local: службы и SMB не прочитаны (CIM: WinRM и DCOM недоступны)"]
+
+
+def test_dc_reasons_show_only_their_channel_error() -> None:
+    dcs = [_dc(registry_read=False, cim_read=False, error="реестр: Access is denied.; CIM: WSMan: отказ; DCOM: отказ")]
+    reasons = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))["DcHardening"].split("; контроллер ")
+    assert reasons == ["контроллер dc01.corp.local: реестр не прочитан (реестр: Access is denied.)",
+                       "dc01.corp.local: службы и SMB не прочитаны (CIM: WSMan: отказ; DCOM: отказ)"]
+
+
+def test_unread_dc_record_of_collector_2_2_keeps_esc10_reason() -> None:
+    """Литеральная запись сборщика 2.2: флагов нет, привязка не прочитана — прежняя причина ESC10."""
+    dcs = [{"host": "dc01.corp.local", "strong_binding": None, "mapping_methods": None, "error": "The network path was not found."}]
+    gaps = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
+    assert gaps["ADCS_MAPPING"] == "контроллер dc01.corp.local: реестр не прочитан (The network path was not found.)"
+    assert gaps["DcHardening"] == ("контроллер dc01.corp.local: реестр не прочитан (The network path was not found.); "
+                                   "контроллер dc01.corp.local: службы и SMB не прочитаны (The network path was not found.)")
+
+
+def test_dc_record_of_old_collector_is_unread_for_dc_hardening() -> None:
+    """Запись сборщика до 2.3: флагов нет — оба канала не прочитаны; ESC10 проверен по привязке."""
+    dcs = [{"host": "dc01.corp.local", "strong_binding": 2, "mapping_methods": 0x18}]
+    gaps = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
+    assert gaps == {"DcHardening": "контроллер dc01.corp.local: реестр не прочитан; контроллер dc01.corp.local: службы и SMB не прочитаны"}
+
+
+def test_cim_error_of_read_registry_is_not_an_esc10_reason() -> None:
+    """Реестр прочитан, значений привязки в нём нет (действуют значения по умолчанию), а CIM отказал: ESC10 проверен."""
+    dcs = [_dc(strong_binding=None, mapping_methods=None, cim_read=False, error="CIM: WinRM недоступен")]
+    gaps = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
+    assert gaps == {"DcHardening": "контроллер dc01.corp.local: службы и SMB не прочитаны (CIM: WinRM недоступен)"}
+
+
+def test_dc_cim_sub_reads_name_each_unread_part() -> None:
+    """CIM-сессия есть, но часть чтений отказала: эти виды DcHardening не проверены — своя причина у каждой части."""
+    dcs = [_dc(smb_require_signing=None, spooler=None, last_boot=None, error="SMB: отказ; службы: нет доступа; время загрузки: таймаут")]
+    reasons = _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))["DcHardening"].split("; контроллер ")
+    assert reasons == ["контроллер dc01.corp.local: SMB не прочитан (SMB: отказ)",
+                       "dc01.corp.local: службы не прочитаны (службы: нет доступа)",
+                       "dc01.corp.local: время загрузки не прочитано (время загрузки: таймаут)"]
+
+
+def test_dc_null_registry_values_of_read_registry_are_not_reasons() -> None:
+    """Реестр прочитан, параметров нет — действуют значения по умолчанию, проверка выполнена."""
+    dcs = [_dc(lm_compatibility=None, no_lm_hash=None, ldap_integrity=None, ldap_channel_binding=None, tls=None)]
+    assert "DcHardening" not in _gaps(build_export(), parse_ca_data(build_ca_data(dcs=dcs)))
 
 
 def _upload(client: TestClient, raw: dict[str, Any]) -> dict[str, Any]:

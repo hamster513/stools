@@ -77,6 +77,8 @@ def list_ca_data(db: Session, domain_id: int) -> list[dict[str, Any]]:
             "cas": len(r.data.get("cas") or []),
             "dcs": len(r.data.get("dcs") or []),
             "web": len(r.data.get("web") or []),
+            "dc_total": len(r.data.get("dcs") or []),
+            "dc_complete": sum(1 for d in r.data.get("dcs") or [] if d.get("registry_read") and d.get("cim_read")),
         }
         for r in _rows(db, domain_id)
     ]

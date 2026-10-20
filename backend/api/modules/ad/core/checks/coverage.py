@@ -13,7 +13,8 @@ from api.modules.ad.core.ca_data import CaAuthority, CaData, DcBinding
 from api.modules.ad.core.checks.adcs_ca import broken_security, unread
 from api.modules.ad.core.checks.critical_acl import DMSA_CLASS
 from api.modules.ad.core.checks.domain import functional_level_value
-from api.modules.ad.core.export import CRITICAL_ACL_UNREAD, AdExport, ExportIndex
+from api.modules.ad.core.checks.gpo_settings import LINKS_UNKNOWN
+from api.modules.ad.core.export import _LINK_CONTAINERS, CRITICAL_ACL_UNREAD, AdExport, ExportIndex
 from api.modules.ad.core.sd import parse_sd
 
 
@@ -21,8 +22,9 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     users = gpos = templates = pki_objects = enrollment_services = computers = 0
     has_os = has_primary_group = False
     dcs = dc_acl = dc_owner = 0
-    logon_dates = False
+    logon_dates = ca_certs = False
     for o in export.objects:
+        ca_certs = ca_certs or bool(o.cACertificate)
         if o.cls in ("user", "computer"):
             has_primary_group = has_primary_group or o.primaryGroupID is not None
         if o.cls == "user":
@@ -79,11 +81,18 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     if gpos and not export.sysvol:
         note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
+    if gpos:
+        gaps.update(_gpo_gaps(export))
+    dc_state = _dc_state_reasons(ca)
+    if dc_state:
+        gaps["DcHardening"] = "; ".join(dc_state)
     if not templates:
         gaps["ADCS_ESC"] = "шаблонов сертификатов в выгрузке нет: в лесу нет AD CS или контейнер шаблонов недоступен"
     if not templates and not enrollment_services:
         # В домене нет AD CS: проверкам ЦС и привязки проверять нечего, они честно чистые.
         return gaps
+    if not ca_certs:
+        gaps["CertificateStrength"] = "сертификаты ЦС не собраны (сборщик старой версии)"
     ca_reasons: list[str] = []
     if templates and not pki_objects:
         ca_reasons.append("ESC5 не проверен: выгрузка собрана без объектов PKI (старый сборщик)")
@@ -148,6 +157,35 @@ def _trust_dns_gaps(export: AdExport) -> dict[str, str]:
     return gaps
 
 
+_GPO_FILE_CHECKS = ("GpoSecurityOptions", "DcLogonRights", "RestrictedGroups")
+_LINKS_UNKNOWN_CHECKS = ("GpoSecurityOptions", "DcLogonRights", "DcAuditPolicy")
+_GPO_BLOCK_CHECKS = ("GpoRegistrySettings", "DcAuditPolicy", "GpoExternalFiles", "SysvolAcl")
+
+
+def _gpo_gaps(export: AdExport) -> dict[str, str]:
+    """Проверки этапа GPO: блок gpo (Registry.pol, GPP) и GptTmpl.inf; приписка о привязке — проверка при этом выполнена."""
+    note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
+    suffix = f" ({note})" if note else ""
+    reasons: dict[str, list[str]] = {}
+    if export.gpo is None:
+        reasons["GppPasswords"] = ["настройки GPP и Registry.pol не собраны (сборщик старой версии или SYSVOL не прочитан)" + suffix]
+        for code in _GPO_BLOCK_CHECKS:
+            reasons[code] = ["Registry.pol, audit.csv, сценарии и настройки GPP не собраны (сборщик старой версии или SYSVOL не прочитан)" + suffix]
+        if not export.sysvol:
+            for code in _GPO_FILE_CHECKS:
+                reasons[code] = ["файлы GPO из SYSVOL не прочитаны" + suffix]
+    elif all(data.acl is None for data in export.gpo.values()):
+        reasons["SysvolAcl"] = ["права на SYSVOL читает только PowerShell-сборщик"]
+    if not export.sysvol:
+        # Права входа есть только в GptTmpl.inf: без него отсутствие запрета не доказано.
+        reasons["TieringLogonDeny"] = ["файлы GptTmpl.inf не прочитаны" + suffix]
+        reasons.setdefault("DcLogonRights", ["файлы GptTmpl.inf не прочитаны" + suffix])
+    if not any(o.gpLink is not None for o in export.objects if o.cls in _LINK_CONTAINERS):
+        for code in _LINKS_UNKNOWN_CHECKS:
+            reasons.setdefault(code, []).append(LINKS_UNKNOWN)
+    return {code: "; ".join(parts) for code, parts in reasons.items()}
+
+
 def _critical_acl_gaps(export: AdExport) -> dict[str, str]:
     gaps: dict[str, str] = {}
     notes = export.collector.notes
@@ -181,8 +219,46 @@ def _ca_record_reasons(c: CaAuthority) -> list[str]:
     return reasons
 
 
+def _dc_state_reasons(ca: CaData | None) -> list[str]:
+    """Состояние контроллеров (раздел dc сборщика 2.3): по каждому контроллеру — какой канал не отработал,
+    а при отработавшем CIM — какая его часть (SMB, службы, время загрузки) не прочитана.
+    Запись сборщика до 2.3 флагов не несёт — оба канала у неё не прочитаны."""
+    if ca is None or "dc" not in ca.sections:
+        return ["нужно состояние контроллеров (сборщик, пункт 6)"]
+    reasons = []
+    for d in ca.dcs:
+        if not d.registry_read:
+            reasons.append(f"контроллер {d.host}: реестр не прочитан{_channel_error(d.error, 'реестр: ')}")
+        if not d.cim_read:
+            reasons.append(f"контроллер {d.host}: службы и SMB не прочитаны{_channel_error(d.error, 'CIM: ')}")
+            continue
+        # Сессия CIM есть, но отдельное чтение отказало: null здесь — «не известно», а не «значения нет».
+        for missing, what, prefix in (
+            (d.smb1 is None or d.smb_require_signing is None, "SMB не прочитан", "SMB: "),
+            (d.spooler is None or d.webclient is None, "службы не прочитаны", "службы: "),
+            (d.last_boot is None, "время загрузки не прочитано", "время загрузки: "),
+        ):
+            if missing:
+                reasons.append(f"контроллер {d.host}: {what}{_channel_error(d.error, prefix)}")
+    return reasons
+
+
+def _channel_error(error: str, prefix: str) -> str:
+    """Часть error о канале в скобках. Сборщик 2.3 пишет отказы частями через «; »: «реестр: …» — одна
+    часть, «CIM: …» — последняя (внутри неё свои «; »). Части с префиксом нет — весь текст."""
+    if not error:
+        return ""
+    parts = error.split("; ")
+    for i, part in enumerate(parts):
+        if part.startswith(prefix):
+            return f" ({'; '.join(parts[i:]) if prefix == 'CIM: ' else part})"
+    return f" ({error})"
+
+
 def _dc_record_reasons(d: DcBinding) -> list[str]:
-    if not d.error:
+    # Реестр прочитан целиком: значения привязки, которого нет, — значение по умолчанию, а текст
+    # в error относится к CIM.
+    if not d.error or d.registry_read:
         return []
     if d.strong_binding is None and d.mapping_methods is None:
         return [f"контроллер {d.host}: реестр не прочитан ({d.error})"]

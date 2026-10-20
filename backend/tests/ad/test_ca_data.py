@@ -15,7 +15,12 @@ from api.modules.ad.core.ca_data import CA_FORMAT, CaDataFormatError, parse_ca_d
 from api.modules.ad.core.checks import ANALYZER_VERSION
 from api.modules.ad.core.export import ExportFormatError, ExportIndex, load_export, load_export_path
 from api.modules.ad.models import AdCaData, AdDomain, AdJob, AdSnapshot
-from api.modules.ad.services.ca_data import delete_ca_data, effective_ca_data, store_ca_data
+from api.modules.ad.services.ca_data import (
+    delete_ca_data,
+    effective_ca_data,
+    list_ca_data,
+    store_ca_data,
+)
 from api.modules.ad.services.snapshots import snapshot_path
 from tests.ad.synthetic import DOMAIN_SID, NOW, build_ca_data, build_export
 from tests.api.conftest import TEST_LOGIN
@@ -55,6 +60,34 @@ def test_ca_entry_with_error_and_without_flags_is_read() -> None:
 def test_null_values_from_registry_are_kept_as_none() -> None:
     data = parse_ca_data(build_ca_data(dcs=[{"host": "dc01.corp.local", "strong_binding": None, "mapping_methods": None, "error": ""}]))
     assert data.dcs[0].strong_binding is None and data.dcs[0].mapping_methods is None
+
+
+DC_STATE_FIELDS = ("lm_compatibility", "no_lm_hash", "ldap_integrity", "ldap_channel_binding", "tls", "smb1", "smb_require_signing",
+                   "spooler", "webclient", "last_boot", "os_build", "registry_read", "cim_read")
+
+
+def test_old_dc_record_reads_with_state_fields_unset() -> None:
+    """Запись сборщика до 2.3 — только привязка: состояние контроллера не прочитано (None), а не «по умолчанию»."""
+    [dc] = parse_ca_data(build_ca_data(dcs=[{"host": "dc01.corp.local", "strong_binding": 2, "mapping_methods": 0x18}])).dcs
+    assert dc.strong_binding == 2 and dc.mapping_methods == 0x18
+    assert all(getattr(dc, name) is None for name in DC_STATE_FIELDS)
+
+
+def test_dc_state_record_is_read() -> None:
+    record = {
+        "host": "dc01.corp.local", "strong_binding": 1, "mapping_methods": 0x4, "lm_compatibility": 3, "no_lm_hash": 0,
+        "ldap_integrity": 1, "ldap_channel_binding": None, "tls": {"SSL 3.0": None, "TLS 1.0": 1, "TLS 1.1": 0},
+        "smb1": True, "smb_require_signing": False, "spooler": "running", "webclient": "stopped",
+        "last_boot": "2026-03-01T04:05:06", "os_build": "17763.6189", "registry_read": True, "cim_read": False,
+        "error": "CIM: WinRM недоступен",
+    }
+    [dc] = parse_ca_data(build_ca_data(dcs=[record])).dcs
+    assert (dc.lm_compatibility, dc.no_lm_hash, dc.ldap_integrity, dc.ldap_channel_binding) == (3, 0, 1, None)
+    assert dc.tls == {"SSL 3.0": None, "TLS 1.0": 1, "TLS 1.1": 0}
+    assert (dc.smb1, dc.smb_require_signing, dc.spooler, dc.webclient) == (True, False, "running", "stopped")
+    # Время без пояса — UTC, как collected_at.
+    assert dc.last_boot == dt.datetime(2026, 3, 1, 4, 5, 6, tzinfo=dt.UTC)
+    assert (dc.os_build, dc.registry_read, dc.cim_read, dc.error) == ("17763.6189", True, False, "CIM: WinRM недоступен")
 
 
 def test_sniff_format_reads_json_and_gzip(tmp_path: Path) -> None:
@@ -205,6 +238,17 @@ def test_deleting_ca_data_clears_snapshot_link(db_session: Any) -> None:
     assert snap.ca_data_id is None
 
 
+def test_ca_data_list_counts_fully_read_controllers(db_session: Any) -> None:
+    """Полностью прочитан — и реестр, и службы с SMB; запись сборщика до 2.3 (флагов нет) — не полностью."""
+    domain = _domain(db_session)
+    full = build_ca_data()["dcs"][0]
+    dcs = [full, {**full, "host": "dc02.corp.local", "cim_read": False, "error": "CIM: отказ"},
+           {"host": "dc03.corp.local", "strong_binding": 2, "mapping_methods": 0x18}]
+    _store(db_session, build_ca_data(dcs=dcs))
+    [item] = list_ca_data(db_session, domain.id)
+    assert (item["dcs"], item["dc_total"], item["dc_complete"]) == (3, 3, 1)
+
+
 # ---- API -------------------------------------------------------------------
 
 
@@ -272,6 +316,8 @@ def test_ca_data_upload_is_stored_and_reanalyzes_latest_snapshot(auth_client: Te
     assert len(items) == 1
     item = items[0]
     assert item["sections"] == ["ca", "dc", "web"] and (item["cas"], item["dcs"], item["web"]) == (1, 1, 1)
+    # Контроллеров в разделе dc и сколько из них прочитано полностью (и реестр, и службы с SMB).
+    assert (item["dc_total"], item["dc_complete"]) == (1, 1)
     assert item["filename"] == "adca-CORP.json.gz" and item["uploaded_by"] == TEST_LOGIN
     assert item["collected_at"].startswith("2026-09-09T12:00:00")
     # Снапшот не добавился, а последний пересчитан по этим данным.

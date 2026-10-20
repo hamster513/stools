@@ -27,6 +27,24 @@ def test_whitelist_and_redaction():
     assert pw.data == "" and g.redact(g.RegistryValue(LSA, "NoLMHash", 4, 1)).data == 1
 
 
+def test_whitelist_domain_controller_keys():
+    assert g.keep_registry("System\\CurrentControlSet\\Services\\NTDS\\Parameters", "LDAPServerIntegrity")
+    assert g.keep_registry("System\\CurrentControlSet\\Services\\Netlogon\\Parameters", "RefusePasswordChange")
+    assert g.keep_registry("Software\\Microsoft\\Windows NT\\CurrentVersion\\Setup\\RecoveryConsole", "SecurityLevel")
+    assert not g.keep_registry("System\\CurrentControlSet\\Services\\Netlogon\\Parameters", "MaximumPasswordAge")
+
+
+def test_registry_pol_odd_values():
+    data = preg((LSA, "Short", 4, b"\x01\x00"), (LSA, "Blob", 3, b"\x01\x02"), (LSA, "Bad", 1, b"\x00\xd8"), (LSA, "NoLMHash", 4, dword(1)))
+    got = {v.value: v.data for v in g.parse_registry_pol(data)}
+    # DWORD не из 4 байт и неизвестный тип — None; битая строка не теряет остальной файл.
+    assert got["Short"] is None and got["Blob"] is None and isinstance(got["Bad"], str) and got["NoLMHash"] == 1
+
+
+def test_registry_pol_key_without_terminator():
+    with pytest.raises(ValueError):
+        g.parse_registry_pol(b"PReg\x01\x00\x00\x00" + "[Software".encode("utf-16-le"))
+
 INF = """[Unicode]
 Unicode=yes
 [System Access]
@@ -76,6 +94,11 @@ def test_audit_scripts_gplink():
     assert g.parse_scripts_ini(ini, "user") == [{"scope": "user", "phase": "logon", "command": "\\\\fs01.other.local\\share\\run.bat", "parameters": "/q"}]
     link = "[LDAP://cn={A},cn=policies,cn=system,DC=corp,DC=local;0][LDAP://CN={B},CN=Policies,CN=System,DC=corp,DC=local;3]"
     assert g.parse_gplink(link) == [("cn={a},cn=policies,cn=system,dc=corp,dc=local", False, False), ("cn={b},cn=policies,cn=system,dc=corp,dc=local", True, True)]
+
+
+def test_audit_csv_oversized_field_is_value_error():
+    with pytest.raises(ValueError):
+        g.parse_audit_csv("Subcategory GUID,Setting Value\n" + "x" * 200_000 + ",1\n")
 
 
 def test_gpo_files_paths():
@@ -150,3 +173,17 @@ def test_gpo_block_and_inf_sections():
     assert idx.inf_sections(pol)["system access"]["ClearTextPassword"] == "1"
     assert idx.inf_sections(pol) is idx.inf_sections(pol)
     assert ExportIndex(mini_export([gpo("DC policy", DC_GPO)])).gpo_data(pol) is None
+
+
+def test_machine_disabled_gpo_never_applies_to_dcs():
+    idx = ExportIndex(mini_export([dc("DC01", 1000), gpo("Users only", USER_ONLY_GPO, flags=2)]))
+    pol = idx.objects("groupPolicyContainer")[0]
+    assert idx.gpo_link_map is None and idx.applies_to_dcs(pol) is False
+
+
+def test_similar_ou_name_is_not_the_dc_ou():
+    idx = ExportIndex(mini_export([
+        {"dn": f"OU=Domain Controllers2,{DN}", "class": "organizationalUnit", "gpLink": link(_dn(DC_GPO))},
+        dc("DC01", 1000), gpo("DC policy", DC_GPO),
+    ]))
+    assert idx.applies_to_dcs(idx.objects("groupPolicyContainer")[0]) is False

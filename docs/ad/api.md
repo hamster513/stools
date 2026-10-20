@@ -27,6 +27,7 @@ GET  /domains/{id}/overview            {domain, snapshot|null, compared_to,
 GET  /snapshots?domain_id              [{id, domain_id, collected_at, imported_at, source, collector, filename,
                                         objects, findings, by_severity, new, fixed, previous_id}]
 GET  /snapshots/{id}
+GET  /snapshots/{id}/summary           сводка домена (ниже) | 409 «сводка не посчитана: пересчитайте снапшот»
 POST /snapshots/file  multipart file   {job_id} | 409 идёт задача
 POST /snapshots/{id}/reanalyze         {job_id}   — проверки заново по сохранённой выгрузке
 DELETE /snapshots/{id}                 204        — удаляет находки и файл; статусы находок остаются
@@ -39,14 +40,52 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 этом снапшоте, `resolved` — пропали с предыдущего. `summary` — счётчики
 статусов домена (вместе с отсутствующими в последнем снапшоте).
 
+Сводка считается при анализе (импорт и пересчёт) из той же выгрузки и хранится
+в снапшоте; у снапшота, посчитанного до её появления (анализатор до версии 9), —
+409, нужен пересчёт.
+
+```
+{version: 1,
+ accounts: {users: COUNTS, computers: COUNTS},
+ password_age: {all: BUCKETS, admins: BUCKETS}, last_logon: {all: BUCKETS, admins: BUCKETS},
+ os:   [{name, build, total, enabled, active}]                         по убыванию total
+ dcs:  [{name, dn, dns, os, build, rodc, last_logon_days, pwd_age_days, owner}]
+ groups: [{name, sid, members, enabled, inactive, pwd_never_expires, delegable, protected_users}]
+ trusts: [{partner, flat_name, direction, type, within_forest, changed}]
+ password_policies: [{name, min_length, lockout_threshold, complexity, reversible, precedence}]
+ gpos: [{name, dn, machine_disabled, user_disabled, links: [{dn, enforced, disabled}] | null}]
+ subnets: [{name, site}]}
+COUNTS:  total, enabled, disabled, active, inactive, pwd_never_expires, pwd_not_required,
+         no_preauth, sid_history, delegation, laps (у пользователей 0)
+BUCKETS: [{le: 30, n}, {le: 90, n}, {le: 180, n}, {le: 365, n}, {le: 730, n}, {le: 1095, n}, {le: null, n}]
+```
+
+`active` — включённые, входившие за `user_inactivity_days` / `computer_inactivity_days`
+настроек; `inactive` — остальные включённые. Флаги (`pwd_never_expires` … `laps`)
+считаются среди включённых; штатная неограниченная делегация контроллеров в `delegation`
+не входит (ограниченная входит). Корзины — включённые пользователи, `admins` — включённые
+админы (`admin_rids` и RID 500); вход и пароль неизвестны (не входил, пароль не задан) —
+в корзине `le: null`. В группах `members` — все рекурсивные участники (пользователи и
+компьютеры), остальные счётчики — по включённым пользователям-участникам; `delegable` —
+без «учётная запись важна и не может быть делегирована». `owner` контроллера — владелец
+объекта, `""` — дескриптор не прочитан. Первая строка `password_policies` — политика
+домена (`precedence: null`), если сборщик её прочитал, за ней PSO по приоритету.
+`links: null` — привязка GPO неизвестна (сборщик не читал gPLink); в `links` и выключенные
+ссылки. `site` подсети — имя сайта.
+
 ## Данные центра сертификации
 
 Файл `stools-ad-ca/1` от PowerShell-сборщика (JSON, можно gzip; поля `format`,
 `collected_at`, `collector`, `domain: {sid, dns_root}`, `sections` и записи разделов:
 `cas` — `name, host, os_build, edit_flags, interface_flags, disable_extension_list,
 security` (дескриптор прав ЦС, base64), `dcs` — `host, strong_binding,
-mapping_methods`, `web` — `url, status, auth`; у каждой записи `error` — что
-сборщик не прочитал) загружается той же ручкой `POST /snapshots/file`: формат
+mapping_methods` и с PowerShell-сборщика 2.3 `lm_compatibility, no_lm_hash,
+ldap_integrity, ldap_channel_binding, tls, smb1, smb_require_signing, spooler,
+webclient, last_boot, os_build, registry_read, cim_read` (`tls` — `Enabled` для
+`SSL 3.0`, `TLS 1.0`, `TLS 1.1` или `null`; службы — `running`, `stopped`,
+`disabled`, `absent`; флаги — отработал ли канал, реестр и CIM: `null` у значения
+при прочитанном реестре — значения нет), `web` — `url, status, auth`; у каждой
+записи `error` — что сборщик не прочитал) загружается той же ручкой `POST /snapshots/file`: формат
 определяется по полю `format`.
 `stools-ad/1` — выгрузка домена (снапшот); `stools-ad-ca/*` — данные ЦС: домен
 ищется по `domain.sid` (нет — задача падает «сначала загрузите выгрузку
@@ -58,7 +97,9 @@ mapping_methods`, `web` — `url, status, auth`; у каждой записи `e
 
 ```
 GET    /domains/{id}/ca-data           [{id, collected_at, imported_at, filename, uploaded_by,
-                                        sections, cas, dcs, web}]   — cas/dcs/web: число записей
+                                        sections, cas, dcs, web, dc_total, dc_complete}]
+                                       — cas/dcs/web: число записей; dc_total/dc_complete —
+                                       контроллеров и сколько прочитано полностью (реестр и CIM)
 DELETE /ca-data/{id}                   {job_id} 202 — пересчёт последнего снапшота без них;
                                        204 — снапшотов домена нет; 409 — идёт задача, данные не удалены
 ```

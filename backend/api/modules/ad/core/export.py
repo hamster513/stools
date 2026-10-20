@@ -167,6 +167,10 @@ class AdObject(BaseModel):
     flatName: str | None = None
     trustAttributes: int | None = None
     altSecurityIdentities: StrList = Field(default_factory=list)
+    # Сертификаты ЦС (DER в base64): у pKIEnrollmentService, NTAuthCertificates и certificationAuthority;
+    # у certificationAuthority — хранилище: root (CN=Certification Authorities) или intermediate (CN=AIA).
+    cACertificate: StrList = Field(default_factory=list)
+    store: str | None = None
     sd: str | None = None
     # Учётные записи.
     primaryGroupID: int | None = None
@@ -643,12 +647,12 @@ class ExportIndex:
 
     def applies_to_dcs(self, gpo: AdObject) -> bool | None:
         """Включённая ссылка на корень домена или на предка DN контроллера, компьютерная часть не выключена.
-        None — привязка неизвестна. Блокировка наследования (gPOptions) не учитывается."""
+        None — привязка неизвестна (компьютерная часть выключена — False и без неё). Блокировка наследования (gPOptions) не учитывается."""
+        if (gpo.flags or 0) & GPO_FLAG_MACHINE_DISABLED:
+            return False
         links = self.gpo_links(gpo)
         if links is None:
             return None
-        if (gpo.flags or 0) & GPO_FLAG_MACHINE_DISABLED:
-            return False
         root = self.export.domain.dn.lower()
         dc_dns = [d.dn.lower() for d in self.dcs]
         for link in links:

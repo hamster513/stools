@@ -41,6 +41,9 @@ def test_registry_codes() -> None:
         "PrimaryGroup", "SidHistory", "SmartcardPassword", "UnixPasswords", "ComputerCreators", "LapsDeployment",
         "PasswordPolicy", "RecycleBin", "DsHeuristics", "BackupAge", "NtfrsSysvol", "SchemaVulnerableClass",
         "TrustSecurity", "DnsZones", "RodcPasswordReplication", "CriticalObjectAcl", "BadSuccessor",
+        "GppPasswords", "GpoSecurityOptions", "DcLogonRights", "TieringLogonDeny", "RestrictedGroups",
+        "GpoRegistrySettings", "DcAuditPolicy", "GpoExternalFiles", "SysvolAcl", "DcHardening",
+        "CertificateStrength",
     }
 
 

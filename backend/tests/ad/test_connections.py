@@ -41,7 +41,7 @@ def test_collect_via_fake_ldap(auth_client: TestClient, monkeypatch: Any) -> Non
     fake_conn = _FakeConn()
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
     monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: fake_conn.fake.search)
-    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
+    monkeypatch.setattr(svc, "smb_access", lambda host, u, p, **kw: (fake_conn.fake.smb, fake_conn.fake.ls))
     r = auth_client.post("/api/ad/connections", json={"host": "dc01.corp.local", "username": "CORP\\auditor", "password": "secret"})
     cid = r.json()["id"]
     test = auth_client.post(f"/api/ad/connections/{cid}/test").json()
@@ -128,7 +128,7 @@ def test_sysvol_gets_the_decrypted_password(auth_client: TestClient, monkeypatch
     seen: list[str] = []
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
     monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: fake_conn.fake.search)
-    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: seen.append(p) or fake_conn.fake.smb)
+    monkeypatch.setattr(svc, "smb_access", lambda host, u, p, **kw: seen.append(p) or (fake_conn.fake.smb, fake_conn.fake.ls))
     cid = _create(auth_client)
     assert auth_client.post(f"/api/ad/connections/{cid}/collect").status_code == 202
     assert seen == ["secret"]
@@ -356,7 +356,7 @@ def test_collect_reads_in_pages_with_pauses_and_progress(auth_client: TestClient
 
     monkeypatch.setattr(jobs.JobHandle, "tick", spy)
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
-    from api.modules.ad.core.ldap_collector import paced_reader
+    from api.modules.ad.core.ldap_collector import paced_lister, paced_reader
 
     smb_reads: list[str] = []
     smb_seen: dict[str, Any] = {}
@@ -368,9 +368,13 @@ def test_collect_reads_in_pages_with_pauses_and_progress(auth_client: TestClient
             smb_reads.append(path)
             return fake_conn.fake.smb(path)
 
-        return paced_reader(read, pacer)
+        def ls(path: str) -> list[str] | None:
+            smb_reads.append(path)  # листинг папки — такой же запрос к контроллеру
+            return fake_conn.fake.ls(path)
 
-    monkeypatch.setattr(svc, "smb_reader", smb)
+        return paced_reader(read, pacer), paced_lister(ls, pacer)
+
+    monkeypatch.setattr(svc, "smb_access", smb)
     _real_searcher_with_fake_sleep(monkeypatch, sleeps, seen)
     cid = _create(auth_client, page_size=50, pause_ms=250)
     r = auth_client.post(f"/api/ad/connections/{cid}/collect")
@@ -401,7 +405,7 @@ def test_cancel_between_pages_stops_collect(auth_client: TestClient, db_session:
 
     fake_conn = _PagedConn(on_search=cancel_on_third)
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
-    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
+    monkeypatch.setattr(svc, "smb_access", lambda host, u, p, **kw: (fake_conn.fake.smb, fake_conn.fake.ls))
     _real_searcher_with_fake_sleep(monkeypatch, [], {})
     cid = _create(auth_client)
     r = auth_client.post(f"/api/ad/connections/{cid}/collect")
@@ -422,7 +426,7 @@ def test_busy_controller_fails_job_without_snapshot(auth_client: TestClient, db_
 
     fake_conn = _PagedConn(fail_on={2: (51, "busy")})
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
-    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
+    monkeypatch.setattr(svc, "smb_access", lambda host, u, p, **kw: (fake_conn.fake.smb, fake_conn.fake.ls))
     _real_searcher_with_fake_sleep(monkeypatch, [], {})
     cid = _create(auth_client)
     r = auth_client.post(f"/api/ad/connections/{cid}/collect")
@@ -441,7 +445,7 @@ def test_cancel_during_pause_stops_before_next_request(auth_client: TestClient, 
 
     fake_conn = _PagedConn()
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
-    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
+    monkeypatch.setattr(svc, "smb_access", lambda host, u, p, **kw: (fake_conn.fake.smb, fake_conn.fake.ls))
     real = svc.Pacer
 
     def cancel_in_pause(seconds: float) -> None:
@@ -503,7 +507,7 @@ def test_scheduler_tick_collects_via_fake_ldap(auth_client: TestClient, db_sessi
     fake_conn = _FakeConn()
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
     monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: fake_conn.fake.search)
-    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
+    monkeypatch.setattr(svc, "smb_access", lambda host, u, p, **kw: (fake_conn.fake.smb, fake_conn.fake.ls))
     cid = _create(auth_client)
     assert auth_client.put(f"/api/ad/connections/{cid}/schedule", json={"interval_hours": 1, "enabled": True}).status_code == 200
     now = dt.datetime.now(dt.UTC) + dt.timedelta(hours=2)

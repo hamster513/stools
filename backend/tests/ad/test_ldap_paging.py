@@ -16,6 +16,7 @@ from api.modules.ad.core.ldap_collector import (
     Pacer,
     ldap3_searcher,
     paced_reader,
+    smb_access,
 )
 
 PAGED_OID = "1.2.840.113556.1.4.319"
@@ -275,3 +276,55 @@ def test_cancel_checked_between_searches_without_pause() -> None:
     with pytest.raises(JobCancelled):
         list(search("DC=corp,DC=local", "(objectSid=S-2)", ["objectSid"], "SUBTREE"))
     assert len(conn.calls) == 1
+
+
+def test_smb_access_translates_dfs_path_paces_and_caps_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Чтение и листинг SYSVOL — по пути на контроллере, через общий дозатор; файл читается не больше потолка."""
+    import errno
+    import io
+    import sys
+    import types
+
+    from api.modules.ad.core.gpo_files import MAX_GPO_FILE
+
+    events: list[str] = []
+    fake = types.ModuleType("smbclient")
+
+    def open_file(path: str, mode: str) -> io.BytesIO:
+        events.append(f"open:{path}")
+        if path.endswith("missing.pol"):
+            raise FileNotFoundError(path)
+        return io.BytesIO(b"x" * (MAX_GPO_FILE + 10))
+
+    def listdir(path: str) -> list[str]:
+        events.append(f"list:{path}")
+        if path.endswith("Absent"):
+            raise FileNotFoundError(path)
+        if path.endswith("NotDir"):
+            raise OSError(errno.ENOTDIR, "not a directory")  # как SMBOSError: OSError с errno, не подкласс
+        if path.endswith("Denied"):
+            raise OSError(0, "Unknown NtStatus error returned 'STATUS_ACCESS_DENIED'")
+        return ["Registry.pol", "Preferences"]
+
+    fake.register_session = lambda host, username, password: events.append(f"session:{host}:{username}")  # type: ignore[attr-defined]
+    fake.open_file = open_file  # type: ignore[attr-defined]
+    fake.listdir = listdir  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "smbclient", fake)
+
+    read, ls = smb_access("dc01.corp.local", "CORP\\auditor", "pw", pacer=Pacer(500, sleep=lambda s: events.append("pause")))
+    gpo = "\\\\corp.local\\SysVol\\corp.local\\Policies\\{G}"
+    local = "\\\\dc01.corp.local\\SysVol\\corp.local\\Policies\\{G}"
+    assert ls(gpo + "\\Machine") == ["Registry.pol", "Preferences"]
+    assert ls(gpo + "\\Absent") is None and ls(gpo + "\\NotDir") is None
+    # Отказ — не «папки нет»: ошибка доходит до сборщика.
+    with pytest.raises(OSError):
+        ls(gpo + "\\Denied")
+    data = read(gpo + "\\Machine\\Registry.pol")
+    assert data is not None and len(data) == MAX_GPO_FILE + 1
+    assert read(gpo + "\\missing.pol") is None
+    assert events == [
+        "session:dc01.corp.local:CORP\\auditor",
+        f"list:{local}\\Machine", "pause", f"list:{local}\\Absent", "pause", f"list:{local}\\NotDir", "pause",
+        f"list:{local}\\Denied", "pause",
+        f"open:{local}\\Machine\\Registry.pol", "pause", f"open:{local}\\missing.pol",
+    ]

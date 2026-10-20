@@ -8,7 +8,9 @@
   анализирует и не меняет.
 
   Выгрузка AD: объекты, дескрипторы безопасности (в том числе привилегированных
-  групп, их участников, Administrator и krbtgt), GptTmpl.inf из SYSVOL,
+  групп, их участников, Administrator и krbtgt), ссылки GPO, файлы GPO из SYSVOL
+  (GptTmpl.inf; Registry.pol — только значения белого списка; настройки GPP —
+  без паролей; аудит; скрипты) и права на папки GPO и файлы их скриптов,
   шаблоны сертификатов, центры сертификации и контейнеры PKI, политики выдачи,
   доверенные домены, настройки домена и леса, политики паролей (PSO), зоны DNS,
   сайты и подсети — один JSON (gzip), ad-<NETBIOS>-<дата>.json.gz. Хватает
@@ -17,7 +19,10 @@
   Данные ЦС (их по LDAP не прочитать, STools сам их не собирает):
     ca  — флаги и права каждого ЦС (certutil, при отказе — удалённый реестр);
           нужны права администратора ЦС или локального администратора сервера ЦС;
-    dc  — два значения реестра каждого контроллера домена (удалённый реестр);
+    dc  — состояние каждого контроллера домена: удалённый реестр (привязка сертификатов, NTLM,
+          подпись LDAP, протоколы SCHANNEL, сборка ОС) и CIM по WSMan, при отказе — по DCOM
+          (SMB, службы Spooler и WebClient, время загрузки); нужны права администратора на
+          контроллерах;
     web — ответ веб-выдачи ЦС на запрос без учётных данных (порты 80/443).
   Пишутся отдельным файлом adca-<NETBIOS>-<дата>.json.gz. Ошибка по отдельному
   серверу пишется в запись этого сервера и сбор не прерывает.
@@ -51,7 +56,8 @@
   тогда пуста).
 
 .PARAMETER SkipSysvol
-  Не читать GptTmpl.inf из SYSVOL (проверка User Rights Assignment пуста).
+  Не читать SYSVOL: ни файлов GPO, ни прав на их папки (проверки по
+  содержимому GPO пусты, блока gpo в выгрузке нет).
 
 .PARAMETER Yes
   Не спрашивать подтверждение после плана (для режима меню).
@@ -81,7 +87,7 @@ Import-Module ActiveDirectory
 
 $FormatVersion = "stools-ad/1"
 $CaFormatVersion = "stools-ad-ca/1"
-$CollectorVersion = "2.1"
+$CollectorVersion = "2.4"
 # Критичные объекты: группы домена (Domain Admins, Cert Publishers, Schema Admins, Enterprise Admins,
 # Group Policy Creator Owners, Key Admins, Enterprise Key Admins, Allowed RODC Password Replication Group),
 # встроенные (Administrators, Account, Server, Print, Backup Operators, Replicator), DnsAdmins по имени.
@@ -89,6 +95,30 @@ $CriticalGroupRids = @(512, 517, 518, 519, 520, 526, 527, 571)
 $CriticalBuiltinRids = @(544, 548, 549, 550, 551, 552)
 $CriticalGroupNames = @("DnsAdmins")
 $CriticalMembersLimit = 5000
+# Файлы GPO из SYSVOL (спека §3.1, список — как GPO_FILES в gpo_files.py): имя (часть/файл) → путь относительно
+# папки GPO. Services бывают только у компьютера, Drives — только у пользователя. Файл больше потолка не читается.
+$GpoFiles = [ordered]@{
+  "machine/Registry.pol" = "Machine\Registry.pol"
+  "user/Registry.pol" = "User\Registry.pol"
+  "machine/Groups.xml" = "Machine\Preferences\Groups\Groups.xml"
+  "machine/Services.xml" = "Machine\Preferences\Services\Services.xml"
+  "machine/ScheduledTasks.xml" = "Machine\Preferences\ScheduledTasks\ScheduledTasks.xml"
+  "machine/DataSources.xml" = "Machine\Preferences\DataSources\DataSources.xml"
+  "machine/Printers.xml" = "Machine\Preferences\Printers\Printers.xml"
+  "machine/Files.xml" = "Machine\Preferences\Files\Files.xml"
+  "user/Groups.xml" = "User\Preferences\Groups\Groups.xml"
+  "user/ScheduledTasks.xml" = "User\Preferences\ScheduledTasks\ScheduledTasks.xml"
+  "user/DataSources.xml" = "User\Preferences\DataSources\DataSources.xml"
+  "user/Drives.xml" = "User\Preferences\Drives\Drives.xml"
+  "user/Printers.xml" = "User\Preferences\Printers\Printers.xml"
+  "user/Files.xml" = "User\Preferences\Files\Files.xml"
+  "machine/audit.csv" = "Machine\Microsoft\Windows NT\Audit\audit.csv"
+  "machine/scripts.ini" = "Machine\Scripts\scripts.ini"
+  "machine/psscripts.ini" = "Machine\Scripts\psscripts.ini"
+  "user/scripts.ini" = "User\Scripts\scripts.ini"
+  "user/psscripts.ini" = "User\Scripts\psscripts.ini"
+}
+$MaxGpoFile = 4 * 1024 * 1024
 
 $ad = @{}
 if ($Server) { $ad["Server"] = $Server }
@@ -125,6 +155,14 @@ function AsList($value) {
   if ($null -eq $value) { return ,@() }
   if ($value -is [string]) { return ,@($value) }
   return ,@($value | ForEach-Object { [string]$_ })
+}
+
+# cACertificate: модуль отдаёт byte[] на каждое значение, а одно значение может прийти и самим byte[]
+# (перебор по конвейеру развернул бы его в байты).
+function CertList($value) {
+  if ($null -eq $value) { return ,@() }
+  if ($value -is [byte[]]) { return ,@([Convert]::ToBase64String($value)) }
+  return ,@($value | ForEach-Object { [Convert]::ToBase64String([byte[]]$_) })
 }
 
 function AsInt64($value) {
@@ -227,6 +265,337 @@ function Get-DnBinaryDn([string]$value) {
   return $value
 }
 
+# ---- Файлы GPO из SYSVOL (спека §3.1): разбор — как в gpo_files.py LDAP-сборщика 1.2 ----
+# Значения паролей отсюда не выходят: у GPP остаётся факт cpassword, у автологона — пустая строка
+# вместо DefaultPassword; из Registry.pol — только значения белого списка.
+
+# Registry.pol (PReg): заголовок «PReg» и версия 1, затем записи [key;value;type;size;data] в UTF-16LE.
+# Данные могут содержать «;» и «]», поэтому разбор идёт по размерам, а не по разделителям. Команды
+# удаления (**del.X, **delvals. и прочие «**») пропускаются. Битый файл — исключение.
+# Данные: REG_SZ и REG_EXPAND_SZ — строка, REG_DWORD — число, REG_MULTI_SZ — список строк, прочее — $null.
+function Read-RegistryPol([byte[]]$bytes) {
+  $n = $bytes.Length
+  if ($n -lt 8 -or [Text.Encoding]::ASCII.GetString($bytes, 0, 4) -cne "PReg" -or [BitConverter]::ToUInt32($bytes, 4) -ne 1) {
+    throw "не файл Registry.pol (нет заголовка PReg версии 1)"
+  }
+  # Разделитель «[», «;» или «]» (UTF-16LE) на смещении $at; отдаёт смещение после него.
+  function Step-PolToken([int64]$at, [char]$c) {
+    if ($at + 2 -gt $n -or $bytes[$at] -ne [int]$c -or $bytes[$at + 1] -ne 0) { throw ("Registry.pol повреждён: на смещении {0} нет «{1}»" -f $at, $c) }
+    return $at + 2
+  }
+  # Смещение завершающего нуля строки UTF-16LE, начатой на $at: первый нулевой байт на чётном от $at
+  # смещении, за которым тоже ноль. Поиск байта — [Array]::IndexOf, без цикла по байтам в PowerShell.
+  function Find-PolNul([int64]$at) {
+    $i = [int]$at
+    while ($true) {
+      $i = [Array]::IndexOf($bytes, [byte]0, $i)
+      if ($i -lt 0 -or $i + 2 -gt $n) { throw "Registry.pol обрезан" }
+      if (($i - $at) % 2 -eq 0 -and $bytes[$i + 1] -eq 0) { return [int64]$i }
+      $i++
+    }
+  }
+  $utf16 = [Text.Encoding]::Unicode
+  $out = New-Object System.Collections.Generic.List[object]
+  $pos = [int64]8
+  while ($pos -lt $n) {
+    $pos = Step-PolToken $pos "["
+    $end = Find-PolNul $pos
+    $key = $utf16.GetString($bytes, $pos, $end - $pos)
+    $pos = Step-PolToken ($end + 2) ";"
+    $end = Find-PolNul $pos
+    $value = $utf16.GetString($bytes, $pos, $end - $pos)
+    $pos = Step-PolToken ($end + 2) ";"
+    if ($pos + 4 -gt $n) { throw "Registry.pol обрезан" }
+    $type = [int64][BitConverter]::ToUInt32($bytes, $pos)
+    $pos = Step-PolToken ($pos + 4) ";"
+    if ($pos + 4 -gt $n) { throw "Registry.pol обрезан" }
+    $size = [int64][BitConverter]::ToUInt32($bytes, $pos)
+    $pos = Step-PolToken ($pos + 4) ";"
+    if ($pos + $size -gt $n) { throw "Registry.pol обрезан" }
+    $start = $pos
+    $pos = Step-PolToken ($pos + $size) "]"
+    if ($value.StartsWith("**", [StringComparison]::Ordinal)) { continue }
+    $data = $null
+    if ($type -eq 1 -or $type -eq 2) {
+      $data = $utf16.GetString($bytes, $start, $size).TrimEnd([char]0)
+    } elseif ($type -eq 4) {
+      if ($size -eq 4) { $data = [int64][BitConverter]::ToUInt32($bytes, $start) }
+    } elseif ($type -eq 7) {
+      $text = $utf16.GetString($bytes, $start, $size).TrimEnd([char]0)
+      $data = [string[]]@(if ($text) { $text.Split([char]0) })
+    }
+    $out.Add(@{ key = $key; value = $value; type = $type; data = $data })
+  }
+  $out.ToArray()
+}
+
+# Белый список Registry.pol (спека §3.1, как keep_registry в gpo_files.py): ключ → имена значений;
+# $null — все значения ключа. Регистр не важен, обратная косая черта по краям ключа — тоже.
+function Test-KeepRegistry([string]$key, [string]$value) {
+  $keep = @{
+    "Software\Policies\Microsoft\Windows NT\DNSClient" = @("EnableMultiCast")
+    "Software\Policies\Microsoft\Windows\NetworkProvider\HardenedPaths" = $null
+    "Software\Policies\Microsoft\Windows\WindowsUpdate" = @("WUServer", "SetProxyBehaviorForUpdateDetection", "DoNotEnforceEnterpriseTLSCertPinningForUpdateDetection")
+    "Software\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging" = @("EnableScriptBlockLogging")
+    "Software\Policies\Microsoft\Windows\PowerShell\ModuleLogging" = @("EnableModuleLogging")
+    "Software\Microsoft\Windows NT\CurrentVersion\Winlogon" = @("AutoAdminLogon", "DefaultUserName", "DefaultPassword")
+    "System\CurrentControlSet\Control\Lsa" = @("LmCompatibilityLevel", "NoLMHash", "RestrictAnonymous", "EveryoneIncludesAnonymous", "LimitBlankPasswordUse")
+    "System\CurrentControlSet\Services\NTDS\Parameters" = @("LDAPServerIntegrity")
+    "System\CurrentControlSet\Services\Netlogon\Parameters" = @("RefusePasswordChange")
+    "Software\Microsoft\Windows NT\CurrentVersion\Setup\RecoveryConsole" = @("SecurityLevel")
+  }
+  $k = $key.Trim([char]'\')
+  if (-not $keep.ContainsKey($k)) { return $false }
+  return ($null -eq $keep[$k]) -or ($keep[$k] -contains $value)
+}
+
+# Пароль автологона не покидает домен: данные DefaultPassword заменяются пустой строкой, остаётся факт.
+function Protect-RegistryValue($v) {
+  if ($v.key.Trim([char]'\') -eq "Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -and $v.value -eq "DefaultPassword") { $v.data = "" }
+  return $v
+}
+
+# Настройки GPP (Groups.xml и др.): запись — любой элемент с дочерним Properties. Текст с DOCTYPE отвергается
+# до разбора (сущности, «миллиард смехов»), внешние ресурсы не загружаются. Значение cpassword не копируется:
+# в записи только факт его наличия.
+function Read-GppFile([string]$file, [string]$scope, [string]$xmlText) {
+  if ($xmlText -match '(?i)<!doctype') { throw ("{0}: XML с DOCTYPE не разбирается" -f $file) }
+  $settings = New-Object System.Xml.XmlReaderSettings
+  $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+  $settings.XmlResolver = $null
+  $doc = New-Object System.Xml.XmlDocument
+  $doc.XmlResolver = $null
+  $reader = [System.Xml.XmlReader]::Create((New-Object System.IO.StringReader($xmlText.TrimStart([char]0xFEFF))), $settings)
+  try { $doc.Load($reader) }
+  catch {
+    $ex = $_.Exception
+    while ($null -ne $ex.InnerException) { $ex = $ex.InnerException }
+    throw ("{0}: XML не разобран ({1})" -f $file, $ex.Message)
+  } finally { $reader.Dispose() }
+  # Свойства узлов — только методами get_*: адаптер XML в PowerShell подменяет .Name, .ChildNodes и прочие
+  # одноимёнными атрибутами и дочерними элементами (у Member есть атрибут name).
+  $elementType = [System.Xml.XmlNodeType]::Element
+  $out = New-Object System.Collections.Generic.List[object]
+  foreach ($el in $doc.SelectNodes("//*")) {
+    $props = $null
+    foreach ($c in $el.get_ChildNodes()) { if ($c.get_NodeType() -eq $elementType -and $c.get_Name() -ceq "Properties") { $props = $c; break } }
+    if ($null -eq $props) { continue }
+    $members = @()
+    foreach ($c in $props.get_ChildNodes()) {
+      if ($c.get_NodeType() -ne $elementType -or $c.get_Name() -cne "Members") { continue }
+      foreach ($m in $c.get_ChildNodes()) {
+        if ($m.get_NodeType() -eq $elementType -and $m.get_Name() -ceq "Member") {
+          $members += [ordered]@{ name = $m.GetAttribute("name"); sid = $m.GetAttribute("sid"); action = $m.GetAttribute("action") }
+        }
+      }
+      break
+    }
+    $user = ""
+    foreach ($a in "userName", "accountName", "runAs", "username") { if ($props.GetAttribute($a)) { $user = $props.GetAttribute($a); break } }
+    $path = ""
+    foreach ($a in "path", "fromPath") { if ($props.GetAttribute($a)) { $path = $props.GetAttribute($a); break } }
+    $out.Add([ordered]@{
+      scope = $scope; file = $file; kind = $el.get_Name(); name = $el.GetAttribute("name"); user = $user
+      cpassword = [bool]$props.GetAttribute("cpassword"); action = $props.GetAttribute("action"); members = [object[]]$members
+      group_sid = $props.GetAttribute("groupSid"); group_name = $props.GetAttribute("groupName"); path = $path
+    })
+  }
+  $out.ToArray()
+}
+
+# audit.csv расширенной политики аудита: {subcategory: GUID в нижнем регистре без скобок, setting: 0–3}.
+# Строки параметров (Option:…) без GUID или с нечисловым значением пропускаются.
+function Read-AuditCsv([string]$text) {
+  $text = $text.TrimStart([char]0xFEFF)
+  if (-not $text.Trim()) { return }
+  try {
+    $first = ($text -split "\r\n|\n|\r", 2)[0]
+    # Столбцы — по строке заголовка (у файла без строк данных ConvertFrom-Csv их не покажет).
+    $columns = @(@($first, $first) | ConvertFrom-Csv)[0].PSObject.Properties | ForEach-Object { $_.Name }
+    $rows = @($text | ConvertFrom-Csv)
+  } catch { throw ("audit.csv не разобран ({0})" -f $_.Exception.Message) }
+  if (-not ($columns -ccontains "Subcategory GUID" -and $columns -ccontains "Setting Value")) {
+    throw "audit.csv: нет столбцов «Subcategory GUID» и «Setting Value»"
+  }
+  foreach ($row in $rows) {
+    $guid = ([string]$row."Subcategory GUID").Trim().Trim([char[]]"{}").ToLowerInvariant()
+    $setting = 0
+    if (-not [int]::TryParse(([string]$row."Setting Value").Trim(), [ref]$setting)) { continue }
+    if ($guid) { [ordered]@{ subcategory = $guid; setting = $setting } }
+  }
+}
+
+# scripts.ini и psscripts.ini: секции Logon, Logoff, Startup, Shutdown, ключи «<n>CmdLine» и «<n>Parameters».
+# Секции и строки — как parse_inf в gpo_files.py: «;» в начале строки — комментарий, строки без «=» пропускаются.
+function Read-ScriptsIni([string]$text, [string]$scope) {
+  $sections = [ordered]@{}
+  $current = $null
+  foreach ($raw in ($text.TrimStart([char]0xFEFF) -split "\r\n|\n|\r")) {
+    $line = $raw.Trim()
+    if ($line.StartsWith("[") -and $line.EndsWith("]") -and $line.Length -ge 2) {
+      $name = $line.Substring(1, $line.Length - 2).Trim().ToLowerInvariant()
+      if (-not $sections.Contains($name)) { $sections[$name] = [ordered]@{} }
+      $current = $sections[$name]
+      continue
+    }
+    $eq = $line.IndexOf("=")
+    if ($null -eq $current -or $eq -lt 0 -or $line.StartsWith(";")) { continue }
+    $current[$line.Substring(0, $eq).Trim()] = $line.Substring($eq + 1).Trim()
+  }
+  foreach ($phase in $sections.Keys) {
+    if (@("logon", "logoff", "startup", "shutdown") -notcontains $phase) { continue }
+    $entries = @{}
+    foreach ($key in $sections[$phase].Keys) {
+      if ($key -match '^(\d+)(cmdline|parameters)$') {
+        $n = [decimal]$Matches[1]
+        if (-not $entries.ContainsKey($n)) { $entries[$n] = @{} }
+        $entries[$n][$Matches[2].ToLowerInvariant()] = $sections[$phase][$key]
+      }
+    }
+    foreach ($n in @($entries.Keys | Sort-Object)) {
+      $command = $(if ($entries[$n].ContainsKey("cmdline")) { $entries[$n]["cmdline"] } else { "" })
+      if (-not $command) { continue }
+      $parameters = $(if ($entries[$n].ContainsKey("parameters")) { $entries[$n]["parameters"] } else { "" })
+      [ordered]@{ scope = $scope; phase = $phase; command = $command; parameters = $parameters }
+    }
+  }
+}
+
+# Кто, кроме владельца, может писать в файл или папку SYSVOL: SID разрешающих записей с правом записи
+# (Write, Modify, FullControl и любые их части записи данных), сменой прав или владельца, общими правами
+# записи. Записи только для наследования (InheritOnly) к самому объекту не относятся. Повторы убираются.
+function Get-PathWriters([string]$path) {
+  $acl = Get-Acl -LiteralPath $path
+  $sidType = [System.Security.Principal.SecurityIdentifier]
+  $owner = $null
+  try { $owner = [string]$acl.GetOwner($sidType).Value } catch { }
+  $fsr = [System.Security.AccessControl.FileSystemRights]
+  # 0x40000000 — GENERIC_WRITE, 0x10000000 — GENERIC_ALL: так записаны права, наследуемые от шаблона.
+  $mask = [int64]($fsr::WriteData -bor $fsr::AppendData -bor $fsr::ChangePermissions -bor $fsr::TakeOwnership) -bor 0x40000000 -bor 0x10000000
+  $inheritOnly = [System.Security.AccessControl.PropagationFlags]::InheritOnly
+  $writers = New-Object System.Collections.Generic.List[string]
+  foreach ($rule in $acl.GetAccessRules($true, $true, $sidType)) {
+    if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+    if (($rule.PropagationFlags -band $inheritOnly) -eq $inheritOnly) { continue }
+    if (([int64][int]$rule.FileSystemRights -band $mask) -eq 0) { continue }
+    $sid = [string]$rule.IdentityReference.Value
+    if ($sid -and $sid -ne $owner -and -not $writers.Contains($sid)) { $writers.Add($sid) }
+  }
+  $writers.ToArray()
+}
+
+# Байты файла SYSVOL → текст: UTF-16 по BOM, иначе UTF-8 (BOM снимается) — как _decode_inf LDAP-сборщика.
+function ConvertFrom-SysvolBytes([byte[]]$bytes) {
+  if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { return [Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2) }
+  if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { return [Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2) }
+  return [Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)
+}
+
+# Папка GPO в SYSVOL: GptTmpl.inf (текстом, для блока sysvol) и запись блока gpo — те же поля, что у
+# LDAP-сборщика, плюс acl. Читаются только файлы, которые показал листинг; отказ на файле — строка в notes
+# записи, сбор продолжается. acl — права на папку GPO и на файлы её скриптов; $null — права не прочитаны.
+function Read-GpoFiles([string]$base) {
+  $registry = New-Object System.Collections.Generic.List[object]
+  $gpp = New-Object System.Collections.Generic.List[object]
+  $audit = New-Object System.Collections.Generic.List[object]
+  $scripts = New-Object System.Collections.Generic.List[object]
+  $notes = New-Object System.Collections.Generic.List[string]
+  $acl = $null
+  $tmpl = $null
+  $result = { @{ tmpl = $tmpl; data = [ordered]@{ registry = $registry.ToArray(); gpp = $gpp.ToArray(); audit = $audit.ToArray(); scripts = $scripts.ToArray(); acl = $acl; notes = [string[]]$notes.ToArray() } } }
+
+  # Один листинг папки GPO; файлы ищутся по относительному пути без учёта регистра.
+  $present = @{}
+  $listErrors = @()
+  try {
+    $gpoRoot = (Get-Item -LiteralPath $base -Force).FullName.TrimEnd([char[]]"\/")
+    $items = @(Get-ChildItem -LiteralPath $gpoRoot -Recurse -File -Force -ErrorAction SilentlyContinue -ErrorVariable listErrors)
+  } catch {
+    $notes.Add(("папка GPO не прочитана ({0})" -f $_.Exception.Message))
+    return (& $result)
+  }
+  foreach ($e in @($listErrors)) {
+    $where = [string]$e.TargetObject
+    if ($where.StartsWith($gpoRoot, [StringComparison]::OrdinalIgnoreCase)) { $where = $where.Substring($gpoRoot.Length).TrimStart([char[]]"\/") }
+    $notes.Add(("{0}: папка не прочитана ({1})" -f $where, $e.Exception.Message))
+  }
+  foreach ($f in $items) {
+    $rel = $f.FullName.Substring($gpoRoot.Length).TrimStart([char[]]"\/").Replace("/", "\")
+    $present[$rel.ToLowerInvariant()] = @{ rel = $rel; file = $f }
+  }
+  # Байты файла по пути из $GpoFiles; $null — файла нет, он не прочитан или больше потолка (последние два — в notes).
+  function Get-GpoBytes([string]$rel) {
+    $hit = $present[$rel.ToLowerInvariant()]
+    if ($null -eq $hit) { return $null }
+    if ($hit.file.Length -gt $MaxGpoFile) { $notes.Add(("{0}: файл больше {1} МБ, не разобран" -f $rel, ($MaxGpoFile / 1MB))); return $null }
+    try { return ,[System.IO.File]::ReadAllBytes($hit.file.FullName) }
+    catch { $notes.Add(("{0}: не прочитан ({1})" -f $rel, (ErrorText $_))); return $null }
+  }
+
+  $tmplRel = "MACHINE\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+  $content = Get-GpoBytes $tmplRel
+  if ($null -ne $content -and $content.Length -gt 0) {
+    try { $tmpl = ConvertFrom-SysvolBytes $content } catch { $notes.Add(("{0}: {1}" -f $tmplRel, $_.Exception.Message)) }
+  }
+  foreach ($name in $GpoFiles.Keys) {
+    $rel = $GpoFiles[$name]
+    $content = Get-GpoBytes $rel
+    if ($null -eq $content) { continue }
+    $scope, $file = $name -split "/", 2
+    $kind = $file.ToLowerInvariant()
+    try {
+      if ($kind.EndsWith(".pol")) {
+        foreach ($v in @(Read-RegistryPol $content)) {
+          if (-not (Test-KeepRegistry $v.key $v.value)) { continue }
+          $v = Protect-RegistryValue $v
+          $registry.Add([ordered]@{ scope = $scope; key = $v.key; value = $v.value; type = $v.type; data = $v.data })
+        }
+      } elseif ($kind -eq "audit.csv") {
+        foreach ($r in @(Read-AuditCsv (ConvertFrom-SysvolBytes $content))) { $audit.Add($r) }
+      } elseif ($kind.EndsWith(".ini")) {
+        foreach ($r in @(Read-ScriptsIni (ConvertFrom-SysvolBytes $content) $scope)) { $scripts.Add($r) }
+      } elseif ($kind.EndsWith(".xml")) {
+        foreach ($r in @(Read-GppFile $file $scope (ConvertFrom-SysvolBytes $content))) { $gpp.Add($r) }
+      } else { $notes.Add(("{0}: неизвестный тип файла" -f $rel)) }
+    } catch { $notes.Add(("{0}: {1}" -f $rel, $_.Exception.Message)) }
+  }
+
+  # Права: папка GPO (path "") и файлы скриптов, лежащие в ней: имя без пути — в Scripts\<фаза> своей части,
+  # полный путь — если он ведёт внутрь папки GPO. Скрипты вне папки GPO здесь не проверяются. Отказ по папке —
+  # acl $null; отказ по скрипту — пропуск только этого скрипта (пометка), запись папки остаётся.
+  $records = New-Object System.Collections.Generic.List[object]
+  try { $records.Add([ordered]@{ path = ""; writers = [string[]]@(Get-PathWriters $gpoRoot) }) }
+  catch { $notes.Add(("права SYSVOL не прочитаны ({0})" -f $_.Exception.Message)); $records = $null }
+  if ($null -ne $records) {
+    $done = @{}
+    foreach ($s in $scripts) {
+      # Кавычки вокруг команды снимаются; «полный путь» — по началу строки, а не [IO.Path]::IsPathRooted:
+      # в .NET Framework тот бросает исключение на кавычках, <, > и |.
+      $command = ([string]$s["command"]).Trim()
+      if ($command.Length -ge 2 -and $command.StartsWith('"') -and $command.EndsWith('"')) { $command = $command.Substring(1, $command.Length - 2) }
+      $where = $command
+      try {
+        $rel = $null
+        if ($command -match '^([\\/]|[A-Za-z]:)') {
+          if ($command.Length -gt $gpoRoot.Length + 1 -and $command.StartsWith($gpoRoot, [StringComparison]::OrdinalIgnoreCase) -and
+              ($command[$gpoRoot.Length] -eq [char]'\' -or $command[$gpoRoot.Length] -eq [char]'/')) { $rel = $command.Substring($gpoRoot.Length + 1) }
+        } else {
+          $rel = "{0}\Scripts\{1}\{2}" -f $(if ($s["scope"] -eq "machine") { "Machine" } else { "User" }), $s["phase"], $command
+        }
+        if ($null -eq $rel) { continue }
+        $hit = $present[$rel.Replace("/", "\").ToLowerInvariant()]
+        if ($null -eq $hit -or $done.ContainsKey($hit.rel)) { continue }
+        $done[$hit.rel] = $true
+        $where = $hit.rel
+        $records.Add([ordered]@{ path = $hit.rel; writers = [string[]]@(Get-PathWriters $hit.file.FullName) })
+      } catch { $notes.Add(("{0}: права не прочитаны ({1})" -f $where, $_.Exception.Message)) }
+    }
+    foreach ($r in $records) { foreach ($sid in $r.writers) { Resolve-SidName $sid } }
+    $acl = $records.ToArray()
+  }
+  return (& $result)
+}
+
 # Имена SID: собираются из ACE и самих объектов, чтобы анализатор не
 # ходил в домен за именами.
 $principals = @{}
@@ -290,7 +659,7 @@ function Show-Menu {
   Write-Host "3  Выгрузка AD без ACL компьютеров (быстрее)"
   Write-Host "4  Выгрузка AD без SYSVOL"
   Write-Host "5  Данные ЦС: настройки и права центров сертификации"
-  Write-Host "6  Данные ЦС: реестр контроллеров домена"
+  Write-Host "6  Контроллеры домена: реестр, службы, SMB"
   Write-Host "7  Данные ЦС: проверка веб-выдачи"
 }
 
@@ -317,7 +686,7 @@ function Read-AdSection([string]$what, [hashtable]$query) {
 
 function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   Write-Step "Свойства домена"
-  $domainObj = Get-ADObject @ad -Identity $domain.DistinguishedName -Properties "ms-DS-MachineAccountQuota", nTSecurityDescriptor, minPwdLength, lockoutThreshold, pwdProperties, pwdHistoryLength
+  $domainObj = Get-ADObject @ad -Identity $domain.DistinguishedName -Properties "ms-DS-MachineAccountQuota", nTSecurityDescriptor, minPwdLength, lockoutThreshold, pwdProperties, pwdHistoryLength, gPLink, gPOptions
   # null у поля — «не прочитано»: отказ необязательного чтения ниже оставляет его null.
   $domainInfo = @{
     dns_root = $domain.DNSRoot
@@ -529,29 +898,32 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   Write-Step ("  групп: {0}, дескрипторов: {1}" -f $critical.Count, $script:criticalSd)
 
   Write-Step "Корень домена, AdminSDHolder, OU"
-  $objects.Add(@{ dn = $domain.DistinguishedName; class = "domainDNS"; sid = $domain.DomainSID.Value; sd = ToBase64Sd $domainObj.nTSecurityDescriptor }) | Out-Null
+  # Привязка GPO: gPLink без атрибута — пустая строка (сборщик ссылки читал, их нет; null — старый сборщик).
+  $objects.Add(@{ dn = $domain.DistinguishedName; class = "domainDNS"; sid = $domain.DomainSID.Value; sd = ToBase64Sd $domainObj.nTSecurityDescriptor
+    gpLink = [string]$domainObj.gPLink; gpOptions = AsInt $domainObj.gPOptions }) | Out-Null
   Register-AceSids $domainObj.nTSecurityDescriptor
   $holder = Get-ADObject @ad -Identity ("CN=AdminSDHolder,CN=System," + $domain.DistinguishedName) -Properties nTSecurityDescriptor
   $objects.Add(@{ dn = $holder.DistinguishedName; class = "container"; sd = ToBase64Sd $holder.nTSecurityDescriptor }) | Out-Null
   Register-AceSids $holder.nTSecurityDescriptor
-  Get-ADObject @ad -LDAPFilter "(objectClass=organizationalUnit)" -Properties nTSecurityDescriptor | ForEach-Object {
-    $objects.Add(@{ dn = $_.DistinguishedName; class = "organizationalUnit"; sd = ToBase64Sd $_.nTSecurityDescriptor }) | Out-Null
+  Get-ADObject @ad -LDAPFilter "(objectClass=organizationalUnit)" -Properties nTSecurityDescriptor, gPLink, gPOptions | ForEach-Object {
+    $objects.Add(@{ dn = $_.DistinguishedName; class = "organizationalUnit"; sd = ToBase64Sd $_.nTSecurityDescriptor; gpLink = [string]$_.gPLink; gpOptions = AsInt $_.gPOptions }) | Out-Null
     Register-AceSids $_.nTSecurityDescriptor
   }
 
   Write-Step "Групповые политики"
   $sysvol = @{}
-  Get-ADObject @ad -SearchBase ("CN=Policies,CN=System," + $domain.DistinguishedName) -LDAPFilter "(objectClass=groupPolicyContainer)" -Properties displayName,gPCFileSysPath,nTSecurityDescriptor | ForEach-Object {
-    $objects.Add(@{ dn = $_.DistinguishedName; class = "groupPolicyContainer"; displayName = [string]$_.displayName; gpcFileSysPath = [string]$_.gPCFileSysPath; sd = ToBase64Sd $_.nTSecurityDescriptor }) | Out-Null
+  # Блок gpo: DN GPO → файлы из SYSVOL. С -SkipSysvol его в выгрузке нет, причина в notes.
+  $gpo = @{}
+  Get-ADObject @ad -SearchBase ("CN=Policies,CN=System," + $domain.DistinguishedName) -LDAPFilter "(objectClass=groupPolicyContainer)" -Properties displayName,gPCFileSysPath,flags,nTSecurityDescriptor | ForEach-Object {
+    $objects.Add(@{ dn = $_.DistinguishedName; class = "groupPolicyContainer"; displayName = [string]$_.displayName; gpcFileSysPath = [string]$_.gPCFileSysPath; flags = AsInt $_.flags; sd = ToBase64Sd $_.nTSecurityDescriptor }) | Out-Null
     Register-AceSids $_.nTSecurityDescriptor
     if (-not $noSysvol -and $_.gPCFileSysPath) {
-      $inf = Join-Path $_.gPCFileSysPath "MACHINE\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
-      if (Test-Path $inf) {
-        try { $sysvol[$_.DistinguishedName] = @{ "GptTmpl.inf" = [string](Get-Content -Path $inf -Raw) } } catch { }
-      }
+      $files = Read-GpoFiles ([string]$_.gPCFileSysPath)
+      if ($null -ne $files.tmpl) { $sysvol[$_.DistinguishedName] = @{ "GptTmpl.inf" = $files.tmpl } }
+      $gpo[$_.DistinguishedName] = $files.data
     }
   }
-  Write-Step ("  GPO с GptTmpl.inf: {0}" -f $sysvol.Count)
+  Write-Step ("  GPO с GptTmpl.inf: {0}, с файлами SYSVOL: {1}, с отказами чтения: {2}" -f $sysvol.Count, $gpo.Count, @($gpo.Values | Where-Object { $_.notes.Count -gt 0 }).Count)
 
   Write-Step "Шаблоны сертификатов"
   $n0 = $objects.Count
@@ -576,11 +948,12 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
 
   Write-Step "Центры сертификации и контейнеры PKI"
   $n0 = $objects.Count
-  Get-AdOptional "центры сертификации" @{ SearchBase = "CN=Enrollment Services," + $pki; LDAPFilter = "(objectClass=pKIEnrollmentService)"; Properties = @("cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor") } | ForEach-Object {
+  Get-AdOptional "центры сертификации" @{ SearchBase = "CN=Enrollment Services," + $pki; LDAPFilter = "(objectClass=pKIEnrollmentService)"; Properties = @("cn", "dNSHostName", "certificateTemplates", "msPKI-Enrollment-Servers", "nTSecurityDescriptor", "cACertificate") } | ForEach-Object {
     $objects.Add(@{
       dn = $_.DistinguishedName; class = "pKIEnrollmentService"; cn = [string]$_.cn; dNSHostName = [string]$_.dNSHostName
       certificateTemplates = AsList $_.certificateTemplates
       "msPKI-Enrollment-Servers" = AsList $_."msPKI-Enrollment-Servers"
+      cACertificate = CertList $_.cACertificate
       sd = ToBase64Sd $_.nTSecurityDescriptor
     }) | Out-Null
     Register-AceSids $_.nTSecurityDescriptor
@@ -588,12 +961,25 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   Write-Step ("  центров сертификации: {0}" -f ($objects.Count - $n0))
   $n0 = $objects.Count
   foreach ($scope in @("Base", "OneLevel")) {
-    Get-AdOptional "контейнеры PKI" @{ SearchBase = $pki; SearchScope = $scope; LDAPFilter = "(objectClass=*)"; Properties = @("nTSecurityDescriptor") } | ForEach-Object {
-      $objects.Add(@{ dn = $_.DistinguishedName; class = "pkiContainer"; sd = ToBase64Sd $_.nTSecurityDescriptor }) | Out-Null
+    # cACertificate есть только у CN=NTAuthCertificates.
+    Get-AdOptional "контейнеры PKI" @{ SearchBase = $pki; SearchScope = $scope; LDAPFilter = "(objectClass=*)"; Properties = @("nTSecurityDescriptor", "cACertificate") } | ForEach-Object {
+      $rec = @{ dn = $_.DistinguishedName; class = "pkiContainer"; sd = ToBase64Sd $_.nTSecurityDescriptor }
+      $certs = CertList $_.cACertificate
+      if ($certs.Count) { $rec.cACertificate = $certs }
+      $objects.Add($rec) | Out-Null
       Register-AceSids $_.nTSecurityDescriptor
     }
   }
   Write-Step ("  контейнеров PKI: {0}" -f ($objects.Count - $n0))
+  # Хранилища сертификатов ЦС: корневые и промежуточные.
+  $n0 = $objects.Count
+  $caStores = [ordered]@{ "Certification Authorities" = "root"; "AIA" = "intermediate" }
+  foreach ($store in $caStores.GetEnumerator()) {
+    Get-AdOptional ("сертификаты ЦС (CN={0}) не прочитаны" -f $store.Key) @{ SearchBase = ("CN={0},{1}" -f $store.Key, $pki); SearchScope = "OneLevel"; LDAPFilter = "(objectClass=certificationAuthority)"; Properties = @("cn", "cACertificate") } | ForEach-Object {
+      $objects.Add(@{ dn = $_.DistinguishedName; class = "certificationAuthority"; cn = [string]$_.cn; store = $store.Value; cACertificate = CertList $_.cACertificate }) | Out-Null
+    }
+  }
+  Write-Step ("  сертификатов ЦС в хранилищах: {0}" -f ($objects.Count - $n0))
   # На один уровень: сам CN=OID тоже класса msPKI-Enterprise-Oid и уже записан как pkiContainer.
   $n0 = $objects.Count
   Get-AdOptional "политики выдачи (CN=OID)" @{ SearchBase = "CN=OID," + $pki; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=msPKI-Enterprise-Oid)"; Properties = @("displayName", "msPKI-Cert-Template-OID", "msDS-OIDToGroupLink") } | ForEach-Object {
@@ -645,7 +1031,16 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
     ForestDnsZones = "DC=ForestDnsZones," + $forestDn
     System = "CN=System," + $domain.DistinguishedName
   }
+  # Разделов DomainDnsZones и ForestDnsZones может не быть (DNS не интегрирован с AD) — это не отказ: есть ли
+  # раздел, видно по crossRef в CN=Partitions. Список разделов не прочитан — читаются все базы, как раньше.
+  $partitions = $null
+  try { $partitions = @(Get-ADObject @ad -SearchBase ("CN=Partitions," + $root.configurationNamingContext) -SearchScope OneLevel -LDAPFilter "(objectClass=crossRef)" -Properties nCName) } catch { }
+  $namingContexts = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  if ($null -ne $partitions) { foreach ($p in $partitions) { if ($p.nCName) { [void]$namingContexts.Add([string]$p.nCName) } } }
+  # crossRef своего домена есть всегда: без него список неполон (не виден) и считается непрочитанным.
+  if (-not $namingContexts.Contains($domain.DistinguishedName)) { $partitions = $null }
   foreach ($partition in $zoneBases.Keys) {
+    if ($partition -ne "System" -and $null -ne $partitions -and -not $namingContexts.Contains($zoneBases[$partition])) { continue }
     $zones = Read-AdSection ("зоны DNS не прочитаны ({0})" -f $partition) @{ SearchBase = $zoneBases[$partition]; LDAPFilter = "(objectClass=dnsZone)"; Properties = @("dNSProperty", "nTSecurityDescriptor") }
     foreach ($z in $zones) {
       $objects.Add(@{
@@ -660,8 +1055,8 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
 
   Write-Step "Сайты и подсети"
   $n0 = $objects.Count
-  $sites = Read-AdSection "сайты не прочитаны" @{ SearchBase = "CN=Sites," + $root.configurationNamingContext; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=site)"; Properties = @("name") }
-  foreach ($s in $sites) { $objects.Add(@{ dn = $s.DistinguishedName; class = "site"; name = [string]$s.Name }) | Out-Null }
+  $sites = Read-AdSection "сайты не прочитаны" @{ SearchBase = "CN=Sites," + $root.configurationNamingContext; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=site)"; Properties = @("name", "gPLink", "gPOptions") }
+  foreach ($s in $sites) { $objects.Add(@{ dn = $s.DistinguishedName; class = "site"; name = [string]$s.Name; gpLink = [string]$s.gPLink; gpOptions = AsInt $s.gPOptions }) | Out-Null }
   $subnets = Read-AdSection "подсети не прочитаны" @{ SearchBase = "CN=Subnets,CN=Sites," + $root.configurationNamingContext; SearchScope = "OneLevel"; LDAPFilter = "(objectClass=subnet)"; Properties = @("siteObject") }
   foreach ($s in $subnets) { $objects.Add(@{ dn = $s.DistinguishedName; class = "subnet"; name = [string]$s.Name; site = $(if ($s.siteObject) { [string]$s.siteObject } else { $null }) }) | Out-Null }
   Write-Step ("  сайтов и подсетей: {0}" -f ($objects.Count - $n0))
@@ -672,7 +1067,7 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   if ($noSysvol) { $notes += "чтение SYSVOL выключено (-SkipSysvol)" }
   $notes += @($script:warnings | Select-Object -Unique)
 
-  return @{
+  $export = @{
     format = $FormatVersion
     collected_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     collector = @{ kind = "powershell"; version = $CollectorVersion; host = $env:COMPUTERNAME; account = ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME); notes = [string[]]$notes; critical_acl = $true }
@@ -682,6 +1077,8 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
     sysvol = $sysvol
     principals = $principals
   }
+  if (-not $noSysvol) { $export["gpo"] = $gpo }
+  return $export
 }
 
 # Центры сертификации домена: имя (cn), сервер и адреса служб веб-выдачи.
@@ -798,15 +1195,84 @@ function Get-CaSettings($ca) {
   return $rec
 }
 
-function Get-DcBinding([string]$dc) {
-  $rec = [ordered]@{ host = $dc; strong_binding = $null; mapping_methods = $null; error = "" }
+# Служба из Win32_Service → состояние для анализа; службы нет — absent. Запуск отключён, а служба ещё
+# работает (до перезагрузки) — running: опасна работающая служба.
+function ConvertTo-ServiceState($service) {
+  if ($null -eq $service) { return "absent" }
+  if ($service.State -eq "Running") { return "running" }
+  if ($service.StartMode -eq "Disabled") { return "disabled" }
+  return "stopped"
+}
+
+# Состояние контроллера: удалённый реестр (привязка сертификатов, NTLM, подпись LDAP, протоколы SCHANNEL,
+# сборка ОС) и CIM (SMB, службы, время загрузки). registry_read и cim_read — отработал ли канал: при
+# прочитанном реестре $null значит «значения нет», при непрочитанном — «не известно». Отказы — в error.
+function Get-DcState([string]$dc) {
+  $rec = [ordered]@{
+    host = $dc; strong_binding = $null; mapping_methods = $null
+    lm_compatibility = $null; no_lm_hash = $null; ldap_integrity = $null; ldap_channel_binding = $null; tls = $null
+    smb1 = $null; smb_require_signing = $null; spooler = $null; webclient = $null; last_boot = $null; os_build = $null
+    registry_read = $false; cim_read = $false; error = ""
+  }
+  $errs = New-Object System.Collections.Generic.List[string]
   try {
     $kdc = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Services\Kdc" @("StrongCertificateBindingEnforcement")
     if ($kdc) { $rec.strong_binding = AsDword $kdc.StrongCertificateBindingEnforcement }
     $schannel = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Control\SecurityProviders\Schannel" @("CertificateMappingMethods")
     if ($schannel) { $rec.mapping_methods = AsDword $schannel.CertificateMappingMethods }
-  } catch { $rec.error = ErrorText $_ }
+    $lsa = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Control\Lsa" @("LmCompatibilityLevel", "NoLMHash")
+    if ($lsa) { $rec.lm_compatibility = AsDword $lsa.LmCompatibilityLevel; $rec.no_lm_hash = AsDword $lsa.NoLMHash }
+    $ntds = Read-RemoteRegistry $dc "SYSTEM\CurrentControlSet\Services\NTDS\Parameters" @("LDAPServerIntegrity", "LdapEnforceChannelBinding")
+    if ($ntds) { $rec.ldap_integrity = AsDword $ntds.LDAPServerIntegrity; $rec.ldap_channel_binding = AsDword $ntds.LdapEnforceChannelBinding }
+    $tls = [ordered]@{}
+    foreach ($protocol in @("SSL 3.0", "TLS 1.0", "TLS 1.1")) {
+      $server = Read-RemoteRegistry $dc ("SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\{0}\Server" -f $protocol) @("Enabled")
+      $tls[$protocol] = $(if ($server) { AsDword $server.Enabled } else { $null })
+    }
+    $rec.tls = $tls
+    $version = Read-RemoteRegistry $dc "SOFTWARE\Microsoft\Windows NT\CurrentVersion" @("CurrentBuildNumber", "UBR")
+    if ($version -and $version.CurrentBuildNumber) {
+      $rec.os_build = [string]$version.CurrentBuildNumber
+      if ($null -ne $version.UBR) { $rec.os_build += "." + (AsDword $version.UBR) }
+    }
+    $rec.registry_read = $true
+  } catch { $errs.Add("реестр: " + (ErrorText $_)) }
+
+  $session = $null
+  try {
+    try { $session = New-CimSession -ComputerName $dc -OperationTimeoutSec 30 }
+    catch {
+      $wsman = ErrorText $_
+      try { $session = New-CimSession -ComputerName $dc -OperationTimeoutSec 30 -SessionOption (New-CimSessionOption -Protocol Dcom) }
+      catch { throw ("WSMan: {0}; DCOM: {1}" -f $wsman, (ErrorText $_)) }
+    }
+    $rec.cim_read = $true
+    try {
+      $smb = Get-CimInstance -CimSession $session -Namespace root/Microsoft/Windows/SMB -ClassName MSFT_SmbServerConfiguration
+      if ($null -eq $smb) { throw "MSFT_SmbServerConfiguration не вернул данных" }
+      $rec.smb1 = AsBool $smb.EnableSMB1Protocol
+      $rec.smb_require_signing = AsBool $smb.RequireSecuritySignature
+    } catch { $errs.Add("SMB: " + (ErrorText $_)) }
+    try {
+      $services = @(Get-CimInstance -CimSession $session -ClassName Win32_Service -Filter "Name='Spooler' OR Name='WebClient'")
+      $rec.spooler = ConvertTo-ServiceState ($services | Where-Object { $_.Name -eq "Spooler" } | Select-Object -First 1)
+      $rec.webclient = ConvertTo-ServiceState ($services | Where-Object { $_.Name -eq "WebClient" } | Select-Object -First 1)
+    } catch { $errs.Add("службы: " + (ErrorText $_)) }
+    try {
+      $os = Get-CimInstance -CimSession $session -ClassName Win32_OperatingSystem
+      $rec.last_boot = IsoTime $os.LastBootUpTime
+    } catch { $errs.Add("время загрузки: " + (ErrorText $_)) }
+  } catch { $errs.Add("CIM: " + (ErrorText $_)) }
+  finally { if ($null -ne $session) { try { Remove-CimSession -CimSession $session } catch { } } }
+  $rec.error = $errs -join "; "
   return $rec
+}
+
+# Значение для строки хода работы: нет значения — «—», флаг — да/нет.
+function Format-DcValue($value) {
+  if ($null -eq $value) { return "—" }
+  if ($value -is [bool]) { return $(if ($value) { "да" } else { "нет" }) }
+  return [string]$value
 }
 
 # Схемы из значений WWW-Authenticate: первое слово каждого вызова. .NET может склеить несколько
@@ -869,12 +1335,13 @@ function Collect-Ca([string[]]$sections, $cas, [string[]]$dcs, [string[]]$urls) 
     }
   }
   if ($sections -contains "dc") {
-    Write-Step "Реестр контроллеров домена"
+    Write-Step "Состояние контроллеров домена"
     foreach ($dc in $dcs) {
-      $r = Get-DcBinding $dc
+      $r = Get-DcState $dc
       $dcRecs.Add($r)
+      Write-Step ("  {0}: привязка {1}, NTLM {2}, подпись LDAP {3}, SMB1 {4}" -f $dc, (Format-DcValue $r.strong_binding),
+        (Format-DcValue $r.lm_compatibility), (Format-DcValue $r.ldap_integrity), (Format-DcValue $r.smb1))
       if ($r.error) { Add-Warning ("контроллер {0}: {1}" -f $dc, $r.error) }
-      else { Write-Step ("  {0}: привязка {1}, сопоставление {2}" -f $dc, $r.strong_binding, $r.mapping_methods) }
     }
   }
   if ($sections -contains "web") {
@@ -965,7 +1432,7 @@ try {
   Write-Host ("  Запросы LDAP — контроллер {0}" -f $root.dnsHostName)
   if ($sel.Ad) {
     $what = "пользователи, компьютеры (" + $(if ($sel.SkipComputerAcl) { "без ACL" } else { "с ACL" }) + "), группы, OU, групповые политики"
-    if (-not $sel.SkipSysvol) { $what += ", GptTmpl.inf из SYSVOL" }
+    if (-not $sel.SkipSysvol) { $what += ", файлы GPO из SYSVOL (GptTmpl.inf, Registry.pol по белому списку, настройки GPP без паролей, аудит, скрипты) и права на папки GPO" }
     Write-Host ("  Выгрузка AD: {0}, шаблоны сертификатов и объекты PKI, доверенные домены, настройки домена и леса, PSO, зоны DNS, сайты и подсети" -f $what)
   }
   if ($picked -contains "ca") {
@@ -974,7 +1441,7 @@ try {
     foreach ($ca in $cas) { Write-Host ("    {0} на {1}" -f $ca.Name, $ca.DnsName) }
   }
   if ($picked -contains "dc") {
-    Write-Host "  Реестр контроллеров домена (удалённый реестр, два значения):"
+    Write-Host "  Состояние контроллеров домена (удалённый реестр; CIM по WSMan, при отказе DCOM — SMB, службы, время загрузки):"
     foreach ($dc in $dcs) { Write-Host ("    {0}" -f $dc) }
   }
   if ($picked -contains "web") {

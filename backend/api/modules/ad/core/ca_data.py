@@ -53,10 +53,34 @@ class CaAuthority(BaseModel):
 
 
 class DcBinding(BaseModel):
+    """Запись контроллера (раздел dc). Всё, кроме host, необязательно: None — не прочитано
+    (сборщик до 2.3 читал только привязку) или значения нет в реестре — их различают флаги
+    `registry_read` и `cim_read` (отработал ли канал)."""
+
     host: str
     strong_binding: int | None = None
     mapping_methods: int | None = None
+    lm_compatibility: int | None = None
+    no_lm_hash: int | None = None
+    ldap_integrity: int | None = None
+    ldap_channel_binding: int | None = None
+    #: `SCHANNEL\Protocols\<протокол>\Server\Enabled` для SSL 3.0, TLS 1.0, TLS 1.1; None — параметра нет.
+    tls: dict[str, int | None] | None = None
+    smb1: bool | None = None
+    smb_require_signing: bool | None = None
+    #: running | stopped | disabled | absent
+    spooler: str | None = None
+    webclient: str | None = None
+    last_boot: dt.datetime | None = None
+    os_build: str | None = None
+    registry_read: bool | None = None
+    cim_read: bool | None = None
     error: str = ""
+
+    @field_validator("last_boot")
+    @classmethod
+    def _utc_if_naive(cls, value: dt.datetime | None) -> dt.datetime | None:
+        return value if value is None or value.tzinfo is not None else value.replace(tzinfo=dt.UTC)
 
 
 class WebEndpoint(BaseModel):

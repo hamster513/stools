@@ -35,6 +35,9 @@ class CaDataView(BaseModel):
     cas: int
     dcs: int
     web: int
+    #: Контроллеров в разделе dc и сколько из них прочитано полностью (реестр и CIM).
+    dc_total: int
+    dc_complete: int
 
 
 @router.get("/domains/{domain_id}/ca-data", response_model=list[CaDataView])

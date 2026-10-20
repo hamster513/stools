@@ -62,7 +62,7 @@ def _fake_ldap(auth_client: TestClient, monkeypatch: Any) -> int:
     fake_conn = _FakeConn()
     monkeypatch.setattr(svc, "ldap3_connection", lambda conn: fake_conn)
     monkeypatch.setattr(svc, "ldap3_searcher", lambda c, **kw: fake_conn.fake.search)
-    monkeypatch.setattr(svc, "smb_reader", lambda host, u, p, **kw: fake_conn.fake.smb)
+    monkeypatch.setattr(svc, "smb_access", lambda host, u, p, **kw: (fake_conn.fake.smb, fake_conn.fake.ls))
     r = auth_client.post("/api/ad/connections", json={"host": "dc01.corp.local", "username": "CORP\\auditor", "password": "secret"})
     return int(r.json()["id"])
 

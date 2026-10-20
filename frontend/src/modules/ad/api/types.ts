@@ -65,6 +65,7 @@ export interface AdConfig {
   computer_password_max_age_days: number
   password_min_length: number
   backup_max_age_days: number
+  dc_max_uptime_days: number
   smartcard_password_max_age_days: number
   trust_inactive_days: number
   control_path_many: number
@@ -92,7 +93,8 @@ export interface SettingsView {
   checks: { code: string; title: string; description: string }[]
 }
 
-/** Загрузка данных центра сертификации (stools-ad-ca/1); cas/dcs/web — число записей. */
+/** Загрузка данных центра сертификации (stools-ad-ca/1); cas/dcs/web — число записей;
+ *  dc_total/dc_complete — контроллеров в разделе dc и сколько прочитано полностью (реестр и CIM). */
 export interface CaData {
   id: number
   collected_at: string
@@ -103,11 +105,13 @@ export interface CaData {
   cas: number
   dcs: number
   web: number
+  dc_total: number
+  dc_complete: number
 }
 
 export const CA_SECTION_LABELS: Record<string, string> = {
   ca: 'настройки и права ЦС',
-  dc: 'реестр контроллеров',
+  dc: 'контроллеры',
   web: 'веб-выдача',
 }
 
@@ -147,4 +151,47 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   import_file: 'Загрузка выгрузки',
   collect: 'Сбор по LDAP',
   reanalyze: 'Пересчёт снапшота',
+}
+
+/** Счётчики учётных записей сводки; флаги — среди включённых, `laps` у пользователей 0. */
+export interface SummaryCounts {
+  total: number
+  enabled: number
+  disabled: number
+  active: number
+  inactive: number
+  pwd_never_expires: number
+  pwd_not_required: number
+  no_preauth: number
+  sid_history: number
+  delegation: number
+  laps: number
+}
+
+/** Корзина распределения: дней не больше `le`; `le: null` — старше последней границы или неизвестно. */
+export interface SummaryBucket {
+  le: number | null
+  n: number
+}
+
+export interface SummaryDistribution {
+  all: SummaryBucket[]
+  admins: SummaryBucket[]
+}
+
+/** Сводка домена (GET /api/ad/snapshots/{id}/summary, docs/ad/api.md); 409 — снапшот надо пересчитать. */
+export interface Summary {
+  version: number
+  accounts: { users: SummaryCounts; computers: SummaryCounts }
+  password_age: SummaryDistribution
+  last_logon: SummaryDistribution
+  os: { name: string; build: string; total: number; enabled: number; active: number }[]
+  dcs: { name: string; dn: string; dns: string; os: string; build: string; rodc: boolean; last_logon_days: number | null; pwd_age_days: number | null; owner: string }[]
+  groups: { name: string; sid: string; members: number; enabled: number; inactive: number; pwd_never_expires: number; delegable: number; protected_users: number }[]
+  /** `direction`, `type` — trustDirection и trustType как в AD. */
+  trusts: { partner: string; flat_name: string; direction: number | null; type: number | null; within_forest: boolean; changed: string | null }[]
+  password_policies: { name: string; min_length: number | null; lockout_threshold: number | null; complexity: boolean | null; reversible: boolean | null; precedence: number | null }[]
+  /** `links: null` — привязка неизвестна (сборщик не читал gPLink). */
+  gpos: { name: string; dn: string; machine_disabled: boolean; user_disabled: boolean; links: { dn: string; enforced: boolean; disabled: boolean }[] | null }[]
+  subnets: { name: string; site: string }[]
 }

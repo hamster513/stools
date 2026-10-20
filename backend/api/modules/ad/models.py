@@ -76,6 +76,8 @@ class AdSnapshot(Base):
     unchecked_json: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")
     #: По каким данным ЦС посчитан снапшот (самая свежая из учтённых загрузок).
     ca_data_id: Mapped[int | None] = mapped_column(ForeignKey("ad_ca_data.id", ondelete="SET NULL"), nullable=True)
+    #: Сводка домена (core/summary.py); '' — снапшот посчитан до её появления.
+    summary_json: Mapped[str] = mapped_column(Text, default="", server_default="")
 
 
 class AdCaData(Base):
