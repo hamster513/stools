@@ -238,29 +238,29 @@ export function useUpdateSettings() {
 
 export function useKbConnection() {
   return useQuery<KbConnectionView, ApiRequestError>({
-    queryKey: ['siem-kb'],
-    queryFn: () => api.get('/api/siem/kb'),
+    queryKey: ['siem-mp'],
+    queryFn: () => api.get('/api/siem/mp'),
   })
 }
 
 export function useSaveKbConnection() {
   const qc = useQueryClient()
   return useMutation<KbConnectionView, ApiRequestError, KbConnectionUpdate>({
-    mutationFn: (body) => api.put('/api/siem/kb', body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['siem-kb'] }),
+    mutationFn: (body) => api.put('/api/siem/mp', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['siem-mp'] }),
   })
 }
 
 export function useTestKb() {
   return useMutation<KbTestResponse, ApiRequestError, void>({
-    mutationFn: () => api.post('/api/siem/kb/test'),
+    mutationFn: () => api.post('/api/siem/mp/test'),
   })
 }
 
 export function useStartKbCollect() {
   const qc = useQueryClient()
   return useMutation<{ job_id: number }, ApiRequestError, void>({
-    mutationFn: () => api.post('/api/siem/kb/collect'),
+    mutationFn: () => api.post('/api/siem/mp/collect'),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['snapshots'] }),
   })
 }

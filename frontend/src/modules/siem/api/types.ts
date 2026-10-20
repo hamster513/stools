@@ -730,6 +730,8 @@ export interface KbTestResponse {
   message: string
   version: string
   database: string
+  events_ok: boolean
+  events_message: string
 }
 
 export interface DeploymentSetView {

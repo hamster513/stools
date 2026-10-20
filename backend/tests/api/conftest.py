@@ -29,6 +29,7 @@ import api.db.base as db_base
 import api.modules.ad.models
 import api.modules.attack.models
 import api.modules.ksc.models
+import api.modules.siem.hunting.models
 import api.modules.vm.models  # noqa: F401 — модели модулей должны быть в реестре
 from api.db.models import AppUser
 from api.security import hash_password
@@ -156,6 +157,8 @@ def app_settings(
     # Расписание истечения рисков, которое заводит старт API, в тестах не заводится: тесты
     # расписаний модулей считают строки platform_schedule. Его проверяет test_mine_and_expiry.py.
     monkeypatch.setattr("api.main.ensure_platform_schedules", lambda: None)
+    # Так же расписания Threat Hunting: их проверяет tests/siem_hunting/test_dispatcher.py.
+    monkeypatch.setattr("api.main.ensure_hunting_schedules", lambda: None)
     from api.settings import get_settings
 
     yield get_settings()
@@ -294,7 +297,7 @@ def upload_and_wait(auth_client: TestClient, data: bytes, filename: str = "kb.zi
 def collect_and_wait(auth_client: TestClient) -> dict[str, Any]:
     """Запускает сбор из базы знаний и дожидается конца задачи: фон в TestClient
     выполняется синхронно, цикл — подстраховка."""
-    response = auth_client.post("/api/siem/kb/collect")
+    response = auth_client.post("/api/siem/mp/collect")
     assert response.status_code == 202, response.text
     job_id = response.json()["job_id"]
     job = auth_client.get(f"/api/siem/jobs/{job_id}").json()

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useSnapshots } from '@/modules/siem/api/queries'
 import { matchPath, Redirect, useRouter } from '@/lib/router'
 import { AppShell } from '@/components/layout/AppShell'
@@ -12,6 +13,13 @@ import { ClonesPage } from './pages/ClonesPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { AttackPage } from './pages/AttackPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { FindingPage } from './hunting/pages/FindingPage'
+import { FindingsPage } from './hunting/pages/FindingsPage'
+import { HuntPage } from './hunting/pages/HuntPage'
+import { LibraryPage } from './hunting/pages/LibraryPage'
+import { DeepHuntPage } from './hunting/pages/DeepHuntPage'
+import { DeepPage } from './hunting/pages/DeepPage'
+import { RunsPage } from './hunting/pages/RunsPage'
 
 const SECTIONS = new Set(['overview', 'rules', 'clones', 'attack', 'profile', 'hygiene'])
 
@@ -22,6 +30,11 @@ function latestOf(snapshots: SnapshotListItem[]): SnapshotListItem | null {
 /** Маршруты модуля SIEM — всё под /siem. Сессию платформа уже проверила. */
 export function SiemModule() {
   const { path, navigate } = useRouter()
+
+  // Threat Hunting не привязан к снапшоту правил.
+  if (path === '/siem/hunting' || path.startsWith('/siem/hunting/')) {
+    return <HuntingRoute />
+  }
 
   // Загрузки собраны в настройках. Прежний адрес /upload остаётся рабочим:
   // на него ведут закладки и ссылки в чужих инструкциях.
@@ -59,6 +72,60 @@ export function SiemModule() {
   }
 
   return <SiemRootRedirect />
+}
+
+/**
+ * Раздел Threat Hunting. Ссылки группы «SIEM Rules Analyzer» в сайдбаре ведут на последний
+ * снапшот — он нужен только им: пока список снапшотов грузится, раздел уже открыт, а группа неактивна.
+ */
+function HuntingRoute() {
+  const { path, search, navigate } = useRouter()
+  const { data: snapshots } = useSnapshots()
+  const latest = snapshots ? latestOf(snapshots) : null
+
+  let section: string
+  let page: ReactNode
+  const finding = matchPath('/siem/hunting/findings/:id', path)
+  const hunt = matchPath('/siem/hunting/library/:id', path)
+  const deep = matchPath('/siem/hunting/deep/:id', path)
+  const run = matchPath('/siem/hunting/runs/:id', path)
+  if (path === '/siem/hunting') {
+    // Фильтры страницы стартуют из адреса: смена строки запроса (ссылка «все находки ханта») открывает её заново.
+    section = `findings${search}`
+    page = <FindingsPage key={search} />
+  } else if (finding) {
+    section = `finding-${finding.id}`
+    page = <FindingPage id={Number(finding.id)} />
+  } else if (path === '/siem/hunting/library') {
+    section = path
+    page = <LibraryPage />
+  } else if (hunt) {
+    section = path
+    page = <HuntPage id={hunt.id === 'new' ? 'new' : Number(hunt.id)} />
+  } else if (path === '/siem/hunting/deep') {
+    // Адрес с `?from=<запрос>` открывает форму с подстановкой: смена строки запроса собирает страницу заново.
+    section = `deep${search}`
+    page = <DeepPage key={search} />
+  } else if (deep) {
+    section = path
+    page = <DeepHuntPage id={Number(deep.id)} />
+  } else if (path === '/siem/hunting/runs') {
+    section = path
+    page = <RunsPage />
+  } else if (run) {
+    section = path
+    page = <RunsPage id={Number(run.id)} />
+  } else {
+    return <Redirect to="/siem/hunting" />
+  }
+
+  return (
+    <AppShell sidebar={<SiemSidebar snapshotId={latest?.id ?? null} />}>
+      <ErrorBoundary key={section} resetLabel="Показать снова" onReset={() => navigate('/siem/hunting')}>
+        {page}
+      </ErrorBoundary>
+    </AppShell>
+  )
 }
 
 /**

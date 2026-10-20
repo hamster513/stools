@@ -74,7 +74,7 @@ def reseal_secrets() -> None:
     if not get_settings().session_secret:
         typer.secho("STOOLS_SESSION_SECRET не задан — шифровать нечем", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-    counts = {"ad": 0, "ksc": 0, "vm": 0, "siem_kb": 0, "oidc": 0}
+    counts = {"ad": 0, "ksc": 0, "vm": 0, "siem_mp": 0, "oidc": 0}
     session = get_sessionmaker()()
     try:
         conns: list[tuple[str, AdConnection | KscConnection]] = [
@@ -89,7 +89,7 @@ def reseal_secrets() -> None:
         #: Ключ настройки в app_setting, раздел JSON с секретами (None — корень), поля.
         for kind, section, fields in (
             ("vm", "connection", ("api_token",)),
-            ("siem_kb", None, ("api_token",)),
+            ("siem_mp", None, ("api_token",)),
             ("oidc", None, ("client_secret",)),
         ):
             row = session.get(AppSetting, kind)

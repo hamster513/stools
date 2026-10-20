@@ -1,0 +1,133 @@
+import { useState } from 'react'
+import { Trash2 } from 'lucide-react'
+import { ApiRequestError } from '@/api/client'
+import { Button } from '@/components/ui/Button'
+import { FIELD } from '@/components/ui/Field'
+import { Link } from '@/lib/router'
+import { useCheckQuery } from '../api/queries'
+import type { QueryView } from '../api/types'
+import type { QueryDraft } from '../draft'
+import { ruStamp } from '../format'
+import { QueryStatus } from './QueryStatus'
+
+const LABEL = 'mb-1 block text-xs font-medium text-text'
+const LINK = 'rounded text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
+
+/**
+ * Один запрос ханта: многострочный PDQL, поля, подписи колонок, предел, выключатель и «проверить запрос».
+ * Правка идёт в черновик карточки (`onChange`); выключатель сохранённого запроса — отдельная ручка (`onToggle`),
+ * у ещё не сохранённого он правит черновик. `view` — сохранённая версия: последний запуск, ссылка «в большой хант».
+ * Только чтение: поля заблокированы, кнопок нет.
+ */
+export function QueryEditor({ huntId, draft, view, enabled, readOnly, toggling, onChange, onToggle, onRemove }: {
+  /** Номер ханта в базе — ссылка «в большой хант» несёт его, чтобы страница читала одну карточку; у несохранённого ханта пуст. */
+  huntId: number | undefined
+  draft: QueryDraft
+  view: QueryView | undefined
+  /** Текущий выключатель: у сохранённого запроса — серверный. */
+  enabled: boolean
+  readOnly: boolean
+  toggling: boolean
+  onChange: (patch: Partial<QueryDraft>) => void
+  onToggle: (enabled: boolean) => void
+  onRemove: () => void
+}) {
+  const check = useCheckQuery()
+  const [confirmed, setConfirmed] = useState(false)
+
+  // Результат проверки относится к тексту, который проверяли: после правки запроса или полей он устарел.
+  function edit(patch: Partial<QueryDraft>) {
+    if ('query' in patch || 'fields' in patch) check.reset()
+    onChange(patch)
+  }
+
+  const checkError = check.error instanceof ApiRequestError ? check.error.message : check.isError ? 'Не удалось проверить запрос' : null
+  const last = view?.last
+
+  return (
+    <section className="rounded border border-grid bg-surface p-3" aria-label={`Запрос ${draft.query_id}`}>
+      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+        {draft.pk === null && !readOnly ? (
+          <div className="w-24"><input value={draft.query_id} onChange={(e) => edit({ query_id: e.target.value })} aria-label="Номер запроса" className={`${FIELD} font-mono`} maxLength={32} /></div>
+        ) : (
+          <span className="font-mono text-sm font-semibold text-text">{draft.query_id}</span>
+        )}
+        <label className="flex items-center gap-1.5 text-xs text-text">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={readOnly || toggling}
+            onChange={(e) => onToggle(e.target.checked)}
+            className="accent-primary"
+          />
+          включён
+        </label>
+        {last && (
+          <span className="text-xs text-text-secondary">
+            последний запуск {ruStamp(last.at)}: <QueryStatus status={last.status} />, событий {last.events}
+          </span>
+        )}
+        {view && view.new_findings > 0 && <span className="text-xs text-text">новых находок: {view.new_findings}</span>}
+        <div className="ml-auto flex items-center gap-3">
+          {view && <Link to={`/siem/hunting/deep?from=${view.id}${huntId !== undefined ? `&hunt=${huntId}` : ''}`} className={LINK} title="Запустить этот запрос за длинный период">в большой хант</Link>}
+          {!readOnly && (
+            confirmed ? (
+              <span className="flex items-center gap-1.5 text-xs text-text-secondary">
+                Убрать при сохранении?
+                <Button variant="danger" onClick={onRemove} className="px-2 py-0.5 text-xs">Убрать</Button>
+                <Button onClick={() => setConfirmed(false)} className="px-2 py-0.5 text-xs">Нет</Button>
+              </span>
+            ) : (
+              <Button variant="ghost" onClick={() => setConfirmed(true)} aria-label={`Убрать запрос ${draft.query_id}`} className="px-1.5 py-1"><Trash2 size={14} aria-hidden /></Button>
+            )
+          )}
+        </div>
+      </div>
+
+      <label className="block">
+        <span className={LABEL}>Запрос (PDQL)</span>
+        <textarea
+          value={draft.query}
+          onChange={(e) => edit({ query: e.target.value })}
+          disabled={readOnly}
+          rows={5}
+          spellCheck={false}
+          className={`${FIELD} font-mono text-xs leading-relaxed`}
+        />
+      </label>
+
+      <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_9rem]">
+        <label className="block">
+          <span className={LABEL}>Поля через запятую</span>
+          <input value={draft.fields} onChange={(e) => edit({ fields: e.target.value })} disabled={readOnly} spellCheck={false} className={`${FIELD} font-mono text-xs`} />
+        </label>
+        <label className="block">
+          <span className={LABEL}>Подписи колонок</span>
+          <input value={draft.fields_label} onChange={(e) => edit({ fields_label: e.target.value })} disabled={readOnly} placeholder="по одной на поле" className={FIELD} />
+        </label>
+        <label className="block">
+          <span className={LABEL}>Предел событий</span>
+          <input
+            type="number"
+            min={1}
+            value={draft.limit}
+            onChange={(e) => edit({ limit: e.target.value })}
+            disabled={readOnly}
+            placeholder="из настроек"
+            className={`${FIELD} font-mono text-xs`}
+          />
+        </label>
+      </div>
+
+      {!readOnly && (
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <Button onClick={() => check.mutate({ query: draft.query, fields: draft.fields })} loading={check.isPending} disabled={!draft.query.trim() || !draft.fields.trim()}>
+            проверить запрос
+          </Button>
+          {check.data && <span className={check.data.ok ? 'text-xs text-kind-accepted' : 'text-xs text-kind-1'} role="status">{check.data.message}</span>}
+          {checkError && <span className="text-xs text-kind-1" role="alert">{checkError}</span>}
+        </div>
+      )}
+    </section>
+  )
+}

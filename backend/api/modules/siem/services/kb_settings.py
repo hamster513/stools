@@ -1,4 +1,4 @@
-"""Подключение к базе знаний MaxPatrol (PT KB) — в `app_setting['siem_kb']`.
+"""Подключение к MaxPatrol (PT KB и события) — в `app_setting['siem_mp']`.
 
 Одно на инсталляцию, по образцу модуля VM: персональный API-токен
 MaxPatrol шифруется (api/crypto.py) и расшифровывается только в момент
@@ -18,7 +18,7 @@ from api.db.models import AppSetting
 from api.hosts import validate_host
 from api.llm_settings import read_setting
 
-KB_KEY = "siem_kb"
+MP_KEY = "siem_mp"
 SECRET_FIELDS = ("api_token",)
 #: Поля, от которых зависит, куда уйдёт токен.
 ADDRESS_FIELDS = ("host", "kb_port", "verify_tls")
@@ -66,7 +66,7 @@ class SecretsRequired(ValueError):
 
 
 def load_connection(db: Session) -> KbConnection:
-    raw = read_setting(db, KB_KEY)
+    raw = read_setting(db, MP_KEY)
     return KbConnection() if raw is None else KbConnection.model_validate_json(raw)
 
 
@@ -92,9 +92,9 @@ def save_connection(db: Session, incoming: KbConnectionIn, login: str | None) ->
     for f in SECRET_FIELDS:
         new_value = getattr(merged, f)
         setattr(merged, f, encrypt(new_value) if new_value else reseal(getattr(current, f)))
-    row = db.get(AppSetting, KB_KEY)
+    row = db.get(AppSetting, MP_KEY)
     if row is None:
-        row = AppSetting(key=KB_KEY)
+        row = AppSetting(key=MP_KEY)
         db.add(row)
     row.value_json = merged.model_dump_json()
     row.updated_at = dt.datetime.now(dt.UTC)
