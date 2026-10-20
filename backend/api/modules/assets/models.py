@@ -1,5 +1,5 @@
 """Таблицы модуля Assets (спека §1): сети, справочник зон, активы, наблюдения источников,
-DNS-серверы, задачи, настройки.
+DNS-серверы, задачи, настройки; пользователи как активы — свои таблицы `asset_user*`.
 
 Актив — каноническая карточка, наблюдение — последнее, что о хосте сказал один источник.
 Карточка пересчитывается из наблюдений, а ручные поля (`criticality`, `tags`, `note`,
@@ -122,6 +122,85 @@ class AssetObservation(Base):
     gone_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     extra: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class AssetUser(Base):
+    """Пользователь как актив (спека «Пользователи как активы» §3–§4): карточка из наблюдений AD и KSC.
+
+    Ключи личности — `sid` и `name_key` (`core.users.user_key`): `<dns-домен>\\<sam>` или
+    `local:<asset_id хоста>\\<sam>` у локальной учётки. `enabled` и `privileged` знает только AD;
+    `note` и `tags` — ручные, синхронизация их не трогает."""
+
+    __tablename__ = "asset_user"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sid: Mapped[str] = mapped_column(String(255), default="", index=True)
+    name_key: Mapped[str] = mapped_column(String(512), default="", index=True)
+    sam: Mapped[str] = mapped_column(String(255), default="")
+    upn: Mapped[str] = mapped_column(String(255), default="")
+    display_name: Mapped[str] = mapped_column(String(255), default="")
+    #: DNS-домен (`corp.local`); у локальной учётки пусто.
+    domain: Mapped[str] = mapped_column(String(255), default="")
+    local: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: None — AD учётку не видел (KSC-only, локальная, домен без выгрузки).
+    enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    privileged: Mapped[bool] = mapped_column(Boolean, default=False)
+    first_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    merged_into: Mapped[int | None] = mapped_column(ForeignKey("asset_user.id", ondelete="SET NULL"), nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    tags: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class AssetUserObservation(Base):
+    """Последнее, что об учётке сказал один источник (ad | ksc); `data` — поля как пришли."""
+
+    __tablename__ = "asset_user_observation"
+    __table_args__ = (UniqueConstraint("source", "source_key", name="uq_asset_user_observation_source_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("asset_user.id", ondelete="CASCADE"), index=True)
+    source: Mapped[str] = mapped_column(String(16))
+    source_key: Mapped[str] = mapped_column(String(512))
+    seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    gone_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+
+
+class AssetUserHost(Base):
+    """Связь «пользователь → актив-хост»: сеанс, владелец устройства или член локальной группы."""
+
+    __tablename__ = "asset_user_host"
+    __table_args__ = (
+        UniqueConstraint("user_id", "asset_id", "source", "kind", name="uq_asset_user_host_link"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("asset_user.id", ondelete="CASCADE"))
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id", ondelete="CASCADE"), index=True)
+    source: Mapped[str] = mapped_column(String(16))
+    #: session | owner | local_group
+    kind: Mapped[str] = mapped_column(String(16))
+    #: Для сеанса KSC: True — в системе на момент сбора, False — заходил раньше.
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    gone_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AssetUserGroup(Base):
+    """Группа AD пользователя: прямая (`direct`) или через вложенность."""
+
+    __tablename__ = "asset_user_group"
+    __table_args__ = (UniqueConstraint("user_id", "group_sid", name="uq_asset_user_group_sid"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("asset_user.id", ondelete="CASCADE"))
+    group_sid: Mapped[str] = mapped_column(String(255))
+    group_name: Mapped[str] = mapped_column(String(512), default="")
+    direct: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(16), default="ad")
 
 
 class AssetDns(Base):
