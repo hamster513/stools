@@ -18,6 +18,7 @@ import httpx
 
 from tests.ksc.synthetic import (
     HOST_USER_RECORDS,
+    ODD_HOST_USER_RECORDS,
     add_empty_objects,
     add_inactive_policy,
     add_secret_bait,
@@ -144,8 +145,12 @@ class FakeKsc:
         #: отвечать PxgError; variant="users_host_failed" — h-ws02, variant="users_denied" — 403 на запрос по любому хосту.
         self.fail_host_users: set[str] = set(fail_host_users) if fail_host_users is not None else ({"h-ws02"} if variant == "users_host_failed" else set())
         self.deny_host_users = variant == "users_denied"
+        #: Первые N запросов пользователей устройств получают 403, остальные — ответ: отказ N подряд в начале, дальше всё в порядке
+        #: (без остановки чтения хосты после N-го получили бы списки). variant="users_first_refused" — три хоста.
+        self.refuse_first_host_users = 3 if variant == "users_first_refused" else 0
         #: Записи пользователей по хосту; хост не в словаре — пусто.
-        self.host_user_records: dict[str, list[dict[str, Any]]] = HOST_USER_RECORDS
+        #: variant="users_odd" — у h-ws04 записи с необычным `ul_imgSid` и `ul_bUser` (ODD_HOST_USER_RECORDS).
+        self.host_user_records: dict[str, list[dict[str, Any]]] = {**HOST_USER_RECORDS, **ODD_HOST_USER_RECORDS} if variant == "users_odd" else HOST_USER_RECORDS
         #: KLPOL_ID (строкой) → имена профилей, на которые GetProfile и GetProfileSettings отвечают PxgError.
         self.fail_profiles: dict[str, set[str]] = fail_profiles or {}
         #: Номера функций CertPoolCtrl.GetCertificateInfo, на которые отвечать 403 (остальные — как обычно).
@@ -272,7 +277,7 @@ class FakeKsc:
             if view == "GlobalUsersListSrvViewName" and host_id:
                 # Пользователи одного устройства: фильтра нет, хост — в pParams.
                 self.host_user_queries.append(str(host_id))
-                if self.deny_host_users:
+                if self.deny_host_users or len(self.host_user_queries) <= self.refuse_first_host_users:
                     return 403, {}
                 if host_id in self.fail_host_users:
                     return 200, {"PxgError": {"code": 1, "message": "хост не найден"}}

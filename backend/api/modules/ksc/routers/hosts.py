@@ -126,8 +126,8 @@ class HostUsers:
         return "past" if people else "none"
 
     def needles(self) -> list[str]:
-        """Что ищется в пользователях хоста: учётная запись, UPN, отображаемое имя (в нижнем регистре)."""
-        return [str(u.get(k) or "").lower() for u in self.users or [] for k in ("sam", "upn", "display_name")]
+        """Что ищется в пользователях хоста: учётная запись, UPN, отображаемое имя (в нижнем регистре); группы не в счёт."""
+        return [str(u.get(k) or "").lower() for u in self.users or [] if not u.get("group") for k in ("sam", "upn", "display_name")]
 
 
 def _host_users(h: KscHost) -> HostUsers:
@@ -287,7 +287,7 @@ def list_hosts(
     компонентов. `status_reason` — текст причины как в `status_reasons`; неизвестный текст ничего не находит.
     `session` — сеансы по данным KSC: `active` (в системе на момент сбора), `past` (заходили раньше), `none` (никто),
     `not_collected` (пользователи не собраны). `user` — подстрока без учёта регистра в учётной записи, UPN или имени
-    любого пользователя хоста (в том числе заходившего раньше); `q` ищет и по ним."""
+    любого пользователя хоста (в том числе заходившего раньше; группы не в счёт); `q` ищет и по ним."""
     snap = _snapshot(db, snapshot_id, settings)
     groups, products, agents, protections, bases_, in_ads, reasons_, components, tags_, sessions = (
         multi(v) for v in (group, product, agent, protection, bases, in_ad, status_reason, component, tag, session))

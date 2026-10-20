@@ -466,6 +466,16 @@ def test_hosts_filter_and_search_by_user(auth_client: TestClient, db_session: Se
     assert names("?q=srv") == ["SRV01"]
 
 
+def test_hosts_user_filter_and_search_skip_groups(auth_client: TestClient, db_session: Session) -> None:
+    """Группа в списке хоста (KSC отдаёт её вместе с пользователями) — не пользователь: ни `user=`, ни `q` её не находят."""
+    _users_snapshot(auth_client, db_session)
+    names = lambda q: sorted(h["name"] for h in _hosts(auth_client, q)["items"])
+    assert names("?user=domain%20users") == [] and names("?user=domain") == []
+    assert names("?q=domain%20users") == [] and names("?q=lab%5Cdomain") == []
+    # пользователи рядом с группой на WS01 по-прежнему находятся
+    assert names("?user=user01") == ["WS01"]
+
+
 def test_hosts_export_accepts_user_filters(auth_client: TestClient, db_session: Session) -> None:
     snap_id = _users_snapshot(auth_client, db_session)
     r = auth_client.get(f"/api/ksc/snapshots/{snap_id}/hosts/export?user=user04&session=active")

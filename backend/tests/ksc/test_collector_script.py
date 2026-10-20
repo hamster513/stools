@@ -636,3 +636,34 @@ def test_script_host_users_give_up_after_failures_in_a_row(tmp_path: Path) -> No
     assert len(raw["server"]["warnings"]) == 1
     assert raw["server"]["warnings"][0].startswith("host_users: 3 отказов подряд, чтение прекращено; пользователи не собраны у 12 хостов: ")
     assert raw["internal_users"] == build_export()["internal_users"] and len(raw["hosts"]) == 14
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_host_users_stop_reading_after_refusals_in_a_row(tmp_path: Path) -> None:
+    """Порог 3, первые три хоста отказывают (403), остальные отвечали бы списками: у всех 12 хостов `null` —
+    значит, со 4-го хоста скрипт уже не спрашивал; без ветки пропуска они получили бы списки."""
+    assert build_export()["host_users"]["h-ws04"] == [] and build_export()["host_users"]["h-srv01"]
+    script_dir = tmp_path / "script"
+    script_dir.mkdir()
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    assert text.count("$HostUsersGiveUp = 20") == 1
+    (script_dir / SCRIPT.name).write_text(text.replace("$HostUsersGiveUp = 20", "$HostUsersGiveUp = 3"), encoding="utf-8-sig")
+    raw = json.loads(gzip.decompress(_run_script(tmp_path, 18379, "users_first_refused", script_dir=script_dir).read_bytes()))
+    assert raw["host_users"] == {h: None for h in build_export()["host_users"]}
+    assert len(raw["server"]["warnings"]) == 1
+    assert raw["server"]["warnings"][0].startswith("host_users: 3 отказов подряд, чтение прекращено; пользователи не собраны у 12 хостов: ")
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+def test_script_and_online_read_odd_sid_and_user_flag_alike(tmp_path: Path) -> None:
+    """Мусорный, усечённый и пустой `ul_imgSid` → `""` у обоих сборщиков, SID строкой — как есть; `ul_bUser` типизированным
+    null — пользователь (не группа), как в Python."""
+    from tests.ksc.synthetic import LAB_SID, ODD_HOST_USER_RECORDS
+
+    script_raw, online_raw = _script_and_online(tmp_path, 18380, "users_odd")
+    assert ODD_HOST_USER_RECORDS["h-ws04"]
+    assert script_raw["host_users"] == online_raw["host_users"]
+    odd = {u["sam"]: u for u in script_raw["host_users"]["h-ws04"]}
+    assert [u["sid"] for u in odd.values()] == ["", "", "", "S-1-5-18", f"{LAB_SID}-3005"]
+    assert not any(u["group"] for u in odd.values())
+    assert {k: v for k, v in script_raw["host_users"].items() if k != "h-ws04"} == {k: v for k, v in build_export()["host_users"].items() if k != "h-ws04"}

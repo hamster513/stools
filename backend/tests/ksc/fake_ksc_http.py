@@ -13,7 +13,7 @@
 маркерами, в параметрах задач и имя сервера с `/` (synthetic.add_secret_bait),
 `tags_batch_denied` — отказ (403) на пакетный `HostsTags.ListTags.GetTags` (теги читаются
 по одному хосту), `tags_host_failed` — то же плюс PxgError на `HostTagsApi.GetHostTags`
-хоста h-ws02, `tags_denied` / `profiles_denied` / `users_denied` / `users_host_failed` — см. FakeKsc.
+хоста h-ws02, `tags_denied` / `profiles_denied` / `users_denied` / `users_host_failed` / `users_first_refused` / `users_odd` — см. FakeKsc.
 Отвечает той же логикой, что и `FakeKsc.handle` (см. fake_ksc.py), но
 по-настоящему слушает сокет — скрипт внутри контейнера ходит на него как на
 боевой KSC Open API.

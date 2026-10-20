@@ -240,7 +240,7 @@ function SidString($v) {
 }
 # Запись GlobalUsersListSrvViewName по хосту → элемент секции host_users (контракт спеки «Пользователи как активы» §2.1)
 # и bin_id — ul_binId как пришёл (base64): по нему разбор связывает владельца устройства с пользователем. group — только
-# явное ul_bUser = false. То же — _host_user в api/modules/ksc/core/collector.py.
+# явное ul_bUser = false (типизированное значение с null — не false: сначала снимается обёртка). То же — _host_user в api/modules/ksc/core/collector.py.
 function Convert-HostUser($record) {
   $r = Unwrap $record
   $domainSam = [string](Plain (Prop $r "ul_wstrDomainSAM"))
@@ -249,7 +249,7 @@ function Convert-HostUser($record) {
   if ($domainSam -and $name) { $sam = "$domainSam\$name" }
   $domain = [string](Plain (Prop $r "ul_wstrDomain2000"))
   if (-not $domain) { $domain = $domainSam }
-  $isUser = Prop $r "ul_bUser"
+  $isUser = Plain (Prop $r "ul_bUser")
   return [ordered]@{
     sid = (SidString (Prop $r "ul_imgSid")); sam = $sam; upn = [string](Plain (Prop $r "ul_wstrPrincipalName"))
     display_name = [string](Plain (Prop $r "ul_wstrDisplayName")); domain = $domain; local = (AsBool (Prop $r "ul_Local"))

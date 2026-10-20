@@ -236,6 +236,26 @@ HOST_USER_RECORDS: dict[str, list[dict[str, Any]]] = {
 }
 
 
+def _odd_user(n: int, sam: str, **fields: Any) -> dict[str, Any]:
+    rec = _ksc_user(n, sam, visited=True, sid=f"{LAB_SID}-{n}")
+    rec.update(fields)
+    return rec
+
+
+#: Необычные `ul_imgSid` и `ul_bUser` (вариант «users_odd» поддельного KSC): оба сборщика обязаны прочитать их одинаково.
+#: SID не base64, усечённый двоичный SID (число подчинённых больше, чем байтов), пустое двоичное значение, SID уже строкой;
+#: `ul_bUser` типизированным значением с null — это не «явное false», запись остаётся пользователем.
+ODD_HOST_USER_RECORDS: dict[str, list[dict[str, Any]]] = {
+    "h-ws04": [
+        _odd_user(3001, "odd-garbage", ul_imgSid={"type": "binary", "value": "!!не base64!!"}),
+        _odd_user(3002, "odd-truncated", ul_imgSid=binary(sid_bytes(f"{LAB_SID}-3002")[:10])),
+        _odd_user(3003, "odd-empty", ul_imgSid={"type": "binary", "value": ""}),
+        _odd_user(3004, "odd-string-sid", ul_imgSid="S-1-5-18"),
+        _odd_user(3005, "odd-typed-null-flag", ul_bUser={"type": "boolean", "value": None}),
+    ],
+}
+
+
 def _hu(n: int, sid: str, sam: str, *, active: bool, upn: str = "", display_name: str = "", domain: str = "lab.local",
         local: bool = False, group: bool = False) -> dict[str, Any]:
     return {"sid": sid, "sam": sam, "upn": upn, "display_name": display_name, "domain": domain, "local": local, "group": group,

@@ -13,12 +13,15 @@ from api.modules.ksc.core.export import load_export, strip_params
 from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
 from tests.ksc.fake_ksc import PASSWORD, USER, FakeKsc, http_factory_for
 from tests.ksc.synthetic import (
+    LAB_SID,
     add_inactive_policy,
     assert_secrets_hidden,
     assert_storage_shapes,
+    binary,
     build_export,
     expected_policy_contents,
     expected_policy_profiles,
+    sid_bytes,
 )
 
 
@@ -530,6 +533,26 @@ def test_collect_host_users_gives_up_after_failures_in_a_row(monkeypatch: Any) -
 
 def test_collect_host_users_default_give_up_is_twenty() -> None:
     assert collector_mod.HOST_USERS_GIVE_UP == 20
+
+
+def test_collect_host_users_gives_up_when_first_hosts_refuse_and_rest_would_answer(monkeypatch: Any) -> None:
+    """Первые три хоста отказывают, остальные ответили бы: после порога 3 их не спрашивают — `null` у всех, запросов три."""
+    monkeypatch.setattr(collector_mod, "HOST_USERS_GIVE_UP", 3)
+    f = FakeKsc(variant="users_first_refused")
+    raw = _collect_with(monkeypatch, f)
+    ids = list(build_export()["host_users"])
+    assert raw["host_users"] == {i: None for i in ids} and f.host_user_queries == ids[:3]
+
+
+def test_sid_string_edge_cases() -> None:
+    """Граничные значения `ul_imgSid`: пусто, мусор, усечённый SID, не строка — `""` без исключений; SID строкой — как есть."""
+    sid = collector_mod.sid_string
+    good = binary(sid_bytes(f"{LAB_SID}-1001"))
+    assert sid(good) == f"{LAB_SID}-1001" and sid(good["value"]) == f"{LAB_SID}-1001"
+    for bad in (None, "", {"type": "binary", "value": None}, {"type": "binary", "value": ""}, "!!не base64!!", "AAAA", binary(b"\x01\x05"),
+                binary(sid_bytes(f"{LAB_SID}-1001")[:-1]), 123, 4.5, True, [], {}, {"a": 1}, b"\x01\x01"):
+        assert sid(bad) == "", bad
+    assert sid("S-1-5-18") == "S-1-5-18" and sid("s-1-5-18") == "s-1-5-18"
 
 
 def test_collect_host_users_without_rights_marks_every_host(monkeypatch: Any) -> None:

@@ -47,11 +47,11 @@ function UserList({ title, users }: { title: string; users: HostUser[] }) {
   )
 }
 
-function ownerText(owner: HostOwner | null, collected: boolean): string {
+function ownerText(owner: HostOwner | null, collected: boolean, listCollected: boolean): string {
   if (!collected) return 'не собран (сборщик до 1.4)'
   if (owner === null) return 'не задан'
   const name = owner.display_name || owner.sam
-  if (!name) return 'владелец задан, но не в списке пользователей'
+  if (!name) return listCollected ? 'владелец задан, но не в списке пользователей' : 'владелец задан, список пользователей по хосту не собран'
   return owner.display_name && owner.sam ? `${owner.display_name} · ${owner.sam}` : name
 }
 
@@ -64,13 +64,13 @@ function HostUsers({ host: h }: { host: HostDetail }) {
       <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Пользователи</div>
       <div className="mb-4">
         {h.users === null && <div className="mb-2 text-text-secondary">{h.users_collected ? 'не собрано для этого хоста' : 'пользователи не собраны (сборщик до 1.4)'}</div>}
-        {h.users !== null && h.users.length === 0 && <div className="mb-2 text-text-secondary">никто не заходил</div>}
+        {h.users !== null && people.length === 0 && <div className="mb-2 text-text-secondary">никто не заходил</div>}
         <UserList title="В системе на момент сбора" users={people.filter((u) => u.active)} />
         <UserList title="Заходили раньше" users={people.filter((u) => !u.active)} />
         <UserList title="Группы с сеансом" users={groups} />
         <div className="flex gap-2">
           <span className="text-text-secondary">Владелец устройства</span>
-          <span className="text-text">{ownerText(h.owner, h.users_collected)}</span>
+          <span className="text-text">{ownerText(h.owner, h.users_collected, h.users !== null)}</span>
         </div>
       </div>
     </>
