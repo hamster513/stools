@@ -5,7 +5,13 @@ import json
 
 import pytest
 
-from api.modules.ad.core.export import ExportFormatError, ExportIndex, load_export
+from api.modules.ad.core.export import (
+    AdObject,
+    ExportFormatError,
+    ExportIndex,
+    GppItem,
+    load_export,
+)
 from tests.ad.synthetic import DOMAIN_SID, build_export, export_bytes, rid, user_dn
 
 
@@ -97,6 +103,16 @@ def test_new_optional_fields_are_read_and_old_export_still_loads():
     raw["guids"].pop("schema_classes")
     old = load_export(json.dumps(raw).encode())
     assert old.domain.min_pwd_length is None and old.domain.recycle_bin is None and old.guids.schema_classes == {}
+
+
+def test_old_gpp_item_fields_none():
+    """Выгрузки сборщиков до LDAP 1.4 / PowerShell 2.5: признаков GPP и UPN нет — None, «не собрано»."""
+    item = GppItem.model_validate({"scope": "machine", "file": "Groups.xml", "kind": "Group"})
+    assert item.filtered is None and item.delete_all is None
+    obj = AdObject.model_validate({"dn": user_dn("helpdesk"), "class": "user"})
+    assert obj.userPrincipalName is None and obj.displayName is None
+    new = AdObject.model_validate({"dn": user_dn("helpdesk"), "class": "user", "userPrincipalName": "helpdesk@corp.local"})
+    assert new.userPrincipalName == "helpdesk@corp.local"
 
 
 def test_naive_timestamps_are_utc():

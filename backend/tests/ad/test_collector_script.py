@@ -1,4 +1,4 @@
-"""Сборщик AD 2.4: раздача, поля, которые читают модели, меню и чистые функции скрипта в контейнере PowerShell.
+"""Сборщик AD 2.5: раздача, поля, которые читают модели, меню и чистые функции скрипта в контейнере PowerShell.
 
 Весь скрипт в контейнере не запустить (нужен модуль ActiveDirectory и домен), поэтому из него
 по AST вынимаются отдельные функции без обращений к домену и выполняются сами по себе.
@@ -146,6 +146,15 @@ def test_script_collects_computer_host_attributes() -> None:
         assert f'$rec["{name}"]' in text, name
 
 
+def test_script_collects_upn_and_display_name() -> None:
+    """Сборщик 2.5 — как LDAP 1.4: userPrincipalName и displayName у пользователей и (через $userProps) у компьютеров."""
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    user_props = next(line for line in text.splitlines() if line.strip().startswith("$userProps ="))
+    for name in ("userPrincipalName", "displayName"):
+        assert f'"{name}"' in user_props, name
+        assert f"{name} = $(if ($o.{name})" in text, name
+
+
 def test_menu_lists_seven_items() -> None:
     text = SCRIPT.read_text(encoding="utf-8-sig")
     for line in ("1  Всё: выгрузка AD и данные ЦС", "5  Данные ЦС: настройки и права центров сертификации",
@@ -157,7 +166,7 @@ def test_script_keeps_bom_version_and_module_requirement() -> None:
     raw = SCRIPT.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")
     text = raw.decode("utf-8-sig")
-    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.4"' in text
+    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.5"' in text
 
 
 def _image_present() -> bool:
@@ -410,6 +419,32 @@ AUDIT_CASES = {
     "options": "﻿" + AUDIT_CSV + ",System,Option:CrashOnAuditFail,,Disabled,,0\r\n,System,IPsec Driver,{0cce9213-69ae-11d9-bed3-505054503030},No Auditing,,x\r\n",
     "empty": "",
 }
+
+
+GPP_TARGETING = {
+    "filtered_replace": '<Groups><Group name="Administrators (built-in)"><Properties action="U" groupSid="S-1-5-32-544" deleteAllUsers="1" '
+                        'deleteAllGroups="0"><Members><Member name="CORP\\helpdesk" action="ADD" sid="S-1-5-21-1-2-3-1108"/></Members>'
+                        '</Properties><Filters><FilterComputer bool="AND" not="0" name="PC01" type="NETBIOS"/></Filters></Group></Groups>',
+    "plain": '<Groups><Group name="Administrators (built-in)"><Properties action="U" groupSid="S-1-5-32-544" deleteAllUsers="0">'
+             '<Members/></Properties></Group></Groups>',
+    "empty_filters_groups": '<Groups><Group name="Remote Desktop Users (built-in)"><Properties action="U" groupSid="S-1-5-32-555" '
+                            'deleteAllGroups="1"/><Filters/></Group></Groups>',
+}
+
+
+@needs_pwsh
+def test_gpp_targeting_and_delete_all_match_python(tmp_path: Path) -> None:
+    """Read-GppFile: признаки filtered и delete_all — те же, что у parse_gpp (сборщик 2.5)."""
+    (tmp_path / "cases.json").write_text(json.dumps(GPP_TARGETING), encoding="utf-8")
+    body = r"""
+$c = Get-Content /t/cases.json -Raw | ConvertFrom-Json
+$out = [ordered]@{}
+foreach ($p in $c.PSObject.Properties) { $out[$p.Name] = @(Read-GppFile "Groups.xml" "machine" $p.Value) }
+$out | ConvertTo-Json -Compress -Depth 8
+"""
+    out = _pwsh(tmp_path, body, ("Read-GppFile",))
+    assert out == {k: g.parse_gpp("Groups.xml", "machine", v) for k, v in GPP_TARGETING.items()}
+    assert [(i["filtered"], i["delete_all"]) for k in GPP_TARGETING for i in out[k]] == [(True, True), (False, False), (False, True)]
 
 
 @needs_pwsh
@@ -706,7 +741,8 @@ $Objects = @(
   @{ dn = "CN=Certificate-Enrollment,CN=Extended-Rights,$Conf"; cls = @("controlAccessRight"); displayName = "Enroll"; rightsGuid = "0e10c968-78fb-11d2-90d4-00c04f79dc55" }
   @{ dn = "CN=alice,CN=Users,$Dom"; cls = @("person", "user"); sAMAccountName = "alice"; objectSid = (Sid "$Base-1104"); userAccountControl = 512
      altSecurityIdentities = @("X509:<I>DC=local,DC=corp,CN=CORP-CA<S>CN=alice"); primaryGroupID = 513; sIDHistory = @((Sid "S-1-5-21-9-9-9-1104"))
-     whenCreated = $Created; scriptPath = "logon.bat"; userPassword = "not-for-export"; nTSecurityDescriptor = $sdBytes }
+     whenCreated = $Created; scriptPath = "logon.bat"; userPassword = "not-for-export"; nTSecurityDescriptor = $sdBytes
+     userPrincipalName = "alice@corp.local"; displayName = "Alice Example" }
   @{ dn = "CN=bob,CN=Users,$Dom"; cls = @("person", "user"); sAMAccountName = "bob"; objectSid = (Sid "$Base-1106"); userAccountControl = 512; primaryGroupID = 513
      nTSecurityDescriptor = $sdBytes }
   @{ dn = "CN=CA01,OU=Servers,$Dom"; cls = @("computer"); sAMAccountName = "CA01$"; objectSid = (Sid "$Base-1105"); userAccountControl = 4096
@@ -992,7 +1028,7 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     raw = _gz_json(ad_file)
     assert next(o for o in raw["objects"] if o["class"] == "trustedDomain")["trustAttributes"] == 8
     assert list(export.sysvol) == [GPO_DN]
-    assert export.collector.notes == [] and export.collector.version == "2.4"
+    assert export.collector.notes == [] and export.collector.version == "2.5"
     # Сертификаты ЦС: одно значение (byte[]) у ЦС выдачи, список у NTAuth и хранилищ.
     assert ca.cACertificate == [STUB_CERT]
     [ntauth] = [o for o in by_class["pkiContainer"] if o.dn.startswith("CN=NTAuthCertificates,")]
@@ -1029,6 +1065,9 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     assert export.collector.critical_acl is True
     assert alice.sd == groups["Domain Admins"].sd == groups["Tier0"].sd == STUB_SD and bob.sd is None
     assert bob.hasUnixPassword is False and bob.sIDHistory == [] and bob.whenCreated is None and bob.scriptPath is None
+    # Сборщик 2.5: UPN и отображаемое имя; не заданы — null.
+    assert (alice.userPrincipalName, alice.displayName) == ("alice@corp.local", "Alice Example")
+    assert (bob.userPrincipalName, bob.displayName) == (None, None) and (comp.userPrincipalName, comp.displayName) == (None, None)
     assert "not-for-export" not in json.dumps(raw)
     assert comp.primaryGroupID == 515 and comp.lapsExpiry == 134000000000000000 and comp.lapsNewExpiry == 134100000000000000
     assert comp.creatorSid == CREATOR_SID and comp.revealedUsers == [] and comp.krbTgtLink is None
@@ -1050,7 +1089,7 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     assert site.name == "Default-First-Site-Name" and subnet.name == "10.0.0.0/24" and subnet.site == site.dn
 
     data = parse_ca_data(_gz_json(ca_file))
-    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.4"
+    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.5"
     [authority] = data.cas
     assert authority.name == "CORP-CA" and authority.os_build == "10.0 (17763)" and authority.error and authority.edit_flags is None
     [dc] = data.dcs

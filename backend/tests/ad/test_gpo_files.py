@@ -70,9 +70,25 @@ def test_inf_sections():
 def test_gpp_items_never_carry_the_password():
     items = g.parse_gpp("Groups.xml", "machine", GROUPS)
     assert items[0] == {"scope": "machine", "file": "Groups.xml", "kind": "User", "name": "localadm", "user": "localadm", "cpassword": True,
-                        "action": "U", "members": [], "group_sid": "", "group_name": "", "path": ""}
+                        "action": "U", "members": [], "group_sid": "", "group_name": "", "path": "", "filtered": False, "delete_all": False}
     assert items[1]["group_sid"] == "S-1-5-32-544" and items[1]["members"] == [{"name": "CORP\\Domain Users", "sid": "S-1-5-21-1000-2000-3000-513", "action": "ADD"}]
     assert "j1Uyj3Vx8TY9" not in repr(items)
+
+
+def _gpp_group(props_attrs: str, tail: str = "") -> str:
+    return ('<Groups><Group name="Administrators (built-in)"><Properties action="U" groupSid="S-1-5-32-544" ' + props_attrs + '>'
+            '<Members><Member name="CORP\\helpdesk" action="ADD" sid="S-1-5-21-1-2-3-1108"/></Members></Properties>' + tail + '</Group></Groups>')
+
+
+def test_gpp_group_filters_and_delete_all():
+    """Нацеливание (дочерний Filters с условиями) и замена состава (deleteAllUsers/deleteAllGroups = "1")."""
+    filters = '<Filters><FilterComputer bool="AND" not="0" name="PC01" type="NETBIOS"/></Filters>'
+    [item] = g.parse_gpp("Groups.xml", "machine", _gpp_group('deleteAllUsers="1" deleteAllGroups="0"', filters))
+    assert (item["filtered"], item["delete_all"]) == (True, True)
+    [item] = g.parse_gpp("Groups.xml", "machine", _gpp_group('deleteAllUsers="0"'))
+    assert (item["filtered"], item["delete_all"]) == (False, False)
+    [item] = g.parse_gpp("Groups.xml", "machine", _gpp_group('deleteAllGroups="1"', "<Filters/>"))
+    assert (item["filtered"], item["delete_all"]) == (False, True)
 
 
 def test_gpp_rejects_doctype():

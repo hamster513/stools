@@ -87,7 +87,7 @@ Import-Module ActiveDirectory
 
 $FormatVersion = "stools-ad/1"
 $CaFormatVersion = "stools-ad-ca/1"
-$CollectorVersion = "2.4"
+$CollectorVersion = "2.5"
 # Критичные объекты: группы домена (Domain Admins, Cert Publishers, Schema Admins, Enterprise Admins,
 # Group Policy Creator Owners, Key Admins, Enterprise Key Admins, Allowed RODC Password Replication Group),
 # встроенные (Administrators, Account, Server, Print, Backup Operators, Replicator), DnsAdmins по имени.
@@ -394,10 +394,20 @@ function Read-GppFile([string]$file, [string]$scope, [string]$xmlText) {
     foreach ($a in "userName", "accountName", "runAs", "username") { if ($props.GetAttribute($a)) { $user = $props.GetAttribute($a); break } }
     $path = ""
     foreach ($a in "path", "fromPath") { if ($props.GetAttribute($a)) { $path = $props.GetAttribute($a); break } }
+    # Нацеливание на уровне элемента: условия в узле Filters рядом с Properties; пустой Filters — без условий.
+    $filtered = $false
+    foreach ($c in $el.get_ChildNodes()) {
+      if ($c.get_NodeType() -ne $elementType -or $c.get_Name() -cne "Filters") { continue }
+      foreach ($f in $c.get_ChildNodes()) { if ($f.get_NodeType() -eq $elementType) { $filtered = $true; break } }
+      break
+    }
+    # Замена состава группы: перед добавлением участников удаляются все пользователи и/или группы.
+    $deleteAll = [bool](($props.GetAttribute("deleteAllUsers") -ceq "1") -or ($props.GetAttribute("deleteAllGroups") -ceq "1"))
     $out.Add([ordered]@{
       scope = $scope; file = $file; kind = $el.get_Name(); name = $el.GetAttribute("name"); user = $user
       cpassword = [bool]$props.GetAttribute("cpassword"); action = $props.GetAttribute("action"); members = [object[]]$members
       group_sid = $props.GetAttribute("groupSid"); group_name = $props.GetAttribute("groupName"); path = $path
+      filtered = $filtered; delete_all = $deleteAll
     })
   }
   $out.ToArray()
@@ -798,6 +808,8 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
       sIDHistory = SidList $o.sIDHistory
       whenCreated = IsoTime $o.whenCreated
       scriptPath = $(if ($o.scriptPath) { [string]$o.scriptPath } else { $null })
+      userPrincipalName = $(if ($o.userPrincipalName) { [string]$o.userPrincipalName } else { $null })
+      displayName = $(if ($o.displayName) { [string]$o.displayName } else { $null })
     }
     if ($class -eq "user" -and $unixDns.Contains([string]$o.DistinguishedName)) { $rec["hasUnixPassword"] = $true }
     if ($class -eq "computer") {
@@ -832,7 +844,7 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   $unixDns = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
   $unix = Read-AdSection "Unix-пароли не проверены" @{ LDAPFilter = "(&(objectCategory=person)(objectClass=user)(|(userPassword=*)(unixUserPassword=*)))"; Properties = @("sAMAccountName") }
   foreach ($u in $unix) { [void]$unixDns.Add([string]$u.DistinguishedName) }
-  $userProps = @("sAMAccountName","Name","objectSid","userAccountControl","lastLogonTimestamp","pwdLastSet","servicePrincipalName","msDS-AllowedToDelegateTo","msDS-SupportedEncryptionTypes","adminCount","altSecurityIdentities","primaryGroupID","sIDHistory","whenCreated","scriptPath")
+  $userProps = @("sAMAccountName","Name","objectSid","userAccountControl","lastLogonTimestamp","pwdLastSet","servicePrincipalName","msDS-AllowedToDelegateTo","msDS-SupportedEncryptionTypes","adminCount","altSecurityIdentities","primaryGroupID","sIDHistory","whenCreated","scriptPath","userPrincipalName","displayName")
   Get-ADObject @ad -LDAPFilter "(&(objectCategory=person)(objectClass=user))" -Properties $userProps | ForEach-Object { Add-Account $_ "user" $false }
   Write-Step ("  пользователей: {0}, с Unix-паролем: {1}" -f ($objects.Count - $n0), $unixDns.Count)
 

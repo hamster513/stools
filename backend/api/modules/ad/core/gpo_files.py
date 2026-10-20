@@ -207,6 +207,7 @@ def parse_gpp(file: str, scope: str, xml_text: str) -> list[dict[str, Any]]:
         if props is None:
             continue
         members = props.find("Members")
+        filters = el.find("Filters")
         out.append({
             "scope": scope,
             "file": file,
@@ -222,6 +223,10 @@ def parse_gpp(file: str, scope: str, xml_text: str) -> list[dict[str, Any]]:
             "group_sid": props.get("groupSid", ""),
             "group_name": props.get("groupName", ""),
             "path": _first(props, _PATH_ATTRS),
+            # Нацеливание на уровне элемента: условия в узле Filters рядом с Properties; пустой Filters — без условий.
+            "filtered": filters is not None and len(filters) > 0,
+            # Замена состава группы: перед добавлением участников удаляются все пользователи и/или группы.
+            "delete_all": "1" in (props.get("deleteAllUsers"), props.get("deleteAllGroups")),
         })
     return out
 

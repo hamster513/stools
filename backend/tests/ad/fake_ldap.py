@@ -149,6 +149,7 @@ class FakeLdap:
             "objectClass": ["top", o["class"]],
             "primaryGroupID": o.get("primaryGroupID"),
             "scriptPath": o.get("scriptPath"),
+            "userPrincipalName": o.get("userPrincipalName"),
             "ms-Mcs-AdmPwdExpirationTime": o.get("lapsExpiry"),
             "msLAPS-PasswordExpirationTime": o.get("lapsNewExpiry"),
             "msDS-RevealOnDemandGroup": o.get("revealOnDemand", []),
