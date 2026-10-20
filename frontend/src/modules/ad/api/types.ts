@@ -195,3 +195,16 @@ export interface Summary {
   gpos: { name: string; dn: string; machine_disabled: boolean; user_disabled: boolean; links: { dn: string; enforced: boolean; disabled: boolean }[] | null }[]
   subnets: { name: string; site: string }[]
 }
+
+/**
+ * Контроллер сводки со связками (GET /api/ad/domains/{id}/dc-links). `null` — неизвестно: нет актива, адресов
+ * или подсетей, нет хоста в VM, нет данных KSC или чтение модуля не удалось.
+ */
+export interface DcLink {
+  name: string
+  asset_id: number | null
+  ips: string[]
+  in_ad_subnet: boolean | null
+  vm: { critical: number; exploitable: number } | null
+  ksc_agent: boolean | null
+}

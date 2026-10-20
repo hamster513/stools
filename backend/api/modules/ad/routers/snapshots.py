@@ -33,6 +33,7 @@ from api.modules.ad.core.export import ExportFormatError
 from api.modules.ad.core.findings import SEVERITIES
 from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
 from api.modules.ad.services.ca_data import store_ca_data
+from api.modules.ad.services.dc_links import dc_links
 from api.modules.ad.services.settings import load_config
 from api.modules.ad.services.snapshots import (
     compare,
@@ -153,6 +154,14 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
         "score": _live_score(db, domain_id, found),
         "score_history": score_history(db, domain_id),
     }
+
+
+@router.get("/domains/{domain_id}/dc-links")
+def domain_dc_links(domain_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[dict[str, Any]]:
+    """Контроллеры сводки последнего снапшота со связками Assets, VM и KSC (спека §7)."""
+    if db.get(AdDomain, domain_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="домен не найден")
+    return dc_links(db, domain_id)
 
 
 def _live_score(db: Session, domain_id: int, found: Sequence[Row[tuple[str, str, str, bool]]]) -> dict[str, Any]:

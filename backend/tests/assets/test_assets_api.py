@@ -136,6 +136,28 @@ def test_cluster_kind_in_list_and_card(analyst: TestClient, db_session: Session,
     assert card["cluster"] == "cluster" and next(o for o in card["observations"] if o["source"] == "ad")["extra"]["cluster"] == "cluster"
 
 
+def test_laps_filter_and_facet(analyst: TestClient, db_session: Session, app_settings: Any) -> None:
+    """Фасет LAPS считает только активы с наблюдением AD; фильтр yes/no — по нему же."""
+    from tests.ad.synthetic import ft
+    from tests.assets.synthetic import computer, load_ad
+
+    now = dt.datetime.now(dt.UTC)
+    load_ad(db_session, Path(app_settings.data_dir), [
+        {**computer("WS01$", 1201, last_logon=now - dt.timedelta(days=3)), "lapsNewExpiry": ft(-30)},
+        computer("SRV01$", 1202, last_logon=now - dt.timedelta(days=1)),
+        computer("OLD01$", 1203, last_logon=now - dt.timedelta(days=120)),
+    ], now)
+    assert analyst.post("/api/assets/sync").status_code == 202
+    body = analyst.get("/api/assets/assets").json()
+    # msk1 без наблюдения AD не считается ни там, ни там.
+    assert body["facets"]["laps"] == {"yes": 1, "no": 2}
+    assert names(analyst.get("/api/assets/assets", params={"laps": "yes"}).json()) == {"ws01"}
+    assert names(analyst.get("/api/assets/assets", params={"laps": "no"}).json()) == {"srv01", "old01"}
+    assert names(analyst.get("/api/assets/assets", params=[("laps", "yes"), ("laps", "no")]).json()) == {"ws01", "srv01", "old01"}
+    assert analyst.get("/api/assets/assets/ids", params={"laps": "yes"}).json()["total"] == 1
+    assert analyst.get("/api/assets/assets", params={"laps": "maybe"}).status_code == 422
+
+
 def test_delete_single_and_bulk(analyst: TestClient) -> None:
     ws01, srv01, old01 = (by_name(analyst, n)["id"] for n in ("ws01", "srv01", "old01"))
     assert analyst.delete(f"/api/assets/assets/{ws01}").status_code == 204

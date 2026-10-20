@@ -176,6 +176,7 @@ def _ad_observations(db: Session, data_dir: Path) -> tuple[list[Observed], bool]
                     "os_version": o.operatingSystemVersion or "", "domain_id": domain.id,
                     # cluster | role — виртуальное имя кластера, не хост; node — узел.
                     "cluster": cluster_kind(o.spn),
+                    "laps": o.lapsExpiry is not None or o.lapsNewExpiry is not None,
                 },
             ))
     return out, complete

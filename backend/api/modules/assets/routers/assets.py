@@ -34,6 +34,7 @@ from api.modules.assets.models import AssetJob
 from api.modules.assets.services.assets import (
     ANY_CODE,
     CRITICALITY,
+    LAPS,
     SOURCES,
     AssetConflict,
     AssetNotFound,
@@ -144,6 +145,7 @@ def _filters(
     port: int | None = Query(default=None, ge=1, le=65535),
     tag: str | None = None,
     criticality: QueryList = None,
+    laps: QueryList = None,
     disc_status: QueryList = None,
     assignee: QueryList = None,
     overdue: bool | None = None,
@@ -152,13 +154,14 @@ def _filters(
     (коды статусов повтором ключа или через запятую, или `all`), `assignee` (`me`, `none`, логины) и
     `overdue` — про расхождения: актив подходит, если у него есть расхождение под ними (и под `code`,
     если он задан). Фасеты `code, source_has, source_missing, criticality, zone, assignee, network_id` —
-    повтором ключа, внутри фасета «или»."""
+    повтором ключа, внутри фасета «или»; `laps` — yes | no по наблюдению AD."""
     picked = {"source_has": multi(source_has), "source_missing": multi(source_missing), "code": multi(code),
-              "zone": multi(zone), "criticality": multi(criticality)}
+              "zone": multi(zone), "criticality": multi(criticality), "laps": multi(laps)}
     _check(picked["source_has"], SOURCES)
     _check(picked["source_missing"], SOURCES)
     _check(picked["code"], (*CODES, ANY_CODE))
     _check(picked["criticality"], (*CRITICALITY, "none", ""))
+    _check(picked["laps"], LAPS)
     _check(multi(disc_status, commas=True), STATUSES)
     return {
         "q": q, **picked, "network_id": multi_int(network_id), "port": port, "tag": tag,

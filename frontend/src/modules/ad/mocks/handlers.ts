@@ -6,7 +6,7 @@
  */
 import { http, HttpResponse } from 'msw'
 import { noSession } from '@/modules/siem/mocks/handlers'
-import type { AdConfig, CaData, CheckSummary, Domain, Overview, SettingsView, Summary, SummaryBucket } from '@/modules/ad/api/types'
+import type { AdConfig, CaData, CheckSummary, DcLink, Domain, Overview, SettingsView, Summary, SummaryBucket } from '@/modules/ad/api/types'
 
 const DOMAIN: Domain = { id: 1, sid: 'S-1-5-21-1000-2000-3000', dns_root: 'corp.local', netbios: 'CORP', dn: 'DC=corp,DC=local', snapshots: 1, last_snapshot_id: 1, last_snapshot_at: '2026-09-30T09:00:00Z' }
 const STALE_DOMAIN: Domain = { id: 2, sid: 'S-1-5-21-1000-2000-4000', dns_root: 'lab.corp.local', netbios: 'LAB', dn: 'DC=lab,DC=corp,DC=local', snapshots: 1, last_snapshot_id: 2, last_snapshot_at: '2026-09-12T09:00:00Z' }
@@ -173,6 +173,13 @@ let caData: CaData[] = [
   { id: 1, collected_at: '2026-09-30T08:40:00Z', imported_at: '2026-09-30T09:05:00Z', filename: 'adca-CORP-20260930.json.gz', uploaded_by: 'analyst', sections: ['ca'], cas: 1, dcs: 0, web: 0, dc_total: 0, dc_complete: 0 },
 ]
 
+// DC02 вне подсетей AD и без антивируса, RODC01 не найден ни в одном модуле.
+const DC_LINKS: DcLink[] = [
+  { name: 'DC01', asset_id: 1, ips: ['10.0.0.10'], in_ad_subnet: true, vm: { critical: 2, exploitable: 1 }, ksc_agent: true },
+  { name: 'DC02', asset_id: 2, ips: ['10.9.0.11'], in_ad_subnet: false, vm: { critical: 0, exploitable: 0 }, ksc_agent: false },
+  { name: 'RODC01', asset_id: null, ips: [], in_ad_subnet: null, vm: null, ksc_agent: null },
+]
+
 export const adHandlers = [
   http.get('/api/ad/domains', () => noSession() ?? HttpResponse.json([DOMAIN, STALE_DOMAIN])),
   http.get('/api/ad/domains/:id/overview', ({ params }) => noSession() ?? HttpResponse.json(overview(Number(params.id) === STALE_DOMAIN.id ? STALE_DOMAIN : DOMAIN))),
@@ -182,6 +189,7 @@ export const adHandlers = [
       ? HttpResponse.json({ detail: 'сводка не посчитана: пересчитайте снапшот' }, { status: 409 })
       : HttpResponse.json(SUMMARY)),
   ),
+  http.get('/api/ad/domains/:id/dc-links', () => noSession() ?? HttpResponse.json(DC_LINKS)),
   http.get('/api/ad/domains/:id/ca-data', () => noSession() ?? HttpResponse.json(caData)),
   http.delete('/api/ad/ca-data/:id', ({ params }) => {
     const denied = noSession()

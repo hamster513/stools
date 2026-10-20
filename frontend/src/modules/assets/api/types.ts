@@ -54,6 +54,11 @@ export const CRITICALITY_LABELS: Record<Criticality | 'none', string> = {
   none: 'не задана',
 }
 
+/** LAPS по наблюдению AD: есть ли у компьютера срок пароля LAPS. */
+export type LapsFilter = 'yes' | 'no'
+export const LAPS_VALUES: LapsFilter[] = ['yes', 'no']
+export const LAPS_LABELS: Record<LapsFilter, string> = { yes: 'есть', no: 'нет' }
+
 export type PinnableField = 'name' | 'fqdn' | 'domain' | 'ip' | 'os'
 
 export interface AssetSourceBadge {
@@ -105,6 +110,8 @@ export interface AssetsFacets {
   code: Record<CodeFilter, number>
   zone: Record<string, number>
   criticality: Record<Criticality | 'none', number>
+  /** Только активы с наблюдением AD. */
+  laps: Record<LapsFilter, number>
   /** Расхождения по статусам — без фильтра статуса. */
   disc_status: Record<FindingStatus, number>
   /** Просроченные расхождения — без фильтра статуса и срока. */
@@ -128,6 +135,7 @@ export interface AssetsQuery {
   port?: number
   tag?: string
   criticality?: (Criticality | 'none')[]
+  laps?: LapsFilter[]
   /** Статусы расхождений (ключ повторяется); без него — учитываемые в подсчётах. */
   disc_status?: string[]
   /** Исполнитель расхождения: `me`, `none` или логин; несколько — «ИЛИ». */

@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import { ArrowRight, RefreshCw, ServerCog } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useOverview, useSummary } from '@/modules/ad/api/queries'
-import type { Summary, SummaryBucket, SummaryCounts } from '@/modules/ad/api/types'
+import { useDcLinks, useOverview, useSummary } from '@/modules/ad/api/queries'
+import type { DcLink, Summary, SummaryBucket, SummaryCounts } from '@/modules/ad/api/types'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -21,7 +21,7 @@ const ACCOUNT_COLUMNS: ColumnDef<'label' | 'users' | 'computers'>[] = [
   { key: 'users', label: 'Пользователи', width: 120, align: 'right' },
   { key: 'computers', label: 'Компьютеры', width: 120, align: 'right' },
 ]
-const DC_COLUMNS: ColumnDef<'name' | 'dns' | 'os' | 'build' | 'rodc' | 'logon' | 'pwd' | 'owner'>[] = [
+const DC_COLUMNS: ColumnDef<'name' | 'dns' | 'os' | 'build' | 'rodc' | 'logon' | 'pwd' | 'owner' | 'asset' | 'ips' | 'subnet' | 'vm' | 'av'>[] = [
   { key: 'name', label: 'Имя', width: 140 },
   { key: 'dns', label: 'DNS', width: 200, flex: true },
   { key: 'os', label: 'ОС', width: 200 },
@@ -30,6 +30,11 @@ const DC_COLUMNS: ColumnDef<'name' | 'dns' | 'os' | 'build' | 'rodc' | 'logon' |
   { key: 'logon', label: 'Вход, дн.', width: 88, align: 'right' },
   { key: 'pwd', label: 'Пароль, дн.', width: 96, align: 'right' },
   { key: 'owner', label: 'Владелец', width: 180 },
+  { key: 'asset', label: 'Актив', width: 88 },
+  { key: 'ips', label: 'IP', width: 128 },
+  { key: 'subnet', label: 'Подсеть AD', width: 104 },
+  { key: 'vm', label: 'Уязвимости (VM)', width: 176 },
+  { key: 'av', label: 'Антивирус', width: 88 },
 ]
 const GROUP_COLUMNS: ColumnDef<'name' | 'members' | 'enabled' | 'inactive' | 'never' | 'delegable' | 'protected'>[] = [
   { key: 'name', label: 'Группа', width: 220, flex: true },
@@ -228,8 +233,22 @@ function Gpos({ gpos }: { gpos: Summary['gpos'] }) {
   )
 }
 
+/** Ячейки связок контроллера; пока связки грузятся или не пришли — «—». */
+function dcLinkCells(l: DcLink | undefined) {
+  return {
+    asset: l?.asset_id != null
+      ? <Link to={`/assets/list?asset=${l.asset_id}`} className="text-text underline hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title="Карточка актива в реестре Assets">#{l.asset_id}</Link>
+      : '—',
+    ips: l?.ips.length ? <span className="font-mono">{l.ips.join(', ')}</span> : '—',
+    subnet: l?.in_ad_subnet == null ? '—' : l.in_ad_subnet ? 'да' : <span className="text-risk-high">нет подсети</span>,
+    vm: l?.vm ? `${l.vm.critical} критичных, ${l.vm.exploitable} с эксплойтом` : '—',
+    av: l?.ksc_agent == null ? '—' : l.ksc_agent ? 'есть' : <span className="text-risk-high">нет</span>,
+  }
+}
+
 function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
   const { users, computers } = s.accounts
+  const links = useDcLinks(domainId)
   return (
     <div className="flex flex-col gap-4">
       {users.total + computers.total > 0 && (
@@ -248,7 +267,7 @@ function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
       {s.password_age.all.some((b) => b.n > 0) || s.last_logon.all.some((b) => b.n > 0) ? <Distributions s={s} /> : null}
 
       {s.dcs.length > 0 && (
-        <Section title="Контроллеры домена" about="Дни — с последнего входа и с последней смены пароля учётной записи контроллера на момент сбора. Владелец — владелец объекта в AD; «—» — дескриптор не прочитан.">
+        <Section title="Контроллеры домена" about="Дни — с последнего входа и с последней смены пароля учётной записи контроллера на момент сбора. Владелец — владелец объекта в AD; «—» — дескриптор не прочитан. Актив, IP, уязвимости и антивирус — из Assets, VM и KSC сейчас, по имени хоста; «нет подсети» — ни один адрес не входит в подсети сайтов AD; «—» — данных нет.">
           <Table
             storageKey="ad-summary-dcs"
             columns={DC_COLUMNS}
@@ -263,6 +282,7 @@ function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
                 logon: num(d.last_logon_days),
                 pwd: num(d.pwd_age_days),
                 owner: d.owner || '—',
+                ...dcLinkCells(links.data?.find((l) => l.name === d.name)),
               },
             }))}
           />

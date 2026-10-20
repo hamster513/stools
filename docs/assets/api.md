@@ -32,19 +32,20 @@ GET  /overview                         {assets_total, by_zone, by_source, codes,
 
 ```
 GET   /assets                          q, source_has, source_missing, code, network_id, zone, port,
-                                       tag, criticality (Critical|High|Medium|Low|none), disc_status,
-                                       assignee, overdue, limit≤500 (200), offset
+                                       tag, criticality (Critical|High|Medium|Low|none), laps (yes|no),
+                                       disc_status, assignee, overdue, limit≤500 (200), offset
                                        → {total, items, facets|null}
                                        items: [{id, cluster: cluster|role|node|null, name, fqdn, domain, ip, os, network: {id, cidr, title,
                                        zone}|null, first_seen, last_seen, criticality, tags, pinned,
                                        sources: [{source, live, fresh, seen_at}], discrepancy_count, codes}]
                                        discrepancy_count, codes — только расхождения с учитываемым статусом
-                                       facets: {source, code, zone, criticality, disc_status, disc_overdue}
+                                       facets: {source, code, zone, criticality, laps: {yes, no}, disc_status,
+                                       disc_overdue}; laps — только активы с наблюдением AD
                                        — только при offset=0; code.any — активов хотя бы с одним
                                        расхождением; code считает расхождения под статусами фильтра
                                        (без disc_status — учитываемые)
                                        code: код ниже или any — хотя бы одно расхождение
-                                       неизвестное значение source_*/code/criticality/disc_status — 422
+                                       неизвестное значение source_*/code/criticality/laps/disc_status — 422
 GET   /assets/{id}                     + network_manual, note, merged_into, created_at, updated_at,
                                        observations: [{id, source, source_key, name, fqdn, domain, ip, ips,
                                        os, seen_at, gone_at, extra, marks: {поле: stale|conflict}}],

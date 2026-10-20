@@ -27,6 +27,9 @@ GET  /domains/{id}/overview            {domain, snapshot|null, compared_to,
                                         (analyzer_version не текущая) — у каждой проверки без находок
                                         и без своей причины unchecked «снапшот посчитан прежней
                                         версией анализатора (<версия>) — пересчитайте»
+GET  /domains/{id}/dc-links            [{name, asset_id, ips, in_ad_subnet, vm: {critical, exploitable} | null,
+                                        ksc_agent}] — контроллеры сводки последнего снапшота со
+                                        связками (ниже); нет снапшота или сводки — []; 404 — нет домена
 GET  /snapshots?domain_id              [{id, domain_id, collected_at, imported_at, source, collector, filename,
                                         objects, findings, by_severity, new, fixed, previous_id}]
 GET  /snapshots/{id}
@@ -83,6 +86,16 @@ BUCKETS: [{le: 30, n}, {le: 90, n}, {le: 180, n}, {le: 365, n}, {le: 730, n}, {l
 домена (`precedence: null`), если сборщик её прочитал, за ней PSO по приоритету.
 `links: null` — привязка GPO неизвестна (сборщик не читал gPLink); в `links` и выключенные
 ссылки. `site` подсети — имя сайта.
+
+Связки контроллеров (`dc-links`) читаются при запросе, не при анализе: имя контроллера
+(`name` и `dns` сводки, без учёта регистра) ищется в Assets (сначала по FQDN, потом по
+короткому имени), в хостах VM (короткое имя или FQDN) и в хостах последних снапшотов серверов
+KSC. `asset_id` и `ips` — актив и его адреса (адрес карточки и адреса живых наблюдений);
+`in_ad_subnet` — входит ли хоть один адрес в подсети `subnets` сводки (правило
+S-DC-SubnetMissing), `null` — адресов или подсетей нет; `vm` — число CVE хоста с риском от
+70 (`critical`) и CVE с известными эксплойтами (`exploitable`), статусы пар не учитываются,
+`null` — хоста в VM нет; `ksc_agent` — есть ли хост с этим именем в KSC, `null` — данных KSC
+нет. Сбой чтения чужого модуля даёт `null` в его поле, а не ошибку запроса.
 
 ## Данные центра сертификации
 

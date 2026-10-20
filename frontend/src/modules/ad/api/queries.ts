@@ -8,6 +8,7 @@ import type {
   CaData,
   Connection,
   ConnectionIn,
+  DcLink,
   Domain,
   FindingDetail,
   FindingsQuery,
@@ -61,6 +62,15 @@ export function useSummary(snapshotId: number | undefined) {
     queryFn: () => api.get(`/api/ad/snapshots/${snapshotId}/summary`),
     enabled: !!snapshotId,
     retry: (count, err) => err.status !== 409 && count < 1,
+  })
+}
+
+/** Контроллеры сводки, связанные с Assets, VM и антивирусом; читаются при показе. */
+export function useDcLinks(domainId: number | undefined) {
+  return useQuery<DcLink[], ApiRequestError>({
+    queryKey: ['ad-snapshots', 'dc-links', domainId],
+    queryFn: () => api.get(`/api/ad/domains/${domainId}/dc-links`),
+    enabled: !!domainId,
   })
 }
 

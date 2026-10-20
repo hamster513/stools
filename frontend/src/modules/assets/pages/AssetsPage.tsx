@@ -9,6 +9,8 @@ import {
   CODES,
   CRITICALITIES,
   CRITICALITY_LABELS,
+  LAPS_LABELS,
+  LAPS_VALUES,
   SOURCE_LABELS,
   SOURCES,
   type AssetItem,
@@ -18,6 +20,7 @@ import {
   type CodeFilter,
   type Criticality,
   type DiscrepancyCode,
+  type LapsFilter,
 } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
@@ -86,7 +89,7 @@ function networkIdsFrom(params: URLSearchParams): number[] | undefined {
   return ids?.length ? ids : undefined
 }
 
-type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'zone' | 'network_id'
+type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'laps' | 'zone' | 'network_id'
 
 const has = <T extends string | number>(list: readonly T[] | undefined, value: T) => list?.includes(value) ?? false
 
@@ -170,6 +173,12 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, por
       <FacetSection title="Критичность">
         {([...CRITICALITIES, 'none'] as const).map((c) => (
           <FacetRow key={c} active={has(filters.criticality, c)} count={facets?.criticality[c]} onClick={() => pick('criticality', c)}>{CRITICALITY_LABELS[c]}</FacetRow>
+        ))}
+      </FacetSection>
+      {/* Считаются только активы с наблюдением AD. */}
+      <FacetSection title="LAPS">
+        {LAPS_VALUES.map((v) => (
+          <FacetRow key={v} active={has(filters.laps, v)} count={facets?.laps[v]} onClick={() => pick('laps', v)}>{LAPS_LABELS[v]}</FacetRow>
         ))}
       </FacetSection>
       {zones.length > 0 && (
@@ -395,6 +404,7 @@ export function AssetsPage() {
     code: listFrom<CodeFilter>(params, 'code', ['any', ...CODES]),
     zone: fromWire(listFrom(params, 'zone')),
     criticality: listFrom<Criticality | 'none'>(params, 'criticality', [...CRITICALITIES, 'none']),
+    laps: listFrom<LapsFilter>(params, 'laps', LAPS_VALUES),
     network_id: networkIdsFrom(params),
   }))
   const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
@@ -452,6 +462,7 @@ export function AssetsPage() {
     ...valueChips('Источник есть', filters.source_has, (s) => SOURCE_LABELS[s], (v) => toggle('source_has', v)),
     ...valueChips('Источника нет', filters.source_missing, (s) => SOURCE_LABELS[s], (v) => toggle('source_missing', v)),
     ...valueChips('Критичность', filters.criticality, (c) => CRITICALITY_LABELS[c], (v) => toggle('criticality', v)),
+    ...valueChips('LAPS', filters.laps, (v) => LAPS_LABELS[v], (v) => toggle('laps', v)),
     ...valueChips('Зона', filters.zone, (z) => z, (v) => toggle('zone', v)),
     ...valueChips('Сеть', filters.network_id, (id) => networks.data?.find((n) => n.id === id)?.cidr ?? `#${id}`, (v) => toggle('network_id', v)),
   ]
