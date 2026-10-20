@@ -1,7 +1,7 @@
 """Threat Hunting: ханты, запросы, прогоны, большие ханты, находки, события; ключ настроек siem_kb -> siem_mp
 
 Revision ID: a7c3e91d5b24
-Revises: f0a1b2c3d4e5
+Revises: b3c4d5e6f7a8
 Create Date: 2026-10-19 12:00:00.000000
 
 Раздел «Охота» в SIEM хранит ханты с PDQL-запросами, ночные прогоны по
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a7c3e91d5b24"
-down_revision: str | Sequence[str] | None = "f0a1b2c3d4e5"
+down_revision: str | Sequence[str] | None = "b3c4d5e6f7a8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
