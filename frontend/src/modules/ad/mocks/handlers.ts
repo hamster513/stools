@@ -31,6 +31,20 @@ const CHECKS: CheckSummary[] = [
   check('ADCS_MAPPING', 'Привязка сертификатов к учётным записям (ESC10, 14)', 'Слабая привязка сертификата к учётной записи на контроллерах и слабые явные сопоставления.', 'pki', {}, 'ESC10 не проверен: нужен реестр контроллеров (сборщик, пункт 6)'),
 ]
 
+const WEIGHTS = { Critical: 40, High: 20, Medium: 10, Low: 3, Info: 0 }
+
+/** Та же формула, что backend/api/modules/ad/core/score.py: вес худшей находки проверки, сумма по категории до 100. */
+function score(): NonNullable<Overview['score']> {
+  const categories: NonNullable<Overview['score']>['categories'] = {}
+  for (const c of CHECKS) {
+    const cat = (categories[c.category ?? ''] ??= { title: c.category_title ?? '', score: 0, checks: [] })
+    const severity = (Object.keys(WEIGHTS) as (keyof typeof WEIGHTS)[]).find((s) => c.by_severity[s] > 0)
+    if (severity && WEIGHTS[severity] > 0) cat.checks.push({ code: c.code, severity, points: WEIGHTS[severity] })
+  }
+  for (const cat of Object.values(categories)) cat.score = Math.min(100, cat.checks.reduce((a, c) => a + c.points, 0))
+  return { total: Math.max(...Object.values(categories).map((c) => c.score)), categories }
+}
+
 function overview(domain: Domain): Overview {
   const by_severity = { ...NONE }
   for (const c of CHECKS) for (const [s, n] of Object.entries(c.by_severity)) by_severity[s as keyof typeof NONE] += n
@@ -44,6 +58,13 @@ function overview(domain: Domain): Overview {
       overdue: 0, risk_expiring: 0, unassigned: CHECKS.reduce((a, c) => a + c.total, 0),
     },
     checks: CHECKS,
+    score: score(),
+    score_history: [
+      { snapshot_id: 101, collected_at: '2026-08-31T09:00:00Z', total: 80 },
+      { snapshot_id: 102, collected_at: '2026-09-10T09:00:00Z', total: 60 },
+      { snapshot_id: 103, collected_at: '2026-09-20T09:00:00Z', total: 50 },
+      { snapshot_id: domain.last_snapshot_id ?? 1, collected_at: domain.last_snapshot_at ?? '2026-09-30T09:00:00Z', total: score().total },
+    ],
   }
 }
 

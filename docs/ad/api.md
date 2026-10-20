@@ -10,7 +10,10 @@ GET  /domains/{id}/overview            {domain, snapshot|null, compared_to,
                                         counted: {total, by_severity, statuses[]},
                                         summary: {by_status, overdue, risk_expiring, unassigned},
                                         checks: [{code, title, description, total, all, open, new, resolved,
-                                                  by_severity, unchecked}]}
+                                                  by_severity, unchecked}],
+                                        score: {total, categories: {<категория>: {title, score,
+                                                checks: [{code, severity, points}]}}},
+                                        score_history: [{snapshot_id, collected_at, total}]}
                                         snapshot: {id, collected_at, source, collector, objects, findings,
                                         by_severity, analyzer_version, stale_analysis}
                                         unchecked: null | причина — в выгрузке не было данных для проверки
@@ -39,6 +42,14 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 У проверки `all` — все её находки, `open` — открытые, `new` — появились в
 этом снапшоте, `resolved` — пропали с предыдущего. `summary` — счётчики
 статусов домена (вместе с отсутствующими в последнем снапшоте).
+
+`score` — живая оценка домена (формула — `checks.md`, «Оценка домена») по
+находкам последнего снапшота вне allowlist и в учитываемых статусах; категории в
+порядке реестра, у каждой — название, оценка и вклад проверок (`checks`, по
+убыванию баллов). `score_history` — «сырая» оценка, записанная при анализе
+(`ad_snapshot.score_json`: все находки вне allowlist, статусы не учитываются), по
+последним 30 снапшотам домена, старые первыми; снапшоты, посчитанные до
+появления оценки, пропускаются. У домена без снапшотов обоих полей нет.
 
 Сводка считается при анализе (импорт и пересчёт) из той же выгрузки и хранится
 в снапшоте; у снапшота, посчитанного до её появления (анализатор до версии 9), —
