@@ -42,6 +42,8 @@ SOURCES = ("vm", "ksc", "ad", "scan", "dns", "rt")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
 #: Фильтр и фасет LAPS: есть ли срок пароля LAPS у компьютера AD.
 LAPS = ("yes", "no")
+#: Фильтр и фасет «Кластер»: вид кластера Windows у компьютера AD (`extra.cluster`).
+CLUSTER_KINDS = ("cluster", "role", "node")
 #: Фильтр и фасет «хоть одно расхождение».
 ANY_CODE = "any"
 #: Расхождения — находки платформы статусов (`findings_adapter`): модуль и единственная область.
@@ -640,10 +642,11 @@ def _pick(
     tag: str | None = None,
     criticality: frozenset[str] | None = None,
     laps: frozenset[str] | None = None,
+    cluster: frozenset[str] | None = None,
 ) -> Picked:
     """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Многозначные фильтры —
     «любое из»: `source_has` — есть хоть один из источников, `source_missing` — нет хоть одного,
-    `criticality` `none` — не задана, `laps` — yes | no (актив без наблюдения AD не подходит ни под одно). Расхождения
+    `criticality` `none` — не задана, `laps` — yes | no (актив без наблюдения AD не подходит ни под одно), `cluster` — cluster | role | node. Расхождения
     считаются на лету, поэтому фильтры — в памяти; фильтр по расхождениям и их статусам — у
     вызывающего (`DiscFilter`). `with_found=False` — расхождения не считаются и остаются пустыми
     (выбор id для массового изменения без фильтра по расхождениям)."""
@@ -659,6 +662,7 @@ def _pick(
     ).tuples().all()) if need_observed else {}
     needle = (q or "").strip().lower()
     laps_of = laps_flags(db) if laps else {}
+    kind_of = cluster_kinds(db) if cluster else {}
 
     picked: Picked = []
     for asset in assets:
@@ -680,6 +684,8 @@ def _pick(
         if criticality is not None and not {asset.criticality or "none", asset.criticality or ""} & criticality:
             continue
         if laps and (asset.id not in laps_of or ("yes" if laps_of[asset.id] else "no") not in laps):
+            continue
+        if cluster and kind_of.get(asset.id) not in cluster:
             continue
         if needle and not _matches_query(asset, rows, needle):
             continue
@@ -779,8 +785,10 @@ def list_assets(
         "source": dict.fromkeys(SOURCES, 0), "code": dict.fromkeys((*CODES, ANY_CODE), 0), "zone": {},
         "criticality": dict.fromkeys([*CRITICALITY, "none"], 0),
         "disc_status": dict.fromkeys(STATUSES, 0), "disc_overdue": 0, "laps": dict.fromkeys(LAPS, 0),
+        "cluster": dict.fromkeys(CLUSTER_KINDS, 0),
     }
     laps_of = laps_flags(db)
+    clusters = cluster_kinds(db)
     for tracked in all_tracked:
         for t in tracked:
             if _hits(t, f, today, status=False):
@@ -801,10 +809,11 @@ def list_assets(
         facets["criticality"][asset.criticality or "none"] = facets["criticality"].get(asset.criticality or "none", 0) + 1
         if asset.id in laps_of:
             facets["laps"]["yes" if laps_of[asset.id] else "no"] += 1
+        if asset.id in clusters:
+            facets["cluster"][clusters[asset.id]] += 1
 
     picked.sort(key=lambda t: (t[0].name_key or normalize_fqdn(t[0].fqdn) or "~", t[0].ip, t[0].id))
     stale_days = int(settings["stale_days"])
-    clusters = cluster_kinds(db)
     page = [
         _item(asset, rows, tracked, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days, counted, clusters.get(asset.id))
         for asset, rows, tracked in picked[offset : offset + limit]

@@ -194,6 +194,15 @@ export interface Summary {
   /** `links: null` — привязка неизвестна (сборщик не читал gPLink). */
   gpos: { name: string; dn: string; machine_disabled: boolean; user_disabled: boolean; links: { dn: string; enforced: boolean; disabled: boolean }[] | null }[]
   subnets: { name: string; site: string }[]
+  /** Кластеры Windows; у сводок, посчитанных до появления ключа, его нет — это пустые списки. */
+  clusters?: SummaryClusters
+}
+
+/** Кластеры сводки: роль — к кластеру по creatorSid его учётки; узлы к кластеру из AD не привязываются. */
+export interface SummaryClusters {
+  clusters: { name: string; dn: string; enabled: boolean; roles: { name: string; enabled: boolean }[]; roles_disabled: number }[]
+  orphan_roles: { name: string; enabled: boolean }[]
+  nodes: { name: string; dns: string; os: string }[]
 }
 
 /**

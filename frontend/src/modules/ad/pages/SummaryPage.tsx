@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { ArrowRight, RefreshCw, ServerCog } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useDcLinks, useOverview, useSummary } from '@/modules/ad/api/queries'
-import type { DcLink, Summary, SummaryBucket, SummaryCounts } from '@/modules/ad/api/types'
+import type { DcLink, Summary, SummaryBucket, SummaryClusters, SummaryCounts } from '@/modules/ad/api/types'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -35,6 +35,17 @@ const DC_COLUMNS: ColumnDef<'name' | 'dns' | 'os' | 'build' | 'rodc' | 'logon' |
   { key: 'subnet', label: 'Подсеть AD', width: 104 },
   { key: 'vm', label: 'Уязвимости (VM)', width: 176 },
   { key: 'av', label: 'Антивирус', width: 88 },
+]
+const CLUSTER_COLUMNS: ColumnDef<'name' | 'enabled' | 'roles' | 'disabled'>[] = [
+  { key: 'name', label: 'Кластер', width: 180 },
+  { key: 'enabled', label: 'Включён', width: 88 },
+  { key: 'roles', label: 'Роли', width: 320, flex: true },
+  { key: 'disabled', label: 'Выключенных ролей', width: 144, align: 'right' },
+]
+const NODE_COLUMNS: ColumnDef<'name' | 'dns' | 'os'>[] = [
+  { key: 'name', label: 'Имя', width: 160 },
+  { key: 'dns', label: 'DNS', width: 220, flex: true },
+  { key: 'os', label: 'ОС', width: 220 },
 ]
 const GROUP_COLUMNS: ColumnDef<'name' | 'members' | 'enabled' | 'inactive' | 'never' | 'delegable' | 'protected'>[] = [
   { key: 'name', label: 'Группа', width: 220, flex: true },
@@ -233,6 +244,44 @@ function Gpos({ gpos }: { gpos: Summary['gpos'] }) {
   )
 }
 
+function roleNames(roles: { name: string; enabled: boolean }[]): ReactNode {
+  if (roles.length === 0) return '—'
+  return roles.map((r, i) => (
+    <span key={r.name}>{i > 0 && ', '}<span className="text-text">{r.name}</span>{!r.enabled && <span className="text-risk-high"> (выкл.)</span>}</span>
+  ))
+}
+
+function Clusters({ c }: { c: SummaryClusters }) {
+  return (
+    <Section title="Кластеры Windows" about="Кластеры отказоустойчивости по SPN компьютеров: учётка кластера, роли (виртуальные имена) и узлы. Роль относится к кластеру, учётка которого её создала (ms-DS-CreatorSID); выключенная роль, вероятно, брошена.">
+      <div className="flex flex-col gap-3">
+        {c.clusters.length > 0 && (
+          <Table
+            storageKey="ad-summary-clusters"
+            columns={CLUSTER_COLUMNS}
+            rows={c.clusters.map((k) => ({
+              key: k.dn,
+              cells: { name: <span className="text-text">{k.name}</span>, enabled: k.enabled ? 'да' : <span className="text-risk-high">нет</span>, roles: roleNames(k.roles), disabled: num(k.roles_disabled) },
+            }))}
+          />
+        )}
+        {c.orphan_roles.length > 0 && <p className="text-xs text-text-secondary">Роли без кластера: {roleNames(c.orphan_roles)}</p>}
+        {c.nodes.length > 0 && (
+          <div>
+            <h3 className="mb-1 text-xs font-semibold text-text">Узлы</h3>
+            <p className="mb-2 text-xs text-text-secondary">узлы к кластеру из AD не привязываются</p>
+            <Table
+              storageKey="ad-summary-cluster-nodes"
+              columns={NODE_COLUMNS}
+              rows={c.nodes.map((n) => ({ key: n.name, cells: { name: <span className="text-text">{n.name}</span>, dns: <span className="break-all">{n.dns || '—'}</span>, os: n.os || '—' } }))}
+            />
+          </div>
+        )}
+      </div>
+    </Section>
+  )
+}
+
 /** Ячейки связок контроллера; пока связки грузятся или не пришли — «—». */
 function dcLinkCells(l: DcLink | undefined) {
   return {
@@ -249,6 +298,7 @@ function dcLinkCells(l: DcLink | undefined) {
 function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
   const { users, computers } = s.accounts
   const links = useDcLinks(domainId)
+  const clusters = s.clusters
   return (
     <div className="flex flex-col gap-4">
       {users.total + computers.total > 0 && (
@@ -288,6 +338,8 @@ function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
           />
         </Section>
       )}
+
+      {clusters && clusters.clusters.length + clusters.orphan_roles.length + clusters.nodes.length > 0 && <Clusters c={clusters} />}
 
       {s.groups.length > 0 && (
         <Section title="Привилегированные группы" about="Участников — все рекурсивные участники (пользователи и компьютеры), остальные столбцы — по включённым пользователям-участникам. Делегируемые — без флага «учётная запись важна и не может быть делегирована». Название ведёт в находки по группе.">

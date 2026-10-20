@@ -4,6 +4,7 @@ import { ApiRequestError } from '@/api/client'
 import { useAssetIds, useAssets, useBulkDelete, useBulkUpdate, useDiscrepancyBulk, useNetworks } from '@/modules/assets/api/queries'
 import {
   ANY_CODE_LABEL,
+  CLUSTER_KINDS,
   CLUSTER_LABELS,
   CODE_LABELS,
   CODES,
@@ -17,6 +18,7 @@ import {
   type AssetsFacets,
   type AssetSource,
   type AssetsQuery,
+  type ClusterKind,
   type CodeFilter,
   type Criticality,
   type DiscrepancyCode,
@@ -89,7 +91,7 @@ function networkIdsFrom(params: URLSearchParams): number[] | undefined {
   return ids?.length ? ids : undefined
 }
 
-type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'laps' | 'zone' | 'network_id'
+type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'laps' | 'cluster' | 'zone' | 'network_id'
 
 const has = <T extends string | number>(list: readonly T[] | undefined, value: T) => list?.includes(value) ?? false
 
@@ -179,6 +181,11 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, por
       <FacetSection title="LAPS">
         {LAPS_VALUES.map((v) => (
           <FacetRow key={v} active={has(filters.laps, v)} count={facets?.laps[v]} onClick={() => pick('laps', v)}>{LAPS_LABELS[v]}</FacetRow>
+        ))}
+      </FacetSection>
+      <FacetSection title="Кластер">
+        {CLUSTER_KINDS.map((v) => (
+          <FacetRow key={v} active={has(filters.cluster, v)} count={facets?.cluster[v]} onClick={() => pick('cluster', v)}>{CLUSTER_LABELS[v]}</FacetRow>
         ))}
       </FacetSection>
       {zones.length > 0 && (
@@ -405,6 +412,7 @@ export function AssetsPage() {
     zone: fromWire(listFrom(params, 'zone')),
     criticality: listFrom<Criticality | 'none'>(params, 'criticality', [...CRITICALITIES, 'none']),
     laps: listFrom<LapsFilter>(params, 'laps', LAPS_VALUES),
+    cluster: listFrom<ClusterKind>(params, 'cluster', CLUSTER_KINDS),
     network_id: networkIdsFrom(params),
   }))
   const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
@@ -463,6 +471,7 @@ export function AssetsPage() {
     ...valueChips('Источника нет', filters.source_missing, (s) => SOURCE_LABELS[s], (v) => toggle('source_missing', v)),
     ...valueChips('Критичность', filters.criticality, (c) => CRITICALITY_LABELS[c], (v) => toggle('criticality', v)),
     ...valueChips('LAPS', filters.laps, (v) => LAPS_LABELS[v], (v) => toggle('laps', v)),
+    ...valueChips('Кластер', filters.cluster, (v) => CLUSTER_LABELS[v], (v) => toggle('cluster', v)),
     ...valueChips('Зона', filters.zone, (z) => z, (v) => toggle('zone', v)),
     ...valueChips('Сеть', filters.network_id, (id) => networks.data?.find((n) => n.id === id)?.cidr ?? `#${id}`, (v) => toggle('network_id', v)),
   ]

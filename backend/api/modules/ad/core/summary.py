@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 from api.modules.ad.core.checks.account_flags import UAC_NOT_DELEGATED, UAC_PASSWD_NOTREQD
+from api.modules.ad.core.checks.clusters import CLUSTER, NODE, ROLE, cluster_kind
 from api.modules.ad.core.checks.common import days_between
 from api.modules.ad.core.checks.domain import PWD_COMPLEX, PWD_STORE_CLEARTEXT
 from api.modules.ad.core.checks.groups import privileged_groups
@@ -204,6 +205,43 @@ def _subnets(idx: ExportIndex) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: r["name"])
 
 
+def _clusters(idx: ExportIndex) -> dict[str, Any]:
+    """Кластеры Windows по тем же правилам, что находки Clusters: роль — к кластеру по creatorSid
+    его учётки; узлы к кластеру из AD не привязываются."""
+    by_kind: dict[str, list[AdObject]] = {CLUSTER: [], ROLE: [], NODE: []}
+    for c in idx.objects("computer"):
+        if (kind := cluster_kind(c.spn)) is not None:
+            by_kind[kind].append(c)
+
+    def name(o: AdObject) -> str:
+        return o.name or o.rdn_value
+
+    def ordered(objs: list[AdObject]) -> list[AdObject]:
+        return sorted(objs, key=lambda o: name(o).lower())
+
+    cluster_dns = {c.dn for c in by_kind[CLUSTER]}
+    roles_of: dict[str, list[AdObject]] = {}
+    orphans = []
+    for r in by_kind[ROLE]:
+        owner = idx.by_sid.get(r.creatorSid or "")
+        if owner is not None and owner.dn in cluster_dns:
+            roles_of.setdefault(owner.dn, []).append(r)
+        else:
+            orphans.append(r)
+    return {
+        "clusters": [
+            {
+                "name": name(c), "dn": c.dn, "enabled": c.enabled,
+                "roles": [{"name": name(r), "enabled": r.enabled} for r in ordered(roles_of.get(c.dn, []))],
+                "roles_disabled": sum(not r.enabled for r in roles_of.get(c.dn, [])),
+            }
+            for c in ordered(by_kind[CLUSTER])
+        ],
+        "orphan_roles": [{"name": name(r), "enabled": r.enabled} for r in ordered(orphans)],
+        "nodes": [{"name": name(n), "dns": n.dNSHostName or "", "os": n.operatingSystem or ""} for n in ordered(by_kind[NODE])],
+    }
+
+
 def build_summary(idx: ExportIndex, cfg: AdConfig) -> dict[str, Any]:
     users = idx.objects("user")
     computers = idx.objects("computer")
@@ -230,4 +268,5 @@ def build_summary(idx: ExportIndex, cfg: AdConfig) -> dict[str, Any]:
         "password_policies": _password_policies(idx),
         "gpos": _gpos(idx),
         "subnets": _subnets(idx),
+        "clusters": _clusters(idx),
     }

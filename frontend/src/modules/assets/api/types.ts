@@ -79,6 +79,7 @@ export interface AssetNetwork {
 
 /** Признак кластера Windows из наблюдения AD: учётка кластера и роль — виртуальные имена, не хосты. */
 export type ClusterKind = 'cluster' | 'role' | 'node'
+export const CLUSTER_KINDS: ClusterKind[] = ['cluster', 'role', 'node']
 export const CLUSTER_LABELS: Record<ClusterKind, string> = {
   cluster: 'кластер',
   role: 'роль кластера',
@@ -112,6 +113,8 @@ export interface AssetsFacets {
   criticality: Record<Criticality | 'none', number>
   /** Только активы с наблюдением AD. */
   laps: Record<LapsFilter, number>
+  /** Только активы с признаком кластера в наблюдении AD. */
+  cluster: Record<ClusterKind, number>
   /** Расхождения по статусам — без фильтра статуса. */
   disc_status: Record<FindingStatus, number>
   /** Просроченные расхождения — без фильтра статуса и срока. */
@@ -136,6 +139,7 @@ export interface AssetsQuery {
   tag?: string
   criticality?: (Criticality | 'none')[]
   laps?: LapsFilter[]
+  cluster?: ClusterKind[]
   /** Статусы расхождений (ключ повторяется); без него — учитываемые в подсчётах. */
   disc_status?: string[]
   /** Исполнитель расхождения: `me`, `none` или логин; несколько — «ИЛИ». */

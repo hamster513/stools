@@ -68,7 +68,9 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
  trusts: [{partner, flat_name, direction, type, within_forest, changed}]
  password_policies: [{name, min_length, lockout_threshold, complexity, reversible, precedence}]
  gpos: [{name, dn, machine_disabled, user_disabled, links: [{dn, enforced, disabled}] | null}]
- subnets: [{name, site}]}
+ subnets: [{name, site}],
+ clusters: {clusters: [{name, dn, enabled, roles: [{name, enabled}], roles_disabled}],
+            orphan_roles: [{name, enabled}], nodes: [{name, dns, os}]}}
 COUNTS:  total, enabled, disabled, active, inactive, pwd_never_expires, pwd_not_required,
          no_preauth, sid_history, delegation, laps (у пользователей 0)
 BUCKETS: [{le: 30, n}, {le: 90, n}, {le: 180, n}, {le: 365, n}, {le: 730, n}, {le: 1095, n}, {le: null, n}]
@@ -85,7 +87,11 @@ BUCKETS: [{le: 30, n}, {le: 90, n}, {le: 180, n}, {le: 365, n}, {le: 730, n}, {l
 объекта, `""` — дескриптор не прочитан. Первая строка `password_policies` — политика
 домена (`precedence: null`), если сборщик её прочитал, за ней PSO по приоритету.
 `links: null` — привязка GPO неизвестна (сборщик не читал gPLink); в `links` и выключенные
-ссылки. `site` подсети — имя сайта.
+ссылки. `site` подсети — имя сайта. `clusters` — кластеры Windows по тем же правилам, что
+находки Clusters (вид по SPN компьютера): роль привязана к кластеру по `creatorSid` его
+учётки, роли без такого создателя — в `orphan_roles`; узлы к кластеру из AD не
+привязываются. Списки по имени; у снапшотов, посчитанных до появления ключа, его нет —
+это пустые списки.
 
 Связки контроллеров (`dc-links`) читаются при запросе, не при анализе: имя контроллера
 (`name` и `dns` сводки, без учёта регистра) ищется в Assets (сначала по FQDN, потом по

@@ -158,6 +158,30 @@ def test_laps_filter_and_facet(analyst: TestClient, db_session: Session, app_set
     assert analyst.get("/api/assets/assets", params={"laps": "maybe"}).status_code == 422
 
 
+
+def test_cluster_filter_and_facet(analyst: TestClient, db_session: Session, app_settings: Any) -> None:
+    """Фасет «Кластер» считает активы с видом кластера из наблюдения AD; фильтр cluster | role | node — по нему же."""
+    from tests.assets.synthetic import computer, load_ad
+
+    now = dt.datetime.now(dt.UTC)
+    load_ad(db_session, Path(app_settings.data_dir), [
+        {**computer("CLUSTER01$", 1301, last_logon=now - dt.timedelta(days=1), os_name=""), "spn": ["MSServerCluster/CLUSTER01"]},
+        {**computer("SQLROLE1$", 1302, last_logon=now - dt.timedelta(days=1), os_name=""), "spn": ["MSClusterVirtualServer/SQLROLE1"]},
+        {**computer("NODE01$", 1303, last_logon=now - dt.timedelta(days=1)), "spn": ["MSServerClusterMgmtAPI/NODE01"]},
+        computer("WS01$", 1201, last_logon=now - dt.timedelta(days=3)),
+    ], now)
+    assert analyst.post("/api/assets/sync").status_code == 202
+    body = analyst.get("/api/assets/assets").json()
+    assert body["facets"]["cluster"] == {"cluster": 1, "role": 1, "node": 1}
+    assert names(analyst.get("/api/assets/assets", params={"cluster": "cluster"}).json()) == {"cluster01"}
+    assert names(analyst.get("/api/assets/assets", params={"cluster": "node"}).json()) == {"node01"}
+    assert names(analyst.get("/api/assets/assets", params=[("cluster", "cluster"), ("cluster", "role")]).json()) == {"cluster01", "sqlrole1"}
+    assert analyst.get("/api/assets/assets/ids", params={"cluster": "role"}).json()["total"] == 1
+    export = analyst.get("/api/assets/assets/export", params={"cluster": "node", "format": "csv"})
+    assert export.status_code == 200 and "NODE01" in export.text.upper() and "CLUSTER01" not in export.text.upper()
+    assert analyst.get("/api/assets/assets", params={"cluster": "host"}).status_code == 422
+
+
 def test_delete_single_and_bulk(analyst: TestClient) -> None:
     ws01, srv01, old01 = (by_name(analyst, n)["id"] for n in ("ws01", "srv01", "old01"))
     assert analyst.delete(f"/api/assets/assets/{ws01}").status_code == 204

@@ -119,3 +119,35 @@ def test_old_export_without_new_fields() -> None:
     assert s["gpos"][0]["links"] is None
     assert s["trusts"] == [] and s["subnets"] == [] and s["password_policies"] == []
     assert s["os"] == [{"name": "", "build": "", "total": 2, "enabled": 2, "active": 2}]
+
+
+def test_clusters_block() -> None:
+    """Роль привязана к кластеру по creatorSid учётки кластера; чужой создатель — роль без кластера; узлы отдельно."""
+    export = mini_export([
+        computer("CLUSTER01", 1301, spn=["MSServerCluster/CLUSTER01"]),
+        computer("SQLROLE1", 1302, spn=["MSClusterVirtualServer/SQLROLE1"], creatorSid=rid(1301)),
+        computer("FSROLE1", 1303, spn=["MSClusterVirtualServer/FSROLE1"], creatorSid=rid(1301), uac=4098),
+        computer("LOSTROLE1", 1304, spn=["MSClusterVirtualServer/LOSTROLE1"], creatorSid="S-1-5-21-9-9-9-1105"),
+        computer("NODE02", 1306, spn=["MSServerClusterMgmtAPI/NODE02"], operatingSystem="Windows Server 2022 Standard"),
+        computer("NODE01", 1305, spn=["MSServerClusterMgmtAPI/NODE01"], dNSHostName="node01.corp.local",
+                 operatingSystem="Windows Server 2019 Datacenter"),
+        computer("WS1", 1201, spn=["HOST/ws1"]),
+    ])
+    s = build_summary(ExportIndex(export), AdConfig())
+    assert s["version"] == 1
+    assert s["clusters"] == {
+        "clusters": [{
+            "name": "CLUSTER01", "dn": f"CN=CLUSTER01,CN=Computers,{DN}", "enabled": True,
+            "roles": [{"name": "FSROLE1", "enabled": False}, {"name": "SQLROLE1", "enabled": True}], "roles_disabled": 1,
+        }],
+        "orphan_roles": [{"name": "LOSTROLE1", "enabled": True}],
+        "nodes": [
+            {"name": "NODE01", "dns": "node01.corp.local", "os": "Windows Server 2019 Datacenter"},
+            {"name": "NODE02", "dns": "node02.corp.local", "os": "Windows Server 2022 Standard"},
+        ],
+    }
+
+
+def test_clusters_block_empty_without_cluster_spn() -> None:
+    s = build_summary(ExportIndex(mini_export([computer("WS1", 1201, spn=["HOST/ws1"]), dc("DC1", 1000)])), AdConfig())
+    assert s["clusters"] == {"clusters": [], "orphan_roles": [], "nodes": []}

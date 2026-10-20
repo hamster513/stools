@@ -127,6 +127,17 @@ const SUMMARY: Summary = {
     { name: '10.10.0.0/16', site: 'Default-First-Site-Name' },
     { name: '10.20.0.0/24', site: 'Branch' },
   ],
+  clusters: {
+    clusters: [{
+      name: 'CLUSTER01', dn: 'CN=CLUSTER01,OU=Servers,DC=corp,DC=local', enabled: true,
+      roles: [{ name: 'FSROLE1', enabled: false }, { name: 'SQLROLE1', enabled: true }], roles_disabled: 1,
+    }],
+    orphan_roles: [{ name: 'LOSTROLE1', enabled: true }],
+    nodes: [
+      { name: 'NODE01', dns: 'node01.corp.local', os: 'Windows Server 2022 Standard' },
+      { name: 'NODE02', dns: 'node02.corp.local', os: 'Windows Server 2022 Standard' },
+    ],
+  },
 }
 
 const DEFAULTS: AdConfig = {
