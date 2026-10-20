@@ -58,8 +58,8 @@ def night(db: Any) -> ThRun:
 
 
 def seed_night(db: Any, fake: FakeEvents) -> ThRun:
-    add_hunt(db, "TH-WIN-001", [("Q1", "q-one"), ("Q2", "q-two")], age_days=2, labels=["Время", "Узел"])
-    add_hunt(db, "TH-WIN-002", [("Q1", "q-three")], age_days=1)
+    add_hunt(db, "TH-WIN-001", [("Q1", "q-one"), ("Q2", "q-two")], labels=["Время", "Узел"])
+    add_hunt(db, "TH-WIN-002", [("Q1", "q-three")])
     fake.events_by_query["q-two"] = events(3)
     fake.events_by_query["q-three"] = events(2, host="ws-0002")
     return night(db)

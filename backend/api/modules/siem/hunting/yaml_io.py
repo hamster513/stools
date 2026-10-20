@@ -23,6 +23,7 @@ from api.modules.siem.hunting.library import (
     hunt_by_code,
     hunt_queries,
     list_hunts,
+    next_position,
     query_view,
     revive_hunt,
     stored_view,
@@ -131,7 +132,7 @@ def apply_import(db: Session, hunts: list[HuntIn], replace: set[str], login: str
             existing = hunt_by_code(db, data.code.strip())
             row = _classify(existing, data, db)
             if row.action == "new":
-                hunt = ThHunt(code=row.code, enabled=True)
+                hunt = ThHunt(code=row.code, enabled=True, position=next_position(db))
                 apply_head(hunt, data, login)
                 db.add(hunt)
                 db.flush()

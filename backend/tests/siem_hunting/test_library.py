@@ -77,6 +77,7 @@ def test_bad_technique_rejected(db_session):
 
 
 def test_update_replaces_queries_by_query_id(db_session):
+    create_hunt(db_session, _hunt("TH-WIN-000"), LOGIN)
     hunt = create_hunt(db_session, _hunt(queries=[_q("Q1"), _q("Q2"), _q("Q3")]), LOGIN)
     before = {q.query_id: q.id for q in hunt_queries(db_session, hunt)}
     data = _hunt(
@@ -89,6 +90,7 @@ def test_update_replaces_queries_by_query_id(db_session):
     hunt = hunt_by_code(db_session, "TH-WIN-001")
     assert hunt is not None
     assert (hunt.name, hunt.enabled, hunt.updated_by) == ("Новое имя", False, "editor")
+    assert hunt.position == 1  # правка не двигает хант в очереди
     queries = {q.query_id: q for q in hunt_queries(db_session, hunt)}
     assert list(queries) == ["Q2", "Q4"]  # Q1 и Q3 убраны правкой из интерфейса
     assert queries["Q2"].id == before["Q2"]  # тот же запрос, а не новый

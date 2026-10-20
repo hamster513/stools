@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from api.db.models import AppSetting
 from api.jobs import JobHandle, run_job, start_job
+from api.modules.siem.hunting.library import next_position
 from api.modules.siem.hunting.models import (
     ThEvent,
     ThFinding,
@@ -77,15 +78,15 @@ def set_th(db: Any, **values: Any) -> ThSettings:
     return data
 
 
-def add_hunt(db: Any, code: str, queries: list[tuple[str, str]], *, age_days: int = 0, enabled: bool = True,
+def add_hunt(db: Any, code: str, queries: list[tuple[str, str]], *, position: int | None = None, enabled: bool = True,
              fields: list[str] | None = None, labels: list[str] | None = None, limit: int | None = None) -> ThHunt:
-    """Хант с запросами `(query_id, условие)`; `age_days` — насколько раньше создан (порядок очереди)."""
-    hunt = ThHunt(code=code, name=code, enabled=enabled, created_at=T0 + dt.timedelta(days=100 - age_days))
+    """Хант с запросами `(query_id, условие)`; `position` — место в очереди (по умолчанию в конец, как у нового)."""
+    hunt = ThHunt(code=code, name=code, enabled=enabled, position=next_position(db) if position is None else position)
     db.add(hunt)
     db.flush()
     fields = fields or ["time", "event_src.host"]
-    for position, (qid, text) in enumerate(queries):
-        db.add(ThQuery(hunt_id=hunt.id, query_id=qid, position=position, query=text,
+    for index, (qid, text) in enumerate(queries):
+        db.add(ThQuery(hunt_id=hunt.id, query_id=qid, position=index, query=text,
                        fields_json=json.dumps(fields), labels_json=json.dumps(labels or fields), limit=limit))
     db.commit()
     return hunt
@@ -127,10 +128,11 @@ def test_window_is_pinned_to_schedule_not_start(db_session: Any, fake: FakeEvent
 
 
 def test_queue_order_and_resume(db_session: Any, fake: FakeEvents) -> None:
-    late = add_hunt(db_session, "TH-WIN-002", [("Q1", "q-late-1")], age_days=1)
-    early = add_hunt(db_session, "TH-WIN-001", [("Q1", "q-early-1"), ("Q2", "q-early-2"), ("Q3", "q-early-3")], age_days=5)
-    add_hunt(db_session, "TH-WIN-003", [("Q1", "q-off")], age_days=9, enabled=False)
-    gone = add_hunt(db_session, "TH-WIN-004", [("Q1", "q-gone")], age_days=9)
+    # Добавлен первым, но в очереди после TH-WIN-001: порядок — по месту, а не по добавлению.
+    late = add_hunt(db_session, "TH-WIN-002", [("Q1", "q-late-1")], position=5)
+    early = add_hunt(db_session, "TH-WIN-001", [("Q1", "q-early-1"), ("Q2", "q-early-2"), ("Q3", "q-early-3")], position=1)
+    add_hunt(db_session, "TH-WIN-003", [("Q1", "q-off")], position=0, enabled=False)
+    gone = add_hunt(db_session, "TH-WIN-004", [("Q1", "q-gone")], position=0)
     gone.deleted_at = T0
     off = db_session.scalar(select(ThQuery).where(ThQuery.query == "q-early-3"))
     off.enabled = False
@@ -162,9 +164,8 @@ def test_queue_order_and_resume(db_session: Any, fake: FakeEvents) -> None:
 
 
 def test_run_persists_findings_and_history(db_session: Any, fake: FakeEvents) -> None:
-    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-one"), ("Q2", "q-two")], age_days=2,
-             labels=["Время", "Узел"])
-    add_hunt(db_session, "TH-WIN-002", [("Q1", "q-three")], age_days=1)
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-one"), ("Q2", "q-two")], labels=["Время", "Узел"])
+    add_hunt(db_session, "TH-WIN-002", [("Q1", "q-three")])
     fake.events_by_query["q-two"] = events(7)
     r = create_run(db_session, NIGHT, ThSettings(), TZ)
     sleeper = run(db_session, r.id)
@@ -183,8 +184,8 @@ def test_run_persists_findings_and_history(db_session: Any, fake: FakeEvents) ->
     assert json.loads(rows[0].data_json) == {"time": "2026-10-18T00:00:00Z", "event_src.host": "ws-0001"}
     q2 = db_session.scalar(select(ThRunQuery).where(ThRunQuery.query_id == "Q2"))
     assert q2.events == 7 and q2.finding_id == finding.id and q2.duration_ms is not None
-    # Пауза только между запросами: (M − 1) × query_pause_s.
-    assert sleeper.calls == [30, 30]
+    # Пауза только между хантами: Q1 и Q2 ханта TH-WIN-001 подряд, перед TH-WIN-002 — hunt_pause_s.
+    assert sleeper.calls == [30]
 
 
 def test_missing_fields_are_blank(db_session: Any, fake: FakeEvents) -> None:
@@ -208,8 +209,8 @@ def test_500_retries_then_failed_and_run_continues(db_session: Any, fake: FakeEv
     fake.status_once["q-flaky"] = [500, 500]
     r = create_run(db_session, NIGHT, ThSettings(), TZ)
     sleeper = run(db_session, r.id)
-    # Ожидание кусками не длиннее 30 с: 10 мин + 20 мин повторов и пауза между запросами.
-    assert sum(sleeper.calls) == 600 + 1200 + 30 and max(sleeper.calls) <= 30
+    # Ожидание кусками не длиннее 30 с: 10 мин + 20 мин повторов; запросы одного ханта — без паузы.
+    assert sum(sleeper.calls) == 600 + 1200 and max(sleeper.calls) <= 30
     assert history(db_session, r.id) == [("TH-WIN-001", "Q1", "ok"), ("TH-WIN-001", "Q2", "ok")]
     assert db_session.get(ThRun, r.id).findings == 1
 
@@ -218,7 +219,7 @@ def test_500_retries_then_failed_and_run_continues(db_session: Any, fake: FakeEv
     fake.calls.clear()
     r2 = create_run(db_session, NIGHT + dt.timedelta(days=1), ThSettings(), TZ)
     sleeper = run(db_session, r2.id)
-    assert sum(sleeper.calls) == 600 + 1200 + 1800 * 5 + 30 and max(sleeper.calls) <= 30
+    assert sum(sleeper.calls) == 600 + 1200 + 1800 * 5 and max(sleeper.calls) <= 30
     assert len(fake.calls) == 9
     assert history(db_session, r2.id) == [("TH-WIN-001", "Q1", "failed"), ("TH-WIN-001", "Q2", "ok")]
     failed = db_session.scalar(select(ThRunQuery).where(ThRunQuery.run_id == r2.id, ThRunQuery.query_id == "Q1"))
@@ -247,8 +248,9 @@ def test_401_aborts_run(db_session: Any, fake: FakeEvents) -> None:
     assert all(TOKEN not in (row.error or "") and "corp.local" not in (row.error or "") for row in rows)
 
 
-def test_cancel_between_queries(db_session: Any, fake: FakeEvents) -> None:
-    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a"), ("Q2", "q-b")])
+def test_cancel_between_hunts(db_session: Any, fake: FakeEvents) -> None:
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a")])
+    add_hunt(db_session, "TH-WIN-002", [("Q1", "q-b")])
     r = create_run(db_session, NIGHT, ThSettings(), TZ)
     run_id = r.id
     job_id = start_job(db_session, ThJob, "nightly", "t")
@@ -266,13 +268,14 @@ def test_cancel_between_queries(db_session: Any, fake: FakeEvents) -> None:
 
 def test_deadline_skips_rest(db_session: Any, fake: FakeEvents) -> None:
     set_th(db_session, nightly_deadline_h=2)
-    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a"), ("Q2", "q-b"), ("Q3", "q-c")])
+    add_hunt(db_session, "TH-WIN-001", [("Q1", "q-a")])
+    add_hunt(db_session, "TH-WIN-002", [("Q1", "q-b"), ("Q2", "q-c")])
     r = create_run(db_session, NIGHT, ThSettings(), TZ)
     clock = Clock(WINDOW_END + dt.timedelta(minutes=10))
-    # Пауза после первого запроса «длится» 3 часа: ночь вышла за предел.
+    # Пауза после первого ханта «длится» 3 часа: ночь вышла за предел.
     run(db_session, r.id, sleeper=Sleeper(clock, dt.timedelta(hours=3)), clock=clock)
     assert len(fake.calls) == 1
-    assert history(db_session, r.id) == [("TH-WIN-001", "Q1", "ok"), ("TH-WIN-001", "Q2", "skipped"), ("TH-WIN-001", "Q3", "skipped")]
+    assert history(db_session, r.id) == [("TH-WIN-001", "Q1", "ok"), ("TH-WIN-002", "Q1", "skipped"), ("TH-WIN-002", "Q2", "skipped")]
     skipped = db_session.scalars(select(ThRunQuery).where(ThRunQuery.status == "skipped")).all()
     assert {row.error for row in skipped} == {"не успели за ночь"}
     got = db_session.get(ThRun, r.id)
