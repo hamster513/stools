@@ -354,3 +354,119 @@ def test_host_profiles_case_insensitive_tag_non_tag_condition_and_by_tag(auth_cl
         {"policy_id": 1, "policy_name": "KES workstations", "profile": "Офис", "enabled": True},
         {"policy_id": 1, "policy_name": "KES workstations", "profile": "Спящий", "enabled": False},
     ]}]
+
+
+SID = "S-1-5-21-1111111111-2222222222-3333333333"
+
+
+def _user(rid: int, sam: str, *, active: bool, display_name: str = "", upn: str = "", group: bool = False, local: bool = False) -> dict[str, Any]:
+    return {"sid": f"{SID}-{rid}", "sam": sam, "upn": upn, "display_name": display_name, "domain": "lab.test", "local": local, "group": group, "active": active}
+
+
+def _store_users(db_session: Session, snapshot_id: int, users: dict[str, Any], owners: dict[str, Any] | None = None, *, collected: bool = True) -> None:
+    """Кладёт `users`/`owner`/`users_collected` в `extra_json` хостов снапшота так, как их пишет разбор выгрузки 1.4
+    (хосты вне `users` получают `users: null`)."""
+    rows = db_session.execute(text("select id, host_id, extra_json from ksc_host where snapshot_id = :sid"), {"sid": snapshot_id}).all()
+    for row_id, host_id, extra_json in rows:
+        extra = json.loads(extra_json or "{}")
+        extra.update({"users": users.get(host_id), "owner": (owners or {}).get(host_id), "users_collected": collected})
+        db_session.execute(text("update ksc_host set extra_json = :e where id = :i"), {"e": json.dumps(extra), "i": row_id})
+    db_session.commit()
+
+
+def _users_snapshot(auth_client: TestClient, db_session: Session) -> int:
+    assert upload(auth_client, build_export())["status"] == "done"
+    snap_id = auth_client.get("/api/ksc/snapshots").json()[0]["id"]
+    users = {
+        "h-ws01": [_user(1001, "LAB\\user01", active=True, display_name="Анна Иванова", upn="user01@lab.test"),
+                   _user(1002, "LAB\\user02", active=False, display_name="Пётр Сидоров"),
+                   _user(1003, "LAB\\Domain Users", active=True, group=True)],
+        "h-ws02": [],
+        "h-ws03": [_user(1002, "LAB\\user02", active=False), _user(0, "admin", active=False, local=True)],
+        "h-ws04": [_user(1004, "LAB\\user04", active=True, upn="User04@lab.test")],
+        "h-ws11": [_user(1003, "LAB\\Domain Users", active=True, group=True)],
+    }
+    owners = {"h-ws01": {"sid": f"{SID}-1001", "sam": "LAB\\user01", "display_name": "Анна Иванова"}, "h-ws03": {"owner_id": "AQUAAAAAAAUVAAAA"}}
+    _store_users(db_session, snap_id, users, owners)
+    return snap_id
+
+
+def test_hosts_users_in_items_and_card(auth_client: TestClient, db_session: Session) -> None:
+    snap_id = _users_snapshot(auth_client, db_session)
+    body = _hosts(auth_client)
+    assert body["users_collected"] is True
+    by_name = {h["name"]: h for h in body["items"]}
+    ws01 = by_name["WS01"]
+    assert ws01["users_collected"] is True and [(u["sam"], u["active"], u["group"]) for u in ws01["users"]] == [
+        ("LAB\\user01", True, False), ("LAB\\user02", False, False), ("LAB\\Domain Users", True, True)]
+    assert set(ws01["users"][0]) == {"sid", "sam", "upn", "display_name", "domain", "local", "group", "active"}
+    assert ws01["owner"] == {"sid": f"{SID}-1001", "sam": "LAB\\user01", "display_name": "Анна Иванова"}
+    assert by_name["WS02"]["users"] == [] and by_name["WS02"]["owner"] is None
+    # хост без ответа: секция собрана, у хоста null
+    assert by_name["WS05"]["users"] is None and by_name["WS05"]["users_collected"] is True
+    assert by_name["WS03"]["owner"] == {"owner_id": "AQUAAAAAAAUVAAAA"}
+    # пользователи не дублируются в extra
+    assert not {"users", "owner", "users_collected"} & set(ws01["extra"])
+    detail = auth_client.get(f"/api/ksc/snapshots/{snap_id}/hosts/h-ws01").json()
+    assert detail["users"] == ws01["users"] and detail["owner"] == ws01["owner"] and detail["users_collected"] is True
+    assert auth_client.get(f"/api/ksc/snapshots/{snap_id}/hosts/h-ws05").json()["users"] is None
+
+
+def test_hosts_users_not_collected_are_null(auth_client: TestClient, db_session: Session) -> None:
+    assert upload(auth_client, build_export())["status"] == "done"
+    snap_id = auth_client.get("/api/ksc/snapshots").json()[0]["id"]
+    # флаг сбора снят — даже если в строке остались данные, пользователи не показываются
+    _store_users(db_session, snap_id, {"h-ws01": [_user(1001, "LAB\\user01", active=True)]}, {"h-ws01": {"sam": "LAB\\user01"}}, collected=False)
+    body = _hosts(auth_client)
+    assert body["users_collected"] is False
+    assert all(h["users"] is None and h["owner"] is None and h["users_collected"] is False for h in body["items"])
+    assert body["facets"]["session"] == {"active": 0, "past": 0, "none": 0, "not_collected": 14}
+    assert _hosts(auth_client, "?session=not_collected")["total"] == 14 and _hosts(auth_client, "?session=active")["total"] == 0
+    assert _hosts(auth_client, "?user=user01")["total"] == 0 and _hosts(auth_client, "?q=user01")["total"] == 0
+    detail = auth_client.get(f"/api/ksc/snapshots/{snap_id}/hosts/h-ws01").json()
+    assert detail["users"] is None and detail["owner"] is None and detail["users_collected"] is False
+    # старая строка вообще без ключей
+    db_session.execute(text("update ksc_host set extra_json = '{}' where snapshot_id = :sid"), {"sid": snap_id})
+    db_session.commit()
+    assert _hosts(auth_client)["users_collected"] is False and _hosts(auth_client, "?session=not_collected")["total"] == 14
+
+
+def test_hosts_session_facet_and_filter(auth_client: TestClient, db_session: Session) -> None:
+    _users_snapshot(auth_client, db_session)
+    # группа в сеансах не считается: WS11 с одной группой — «никто», WS01 — активный пользователь
+    assert _hosts(auth_client)["facets"]["session"] == {"active": 2, "past": 1, "none": 2, "not_collected": 9}
+    names = lambda q: sorted(h["name"] for h in _hosts(auth_client, q)["items"])
+    assert names("?session=active") == ["WS01", "WS04"]
+    assert names("?session=past") == ["WS03"]
+    assert names("?session=none") == ["WS02", "WS11"]
+    assert names("?session=past&session=active") == ["WS01", "WS03", "WS04"]
+    assert _hosts(auth_client, "?session=not_collected")["total"] == 9
+    snap = auth_client.get("/api/ksc/snapshots").json()[0]
+    assert auth_client.get(f"/api/ksc/snapshots/{snap['id']}/hosts?session=bad").status_code == 422
+    # счётчики фасета считаются по отфильтрованному набору
+    assert _hosts(auth_client, "?session=active")["facets"]["session"] == {"active": 2, "past": 0, "none": 0, "not_collected": 0}
+
+
+def test_hosts_filter_and_search_by_user(auth_client: TestClient, db_session: Session) -> None:
+    _users_snapshot(auth_client, db_session)
+    names = lambda q: sorted(h["name"] for h in _hosts(auth_client, q)["items"])
+    # подстрока без учёта регистра: sam, upn, отображаемое имя; прошлые пользователи тоже
+    assert names("?user=USER02") == ["WS01", "WS03"]
+    assert names("?user=user04@LAB") == ["WS04"]
+    assert names("?user=иванова") == ["WS01"]
+    assert names("?user=admin") == ["WS03"]
+    assert names("?user=нет-такого") == []
+    # поиск q ищет и по пользователям хоста
+    assert names("?q=сидоров") == ["WS01"]
+    assert names("?q=user04") == ["WS04"]
+    assert names("?q=lab%5Cuser02") == ["WS01", "WS03"]
+    # фильтры сочетаются
+    assert names("?user=user02&session=active") == ["WS01"]
+    # обычный поиск по имени хоста не сломан
+    assert names("?q=srv") == ["SRV01"]
+
+
+def test_hosts_export_accepts_user_filters(auth_client: TestClient, db_session: Session) -> None:
+    snap_id = _users_snapshot(auth_client, db_session)
+    r = auth_client.get(f"/api/ksc/snapshots/{snap_id}/hosts/export?user=user04&session=active")
+    assert r.status_code == 200 and "WS04" in r.text and "WS01" not in r.text

@@ -127,6 +127,39 @@ export function vmTypeLabel(code: number): string {
   return VM_TYPE_LABELS[code] ?? 'неизвестно'
 }
 
+/** Пользователь устройства по данным KSC (сборщик 1.4); поля — как в выгрузке. */
+export interface HostUser {
+  /** Пустой у внутренних и локальных учёток без SID. */
+  sid: string
+  sam: string
+  upn: string
+  display_name: string
+  domain: string
+  local: boolean
+  /** Группа, а не пользователь: KSC отдаёт её в том же списке; в сеансах не считается. */
+  group: boolean
+  /** `true` — в системе на момент сбора; `false` — заходил раньше. */
+  active: boolean
+}
+
+/** Владелец устройства: без `sid`/`sam`/`display_name` (только `owner_id`) — владелец задан, но не в списке пользователей хоста. */
+export interface HostOwner {
+  sid?: string
+  sam?: string
+  display_name?: string
+  owner_id?: string
+}
+
+/** Сеансы хоста в фасете: идёт сеанс, заходили раньше, никто, не собрано. */
+export type HostSession = 'active' | 'past' | 'none' | 'not_collected'
+
+export const SESSION_LABELS: Record<HostSession, string> = {
+  active: 'в системе на момент сбора',
+  past: 'только заходили раньше',
+  none: 'никто не заходил',
+  not_collected: 'не собрано',
+}
+
 export interface Host {
   id: number
   host_id: string
@@ -157,6 +190,12 @@ export interface Host {
   findings: number
   /** `null` — сборщик не присылал теги; `[]` — теги собраны, у хоста их нет. */
   tags: string[] | null
+  /** `null` — не собрано (сборщик до 1.4 или запрос по этому хосту отказал, см. `users_collected`); `[]` — никто не заходил. */
+  users: HostUser[] | null
+  /** Секция пользователей была в выгрузке снапшота. */
+  users_collected: boolean
+  /** `null` — владелец не задан или не собран (`users_collected: false`). */
+  owner: HostOwner | null
 }
 
 /** Состояние компонента защиты в фильтре хостов: `none` — у хоста нет такого компонента. */
@@ -179,6 +218,10 @@ export interface HostsQuery {
   component_state?: ComponentState
   /** Теги; `-` — хосты без тегов. */
   tag?: string[]
+  /** Сеансы по данным KSC; внутри фасета «ИЛИ». */
+  session?: HostSession[]
+  /** Подстрока без учёта регистра в учётной записи, UPN или имени пользователя хоста. */
+  user?: string
   /** Хосты групп, где действует политика. */
   policy?: number
   q?: string
@@ -202,9 +245,12 @@ export interface HostsResponse {
     component: Record<string, { on: number; off: number; other: number }>
     /** Нет в ответе, если теги не собраны. */
     tag?: Record<string, number>
+    session: Record<HostSession, number>
   } | null
   /** В выгрузке снапшота была секция тегов. */
   tags_collected: boolean
+  /** В выгрузке снапшота была секция пользователей устройств. */
+  users_collected: boolean
 }
 
 /** Политика, действующая на хост (по группе хоста). */

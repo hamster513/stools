@@ -52,6 +52,10 @@ COMPONENT_STATES = ("on", "off", "other", "none")
 #: Худшее состояние побеждает, если хост перечисляет компонент дважды (две версии продукта): выключен > прочее > работает.
 _COMPONENT_RANK = {"on": 0, "other": 1, "off": 2}
 NO_TAGS = "-"
+#: Сеансы хоста для фасета: идёт сеанс; заходили раньше; никто (в том числе только группы); пользователи не собраны.
+SESSIONS = ("active", "past", "none", "not_collected")
+#: Ключи пользователей и владельца в `extra_json`: в `extra` ответа не повторяются, отдаются полями `users`, `owner`, `users_collected`.
+USER_KEYS = ("users", "owner", "users_collected")
 
 
 def _agent(h: KscHost, now: dt.datetime, silent_days: int) -> str:
@@ -101,6 +105,38 @@ def _tags_collected(rows: list[KscHost]) -> bool:
     return any("tags" in json.loads(h.extra_json or "{}") for h in rows)
 
 
+@dataclass(frozen=True)
+class HostUsers:
+    """Пользователи хоста из `extra_json` (сборщик 1.4)."""
+
+    #: Секция `host_users` была в выгрузке; иначе (сборщик до 1.4) пользователей и владельца нет — «не собрано».
+    collected: bool
+    #: None — не собрано: секции нет или запрос по этому хосту отказал; `[]` — никто не заходил.
+    users: list[dict[str, Any]] | None
+    #: `{sid, sam, display_name}`; `{owner_id}` — владелец задан, но не в списке пользователей хоста; None — не задан или не собран.
+    owner: dict[str, Any] | None
+
+    def session(self) -> str:
+        """Группы в сеансах не считаются (KSC отдаёт их в том же списке)."""
+        if self.users is None:
+            return "not_collected"
+        people = [u for u in self.users if not u.get("group")]
+        if any(u.get("active") for u in people):
+            return "active"
+        return "past" if people else "none"
+
+    def needles(self) -> list[str]:
+        """Что ищется в пользователях хоста: учётная запись, UPN, отображаемое имя (в нижнем регистре)."""
+        return [str(u.get(k) or "").lower() for u in self.users or [] for k in ("sam", "upn", "display_name")]
+
+
+def _host_users(h: KscHost) -> HostUsers:
+    extra = json.loads(h.extra_json or "{}")
+    if not extra.get("users_collected"):
+        return HostUsers(False, None, None)
+    return HostUsers(True, extra.get("users"), extra.get("owner"))
+
+
 def _status_reasons(h: KscHost) -> list[str] | None:
     """Причины статуса по KSC из `extra_json`; None — строка записана до разбора причин (ключа `status_mask` нет):
     причины не разобраны, пересчёт снапшота их заполнит."""
@@ -111,6 +147,8 @@ def _status_reasons(h: KscHost) -> list[str] | None:
 
 
 def _item(h: KscHost, agent: str, bases: str, findings: int, tags: list[str] | None) -> dict[str, Any]:
+    extra = {k: v for k, v in json.loads(h.extra_json or "{}").items() if k not in USER_KEYS}
+    people = _host_users(h)
     return {
         "id": h.id, "host_id": h.host_id, "name": h.name, "fqdn": h.fqdn, "domain": h.domain, "group": h.group_path, "os": h.os, "ip": h.ip,
         "agent": agent, "agent_version": h.agent_version, "last_seen_at": h.last_seen_at.isoformat() if h.last_seen_at else None,
@@ -118,7 +156,8 @@ def _item(h: KscHost, agent: str, bases: str, findings: int, tags: list[str] | N
         "bases_at": h.bases_at.isoformat() if h.bases_at else None, "bases": bases,
         "last_fullscan_at": h.last_fullscan_at.isoformat() if h.last_fullscan_at else None,
         "status": h.status, "status_reasons": _status_reasons(h), "threats": h.threats, "unassigned": h.unassigned, "in_ad": h.in_ad,
-        "components": _component_rows(h), "extra": json.loads(h.extra_json or "{}"), "tags": tags, "findings": findings,
+        "components": _component_rows(h), "extra": extra, "tags": tags, "findings": findings,
+        "users": people.users, "users_collected": people.collected, "owner": people.owner,
     }
 
 
@@ -233,6 +272,8 @@ def list_hosts(
     component: QueryList = None,
     component_state: str | None = None,
     tag: QueryList = None,
+    session: QueryList = None,
+    user: str | None = None,
     policy: int | None = None,
     q: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
@@ -241,17 +282,20 @@ def list_hosts(
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Фасеты `protection, agent, bases, in_ad, status, status_reason, component, tag, group, product` — повтором
+    """Фасеты `protection, agent, bases, in_ad, status, status_reason, component, tag, session, group, product` — повтором
     ключа, внутри фасета «или» (`status` — ещё и через запятую); `component_state` — одно, к любому из выбранных
-    компонентов. `status_reason` — текст причины как в `status_reasons`; неизвестный текст ничего не находит."""
+    компонентов. `status_reason` — текст причины как в `status_reasons`; неизвестный текст ничего не находит.
+    `session` — сеансы по данным KSC: `active` (в системе на момент сбора), `past` (заходили раньше), `none` (никто),
+    `not_collected` (пользователи не собраны). `user` — подстрока без учёта регистра в учётной записи, UPN или имени
+    любого пользователя хоста (в том числе заходившего раньше); `q` ищет и по ним."""
     snap = _snapshot(db, snapshot_id, settings)
-    groups, products, agents, protections, bases_, in_ads, reasons_, components, tags_ = (
-        multi(v) for v in (group, product, agent, protection, bases, in_ad, status_reason, component, tag))
+    groups, products, agents, protections, bases_, in_ads, reasons_, components, tags_, sessions = (
+        multi(v) for v in (group, product, agent, protection, bases, in_ad, status_reason, component, tag, session))
     # Статус, как и статусы находок, понимает и старую строку через запятую (`status=ok,warning`).
     statuses = multi(status_, commas=True)
     checked = (
         (agents, AGENT), (protections, PROTECTION), (bases_, BASES), (in_ads, ("both", "ksc_only")),
-        (statuses, ("ok", "warning", "critical")), ({component_state} if component_state is not None else None, COMPONENT_STATES),
+        (statuses, ("ok", "warning", "critical")), (sessions, SESSIONS), ({component_state} if component_state is not None else None, COMPONENT_STATES),
     )
     for values, allowed in checked:
         for value in sorted(values or ()):
@@ -266,6 +310,9 @@ def list_hosts(
     tags = {h.id: _tags(h, tags_collected) for h in rows}
     comps = {h.id: _components(h) for h in rows}
     reasons = {h.id: _status_reasons(h) or [] for h in rows}
+    people = {h.id: _host_users(h) for h in rows}
+    sessions_of = {h.id: people[h.id].session() for h in rows}
+    users_collected = any(p.collected for p in people.values())
     policy_groups: set[int] = set()
     if policy is not None:
         scope = select(KscPolicyScope.group_id).where(KscPolicyScope.snapshot_id == snapshot_id, KscPolicyScope.policy_id == policy)
@@ -296,12 +343,17 @@ def list_hosts(
             own = tags[h.id]
             if own is None or not any(has_tag(own, t) for t in tags_):
                 return False
+        if sessions and sessions_of[h.id] not in sessions:
+            return False
+        if user and not any(user.lower() in n for n in people[h.id].needles()):
+            return False
         if policy is not None and (h.group_id is None or h.group_id not in policy_groups):
             return False
         if q:
             needle = q.lower()
             if (needle not in h.name.lower() and needle not in h.fqdn and needle not in h.ip and needle not in h.os.lower()
-                    and not any(needle in t.lower() for t in tags[h.id] or [])):
+                    and not any(needle in t.lower() for t in tags[h.id] or [])
+                    and not any(needle in n for n in people[h.id].needles())):
                 return False
         return True
 
@@ -309,6 +361,7 @@ def list_hosts(
     facets: dict[str, dict[str, Any]] = {
         "group": {}, "product": {}, "agent": dict.fromkeys(AGENT, 0), "protection": dict.fromkeys(PROTECTION, 0), "bases": dict.fromkeys(BASES, 0),
         "in_ad": {}, "status": {"ok": 0, "warning": 0, "critical": 0}, "status_reason": {}, "component": {},
+        "session": dict.fromkeys(SESSIONS, 0),
     }
     if tags_collected:
         facets["tag"] = {}
@@ -320,6 +373,7 @@ def list_hosts(
         facets["agent"][a] += 1
         facets["protection"][h.protection] += 1
         facets["bases"][b] += 1
+        facets["session"][sessions_of[h.id]] += 1
         if h.in_ad:
             facets["in_ad"][h.in_ad] = facets["in_ad"].get(h.in_ad, 0) + 1
         facets["status"][h.status] = facets["status"].get(h.status, 0) + 1
@@ -331,7 +385,7 @@ def list_hosts(
             facets["tag"][t] = facets["tag"].get(t, 0) + 1
     page = filtered[offset : offset + limit]
     return {"total": len(filtered), "items": [_item(h, *derived[h.id], per_host.get(_host_key(h), 0), tags[h.id]) for h in page],
-            "facets": facets if offset == 0 else None, "tags_collected": tags_collected}
+            "facets": facets if offset == 0 else None, "tags_collected": tags_collected, "users_collected": users_collected}
 
 
 #: Подписи значений — как на экране (AGENT_LABELS, PROTECTION_LABELS, BASES_LABELS, IN_AD_LABELS, RTP_STATE_LABELS фронтенда).
@@ -380,16 +434,18 @@ def export_hosts(
     component: QueryList = None,
     component_state: str | None = None,
     tag: QueryList = None,
+    session: QueryList = None,
+    user: str | None = None,
     policy: int | None = None,
     q: str | None = None,
     fmt: str = Query(default="csv", alias="format"),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    user: AppUser = Depends(get_current_user),
+    current: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Хосты под фильтрами списка, в его порядке — тот же отбор (`list_hosts`) без страницы."""
     page = list_hosts(snapshot_id, group, product, agent, protection, bases, in_ad, status_, status_reason, component, component_state, tag,
-                      policy, q, limit=EXPORT_ALL, offset=0, db=db, settings=settings, _user=user)
+                      session, user, policy, q, limit=EXPORT_ALL, offset=0, db=db, settings=settings, _user=current)
     return export_response(fmt, EXPORT_COLUMNS, [_export_row(h) for h in page["items"]], module="ksc", name="hosts")
 
 

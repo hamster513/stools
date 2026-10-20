@@ -1,7 +1,7 @@
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { SeverityBadge } from '@/platform/collector/SeverityBadge'
 import { AssetLink } from '@/modules/assets/AssetLink'
-import { AGENT_LABELS, BASES_LABELS, CPU_ARCH_LABELS, IN_AD_LABELS, PROTECTION_LABELS, RTP_STATE_LABELS, vmTypeLabel, type HostDetail } from '@/modules/ksc/api/types'
+import { AGENT_LABELS, BASES_LABELS, CPU_ARCH_LABELS, IN_AD_LABELS, PROTECTION_LABELS, RTP_STATE_LABELS, vmTypeLabel, type HostDetail, type HostOwner, type HostUser } from '@/modules/ksc/api/types'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
@@ -22,6 +22,59 @@ function edrLabel(code: number): string {
 
 function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'никогда'
+}
+
+function userName(u: HostUser): string {
+  return u.display_name || u.sam
+}
+
+function UserList({ title, users }: { title: string; users: HostUser[] }) {
+  if (users.length === 0) return null
+  return (
+    <div className="mb-2">
+      <div className="mb-0.5 text-text-secondary">{title} ({users.length})</div>
+      <ul className="flex flex-col gap-0.5">
+        {users.map((u) => (
+          <li key={`${u.sid}|${u.sam}`} className="flex items-baseline gap-2">
+            <span className="truncate text-text" title={userName(u)}>{userName(u)}</span>
+            {u.display_name && <span className="truncate font-mono text-[11px] text-text-secondary" title={u.sam}>{u.sam}</span>}
+            {u.upn && <span className="truncate font-mono text-[11px] text-text-secondary" title={u.upn}>{u.upn}</span>}
+            {u.local && <span className="shrink-0 text-[11px] text-text-secondary">локальная</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function ownerText(owner: HostOwner | null, collected: boolean): string {
+  if (!collected) return 'не собран (сборщик до 1.4)'
+  if (owner === null) return 'не задан'
+  const name = owner.display_name || owner.sam
+  if (!name) return 'владелец задан, но не в списке пользователей'
+  return owner.display_name && owner.sam ? `${owner.display_name} · ${owner.sam}` : name
+}
+
+/** Блок «Пользователи» карточки: кто в системе на момент сбора, кто заходил раньше, владелец устройства. «Не собрано» и «никто» — разные тексты. */
+function HostUsers({ host: h }: { host: HostDetail }) {
+  const people = (h.users ?? []).filter((u) => !u.group)
+  const groups = (h.users ?? []).filter((u) => u.group)
+  return (
+    <>
+      <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Пользователи</div>
+      <div className="mb-4">
+        {h.users === null && <div className="mb-2 text-text-secondary">{h.users_collected ? 'не собрано для этого хоста' : 'пользователи не собраны (сборщик до 1.4)'}</div>}
+        {h.users !== null && h.users.length === 0 && <div className="mb-2 text-text-secondary">никто не заходил</div>}
+        <UserList title="В системе на момент сбора" users={people.filter((u) => u.active)} />
+        <UserList title="Заходили раньше" users={people.filter((u) => !u.active)} />
+        <UserList title="Группы с сеансом" users={groups} />
+        <div className="flex gap-2">
+          <span className="text-text-secondary">Владелец устройства</span>
+          <span className="text-text">{ownerText(h.owner, h.users_collected)}</span>
+        </div>
+      </div>
+    </>
+  )
 }
 
 /** Вкладка «Обзор» панели хоста: карточка, теги, действующие политики, система, компоненты. */
@@ -63,6 +116,8 @@ export function HostOverview({ host: h, serverId }: { host: HostDetail; serverId
         {h.tags?.length === 0 && <span className="text-text-secondary">нет</span>}
         {h.tags?.map((t) => <span key={t} className="rounded bg-row-hover px-1.5 py-0.5 text-[11px] text-text">{t}</span>)}
       </div>
+
+      <HostUsers host={h} />
 
       <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Политики ({h.policies.length})</div>
       <ul className="mb-4 flex flex-col gap-0.5">

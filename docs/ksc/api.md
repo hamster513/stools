@@ -109,9 +109,10 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 GET  /snapshots/{id}/hosts             group, product, agent(none|silent|alive), protection(none|off|on),
                                        bases(fresh|old|unknown), in_ad(both|ksc_only),
                                        status(ok|warning|critical), status_reason, component, component_state(on|off|other|none),
-                                       tag, policy, q, limit≤1000, offset
-                                       → {total, items (каждый: … status, status_reasons: [str]|null, extra, tags, findings),
-                                          facets|null, tags_collected}
+                                       tag, session(active|past|none|not_collected), user, policy, q, limit≤1000, offset
+                                       → {total, items (каждый: … status, status_reasons: [str]|null, extra, tags, findings,
+                                          users: [HostUser]|null, users_collected, owner: {…}|null),
+                                          facets|null, tags_collected, users_collected}
 GET  /snapshots/{id}/hosts/export      format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
 GET  /snapshots/{id}/hosts/{host_id}   + findings[] (каждая: key, check, check_title, severity, status, status_title, details),
                                        findings_counted — учитываемые (то же правило, что `findings` в списке),
@@ -169,6 +170,21 @@ GET  /snapshots/{id}/hosts/{host_id}/profiles
 Теги приходят не от всех сборщиков: `tags_collected` — в выгрузке снапшота была секция тегов. Если нет, у хоста
 `tags: null`, фасета `tag` в ответе нет, фильтр `tag` (включая `-`) ничего не находит. Если секция была, у хоста
 без тегов — `tags: []`.
+
+Пользователи и сеансы (сборщик 1.4, секция `host_users`; контракт — спека «Пользователи как активы» §2.1). Элемент списка
+и карточка хоста несут `users` — список `{sid, sam, upn, display_name, domain, local, group, active}` (`active` — в системе
+на момент сбора, иначе заходил раньше; `group` — KSC отдаёт группы в том же списке, в сеансах они не считаются), флаг
+`users_collected` (в выгрузке хоста была секция) и `owner` — владелец устройства: `{sid, sam, display_name}`, либо
+`{owner_id}` — владелец задан, но его нет в списке пользователей хоста, либо `null` (не задан или не собран). «Не
+собрано» и «пусто» различаются: `users: null` — секции нет (сборщик до 1.4, `users_collected: false`) или запрос по этому
+хосту отказал (`users_collected: true`); `users: []` — никто не заходил. Ответ списка несёт `users_collected` — секция
+была хотя бы у одного хоста снапшота. Эти же поля в `extra` не повторяются.
+Фильтры: `session=<active|past|none|not_collected>` — повтором ключа, внутри «или» (`active` — есть пользователь в
+системе, `past` — активных нет, но заходили, `none` — никто не заходил, группы не считаются, `not_collected` — `users`
+равен `null`); фасет `session: {active, past, none, not_collected}` — всегда все четыре ключа, по отфильтрованному
+набору; неизвестное значение — `422`. `user=<текст>` — подстрока без учёта регистра в `sam`, `upn` или `display_name`
+любого пользователя хоста, включая заходивших раньше; `q` ищет и по этим полям. Выгрузка `hosts/export` принимает оба
+фильтра, но колонок пользователей в файле нет.
 
 Элемент хоста несёт `extra`: `os_build`, `cpu_arch`, `vm_type`,
 `reboot_required`, `reboot_requested_at`, `reboot_reason`, `edr_status`,

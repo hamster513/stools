@@ -9,11 +9,13 @@ import {
   IN_AD_LABELS,
   PROTECTION_LABELS,
   RTP_STATE_LABELS,
+  SESSION_LABELS,
   type ComponentState,
   type Host,
   type HostAgent,
   type HostBases,
   type HostProtection,
+  type HostSession,
   type HostsQuery,
   type HostsResponse,
 } from '@/modules/ksc/api/types'
@@ -43,7 +45,7 @@ import { HostTagsTab } from './hosts/HostTagsTab'
 
 const ROW_HEIGHT = 40
 
-type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'status_reason' | 'component' | 'component_state' | 'tag' | 'policy'>
+type HostFilters = Pick<HostsQuery, 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'status_reason' | 'component' | 'component_state' | 'tag' | 'session' | 'user' | 'policy'>
 
 const COMPONENT_STATES: { key: ComponentState; label: string }[] = [
   { key: 'on', label: 'работает' },
@@ -55,7 +57,7 @@ const COMPONENT_STATE_LABELS = Object.fromEntries(COMPONENT_STATES.map((c) => [c
 const KSC_STATUS_LABELS: Record<string, string> = { ok: 'ок', warning: 'предупреждение', critical: 'критично' }
 const REASONS_NOT_PARSED = 'причины не разобраны — пересчитайте снапшот'
 
-type MultiKey = 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'status_reason' | 'tag'
+type MultiKey = 'group' | 'product' | 'agent' | 'protection' | 'bases' | 'in_ad' | 'status' | 'status_reason' | 'tag' | 'session'
 
 const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
 
@@ -63,6 +65,7 @@ const HOST: ColumnDef = { key: 'host', label: 'Хост', width: 224, flex: true
 const GROUP: ColumnDef = { key: 'group', label: 'Группа', width: 160 }
 const TAGS: ColumnDef = { key: 'tags', label: 'Теги', width: 192 }
 const REST: ColumnDef[] = [
+  { key: 'users', label: 'Пользователь', width: 176 },
   { key: 'os', label: 'ОС', width: 160 },
   { key: 'agent', label: 'Агент', width: 128 },
   { key: 'protection', label: 'Защита', width: 160 },
@@ -79,6 +82,9 @@ const REST: ColumnDef[] = [
 const COLUMNS = [HOST, GROUP, ...REST]
 const COLUMNS_WITH_TAGS = [HOST, GROUP, TAGS, ...REST]
 const TAGS_SHOWN = 3
+const USERS_NOT_COLLECTED = 'пользователи не собраны (сборщик до 1.4)'
+const USERS_NOT_COLLECTED_HOST = 'не собрано для этого хоста'
+const SESSIONS = Object.keys(SESSION_LABELS) as HostSession[]
 
 function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
@@ -146,6 +152,11 @@ function HostFacetPanel({ facets, remembered, filters, onToggle, onComponent, ta
           ))}
         </FacetSection>
       )}
+      <FacetSection title="Сеанс">
+        {SESSIONS.map((k) => (
+          <FacetRow key={k} active={has(filters.session, k)} count={facets?.session?.[k] ?? 0} onClick={() => pick('session', k)}>{SESSION_LABELS[k]}</FacetRow>
+        ))}
+      </FacetSection>
       <FacetSection title="Статус KSC">
         {(['ok', 'warning', 'critical'] as const).map((s) => (
           <FacetRow key={s} active={has(filters.status, s)} count={facets?.status[s] ?? 0} onClick={() => pick('status', s)}>{KSC_STATUS_LABELS[s]}</FacetRow>
@@ -206,6 +217,24 @@ function TagChips({ tags }: { tags: string[] }) {
   )
 }
 
+/** Ячейка «Пользователь»: активные на момент сбора (кроме групп) — первый и «+N»; подсказка — все пользователи хоста. */
+function UsersCell({ host: h }: { host: Host }) {
+  if (h.users === null) {
+    return <div className="min-w-0 truncate px-2 text-text-secondary" title={h.users_collected ? USERS_NOT_COLLECTED_HOST : USERS_NOT_COLLECTED}>—</div>
+  }
+  const people = h.users.filter((u) => !u.group)
+  const active = people.filter((u) => u.active)
+  const title = people.length === 0 ? 'никто не заходил' : people.map((u) => `${u.display_name || u.sam}${u.display_name ? ` (${u.sam})` : ''} — ${u.active ? 'в системе' : 'заходил раньше'}`).join('\n')
+  if (active.length === 0) return <div className="min-w-0 truncate px-2 text-text-secondary" title={title}>—</div>
+  const first = active[0]
+  return (
+    <div className="flex min-w-0 items-center gap-1 px-2" title={title}>
+      <span className="truncate text-text">{first.display_name || first.sam}</span>
+      {active.length > 1 && <span className="shrink-0 text-[10px] text-text-secondary">+{active.length - 1}</span>}
+    </div>
+  )
+}
+
 /** Ячейка статуса KSC: слово статуса и число причин; сами причины — в подсказке. */
 function StatusCell({ host: h }: { host: Host }) {
   const reasons = h.status_reasons
@@ -238,6 +267,7 @@ function HostsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, s
               </div>
               <div className="min-w-0 truncate px-2 text-text-secondary" title={h.group}>{h.group}</div>
               {tagsCollected && <div className="min-w-0 px-2"><TagChips tags={h.tags ?? []} /></div>}
+              <UsersCell host={h} />
               <div className="min-w-0 truncate px-2 text-text-secondary" title={h.os}>{h.os}</div>
               <div className="min-w-0 truncate px-2 text-text-secondary">{AGENT_LABELS[h.agent]}{h.agent_version ? ` · ${h.agent_version}` : ''}</div>
               <div className={cn('min-w-0 truncate px-2', h.protection === 'off' ? 'text-risk-high' : 'text-text-secondary')}>
@@ -353,6 +383,8 @@ export function HostsPage({ serverId }: { serverId: number }) {
     // Состояние без компонента сервер отвергает (422), поэтому из адреса оно читается только вместе с компонентом.
     component_state: params.get('component') ? COMPONENT_STATES.find((c) => c.key === params.get('component_state'))?.key : undefined,
     tag: listFrom(params, 'tag'),
+    session: listFrom<HostSession>(params, 'session', SESSIONS),
+    user: params.get('user') || undefined,
     policy: Number(params.get('policy')) || undefined,
   }))
   const [searchInput, setSearchInput] = useState('')
@@ -391,6 +423,8 @@ export function HostsPage({ serverId }: { serverId: number }) {
   ]
   if (filters.component_state) chips.push({ label: `Состояние компонента: ${COMPONENT_STATE_LABELS[filters.component_state]}`, clear: () => toggle('component_state', undefined) })
   chips.push(...valueChips('Тег', filters.tag, (t) => (t === '-' ? 'без тегов' : t), (v) => toggle('tag', v)))
+  chips.push(...valueChips('Сеанс', filters.session, (k) => SESSION_LABELS[k], (v) => toggle('session', v)))
+  if (filters.user) chips.push({ label: `Пользователь: ${filters.user}`, clear: () => toggle('user', undefined) })
   if (filters.policy) chips.push({ label: `политика #${filters.policy}${policyName ? ` · ${policyName}` : ''}`, clear: () => toggle('policy', undefined) })
   chips.push(...valueChips('Группа', filters.group, (g) => g, (v) => toggle('group', v)))
   chips.push(...valueChips('Продукт', filters.product, (p) => p, (v) => toggle('product', v)))
@@ -431,7 +465,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
         <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/hosts/export`, queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
-          <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, IP, ОС… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
+          <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Имя, IP, ОС, пользователь… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
