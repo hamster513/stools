@@ -87,6 +87,15 @@ def _latest_runs(db: Session, column: InstrumentedAttribute[Any], values: list[A
     return {getattr(row, column.key): row for row in rows}
 
 
+def _query_counts(db: Session, hunt_ids: list[int]) -> dict[int, int]:
+    """Число запросов на хант одним запросом; общий для списка библиотеки и очереди планировщика."""
+    return {
+        hunt_id: n for hunt_id, n in db.execute(
+            select(ThQuery.hunt_id, func.count()).where(ThQuery.hunt_id.in_(hunt_ids)).group_by(ThQuery.hunt_id),
+        )
+    }
+
+
 def _statuses(db: Session, finding_ids: list[int]) -> dict[int, str]:
     states = state_map(db, MODULE, SCOPE_ID, [f"th:{i}" for i in finding_ids])
     return {i: effective_status(states.get(f"th:{i}")) for i in finding_ids}
@@ -106,6 +115,7 @@ class HuntRow(BaseModel):
     last_run: dict[str, Any] | None
     new_findings: int
     updated_at: dt.datetime
+    position: int
 
 
 @router.get("/hunts", response_model=list[HuntRow])
@@ -121,11 +131,7 @@ def list_hunts(
         and (not needle or needle in h.code.casefold() or needle in h.name.casefold())
     ]
     ids = [h.id for h in hunts]
-    counts = {
-        hunt_id: n for hunt_id, n in db.execute(
-            select(ThQuery.hunt_id, func.count()).where(ThQuery.hunt_id.in_(ids)).group_by(ThQuery.hunt_id),
-        )
-    }
+    counts = _query_counts(db, ids)
     last = _latest_runs(db, ThRunQuery.hunt_code, [h.code for h in hunts])
     findings = [(fid, hunt_id) for fid, hunt_id in db.execute(select(ThFinding.id, ThFinding.hunt_id).where(ThFinding.hunt_id.in_(ids)))]
     state = _statuses(db, [fid for fid, _ in findings])
@@ -137,7 +143,7 @@ def list_hunts(
         HuntRow(
             id=h.id, code=h.code, name=h.name, technique_id=h.technique_id, enabled=h.enabled,
             queries=counts.get(h.id, 0), last_run=_last_run(last.get(h.code)),
-            new_findings=fresh.get(h.id, 0), updated_at=h.updated_at,
+            new_findings=fresh.get(h.id, 0), updated_at=h.updated_at, position=h.position,
         )
         for h in hunts
     ]

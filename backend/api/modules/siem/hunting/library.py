@@ -116,7 +116,8 @@ def next_position(db: Session) -> int:
 
 
 def list_hunts(db: Session, *, include_deleted: bool = False) -> list[ThHunt]:
-    stmt = select(ThHunt).order_by(ThHunt.code)
+    # Порядок списка — порядок очереди ночного прогона (его задаёт планировщик); id разводит равные позиции.
+    stmt = select(ThHunt).order_by(ThHunt.position, ThHunt.id)
     if not include_deleted:
         stmt = stmt.where(ThHunt.deleted_at.is_(None))
     return list(db.scalars(stmt))
