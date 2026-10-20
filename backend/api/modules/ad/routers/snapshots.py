@@ -4,12 +4,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import Row, func, select
 from sqlalchemy.orm import Session
 
 from api.collector_routes import (
@@ -32,15 +33,19 @@ from api.modules.ad.core.export import ExportFormatError
 from api.modules.ad.core.findings import SEVERITIES
 from api.modules.ad.models import AdDomain, AdFinding, AdJob, AdSnapshot
 from api.modules.ad.services.ca_data import store_ca_data
+from api.modules.ad.services.dc_links import dc_links
 from api.modules.ad.services.settings import load_config
 from api.modules.ad.services.snapshots import (
     compare,
     delete_snapshot,
+    domain_score,
     import_export,
     latest_snapshot,
     reanalyze,
+    score_history,
     severity_counts,
 )
+from api.platform.findings import service as finding_svc
 from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["ad"])
@@ -122,7 +127,10 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
     if snap is None:
         return {"domain": {"id": domain.id, "dns_root": domain.dns_root, "netbios": domain.netbios}, "snapshot": None, "checks": []}
     cmp_ = compare(db, snap)
-    rows = db.execute(select(AdFinding.check, AdFinding.severity, AdFinding.key).where(AdFinding.snapshot_id == snap.id)).all()
+    found = db.execute(
+        select(AdFinding.check, AdFinding.severity, AdFinding.key, AdFinding.allowlisted).where(AdFinding.snapshot_id == snap.id)
+    ).all()
+    rows = [(check, severity, key) for check, severity, key, _ in found]
     counts = severity_counts(db, snap.id)
     unchecked: dict[str, str] = json.loads(snap.unchecked_json or "{}")
     stale = snap.analyzer_version != ANALYZER_VERSION
@@ -143,7 +151,31 @@ def domain_overview(domain_id: int, db: Session = Depends(get_db), _user: AppUse
         },
         "compared_to": comparison_summary(cmp_),
         **findings_overview(db, "ad", domain_id, rows, CHECKS, SEVERITIES, cmp_, unchecked, CATEGORIES),
+        "score": _live_score(db, domain_id, found),
+        "score_history": score_history(db, domain_id),
     }
+
+
+@router.get("/domains/{domain_id}/dc-links")
+def domain_dc_links(domain_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[dict[str, Any]]:
+    """Контроллеры сводки последнего снапшота со связками Assets, VM и KSC (спека §7)."""
+    if db.get(AdDomain, domain_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="домен не найден")
+    return dc_links(db, domain_id)
+
+
+def _live_score(db: Session, domain_id: int, found: Sequence[Row[tuple[str, str, str, bool]]]) -> dict[str, Any]:
+    """Живая оценка: находки вне allowlist в статусах, которые учитываются в подсчётах.
+    Категории — в порядке CATEGORIES и с названием для заголовков групп."""
+    states = finding_svc.state_map(db, "ad", domain_id)
+    counted = finding_svc.counted_statuses(db)
+    live = domain_score(
+        (check, severity) for check, severity, key, allowlisted in found
+        if not allowlisted and finding_svc.effective_status(states.get(key)) in counted
+    )
+    cats = live["categories"]
+    live["categories"] = {code: {**cats[code], "title": title} for code, title in CATEGORIES.items() if code in cats}
+    return live
 
 
 @router.get("/snapshots", response_model=list[SnapshotView])

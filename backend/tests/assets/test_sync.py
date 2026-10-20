@@ -103,6 +103,22 @@ def test_ad_observation_carries_computer_attributes(loaded: Session) -> None:
     assert obs.extra["last_logon"].startswith(str((dt.datetime.now(dt.UTC) - dt.timedelta(days=120)).date()))
 
 
+def test_ad_observation_has_laps_flag(db_session: Session, app_settings: Any, now: dt.datetime) -> None:
+    """LAPS — есть срок пароля нового (`lapsNewExpiry`) или старого (`lapsExpiry`) LAPS."""
+    from tests.ad.synthetic import ft
+    from tests.assets.synthetic import computer, load_ad
+
+    set_settings(db_session, sync_after_import=False)
+    load_ad(db_session, Path(app_settings.data_dir), [
+        {**computer("WS01$", 1201, last_logon=now), "lapsNewExpiry": ft(-30)},
+        {**computer("WS02$", 1202, last_logon=now), "lapsExpiry": ft(-30)},
+        computer("WS03$", 1203, last_logon=now),
+    ], now)
+    sync(db_session)
+    laps = dict(db_session.execute(select(AssetObservation.name, AssetObservation.extra).where(AssetObservation.source == "ad")).tuples().all())
+    assert {name: extra["laps"] for name, extra in laps.items()} == {"WS01": True, "WS02": True, "WS03": False}
+
+
 def test_repeated_sync_does_not_duplicate(loaded: Session) -> None:
     sync(loaded)
     sync(loaded)

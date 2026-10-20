@@ -425,8 +425,9 @@ function Read-AuditCsv([string]$text) {
   }
 }
 
-# scripts.ini и psscripts.ini: секции Logon, Logoff, Startup, Shutdown, ключи «<n>CmdLine» и «<n>Parameters».
-# Секции и строки — как parse_inf в gpo_files.py: «;» в начале строки — комментарий, строки без «=» пропускаются.
+# scripts.ini и psscripts.ini: секции Logon, Logoff, Startup, Shutdown, ключи «<n>CmdLine». «<n>Parameters» не
+# собираются: в них бывают пароли (parameters всегда ""). Секции и строки — как parse_inf в gpo_files.py: «;» в
+# начале строки — комментарий, строки без «=» пропускаются.
 function Read-ScriptsIni([string]$text, [string]$scope) {
   $sections = [ordered]@{}
   $current = $null
@@ -444,19 +445,13 @@ function Read-ScriptsIni([string]$text, [string]$scope) {
   }
   foreach ($phase in $sections.Keys) {
     if (@("logon", "logoff", "startup", "shutdown") -notcontains $phase) { continue }
-    $entries = @{}
+    $commands = @{}
     foreach ($key in $sections[$phase].Keys) {
-      if ($key -match '^(\d+)(cmdline|parameters)$') {
-        $n = [decimal]$Matches[1]
-        if (-not $entries.ContainsKey($n)) { $entries[$n] = @{} }
-        $entries[$n][$Matches[2].ToLowerInvariant()] = $sections[$phase][$key]
-      }
+      if ($key -match '^(\d+)cmdline$') { $commands[[decimal]$Matches[1]] = $sections[$phase][$key] }
     }
-    foreach ($n in @($entries.Keys | Sort-Object)) {
-      $command = $(if ($entries[$n].ContainsKey("cmdline")) { $entries[$n]["cmdline"] } else { "" })
-      if (-not $command) { continue }
-      $parameters = $(if ($entries[$n].ContainsKey("parameters")) { $entries[$n]["parameters"] } else { "" })
-      [ordered]@{ scope = $scope; phase = $phase; command = $command; parameters = $parameters }
+    foreach ($n in @($commands.Keys | Sort-Object)) {
+      if (-not $commands[$n]) { continue }
+      [ordered]@{ scope = $scope; phase = $phase; command = $commands[$n]; parameters = "" }
     }
   }
 }
@@ -482,6 +477,13 @@ function Get-PathWriters([string]$path) {
     if ($sid -and $sid -ne $owner -and -not $writers.Contains($sid)) { $writers.Add($sid) }
   }
   $writers.ToArray()
+}
+
+# Сервер UNC-пути (\\host\share или //host/share); $null — путь не UNC.
+function Get-UncHost([string]$path) {
+  $p = $path.Trim().Trim('"').Replace("/", "\")
+  if (-not $p.StartsWith("\\")) { return $null }
+  return $p.Substring(2).Split([char]'\')[0]
 }
 
 # Байты файла SYSVOL → текст: UTF-16 по BOM, иначе UTF-8 (BOM снимается) — как _decode_inf LDAP-сборщика.
@@ -914,13 +916,33 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   $sysvol = @{}
   # Блок gpo: DN GPO → файлы из SYSVOL. С -SkipSysvol его в выгрузке нет, причина в notes.
   $gpo = @{}
+  # Папка GPO открывается по SMB: путь на сервер вне домена отдал бы ему аутентификацию сборщика. Свои — имя
+  # домена, NetBIOS и контроллеры (FQDN и короткое имя).
+  $gpoHosts = New-Object System.Collections.Generic.List[string]
+  foreach ($h in @($domain.DNSRoot, $domain.NetBIOSName)) { if ($h) { $gpoHosts.Add([string]$h) } }
+  if (-not $noSysvol) {
+    try {
+      foreach ($d in @(Get-ADDomainController @ad -Filter *)) {
+        $h = [string]$d.HostName
+        if ($h) { $gpoHosts.Add($h); $gpoHosts.Add($h.Split([char]'.')[0]) }
+      }
+    } catch { Add-Warning ("контроллеры домена не перечислены, папки GPO читаются только по имени домена: {0}" -f $_.Exception.Message) }
+  }
   Get-ADObject @ad -SearchBase ("CN=Policies,CN=System," + $domain.DistinguishedName) -LDAPFilter "(objectClass=groupPolicyContainer)" -Properties displayName,gPCFileSysPath,flags,nTSecurityDescriptor | ForEach-Object {
     $objects.Add(@{ dn = $_.DistinguishedName; class = "groupPolicyContainer"; displayName = [string]$_.displayName; gpcFileSysPath = [string]$_.gPCFileSysPath; flags = AsInt $_.flags; sd = ToBase64Sd $_.nTSecurityDescriptor }) | Out-Null
     Register-AceSids $_.nTSecurityDescriptor
     if (-not $noSysvol -and $_.gPCFileSysPath) {
-      $files = Read-GpoFiles ([string]$_.gPCFileSysPath)
-      if ($null -ne $files.tmpl) { $sysvol[$_.DistinguishedName] = @{ "GptTmpl.inf" = $files.tmpl } }
-      $gpo[$_.DistinguishedName] = $files.data
+      $path = [string]$_.gPCFileSysPath
+      $gpoHost = Get-UncHost $path
+      if ($null -eq $gpoHost -or $gpoHosts -notcontains $gpoHost) {
+        $where = $(if ($null -eq $gpoHost) { $path } else { $gpoHost })
+        $gpo[$_.DistinguishedName] = [ordered]@{ registry = @(); gpp = @(); audit = @(); scripts = @(); acl = $null
+                                                 notes = [string[]]@(("путь GPO вне домена ({0}) — не читается" -f $where)) }
+      } else {
+        $files = Read-GpoFiles $path
+        if ($null -ne $files.tmpl) { $sysvol[$_.DistinguishedName] = @{ "GptTmpl.inf" = $files.tmpl } }
+        $gpo[$_.DistinguishedName] = $files.data
+      }
     }
   }
   Write-Step ("  GPO с GptTmpl.inf: {0}, с файлами SYSVOL: {1}, с отказами чтения: {2}" -f $sysvol.Count, $gpo.Count, @($gpo.Values | Where-Object { $_.notes.Count -gt 0 }).Count)

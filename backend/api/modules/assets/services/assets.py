@@ -40,6 +40,8 @@ from api.timeutil import utcnow
 DEFAULT_SETTINGS: dict[str, Any] = {"inactive_days": 30, "stale_days": 30, "sync_after_import": True}
 SOURCES = ("vm", "ksc", "ad", "scan", "dns", "rt")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
+#: Фильтр и фасет LAPS: есть ли срок пароля LAPS у компьютера AD.
+LAPS = ("yes", "no")
 #: Фильтр и фасет «хоть одно расхождение».
 ANY_CODE = "any"
 #: Расхождения — находки платформы статусов (`findings_adapter`): модуль и единственная область.
@@ -590,6 +592,19 @@ def cluster_kinds(db: Session) -> dict[int, str]:
     ).tuples().all())
 
 
+def laps_flags(db: Session) -> dict[int, bool]:
+    """asset_id → есть ли LAPS по живым наблюдениям AD (`extra.laps`); актива без них в словаре нет,
+    как и наблюдений до появления признака (до следующей синхронизации). Компьютер в двух
+    доменах — LAPS есть, если он есть хоть в одном."""
+    flag = AssetObservation.extra["laps"].as_boolean()
+    out: dict[int, bool] = {}
+    for asset_id, laps in db.execute(
+        select(AssetObservation.asset_id, flag).where(AssetObservation.source.in_(("ad",)), AssetObservation.gone_at.is_(None), flag.is_not(None))
+    ).tuples():
+        out[asset_id] = out.get(asset_id, False) or bool(laps)
+    return out
+
+
 def _matches_query(asset: Asset, rows: list[AssetObservation], needle: str) -> bool:
     texts = [asset.name, asset.fqdn, asset.ip, asset.os]
     for r in rows:
@@ -624,10 +639,11 @@ def _pick(
     port: int | None = None,
     tag: str | None = None,
     criticality: frozenset[str] | None = None,
+    laps: frozenset[str] | None = None,
 ) -> Picked:
     """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Многозначные фильтры —
     «любое из»: `source_has` — есть хоть один из источников, `source_missing` — нет хоть одного,
-    `criticality` `none` — не задана. Расхождения
+    `criticality` `none` — не задана, `laps` — yes | no (актив без наблюдения AD не подходит ни под одно). Расхождения
     считаются на лету, поэтому фильтры — в памяти; фильтр по расхождениям и их статусам — у
     вызывающего (`DiscFilter`). `with_found=False` — расхождения не считаются и остаются пустыми
     (выбор id для массового изменения без фильтра по расхождениям)."""
@@ -642,6 +658,7 @@ def _pick(
         select(AssetObservation.id, AssetObservation.extra).where(AssetObservation.source.in_(LIST_EXTRA_SOURCES))
     ).tuples().all()) if need_observed else {}
     needle = (q or "").strip().lower()
+    laps_of = laps_flags(db) if laps else {}
 
     picked: Picked = []
     for asset in assets:
@@ -661,6 +678,8 @@ def _pick(
             continue
         # «Не задана» — `none` (как в фасете) или '' (`-` в запросе, общий знак пустого значения).
         if criticality is not None and not {asset.criticality or "none", asset.criticality or ""} & criticality:
+            continue
+        if laps and (asset.id not in laps_of or ("yes" if laps_of[asset.id] else "no") not in laps):
             continue
         if needle and not _matches_query(asset, rows, needle):
             continue
@@ -759,8 +778,9 @@ def list_assets(
     facets: dict[str, Any] = {
         "source": dict.fromkeys(SOURCES, 0), "code": dict.fromkeys((*CODES, ANY_CODE), 0), "zone": {},
         "criticality": dict.fromkeys([*CRITICALITY, "none"], 0),
-        "disc_status": dict.fromkeys(STATUSES, 0), "disc_overdue": 0,
+        "disc_status": dict.fromkeys(STATUSES, 0), "disc_overdue": 0, "laps": dict.fromkeys(LAPS, 0),
     }
+    laps_of = laps_flags(db)
     for tracked in all_tracked:
         for t in tracked:
             if _hits(t, f, today, status=False):
@@ -779,6 +799,8 @@ def list_assets(
         if net is not None and net.zone:
             facets["zone"][net.zone] = facets["zone"].get(net.zone, 0) + 1
         facets["criticality"][asset.criticality or "none"] = facets["criticality"].get(asset.criticality or "none", 0) + 1
+        if asset.id in laps_of:
+            facets["laps"]["yes" if laps_of[asset.id] else "no"] += 1
 
     picked.sort(key=lambda t: (t[0].name_key or normalize_fqdn(t[0].fqdn) or "~", t[0].ip, t[0].id))
     stale_days = int(settings["stale_days"])

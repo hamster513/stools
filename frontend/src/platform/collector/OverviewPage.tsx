@@ -8,7 +8,7 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { SeverityBadge } from './SeverityBadge'
-import { CATEGORY_ORDER, SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type CheckSummary, type OverviewBase, type Severity } from './types'
+import { CATEGORY_ORDER, SEVERITIES, SEVERITY_LABELS, SEVERITY_TEXT, type CheckSummary, type DomainScore, type OverviewBase, type ScorePoint, type Severity } from './types'
 
 function worst(...cs: CheckSummary[]): Severity | null {
   return SEVERITIES.find((s) => cs.some((c) => (c.by_severity[s] ?? 0) > 0)) ?? null
@@ -29,6 +29,37 @@ function byCategory(checks: CheckSummary[]): { code: string; title: string; chec
 
 function when(iso: string): string {
   return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+/** Цвет оценки по диапазонам 0–24, 25–49, 50–74, 75–100 — теми же тонами, что серьёзность. */
+function scoreLevel(n: number): Severity {
+  return n >= 75 ? 'Critical' : n >= 50 ? 'High' : n >= 25 ? 'Medium' : 'Low'
+}
+
+const SCORE_BAR: Record<Severity, string> = {
+  Critical: 'bg-risk-critical', High: 'bg-risk-high', Medium: 'bg-risk-medium', Low: 'bg-risk-low', Info: 'bg-grid',
+}
+
+function ScoreBlock({ score, history }: { score: DomainScore; history: ScorePoint[] }) {
+  return (
+    <div className="mb-4 flex flex-wrap items-stretch gap-3">
+      <div className="rounded border border-grid bg-surface p-3">
+        <div className="text-[11px] text-text-secondary">Оценка домена</div>
+        <div className={cn('mt-1 font-mono text-3xl tabular-nums', SEVERITY_TEXT[scoreLevel(score.total)])}>{score.total}</div>
+        <div className="text-[11px] text-text-secondary">из 100 по худшей категории, 0 — чисто</div>
+      </div>
+      {history.length > 0 && (
+        <div className="min-w-0 flex-1 rounded border border-grid bg-surface p-3">
+          <div className="text-[11px] text-text-secondary">Оценка по снапшотам — без учёта принятых рисков и статусов</div>
+          <div className="mt-2 flex h-16 items-end gap-1 overflow-x-auto" role="img" aria-label={`Оценка по снапшотам: ${history.map((p) => p.total).join(', ')}`}>
+            {history.map((p) => (
+              <div key={p.snapshot_id} title={`${when(p.collected_at)}: ${p.total}`} className={cn('w-3 shrink-0 rounded-t', SCORE_BAR[scoreLevel(p.total)])} style={{ height: `${Math.max(p.total, 2)}%` }} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 type Snap<O extends OverviewBase> = NonNullable<O['snapshot']>
@@ -71,6 +102,7 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
   // Проверка с находками тоже бывает проверена частично (у AD CS часть ESC — только по данным ЦС).
   const unchecked = o.checks.filter((c) => c.unchecked)
   const clean = o.checks.filter((c) => c.all === 0 && c.resolved === 0 && !c.unchecked)
+  const titleOf = new Map(o.checks.map((c) => [c.code, c.title]))
   // Плитки severity — по учитываемым статусам (настройка платформы), как и счётчики проверок.
   const bySeverity = o.counted?.by_severity ?? snap.by_severity
   // Ссылка с плитки и карточки — на список с теми же статусами, что в числе: без статуса список показал бы открытые.
@@ -145,16 +177,36 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
         </>
       )}
 
+      {o.score && <ScoreBlock score={o.score} history={o.score_history ?? []} />}
+
       <div className="mb-2 text-xs font-semibold tracking-wide text-text-secondary uppercase">Проверки</div>
       {groups ? groups.map((g) => {
         const w = worst(...g.checks)
+        const cs = o.score?.categories[g.code]
+        const sum = cs ? cs.checks.reduce((a, c) => a + c.points, 0) : 0
         return (
           <section key={g.code} className="mb-4">
             <h2 className="mb-2 flex items-center gap-2 text-sm text-text">
               {g.title}
               <span className="font-mono text-xs tabular-nums text-text-secondary">{g.checks.reduce((a, c) => a + c.total, 0)}</span>
               {w && <SeverityBadge severity={w} />}
+              {cs && <span className={cn('font-mono text-xs tabular-nums', SEVERITY_TEXT[scoreLevel(cs.score)])}>оценка {cs.score}</span>}
             </h2>
+            {cs && cs.checks.length > 0 && (
+              <details className="mb-2 text-xs text-text-secondary">
+                <summary className="cursor-pointer select-none hover:text-text">из чего сложилась</summary>
+                <ul className="mt-1 space-y-0.5">
+                  {cs.checks.map((c) => (
+                    <li key={c.code} className="flex items-center gap-2">
+                      <span className="text-text">{titleOf.get(c.code) ?? c.code}</span>
+                      <SeverityBadge severity={c.severity} />
+                      <span className="font-mono tabular-nums">+{c.points}</span>
+                    </li>
+                  ))}
+                </ul>
+                {sum > cs.score && <p className="mt-1">Сумма {sum}, оценка категории ограничена 100.</p>}
+              </details>
+            )}
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{g.checks.map(card)}</div>
           </section>
         )

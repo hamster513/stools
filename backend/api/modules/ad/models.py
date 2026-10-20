@@ -78,6 +78,8 @@ class AdSnapshot(Base):
     ca_data_id: Mapped[int | None] = mapped_column(ForeignKey("ad_ca_data.id", ondelete="SET NULL"), nullable=True)
     #: Сводка домена (core/summary.py); '' — снапшот посчитан до её появления.
     summary_json: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: Сырая оценка домена (core/score.py) по находкам вне allowlist; '' — посчитан до её появления.
+    score_json: Mapped[str] = mapped_column(Text, default="", server_default="")
 
 
 class AdCaData(Base):

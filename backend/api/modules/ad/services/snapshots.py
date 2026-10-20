@@ -9,6 +9,7 @@ import datetime as dt
 import json
 import logging
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,21 +20,29 @@ from sqlalchemy.orm import Session
 from api.export_files import file_sha256, store_gz
 from api.jobs import JobHandle, insert_chunked
 from api.modules.ad.core.ca_data import CaData
-from api.modules.ad.core.checks import ANALYZER_VERSION, run_all
+from api.modules.ad.core.checks import ANALYZER_VERSION, CHECKS, run_all
 from api.modules.ad.core.checks.coverage import coverage_gaps
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import AdExport, ExportIndex, load_export_path
 from api.modules.ad.core.findings import SEVERITY_RANK, Finding
+from api.modules.ad.core.score import score
 from api.modules.ad.core.summary import build_summary
 from api.modules.ad.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ad.models import AdDomain, AdFinding, AdSnapshot
 from api.modules.ad.services.ca_data import effective_ca_data
 
 log = logging.getLogger(__name__)
+#: Сколько последних снапшотов домена показывает график оценки.
+SCORE_HISTORY_LIMIT = 30
 
 
 def snapshot_path(data_dir: Path, snapshot_id: int) -> Path:
     return data_dir / "ad" / f"{snapshot_id}.json.gz"
+
+
+def domain_score(rows: Iterable[tuple[str, str]]) -> dict[str, Any]:
+    """Оценка по (проверка, серьёзность) находкам с категориями реестра проверок."""
+    return score(rows, {c.code: c.category for c in CHECKS if c.category})
 
 
 def _domain_for(db: Session, export: AdExport) -> AdDomain:
@@ -79,6 +88,9 @@ def _store_findings(
     snapshot.analyzer_version = ANALYZER_VERSION
     snapshot.unchecked_json = json.dumps(gaps, ensure_ascii=False)
     snapshot.summary_json = json.dumps(summary, ensure_ascii=False)
+    # «Сырая» оценка для графика: статусы находок меняются позже и задним числом её не трогают.
+    raw = domain_score((f.check, f.severity) for f in findings if not f.allowlisted)
+    snapshot.score_json = json.dumps(raw, ensure_ascii=False)
 
 
 def analyze(export: AdExport, cfg: AdConfig, ca: CaData | None = None) -> tuple[ExportIndex, list[Finding]]:
@@ -194,6 +206,16 @@ def latest_snapshot(db: Session, domain_id: int) -> AdSnapshot | None:
     return db.execute(
         select(AdSnapshot).where(AdSnapshot.domain_id == domain_id).order_by(AdSnapshot.collected_at.desc(), AdSnapshot.id.desc())
     ).scalars().first()
+
+
+def score_history(db: Session, domain_id: int) -> list[dict[str, Any]]:
+    """Сырая оценка последних снапшотов домена, старые первыми; посчитанные до оценки пропускаются."""
+    snaps = db.execute(
+        select(AdSnapshot.id, AdSnapshot.collected_at, AdSnapshot.score_json)
+        .where(AdSnapshot.domain_id == domain_id, AdSnapshot.score_json != "")
+        .order_by(AdSnapshot.collected_at.desc(), AdSnapshot.id.desc()).limit(SCORE_HISTORY_LIMIT)
+    ).all()
+    return [{"snapshot_id": sid, "collected_at": at.isoformat(), "total": json.loads(raw)["total"]} for sid, at, raw in reversed(snaps)]
 
 
 def finding_keys(db: Session, snapshot_id: int) -> set[str]:

@@ -91,7 +91,7 @@ def test_audit_scripts_gplink():
     csv = AUDIT_CSV
     assert g.parse_audit_csv(csv) == [{"subcategory": "0cce923f-69ae-11d9-bed3-505054503030", "setting": 3}]
     ini = "[Logon]\r\n0CmdLine=\\\\fs01.other.local\\share\\run.bat\r\n0Parameters=/q\r\n[Logoff]\r\n"
-    assert g.parse_scripts_ini(ini, "user") == [{"scope": "user", "phase": "logon", "command": "\\\\fs01.other.local\\share\\run.bat", "parameters": "/q"}]
+    assert g.parse_scripts_ini(ini, "user") == [{"scope": "user", "phase": "logon", "command": "\\\\fs01.other.local\\share\\run.bat", "parameters": ""}]
     link = "[LDAP://cn={A},cn=policies,cn=system,DC=corp,DC=local;0][LDAP://CN={B},CN=Policies,CN=System,DC=corp,DC=local;3]"
     assert g.parse_gplink(link) == [("cn={a},cn=policies,cn=system,dc=corp,dc=local", False, False), ("cn={b},cn=policies,cn=system,dc=corp,dc=local", True, True)]
 

@@ -75,6 +75,26 @@ export interface CheckSummary {
 /** Порядок категорий на обзоре — как CATEGORIES в backend/api/modules/ad/core/checks/common.py. */
 export const CATEGORY_ORDER = ['accounts', 'privileged', 'kerberos', 'acl', 'gpo', 'dc', 'domain', 'trust', 'pki']
 
+/** Вклад проверки в оценку категории — вес её худшей открытой находки. */
+export interface ScoreCheck {
+  code: string
+  severity: Severity
+  points: number
+}
+
+/** Оценка домена (AD): 0 — чисто, 100 — худшее; total — максимум по категориям. */
+export interface DomainScore {
+  total: number
+  categories: Record<string, { title: string; score: number; checks: ScoreCheck[] }>
+}
+
+/** Точка графика: «сырая» оценка снапшота, без учёта статусов находок. */
+export interface ScorePoint {
+  snapshot_id: number
+  collected_at: string
+  total: number
+}
+
 /** Обзор: в snapshot модуль добавляет свой счётчик (объекты, хосты). */
 export interface OverviewBase {
   snapshot: {
@@ -90,6 +110,9 @@ export interface OverviewBase {
   counted?: { total: number; by_severity: Record<Severity, number>; statuses: FindingStatus[] }
   summary?: FindingSummary
   checks: CheckSummary[]
+  /** Только у модулей с оценкой (AD): живая — по учитываемым статусам. */
+  score?: DomainScore
+  score_history?: ScorePoint[]
 }
 
 export interface FindingBase {

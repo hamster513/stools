@@ -112,7 +112,7 @@ def collect_snapshot(
                 reader, lister = smb_access(conn.host, conn.username, decrypt(conn.password), pacer=pacer)
             except Exception as exc:  # noqa: BLE001 — без SYSVOL сбор всё равно полезен
                 notes.append(f"SYSVOL недоступен по SMB: {exc.__class__.__name__}")
-                handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; User Rights пропущены")
+                handle.tick(0, message=f"SYSVOL недоступен: {exc.__class__.__name__}; проверки по SYSVOL пропущены")
         else:
             notes.append("чтение SYSVOL выключено в подключении")
         handle.stage("collecting", message="объекты и дескрипторы")

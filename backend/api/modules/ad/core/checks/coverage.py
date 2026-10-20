@@ -14,6 +14,7 @@ from api.modules.ad.core.checks.adcs_ca import broken_security, unread
 from api.modules.ad.core.checks.critical_acl import DMSA_CLASS
 from api.modules.ad.core.checks.domain import functional_level_value
 from api.modules.ad.core.checks.gpo_settings import LINKS_UNKNOWN
+from api.modules.ad.core.checks.rodc import is_rodc, is_rodc_krbtgt
 from api.modules.ad.core.export import _LINK_CONTAINERS, CRITICAL_ACL_UNREAD, AdExport, ExportIndex
 from api.modules.ad.core.sd import parse_sd
 
@@ -22,11 +23,12 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     users = gpos = templates = pki_objects = enrollment_services = computers = 0
     has_os = has_primary_group = False
     dcs = dc_acl = dc_owner = 0
-    logon_dates = ca_certs = False
+    logon_dates = ca_certs = rodc_accounts = False
     for o in export.objects:
         ca_certs = ca_certs or bool(o.cACertificate)
         if o.cls in ("user", "computer"):
             has_primary_group = has_primary_group or o.primaryGroupID is not None
+            rodc_accounts = rodc_accounts or (is_rodc(o) if o.cls == "computer" else is_rodc_krbtgt(o))
         if o.cls == "user":
             users += 1
             logon_dates = logon_dates or bool(o.lastLogonTimestamp)
@@ -78,6 +80,8 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
             gaps[code] = "атрибуты учётных записей собраны старым сборщиком"
         note = "учётки без входов не проверены: нет whenCreated"
         gaps["InactiveUsers"] = f"{gaps['InactiveUsers']}; {note}" if "InactiveUsers" in gaps else note
+        if rodc_accounts:
+            gaps["RodcPasswordReplication"] = "атрибуты RODC собраны старым сборщиком"
     if gpos and not export.sysvol:
         note = next((n for n in export.collector.notes if "SYSVOL" in n), "")
         gaps["UserRightsAssignment"] = "файлы GptTmpl.inf из SYSVOL не прочитаны" + (f" ({note})" if note else "")
@@ -91,8 +95,12 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     if not templates and not enrollment_services:
         # В домене нет AD CS: проверкам ЦС и привязки проверять нечего, они честно чистые.
         return gaps
-    if not ca_certs:
-        gaps["CertificateStrength"] = "сертификаты ЦС не собраны (сборщик старой версии)"
+    cert_reasons = [] if ca_certs else ["сертификаты ЦС не собраны (сборщик старой версии)"]
+    # Оба сборщика пишут отказ хранилища как «сертификаты ЦС (CN=…) не прочитаны: <причина>».
+    if unread_stores := [n for n in export.collector.notes if n.startswith(CA_STORES_UNREAD)]:
+        cert_reasons.append(f"хранилища ЦС прочитаны не полностью ({'; '.join(unread_stores)})")
+    if cert_reasons:
+        gaps["CertificateStrength"] = "; ".join(cert_reasons)
     ca_reasons: list[str] = []
     if templates and not pki_objects:
         ca_reasons.append("ESC5 не проверен: выгрузка собрана без объектов PKI (старый сборщик)")
@@ -117,6 +125,7 @@ def coverage_gaps(export: AdExport, ca: CaData | None = None) -> dict[str, str]:
     return gaps
 
 
+CA_STORES_UNREAD = "сертификаты ЦС ("
 OLD_COLLECTOR = "настройки домена не собраны (сборщик старой версии)"
 PSO_UNREAD = "PSO не прочитаны или не видны (нужны права администратора домена); политика домена проверена"
 
@@ -160,6 +169,7 @@ def _trust_dns_gaps(export: AdExport) -> dict[str, str]:
 _GPO_FILE_CHECKS = ("GpoSecurityOptions", "DcLogonRights", "RestrictedGroups")
 _LINKS_UNKNOWN_CHECKS = ("GpoSecurityOptions", "DcLogonRights", "DcAuditPolicy")
 _GPO_BLOCK_CHECKS = ("GpoRegistrySettings", "DcAuditPolicy", "GpoExternalFiles", "SysvolAcl")
+_GPO_READ_CHECKS = ("GppPasswords", *_GPO_FILE_CHECKS, *_GPO_BLOCK_CHECKS)
 
 
 def _gpo_gaps(export: AdExport) -> dict[str, str]:
@@ -183,6 +193,13 @@ def _gpo_gaps(export: AdExport) -> dict[str, str]:
     if not any(o.gpLink is not None for o in export.objects if o.cls in _LINK_CONTAINERS):
         for code in _LINKS_UNKNOWN_CHECKS:
             reasons.setdefault(code, []).append(LINKS_UNKNOWN)
+    # Отказ чтения файла GPO сборщик пишет в notes записи и идёт дальше: без этой приписки проверка выглядела бы полной.
+    failed = [dn for dn, data in (export.gpo or {}).items() if data.notes]
+    if failed:
+        names = {o.dn.lower(): o.displayName or o.label for o in export.objects if o.cls == "groupPolicyContainer"}
+        shown = ", ".join(names.get(dn.lower(), dn) for dn in failed[:3])
+        for code in _GPO_READ_CHECKS:
+            reasons.setdefault(code, []).append(f"проверено частично: {len(failed)} GPO с отказами чтения ({shown})")
     return {code: "; ".join(parts) for code, parts in reasons.items()}
 
 

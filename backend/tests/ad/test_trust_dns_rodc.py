@@ -51,7 +51,7 @@ def test_rodc_rules_only_with_rodc():
     allowed = group("Allowed RODC Password Replication Group", rid(571), [f"CN=u1,CN=Users,{DN}"])
     rodc = computer("RODC1", 1201, uac=0x4000000 | 0x1000, revealOnDemand=[da], neverReveal=[],
                     revealedUsers=[f"CN=adm,CN=Users,{DN}"], krbTgtLink=f"CN=krbtgt_1111,CN=Users,{DN}")
-    objects = [user("u1", 1101), user("adm", 1102), user("krbtgt_1111", 1301, uac=514), user("krbtgt_2222", 1302, uac=514), denied, allowed, rodc]
+    objects = [user("u1", 1101, primaryGroupID=513), user("adm", 1102), user("krbtgt_1111", 1301, uac=514), user("krbtgt_2222", 1302, uac=514), denied, allowed, rodc]
     got = {f.key_extra for f in run("RodcPasswordReplication", mini_export(objects, admins=["adm"]))}
     assert got == {"reveal_privileged", "never_reveal_missing", "admin_revealed", "krbtgt_orphan", "allowed_group_not_empty", "denied_group_incomplete"}
     no_rodc = [o for o in objects if o is not rodc and o.get("sam") != "krbtgt_1111"]
@@ -88,3 +88,32 @@ def test_rodc_complete_denied_group_and_policy_are_clean():
                group("Enterprise Admins", rid(519)), group("Schema Admins", rid(518)), group("Domain Controllers", rid(516)),
                group("Allowed RODC Password Replication Group", rid(571))]
     assert run("RodcPasswordReplication", mini_export(objects)) == []
+
+
+def _rodc_objects(**acct):
+    rodc = computer("RODC1", 1201, uac=0x4000000 | 0x1000, **acct)
+    return [user("krbtgt_1111", 1301, uac=514, **acct), rodc]
+
+
+def _strip_primary_group(exp):
+    for o in exp.objects:
+        o.primaryGroupID = None
+    return exp
+
+
+def test_rodc_attributes_of_old_collector_are_unchecked():
+    # Сборщик до 1.1/2.1 не читал атрибуты RODC: их отсутствие — не «список запрета пуст».
+    exp = _strip_primary_group(mini_export(_rodc_objects()))
+    assert run("RodcPasswordReplication", exp) == []
+    assert coverage_gaps(exp)["RodcPasswordReplication"] == "атрибуты RODC собраны старым сборщиком"
+    # Членство групп старый сборщик собирал: эти виды остаются.
+    exp = _strip_primary_group(mini_export([*_rodc_objects(), group("Denied RODC Password Replication Group", rid(572))]))
+    assert {f.key_extra for f in run("RodcPasswordReplication", exp)} == {"denied_group_incomplete"}
+    assert coverage_gaps(exp)["RodcPasswordReplication"] == "атрибуты RODC собраны старым сборщиком"
+    new = mini_export([*_rodc_objects(primaryGroupID=515), group("Denied RODC Password Replication Group", rid(572))])
+    assert {f.key_extra for f in run("RodcPasswordReplication", new)} == {"never_reveal_missing", "krbtgt_orphan", "denied_group_incomplete"}
+    assert "RodcPasswordReplication" not in coverage_gaps(new)
+
+
+def test_old_collector_without_rodc_has_no_rodc_gap():
+    assert "RodcPasswordReplication" not in coverage_gaps(_strip_primary_group(mini_export([user("u1", 1101)])))

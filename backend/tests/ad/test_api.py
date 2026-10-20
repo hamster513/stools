@@ -107,6 +107,28 @@ def test_accepted_risk_survives_next_snapshot_and_detail_has_history(auth_client
     assert auth_client.get(f"/api/ad/snapshots/{snap2}/findings?check=Kerberoast").json()["items"][0]["status"] == "new"
 
 
+def test_overview_score_is_live_and_history_is_raw(auth_client: TestClient) -> None:
+    assert _upload(auth_client, build_export())["status"] == "done"
+    domain_id = auth_client.get("/api/ad/domains").json()[0]["id"]
+    before = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()
+    assert 0 < before["score"]["total"] <= 100
+    privileged = before["score"]["categories"]["privileged"]
+    assert privileged["title"] == "Привилегированные учётные записи" and privileged["score"] < 100
+    assert any(c["code"] == "AdminCount" for c in privileged["checks"])
+    history = before["score_history"]
+    assert len(history) == 1 and history[0]["total"] == before["score"]["total"]
+    assert set(history[0]) == {"snapshot_id", "collected_at", "total"}
+    snap = history[0]["snapshot_id"]
+    item = auth_client.get(f"/api/ad/snapshots/{snap}/findings?check=AdminCount").json()["items"][0]
+    ref = {"module": "ad", "scope_id": domain_id, "key": item["key"]}
+    r = auth_client.put("/api/findings/state", json={**ref, "status": "risk_accepted", "comment": "бывший администратор, права сняты"})
+    assert r.status_code == 200, r.text
+    after = auth_client.get(f"/api/ad/domains/{domain_id}/overview").json()
+    assert after["score"]["categories"]["privileged"]["score"] < privileged["score"]
+    assert not any(c["code"] == "AdminCount" for c in after["score"]["categories"]["privileged"]["checks"])
+    assert after["score_history"] == history
+
+
 def test_reanalyze_with_new_rules_and_delete(auth_client: TestClient, app_settings: Any) -> None:
     assert _upload(auth_client, build_export())["status"] == "done"
     snap = auth_client.get("/api/ad/snapshots").json()[0]
