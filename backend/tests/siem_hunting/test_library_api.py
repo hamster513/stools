@@ -252,14 +252,18 @@ def test_check_query_needs_connection(auth_client: TestClient, fake_events: Fake
 def test_settings_roundtrip(auth_client: TestClient) -> None:
     got = auth_client.get(f"{BASE}/settings").json()
     assert got["window_from"] == "01:00" and got["schedule"] is None and got["nightly_enabled"] is True
-    put = {**{k: v for k, v in got.items() if k != "schedule"}, "window_from": "03:15", "hunt_pause_s": 45}
+    # Расписанием владеет Планировщик; страница настроек правит только техническое.
+    r = auth_client.put(f"{BASE}/scheduler", json={"nightly_enabled": True, "window_from": "03:15", "hunt_pause_s": 45})
+    assert r.status_code == 200, r.text
+    put = {**{k: v for k, v in got.items() if k != "schedule"}, "request_timeout_s": 120}
     r = auth_client.put(f"{BASE}/settings", json=put)
     assert r.status_code == 200, r.text
     assert r.json()["schedule"]["window_from"] == "03:15" and r.json()["schedule"]["interval_hours"] == 24
     again = auth_client.get(f"{BASE}/settings").json()
-    # Конец окна выводится из начала: час после него.
-    assert again["hunt_pause_s"] == 45 and again["schedule"]["window_to"] == "04:15" and "window_to" not in again
-    assert auth_client.put(f"{BASE}/settings", json={**put, "window_from": "25:99"}).status_code == 422
+    # Конец окна выводится из начала: час после него. Поля расписания из тела настроек не берутся.
+    assert again["request_timeout_s"] == 120 and again["hunt_pause_s"] == 45
+    assert again["schedule"]["window_to"] == "04:15" and "window_to" not in again
+    assert auth_client.put(f"{BASE}/settings", json={**put, "request_timeout_s": 0}).status_code == 422
 
 
 def test_settings_corrupt_json_returns_defaults(auth_client: TestClient, db_session: Any) -> None:

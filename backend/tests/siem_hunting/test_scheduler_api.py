@@ -103,3 +103,18 @@ def test_scheduler_auditor_forbidden(client_as: Callable[[str], TestClient], db_
     body = {"nightly_enabled": True, "window_from": "01:00", "hunt_pause_s": 30}
     assert auditor.put(URL, json=body).status_code == 403
     assert auditor.put(ORDER, json={"ids": [a.id]}).status_code == 403
+
+
+def test_settings_put_does_not_touch_scheduler_fields(auth_client: TestClient, db_session: Any) -> None:
+    """Страница настроек шлёт свою копию полей расписания: залежавшаяся вкладка не должна откатывать Планировщик."""
+    auth_client.put(URL, json={"nightly_enabled": False, "window_from": "03:30", "hunt_pause_s": 45})
+    stale = auth_client.get("/api/siem/hunting/settings").json()
+    stale.pop("schedule", None)
+    stale.update({"nightly_enabled": True, "window_from": "01:00", "hunt_pause_s": 30, "retention_days": 10})
+
+    r = auth_client.put("/api/siem/hunting/settings", json=stale)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["retention_days"] == 10
+    assert (body["nightly_enabled"], body["window_from"], body["hunt_pause_s"]) == (False, "03:30", 45)

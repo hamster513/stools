@@ -38,11 +38,12 @@ def upgrade() -> None:
     # Умолчание базы нужно было только для заполнения: место нового ханта ставит код (в конец).
     op.alter_column("th_hunt", "position", server_default=None)
     # jsonb_strip_nulls убирает ключ, если старого значения не было: умолчание возьмёт модель.
+    # Пустая строка — «не задано» для read_setting, её ::jsonb не разберёт — пропускаем.
     op.execute(
         "UPDATE app_setting SET value_json = ("
         " (value_json::jsonb - 'query_pause_s' - 'window_to')"
         " || jsonb_strip_nulls(jsonb_build_object('hunt_pause_s', value_json::jsonb -> 'query_pause_s'))"
-        ")::text WHERE key = 'siem_th'"
+        ")::text WHERE key = 'siem_th' AND value_json <> ''"
     )
 
 
@@ -53,6 +54,6 @@ def downgrade() -> None:
         " (value_json::jsonb - 'hunt_pause_s')"
         " || jsonb_strip_nulls(jsonb_build_object('query_pause_s', value_json::jsonb -> 'hunt_pause_s'))"
         " || '{\"window_to\": \"02:00\"}'::jsonb"
-        ")::text WHERE key = 'siem_th'"
+        ")::text WHERE key = 'siem_th' AND value_json <> ''"
     )
     op.drop_column("th_hunt", "position")
