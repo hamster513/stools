@@ -64,7 +64,7 @@ def loaded(db_session: Session, app_settings: Any, now: dt.datetime) -> Session:
 
 def test_sync_creates_one_asset_per_host(loaded: Session) -> None:
     counts = sync(loaded)
-    assert counts == {"vm": 2, "ksc": 2, "ad": 3}
+    assert counts == {"vm": 2, "ksc": 2, "ad": 3, "users": 17}
     assets = live_assets(loaded)
     assert set(assets) == {"msk1", "ws01", "srv01", "old01"}
     per_asset = dict(loaded.execute(select(AssetObservation.asset_id, func.count()).group_by(AssetObservation.asset_id)).tuples().all())
@@ -273,7 +273,7 @@ def test_sync_waits_for_scan_or_dns_write(loaded: Session) -> None:
     waited = time.monotonic() - started
     holder.join()
     assert waited >= 0.5
-    assert counts == {"vm": 2, "ksc": 2, "ad": 3}
+    assert counts == {"vm": 2, "ksc": 2, "ad": 3, "users": 17}
     assert loaded.execute(select(func.count()).select_from(AssetObservation)).scalar() == 7
     assert not rerun_flag(loaded)
 
@@ -357,7 +357,7 @@ def test_ksc_import_requests_sync(db_session: Session, app_settings: Any, now: d
     load_ksc(db_session, Path(app_settings.data_dir), [("SRV01", "10.10.0.11")], now)
     jobs = db_session.execute(select(AssetJob)).scalars().all()
     assert [(j.kind, j.status, j.started_by) for j in jobs] == [("sync", "done", "после импорта")]
-    assert jobs[0].message == "KSC: VM 0 · KSC 1 · AD 0"
+    assert jobs[0].message == "KSC: VM 0 · KSC 1 · AD 0 · пользователи 2"
     assert set(live_assets(db_session)) == {"srv01"}
 
 

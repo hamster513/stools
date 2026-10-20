@@ -34,6 +34,7 @@ from api.modules.assets.services.assets import (
     settings_row,
 )
 from api.modules.assets.services.networks import load_networks
+from api.modules.assets.services.users import sync_users
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
 
@@ -41,6 +42,8 @@ log = logging.getLogger("stools.assets")
 
 SYNC_SOURCES = ("vm", "ksc", "ad")
 SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD"}
+#: Итог задачи: после источников — пользователи (`services.users`).
+COUNT_TITLES = {**SOURCE_TITLES, "users": "пользователи"}
 #: Кто запустил задачу после импорта модуля: человека у неё нет.
 AUTO_STARTED_BY = "после импорта"
 #: Прогресс и проверка отмены — раз в столько наблюдений.
@@ -91,7 +94,7 @@ def sync_job(db: Session, handle: JobHandle, trigger: str) -> None:
     counts = run_sync(db, handle)
     if counts is None:
         return
-    handle.stage("done", message=f"{trigger}: " + " · ".join(f"{SOURCE_TITLES[s]} {n}" for s, n in counts.items()))
+    handle.stage("done", message=f"{trigger}: " + " · ".join(f"{COUNT_TITLES[s]} {n}" for s, n in counts.items()))
 
 
 # ---- Чтение источников ----------------------------------------------------
@@ -295,7 +298,8 @@ def _locked_sync(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> di
 
 def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict[str, int]:
     """Читает источники, для каждого наблюдения — match → upsert asset_observation → пересчёт
-    актива; пропавшим ставит gone_at. Возвращает число наблюдений по источникам."""
+    актива; пропавшим ставит gone_at. Возвращает число наблюдений по источникам и, если среди
+    источников AD или KSC, — число пользователей (`users`)."""
     from api.settings import get_settings
 
     data_dir = get_settings().data_dir
@@ -337,6 +341,10 @@ def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict
                     index.put(asset, [observed(r, extra={}) for r in per_asset[asset_id]])
         db.commit()
         counts[source] = len(seen)
+    # Пользователи — последним шагом: связям с хостами нужны уже сопоставленные активы.
+    if "ad" in sources or "ksc" in sources:
+        counts["users"] = sync_users(db, handle, data_dir, now)["users"]
+        db.commit()
     return counts
 
 
