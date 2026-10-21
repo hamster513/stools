@@ -24,6 +24,20 @@ RUN npm run build
 # которое эта задача заводит. Раз порт 80 (и с ним root) обязателен для
 # заявленного поведения, отдельно решать между непривилегированным
 # пользователем и автоматическим HTTPS незачем — оставляем root.
+# Бинарник Caddy собирается заново образом-сборщиком: готовый caddy:2-alpine отстаёт
+# по версии Go и тащит уязвимости стандартной библиотеки (сканер контейнеров находил
+# их в stdlib), а сборщик идёт со свежим Go. Версия Caddy закреплена — та же, что в
+# базовом образе, меняется осознанно вместе с ним.
+FROM caddy:2-builder-alpine AS caddybuild
+ARG CADDY_VERSION=v2.11.7
+# Зависимости с известными уязвимостями поднимаются здесь же (--with модуль@версия),
+# пока Caddy не выпустит релиз с ними; при смене CADDY_VERSION список пересматривается.
+ARG XNET_VERSION=v0.60.0
+RUN xcaddy build ${CADDY_VERSION} --with golang.org/x/net/http2@${XNET_VERSION} --output /usr/bin/caddy
+
 FROM caddy:2-alpine
+# Пакеты Alpine обновляются при сборке: базовый образ отстаёт от исправлений (zlib).
+RUN apk upgrade --no-cache
+COPY --from=caddybuild /usr/bin/caddy /usr/bin/caddy
 COPY --from=build /app/dist /srv
 COPY ops/Caddyfile /etc/caddy/Caddyfile
