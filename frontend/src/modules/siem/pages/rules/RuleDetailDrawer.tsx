@@ -335,7 +335,8 @@ function withTableSpans(body: string, spans: RuleBodySpan[], tables: RuleTableSt
     const tone = toneOf(t)
     if (!tone || !t.name) continue
     const escaped = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const re = new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'gu')
+    // Границы токена включают «-» и «.»: имя `Admins` не должно красить соседний `Admins-Old` или `Admins.bak`.
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_.-])${escaped}(?![\\p{L}\\p{N}_.-])`, 'gu')
     for (const m of body.matchAll(re)) {
       const start = m.index
       const end = start + t.name.length
@@ -365,7 +366,7 @@ function TablesLine({ tables }: { tables: RuleTableState[] }) {
             ) : tone === 'empty' ? (
               <span className="text-risk-high">пуст</span>
             ) : (
-              <span className="font-mono tabular-nums">{t.value_count} значений</span>
+              <span className="font-mono tabular-nums">значений: {t.value_count}</span>
             )}
           </span>
         )
