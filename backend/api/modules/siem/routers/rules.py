@@ -218,7 +218,9 @@ def list_rules(
     installed: bool | None = None,
     deployment_set: str | None = None,
     folder: str | None = None,
-    limit: int = Query(default=500, ge=1, le=2000),
+    # Страница инвентаря читает снапшот целиком и строит фасеты у себя: предел должен
+    # вмещать базу заказчика (тысячи правил), а не резать её по тысяче.
+    limit: int = Query(default=500, ge=1, le=20000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),

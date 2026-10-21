@@ -80,7 +80,7 @@ class FakeKb:
         if p == "/api-studio/siem/deploy/stats":
             if self.stats_status != 200:
                 return httpx.Response(self.stats_status, json={"detail": "forbidden"})
-            installed = sum(1 for o in self.objects if o["DeploymentStatus"] == "Installed")
+            installed = sum(1 for o in self.objects if o.get("DeploymentStatus") == "Installed")
             return httpx.Response(200, json={"Installed": installed, "NotInstalled": len(self.objects) - installed, "Outdated": 0})
         if p == "/api-studio/siem/objects/list":
             body = json.loads(request.content)

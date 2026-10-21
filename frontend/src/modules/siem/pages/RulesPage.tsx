@@ -56,7 +56,8 @@ function folderOf(r: RuleListItem): string {
 
 export function RulesPage({ snapshotId }: { snapshotId: number }) {
   const searchParams = useSearchParams()
-  const query = useRules({ snapshot_id: snapshotId, limit: 1000 })
+  // Весь снапшот одним запросом: фасеты и фильтры считаются на клиенте, строки виртуализированы.
+  const query = useRules({ snapshot_id: snapshotId, limit: 20000 })
   const [author, setAuthor] = useState<string | undefined>()
   const [category, setCategory] = useState<string | undefined>()
   const [onlyScoped, setOnlyScoped] = useState(searchParams.get('scoped') === '1')

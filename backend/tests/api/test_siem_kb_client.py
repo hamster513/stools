@@ -213,3 +213,15 @@ def test_export_forbidden_on_studio_tries_legacy_and_reports_first_refusal(tmp_p
     with pytest.raises(KbError, match="HTTP 403") as exc_info:
         _client(fake).export_all(DB, tmp_path / "kb2.zip")
     assert exc_info.value.status == 403
+
+
+def test_installed_from_general_deployment_status_r28() -> None:
+    """KB 27+/R28 отдаёт статус объекта в `GeneralDeploymentStatus`, иногда объектом с Name."""
+    a = kb_object("00000000-0000-0000-0000-00000000000a", "A", installed=False)
+    del a["DeploymentStatus"]; a["GeneralDeploymentStatus"] = "Installed"
+    b = kb_object("00000000-0000-0000-0000-00000000000b", "B", installed=False)
+    del b["DeploymentStatus"]; b["GeneralDeploymentStatus"] = {"Name": "Installed"}
+    c = kb_object("00000000-0000-0000-0000-00000000000c", "C", installed=False)
+    del c["DeploymentStatus"]; c["GeneralDeploymentStatus"] = "NotInstalled"
+    got = {o.name: o.installed for o in _client(FakeKb(objects=[a, b, c])).correlation_objects(DB)}
+    assert got == {"A": True, "B": True, "C": False}

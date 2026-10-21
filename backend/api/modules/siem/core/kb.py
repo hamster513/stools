@@ -245,7 +245,9 @@ class KbClient:
                 yield KbObject(
                     guid=str(i["Id"]).lower(), short_id=str(i.get("ObjectId") or ""), name=str(i.get("SystemName") or ""),
                     folder_path=str(i.get("FolderPath") or "").replace("\\", "/"), origin_id=str(i.get("OriginId") or ""),
-                    installed=str(i.get("DeploymentStatus") or "").lower() == "installed",
+                    # KB 26 отдаёт `DeploymentStatus`, KB 27+/R28 — `GeneralDeploymentStatus` (как в mpsiemlib);
+                    # статус бывает строкой или объектом с Name.
+                    installed=_text(i.get("DeploymentStatus") or i.get("GeneralDeploymentStatus")).lower() == "installed",
                 )
             if not rows:
                 return
