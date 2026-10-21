@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { useFindingDetail } from '@/modules/siem/api/queries'
 import type { FindingListItem } from '@/modules/siem/api/types'
-import { FINDING_KIND_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS } from '@/modules/siem/api/types'
+import { FINDING_KIND_ADVICE, FINDING_KIND_EXPLANATION, FINDING_KIND_LABELS, OBJECT_TYPE_LABELS, POLARITY_LABELS } from '@/modules/siem/api/types'
 
 const SHAPE_LABELS: Record<string, string> = {
   fqdn: 'имя узла',
@@ -90,6 +90,17 @@ export function DetailDrawer({ finding, ordinal, onClose, onChanged, statusesAva
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-4">
+              {/* Суть проверки и совет — прямо в карточке: по одному названию класса («одиночный литерал»)
+                  человек не понимает, в чём претензия и что с этим делать. Текст тот же, что в карточке правила. */}
+              <div className="mb-4 rounded border border-grid bg-app-bg px-3 py-2 text-xs leading-relaxed">
+                <p className="text-text">{FINDING_KIND_EXPLANATION[finding.kind]}</p>
+                <p className="mt-1 text-text-secondary">{FINDING_KIND_ADVICE[finding.kind]}</p>
+                {finding.polarity === 'assertion' && (
+                  <p className="mt-1 text-text-secondary">
+                    Сравнение утвердительное: такое значение часто и есть предмет детекта. Если оно задано самим продуктом или протоколом, находку честно закрыть как ложную.
+                  </p>
+                )}
+              </div>
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
                 <dt className="text-text-secondary">Объект</dt>
                 <dd className="truncate font-mono text-text" title={finding.object_name}>
