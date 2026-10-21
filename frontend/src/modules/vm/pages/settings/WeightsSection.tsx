@@ -73,7 +73,7 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
 
   const { medium, high, critical } = w.levels
   // Та же проверка, что на сервере (422): не отправлять заведомо неверные пороги.
-  const levelsOk = 0 < medium && medium < high && high < critical && critical <= 100
+  const levelsOk = [medium, high, critical].every(Number.isInteger) && 0 < medium && medium < high && high < critical && critical <= 100
 
   return (
     <Section
@@ -92,7 +92,7 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
           средний ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={medium} onChange={(e) => edit((d) => { d.levels.medium = Number(e.target.value) })} aria-label="Уровни: средний от" disabled={!write} />
           высокий ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={high} onChange={(e) => edit((d) => { d.levels.high = Number(e.target.value) })} aria-label="Уровни: высокий от" disabled={!write} />
           критический ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={critical} onChange={(e) => edit((d) => { d.levels.critical = Number(e.target.value) })} aria-label="Уровни: критический от" disabled={!write} />
-          {!levelsOk && <span className="text-kind-1">нужно 0 &lt; средний &lt; высокий &lt; критический ≤ 100</span>}
+          {!levelsOk && <span className="text-kind-1">нужны целые: 0 &lt; средний &lt; высокий &lt; критический ≤ 100</span>}
         </div>
       </div>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">

@@ -121,7 +121,7 @@ export function OverviewPage() {
         <Stat label="Хостов с уязвимостями" value={o.hosts} to="/vm/vulns?sort=host_asc" />
         <Stat label={o.pairs === o.pairs_all ? 'Пар хост–CVE' : `Пар хост–CVE (всего ${o.pairs_all.toLocaleString('ru-RU')})`} value={o.pairs} to="/vm/vulns" />
         <Stat label="Уникальных CVE" value={o.cves} to="/vm/vulns?sort=cve_asc" />
-        <Stat label={`Выше порога ${o.threshold}`} value={o.above_threshold} to="/vm/vulns?level=critical" tone="text-risk-critical" />
+        <Stat label={`Выше порога ${o.threshold}`} value={o.above_threshold} to="/vm/vulns?sort=risk_desc" tone="text-risk-critical" />
       </div>
 
       {/* Статусы пар (общий механизм находок): пары, распределение и «выше порога» выше

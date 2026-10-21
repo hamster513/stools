@@ -18,7 +18,8 @@ interface Props {
 }
 
 function num(v: number): string {
-  return v.toLocaleString('ru-RU', { maximumFractionDigits: 3 })
+  // Значащие цифры, а не знаки после запятой: типичный EPSS 0,0004 иначе показывался бы как «0».
+  return v.toLocaleString('ru-RU', { maximumSignificantDigits: 3 })
 }
 
 /** Члены формулы — ровно два знака, как в строке `0,82 × 0,98 × 1,00 × 100 = 81`. */
