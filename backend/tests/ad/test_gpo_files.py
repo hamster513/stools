@@ -70,7 +70,8 @@ def test_inf_sections():
 def test_gpp_items_never_carry_the_password():
     items = g.parse_gpp("Groups.xml", "machine", GROUPS)
     assert items[0] == {"scope": "machine", "file": "Groups.xml", "kind": "User", "name": "localadm", "user": "localadm", "cpassword": True,
-                        "action": "U", "members": [], "group_sid": "", "group_name": "", "path": "", "filtered": False, "delete_all": False}
+                        "action": "U", "members": [], "group_sid": "", "group_name": "", "path": "", "filtered": False, "delete_all": False,
+                        "disabled": False}
     assert items[1]["group_sid"] == "S-1-5-32-544" and items[1]["members"] == [{"name": "CORP\\Domain Users", "sid": "S-1-5-21-1000-2000-3000-513", "action": "ADD"}]
     assert "j1Uyj3Vx8TY9" not in repr(items)
 
@@ -89,6 +90,19 @@ def test_gpp_group_filters_and_delete_all():
     assert (item["filtered"], item["delete_all"]) == (False, False)
     [item] = g.parse_gpp("Groups.xml", "machine", _gpp_group('deleteAllGroups="1"', "<Filters/>"))
     assert (item["filtered"], item["delete_all"]) == (False, True)
+
+
+def test_gpp_disabled_item_and_collection():
+    """disabled="1" у элемента или у любого предка (коллекции) — выключен; без атрибута и "0" — нет."""
+    group = _gpp_group('deleteAllUsers="0"')
+    [item] = g.parse_gpp("Groups.xml", "machine", group.replace('<Group name=', '<Group disabled="1" name='))
+    assert item["disabled"] is True
+    [item] = g.parse_gpp("Groups.xml", "machine", group.replace("<Groups>", '<Groups disabled="1">'))
+    assert item["disabled"] is True
+    [item] = g.parse_gpp("Groups.xml", "machine", group)
+    assert item["disabled"] is False
+    [item] = g.parse_gpp("Groups.xml", "machine", group.replace('<Group name=', '<Group disabled="0" name=').replace("<Groups>", '<Groups disabled="0">'))
+    assert item["disabled"] is False
 
 
 def test_gpp_rejects_doctype():

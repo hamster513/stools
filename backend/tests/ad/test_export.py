@@ -108,7 +108,7 @@ def test_new_optional_fields_are_read_and_old_export_still_loads():
 def test_old_gpp_item_fields_none():
     """Выгрузки сборщиков до LDAP 1.4 / PowerShell 2.5: признаков GPP и UPN нет — None, «не собрано»."""
     item = GppItem.model_validate({"scope": "machine", "file": "Groups.xml", "kind": "Group"})
-    assert item.filtered is None and item.delete_all is None
+    assert item.filtered is None and item.delete_all is None and item.disabled is None
     obj = AdObject.model_validate({"dn": user_dn("helpdesk"), "class": "user"})
     assert obj.userPrincipalName is None and obj.displayName is None
     new = AdObject.model_validate({"dn": user_dn("helpdesk"), "class": "user", "userPrincipalName": "helpdesk@corp.local"})

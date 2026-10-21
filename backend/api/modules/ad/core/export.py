@@ -323,10 +323,12 @@ class GppItem(BaseModel):
     group_sid: str = ""
     group_name: str = ""
     path: str = ""
-    #: Сборщики LDAP 1.4 / PowerShell 2.5: есть нацеливание (Filters с условиями) и состав заменяется
-    #: (deleteAllUsers/deleteAllGroups = "1"). None — выгрузка старого сборщика, не собрано.
+    #: Сборщики LDAP 1.4 / PowerShell 2.5: есть нацеливание (Filters с условиями), состав заменяется
+    #: (deleteAllUsers/deleteAllGroups = "1") и элемент выключен (disabled="1" у него или у предка).
+    #: None — выгрузка старого сборщика, не собрано.
     filtered: bool | None = None
     delete_all: bool | None = None
+    disabled: bool | None = None
 
 
 class GpoAudit(BaseModel):

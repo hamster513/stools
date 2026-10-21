@@ -201,6 +201,7 @@ def parse_gpp(file: str, scope: str, xml_text: str) -> list[dict[str, Any]]:
         root = ET.fromstring(xml_text.lstrip("﻿"))
     except ET.ParseError as exc:
         raise ValueError(f"{file}: XML не разобран ({exc})") from exc
+    parents = {c: p for p in root.iter() for c in p}
     out: list[dict[str, Any]] = []
     for el in root.iter():
         props = el.find("Properties")
@@ -227,8 +228,19 @@ def parse_gpp(file: str, scope: str, xml_text: str) -> list[dict[str, Any]]:
             "filtered": filters is not None and len(filters) > 0,
             # Замена состава группы: перед добавлением участников удаляются все пользователи и/или группы.
             "delete_all": "1" in (props.get("deleteAllUsers"), props.get("deleteAllGroups")),
+            # Элемент выключен в GPMC: disabled="1" у него или у любого предка (коллекции).
+            "disabled": _disabled(el, parents),
         })
     return out
+
+
+def _disabled(el: ET.Element, parents: dict[ET.Element, ET.Element]) -> bool:
+    node: ET.Element | None = el
+    while node is not None:
+        if node.get("disabled") == "1":
+            return True
+        node = parents.get(node)
+    return False
 
 
 def _first(el: ET.Element, attrs: tuple[str, ...]) -> str:
