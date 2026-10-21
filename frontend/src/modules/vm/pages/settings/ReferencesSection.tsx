@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { Download, Upload } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useDownloadRef, useRefs, useUploadRef } from '@/modules/vm/api/queries'
+import { useDownloadRef, useRefs, useUploadBundle, useUploadRef } from '@/modules/vm/api/queries'
 import type { RefState } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
@@ -9,12 +9,15 @@ import { cn } from '@/lib/cn'
 import { Section } from '@/platform/collector/ui'
 
 const ABOUT: Record<string, string> = {
-  epss: 'Вероятность эксплуатации за 30 дней от FIRST; без неё берётся 0.5.',
+  epss: 'Вероятность эксплуатации за 30 дней от FIRST; без неё берётся априор из настроек (0.01) с пометкой.',
   nvd: 'Балл CVSS, метрики и описания CVE; фиды по годам, можно грузить частями.',
   exploitdb: 'Публичные эксплойты; тип эксплойта — множитель ExDB_param.',
   msf: 'Модули Metasploit; ранг модуля — множитель MSF_param.',
+  kev: 'Каталог эксплуатируемых уязвимостей CISA; попадание — вероятность эксплуатации 1.0.',
 }
-const ACCEPT: Record<string, string> = { epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json' }
+const ACCEPT: Record<string, string> = { epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }
+const LINK = 'text-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
+const SOURCE: Record<string, string> = { network: 'сеть', file: 'файл', bundle: 'архив' }
 
 function RefCard({ r }: { r: RefState }) {
   // Аудитору остаётся состояние справочника: что загружено, когда и откуда.
@@ -43,7 +46,7 @@ function RefCard({ r }: { r: RefState }) {
       <div className="mb-1 flex items-center justify-between">
         <span className="text-sm font-medium text-text">{r.title}</span>
         <span className={cn('text-[11px]', r.stale ? 'text-risk-medium' : 'text-text-secondary')}>
-          {r.loaded_at ? `${new Date(r.loaded_at).toLocaleDateString('ru-RU')} · ${r.source === 'network' ? 'сеть' : 'файл'}` : 'не загружен'}
+          {r.loaded_at ? `${new Date(r.loaded_at).toLocaleDateString('ru-RU')} · ${SOURCE[r.source ?? ''] ?? 'файл'}` : 'не загружен'}
           {r.stale && r.loaded_at && ' · устарел'}
         </span>
       </div>
@@ -76,13 +79,49 @@ function RefCard({ r }: { r: RefState }) {
   )
 }
 
+function BundleUpload({ refs }: { refs: RefState[] }) {
+  // Скрипт для сети без интернета собирает все ленты в один zip; грузится он одной задачей.
+  const { write } = useCan()
+  const upload = useUploadBundle()
+  const inputRef = useRef<HTMLInputElement>(null)
+  // Задача архива занимает все справочники сразу: у каждой карточки один и тот же номер.
+  // Так она и отличается от задачи одной карточки, без отдельного запроса списка задач.
+  const ids = new Set(refs.map((r) => r.active_job_id))
+  const bundleJob = refs.length > 1 && ids.size === 1 ? refs[0].active_job_id : null
+  const busy = refs.some((r) => r.active_job_id !== null) || upload.isPending
+  const error = upload.error
+  const errorText = error instanceof ApiRequestError ? error.message : error ? 'Не удалось запустить' : null
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+      <span>
+        Для сети без интернета: скрипт собирает все справочники в один архив —{' '}
+        <a className={LINK} href="/vm/download-references.ps1" download>Windows (PowerShell, прокси из системы)</a>
+        {' · '}
+        <a className={LINK} href="/vm/download-references.sh" download>Linux</a>
+      </span>
+      {write && (
+        <>
+          <Button onClick={() => inputRef.current?.click()} loading={upload.isPending} disabled={busy}>
+            <Upload size={13} aria-hidden /> Загрузить архив
+          </Button>
+          <input ref={inputRef} type="file" accept=".zip" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) upload.mutate(file); e.target.value = '' }} />
+        </>
+      )}
+      {bundleJob !== null && <span className="text-[11px]">идёт задача #{bundleJob}</span>}
+      {errorText && <span className="text-[11px] text-kind-1">{errorText}</span>}
+    </div>
+  )
+}
+
 export function ReferencesSection() {
   const refs = useRefs()
   return (
     <Section
       title="Справочники"
-      about="Скачиваются из сети или загружаются файлами (для сетей без интернета есть скрипт docs/vm/download-references.sh). После загрузки витрина CVE пересобирается и риск пересчитывается. Старше 30 дней — помечается устаревшим."
+      about="Скачиваются из сети или загружаются файлами — по одному или все сразу архивом. После загрузки витрина CVE пересобирается и риск пересчитывается. Старше 30 дней — помечается устаревшим."
     >
+      <BundleUpload refs={refs.data ?? []} />
       <div className="grid gap-3 md:grid-cols-2">
         {(refs.data ?? []).map((r) => <RefCard key={r.name} r={r} />)}
       </div>

@@ -267,6 +267,8 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   ref_nvd: 'Справочник NVD',
   ref_exploitdb: 'Справочник ExploitDB',
   ref_msf: 'Справочник Metasploit',
+  ref_kev: 'Справочник KEV',
+  ref_bundle: 'Архив справочников',
   recalculate: 'Пересчёт риска',
   bulk_status: 'Массовая смена статусов',
 }
@@ -279,9 +281,10 @@ export const STAGE_LABELS: Record<string, string> = {
   enriching: 'обогащение',
   scoring: 'расчёт риска',
   downloading: 'скачивание',
+  extracting: 'распаковка',
   loading: 'загрузка',
-  cves: 'множители CVE',
-  hosts: 'Impact хостов',
+  cves: 'вероятность и тяжесть CVE',
+  hosts: 'ценность хостов',
   pairs: 'риск пар',
   status: 'смена статусов',
   done: 'готово',
@@ -297,7 +300,7 @@ export interface RefState {
   title: string
   url: string
   loaded_at: string | null
-  source: string | null
+  source: 'network' | 'file' | 'bundle' | null
   records: number
   detail: string
   stale: boolean
