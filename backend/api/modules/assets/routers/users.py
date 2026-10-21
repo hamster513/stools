@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -21,6 +21,7 @@ from api.modules.assets.services.user_views import (
     STATES,
     USER_SOURCES,
     YES_NO,
+    UserConflict,
     UserNotFound,
     list_users,
     update_user,
@@ -51,12 +52,12 @@ EXPORT_COLUMNS = [
 class UserPatch(BaseModel):
     """Только ручные поля; не переданное поле не меняется."""
 
-    tags: list[str] | None = Field(default=None, max_length=50)
+    tags: list[Annotated[str, Field(max_length=100)]] | None = Field(default=None, max_length=50)
     note: str | None = Field(default=None, max_length=4000)
 
 
 def _filters(
-    q: str | None = None,
+    q: str | None = Query(default=None, max_length=200),
     source: QueryList = None,
     state: QueryList = None,
     session: QueryList = None,
@@ -77,11 +78,13 @@ def _filters(
     return {"q": q, **picked, "host_id": multi_int(host_id)}
 
 
-def _not_found(fn: Any, *args: Any) -> Any:
+def _errors(fn: Any, *args: Any) -> Any:
     try:
         return fn(*args)
     except UserNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from None
+    except UserConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
 
 
 @router.get("/users")
@@ -119,11 +122,11 @@ def export_users(
 
 @router.get("/users/{user_id}")
 def get_user(user_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
-    return dict(_not_found(user_detail, db, user_id))
+    return dict(_errors(user_detail, db, user_id))
 
 
 @router.patch("/users/{user_id}")
 def patch_user(user_id: int, payload: UserPatch, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
-    _not_found(update_user, db, user_id, payload.model_dump(include=payload.model_fields_set))
+    _errors(update_user, db, user_id, payload.model_dump(include=payload.model_fields_set))
     db.commit()
     return dict(user_detail(db, user_id))

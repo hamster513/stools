@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import time
 from collections.abc import Callable
@@ -15,8 +16,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from api.modules.assets.models import Asset, AssetSettings, AssetUser, AssetUserHost
+from api.modules.assets.models import (
+    Asset,
+    AssetObservation,
+    AssetSettings,
+    AssetUser,
+    AssetUserHost,
+)
+from api.modules.assets.services.users import owner_unresolved
 from api.modules.ksc.models import KscHost
+from tests.assets.synthetic import load_ksc
 from tests.assets.test_users_sync import (
     HOSTS,
     OWNER01,
@@ -235,6 +244,11 @@ def test_stale_link_on_uncollected_host_out_of_discrepancies(analyst: TestClient
     (dev,) = card["devices"]
     assert (dev["asset_id"], dev["stale"], dev["users_collected"], dev["gone_at"]) == (ws02, True, False, None)
     assert listed(analyst, code="disabled_session")["total"] == 0
+    # Устаревшая связь в сеансе (прошлый) и в числе хостов считается.
+    item = next(i for i in listed(analyst, session="past")["items"] if i["id"] == u2)
+    assert (item["hosts_active"], item["hosts_total"], item["codes"]) == (0, 1, [])
+    # Хост был собран, стал не собран: в карточке хоста пользователей нет, у пользователя устройство осталось.
+    assert analyst.get(f"/api/assets/assets/{ws02}").json()["users"] is None
     # Тот же возраст на собранном хосте — связь живая, не устаревшая.
     u1 = uid(state, sid=csid(1101))
     state.execute(update(AssetUserHost).where(AssetUserHost.user_id == u1).values(seen_at=now - dt.timedelta(days=40)))
@@ -303,6 +317,11 @@ def test_card_merged_and_missing(analyst: TestClient, state: Session) -> None:
     assert analyst.patch("/api/assets/users/999999", json={"note": "x"}).status_code == 404
     # Слитый пользователь в списке не показывается.
     assert u3 not in {i["id"] for i in listed(analyst)["items"]}
+    # И в карточке хоста тоже; править слитого нельзя — правят того, в кого он слит.
+    host = analyst.get(f"/api/assets/assets/{asset_id(state, 'ws01')}").json()
+    assert u3 not in {u["user_id"] for u in host["users"]}
+    r = analyst.patch(f"/api/assets/users/{u3}", json={"note": "x"})
+    assert r.status_code == 409 and f"#{u1}" in r.json()["detail"]
 
 
 def test_patch_note_and_tags(analyst: TestClient, state: Session, client_as: Callable[[str], TestClient]) -> None:
@@ -314,6 +333,8 @@ def test_patch_note_and_tags(analyst: TestClient, state: Session, client_as: Cal
     assert (r.json()["note"], r.json()["tags"]) == ("служебная", [])
     # Только ручные поля: прочее схема не принимает.
     assert analyst.patch(f"/api/assets/users/{u1}", json={"sam": "x"}).json()["sam"] == "user01"
+    assert analyst.patch(f"/api/assets/users/{u1}", json={"tags": ["x" * 101]}).status_code == 422
+    assert analyst.get("/api/assets/users", params={"q": "x" * 201}).status_code == 422
     auditor = client_as("auditor")
     assert auditor.get("/api/assets/users").status_code == 200
     assert auditor.get(f"/api/assets/users/{u1}").status_code == 200
@@ -350,6 +371,101 @@ def test_host_card_without_ksc_is_null(analyst: TestClient, state: Session) -> N
     state.add(ad_only)
     state.commit()
     assert analyst.get(f"/api/assets/assets/{ad_only.id}").json()["users"] is None
+
+
+def test_gone_link_shown_in_host_card_and_host_filter(analyst: TestClient, state: Session, data_dir: Path, now: dt.datetime) -> None:
+    """WS01 собран заново без user03: связь пропала, но в карточке хоста и в фильтре по хосту она есть."""
+    later = scenario()
+    later["h-ws01"]["users"] = [r for r in later["h-ws01"]["users"] if r["sam"] != "CORP\\user03"]
+    load_scenario(state, data_dir, now - dt.timedelta(minutes=10), later)
+    sync(state)
+    ws01, u3 = asset_id(state, "ws01"), uid(state, name_key="corp.local\\user03")
+    host = analyst.get(f"/api/assets/assets/{ws01}").json()
+    gone = {u["user_id"]: u["gone"] for u in host["users"] if u["kind"] == "session"}
+    assert gone[u3] is True and gone[uid(state, sid=csid(1101))] is False
+    assert u3 in {i["id"] for i in listed(analyst, host_id=ws01)["items"]}
+    # Пропавшая связь — не сеанс: расхождения «нет в AD» больше нет.
+    assert listed(analyst, code="not_in_ad")["total"] == 0
+
+
+def test_facets_under_q_and_host(analyst: TestClient, state: Session) -> None:
+    f = listed(analyst, q="user0")["facets"]
+    assert f["state"] == {"enabled": 1, "disabled": 1, "unknown": 1}
+    assert f["code"] == {"disabled_session": 1, "not_in_ad": 1, "privileged_on_workstation": 0, "owner_without_session": 0, "any": 2}
+    f = listed(analyst, host_id=asset_id(state, "ws01"))["facets"]
+    assert f["local"] == {"yes": 1, "no": 3}
+    assert f["session"] == {"active": 3, "past": 1, "none": 0}
+    assert f["source"] == {"ad": 2, "ksc": 4}
+    # Буквальные `%` и `_` в поиске — не шаблон.
+    assert listed(analyst, q="%")["total"] == 0 and listed(analyst, q="_")["total"] == 0
+
+
+def test_asset_with_one_uncollected_ksc_host_is_not_collected(analyst: TestClient, state: Session, data_dir: Path, now: dt.datetime) -> None:
+    """WS02 виден двумя серверами KSC; у второго пользователи не собраны — актив не собран, как в синхронизации."""
+    active = scenario()
+    active["h-ws02"]["users"] = [rec("CORP\\user02", sid=csid(1102), active=True)]
+    load_scenario(state, data_dir, now - dt.timedelta(minutes=20), active)
+    sync(state)
+    u2, admin, ws02 = uid(state, sid=csid(1102)), uid(state, sid=csid(500)), asset_id(state, "ws02")
+    item = next(i for i in listed(analyst)["items"] if i["id"] == u2)
+    assert item["hosts_active"] == 1
+    snap = load_ksc(state, data_dir, [("WS02", "10.10.0.22")], now - dt.timedelta(minutes=10), server="ksc02")
+    # У второго сервера запрос пользователей по хосту отказал.
+    state.execute(update(KscHost).where(KscHost.snapshot_id == snap.id)
+                  .values(extra_json=json.dumps({"users": None, "users_collected": True, "owner": None})))
+    state.commit()
+    sync(state)
+    ksc_rows = state.execute(select(AssetObservation).where(AssetObservation.asset_id == ws02, AssetObservation.source == "ksc",
+                                                            AssetObservation.gone_at.is_(None))).scalars().all()
+    assert len(ksc_rows) == 2 and sorted(bool(r.extra.get("users_collected")) for r in ksc_rows) == [False, True]
+    # Сеанс на таком активе — не «в системе», владелец без сеанса не судится, в карточке хоста — «не собраны».
+    item = next(i for i in listed(analyst)["items"] if i["id"] == u2)
+    assert (item["hosts_active"], item["hosts_total"]) == (0, 1)
+    assert u2 in {i["id"] for i in listed(analyst, session="past")["items"]}
+    card = analyst.get(f"/api/assets/users/{u2}").json()
+    assert card["devices"][0]["users_collected"] is False and "заходил раньше" in card["discrepancies"][0]["text"]
+    assert analyst.get(f"/api/assets/users/{admin}").json()["discrepancies"] == []
+    assert analyst.get(f"/api/assets/assets/{ws02}").json()["users"] is None
+
+
+def test_owner_unresolved_rules() -> None:
+    people = [rec("CORP\\user01", sid=csid(1101))]
+    groups = [{"sid": csid(513), "sam": "CORP\\Domain Users", "active": True}]
+    assert owner_unresolved(None, people, groups) is False
+    assert owner_unresolved({"owner_id": "AAAAAA=="}, people, groups) is True
+    assert owner_unresolved(OWNER01, people, groups) is False
+    # Задан SID учётки не из списка — ссылка строится по SID, владелец разрешён.
+    assert owner_unresolved({"sid": csid(1102), "sam": "CORP\\user02"}, people, groups) is False
+    # Группа, учётка компьютера, служебный SID — пользователем не станут.
+    assert owner_unresolved({"sid": "", "sam": "CORP\\Domain Users"}, people, groups) is True
+    assert owner_unresolved({"sid": csid(1201), "sam": "CORP\\WS01$"}, people, groups) is True
+    assert owner_unresolved({"sid": "S-1-5-18", "sam": "NT AUTHORITY\\SYSTEM"}, people, groups) is True
+    # Группа без сеанса на хосте: встроенная группа домена по RID или известная AD по SID.
+    assert owner_unresolved({"sid": csid(512), "sam": "CORP\\Domain Admins"}, people, []) is True
+    assert owner_unresolved({"sid": csid(1301), "sam": "CORP\\Staff"}, people, []) is False
+    assert owner_unresolved({"sid": csid(1301), "sam": "CORP\\Staff"}, people, [], {csid(1301).lower()}) is True
+
+
+def test_owner_group_gives_no_link_and_no_user(analyst: TestClient, state: Session, data_dir: Path, now: dt.datetime) -> None:
+    """Владелец — группа: с сеансом на хосте (WS03), встроенная группа домена по RID (WS04 — Domain Users без
+    записи в списке) и группа AD (WS02 — Staff): ни связи владельца, ни пользователя, у хоста owner_unresolved."""
+    later = scenario()
+    later["h-ws03"] = {"users": [rec("CORP\\Domain Admins", sid=csid(512), group=True)], "users_collected": True,
+                       "owner": {"sid": csid(512), "sam": "CORP\\Domain Admins", "display_name": ""}}
+    later["h-ws04"] = {"users": [], "users_collected": True, "owner": {"sid": csid(513), "sam": "CORP\\Domain Users", "display_name": ""}}
+    later["h-ws02"]["owner"] = {"sid": csid(1301), "sam": "CORP\\Staff", "display_name": ""}
+    load_scenario(state, data_dir, now - dt.timedelta(minutes=10), later)
+    sync(state)
+    sids = set(state.execute(select(AssetUser.sid)).scalars())
+    assert not {csid(512), csid(513), csid(1301)} & sids
+    for name in ("ws02", "ws03", "ws04"):
+        owners = state.execute(select(AssetUserHost).where(AssetUserHost.asset_id == asset_id(state, name),
+                                                          AssetUserHost.kind == "owner", AssetUserHost.gone_at.is_(None))).scalars().all()
+        assert owners == [], name
+        assert analyst.get(f"/api/assets/assets/{asset_id(state, name)}").json()["owner_unresolved"] is True, name
+    card = analyst.get(f"/api/assets/assets/{asset_id(state, 'ws03')}").json()
+    assert card["session_groups"][0]["sam"] == "CORP\\Domain Admins"
+    assert analyst.get(f"/api/assets/assets/{asset_id(state, 'ws01')}").json()["owner_unresolved"] is False
 
 
 # ---- замер ----------------------------------------------------------------

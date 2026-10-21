@@ -40,7 +40,7 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle
-from api.modules.assets.core.users import UserSeen, match_user, user_key
+from api.modules.assets.core.users import ACCOUNT_SID_PREFIX, UserSeen, match_user, user_key
 from api.modules.assets.models import (
     Asset,
     AssetObservation,
@@ -229,7 +229,49 @@ def _owner_record(owner: Any, people: list[dict[str, Any]]) -> dict[str, Any] | 
     return {"sid": owner.get("sid") or "", "sam": owner.get("sam") or "", "display_name": owner.get("display_name") or ""}
 
 
-def users_from_ksc(db: Session) -> KscUsers:
+#: RID встроенных групп домена (Domain Admins … Enterprise Key Admins, RAS, группы репликации паролей RODC):
+#: SID такой группы — не учётка, даже если AD-выгрузки ещё нет.
+DOMAIN_GROUP_RIDS = frozenset({*range(512, 528), 553, 571, 572})
+
+
+def known_group_sids(db: Session) -> set[str]:
+    """SID групп AD, уже известных Assets (группы пользователей прошлой синхронизации)."""
+    return {s.upper() for s in db.execute(select(AssetUserGroup.group_sid).distinct()).scalars() if s}
+
+
+def owner_unresolved(
+    owner: Any, people: list[dict[str, Any]], groups: list[dict[str, Any]], group_sids: Iterable[str] = (),
+) -> bool:
+    """Владелец хоста задан в KSC, но пользователем хоста не становится: `{owner_id}` без SID и имени
+    или запись владельца — группа (с сеансом на хосте — `groups`, известная AD — `group_sids`, встроенная
+    группа домена по RID), служебная учётка (`$`, SID не учётки) либо запись, которой `user_key` не даёт
+    ключа. Такой владелец — только показ (`owner_unresolved` у хоста): ни связи, ни пользователя."""
+    if not isinstance(owner, dict):
+        return False
+    if not (owner.get("sid") or owner.get("sam")):
+        return bool(owner.get("owner_id"))
+    sid = str(owner.get("sid") or "").upper()
+    sam = str(owner.get("sam") or "").lower()
+    if any((sid and str(g.get("sid") or "").upper() == sid) or (sam and str(g.get("sam") or "").lower() == sam) for g in groups):
+        return True
+    rec = _owner_record(owner, people)
+    if rec is None:
+        return True
+    rec_sid = str(rec.get("sid") or "").upper()
+    if rec_sid and (rec_sid in {g.upper() for g in group_sids} or _domain_group_rid(rec_sid)):
+        return True
+    # Локальной записи нужен актив хоста — для проверки ключа подходит любой.
+    return user_key(_ksc_seen(0, "", 0, rec, dt.datetime.now(dt.UTC)), {}) is None
+
+
+def _domain_group_rid(sid: str) -> bool:
+    head, _, rid = sid.rpartition("-")
+    return head.startswith(ACCOUNT_SID_PREFIX) and rid.isdigit() and int(rid) in DOMAIN_GROUP_RIDS
+
+
+def users_from_ksc(db: Session, group_sids: Iterable[str] = ()) -> KscUsers:
+    """`group_sids` — SID групп AD (`owner_unresolved`): владелец-группа связи и пользователя не даёт."""
+    groups_ad = {g.upper() for g in group_sids}
     from api.modules.ksc.models import KscHost, KscServer
     from api.modules.ksc.services.snapshots import latest_snapshot
 
@@ -260,7 +302,7 @@ def users_from_ksc(db: Session) -> KscUsers:
                 continue
             asset_id = alive(int(host_assets[obs_key]))
             extra = json.loads(extra_json or "{}")
-            collected, people, _groups = ksc_host_users(extra)
+            collected, people, groups = ksc_host_users(extra)
             out.hosts.add(asset_id)
             if not collected:
                 out.uncollected.add(asset_id)
@@ -270,7 +312,7 @@ def users_from_ksc(db: Session) -> KscUsers:
                 by_key.setdefault(s.source_key, s)
                 out.links.append((s.source_key, asset_id, "session", bool(rec.get("active")), snap.collected_at))
             owner = _owner_record(extra.get("owner"), people)
-            if owner is not None:
+            if owner is not None and not owner_unresolved(extra.get("owner"), people, groups, groups_ad):
                 s = _ksc_seen(server.id, host_id, asset_id, owner, snap.collected_at)
                 by_key.setdefault(s.source_key, s)
                 out.links.append((s.source_key, asset_id, "owner", False, snap.collected_at))
@@ -423,7 +465,7 @@ def sync_users(db: Session, handle: JobHandle, data_dir: Path, now: dt.datetime,
     `users` — сколько пользователей видели источники в этом проходе."""
     dmap = domain_map(db)
     ad = users_from_ad(db, data_dir, ad_cache)
-    ksc = users_from_ksc(db)
+    ksc = users_from_ksc(db, known_group_sids(db) | {sid.upper() for rows in ad.groups.values() for sid, _name, _direct in rows})
     found = [*ad.seen, *ksc.seen]
     handle.stage("users", total=len(found), message=f"пользователи: AD {len(ad.seen)}, KSC {len(ksc.seen)}")
 

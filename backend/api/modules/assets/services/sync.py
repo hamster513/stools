@@ -36,7 +36,9 @@ from api.modules.assets.services.assets import (
 from api.modules.assets.services.networks import load_networks
 from api.modules.assets.services.users import (
     AdExportCache,
+    known_group_sids,
     ksc_host_users,
+    owner_unresolved,
     read_ad_export,
     sync_users,
 )
@@ -132,15 +134,12 @@ def observations_from_vm(db: Session) -> Iterator[Observed]:
         )
 
 
-def _owner_unresolved(owner: Any) -> bool:
-    """Владелец задан в KSC, но среди пользователей хоста не найден: `{"owner_id": …}` без SID и имени."""
-    return isinstance(owner, dict) and bool(owner.get("owner_id")) and not (owner.get("sid") or owner.get("sam"))
-
-
 def observations_from_ksc(db: Session) -> Iterator[Observed]:
     from api.modules.ksc.models import KscHost, KscServer
     from api.modules.ksc.services.snapshots import latest_snapshot
 
+    # Группы AD прошлой синхронизации пользователей: владелец-группа — «не стал пользователем хоста».
+    group_sids = known_group_sids(db)
     for server in db.execute(select(KscServer).order_by(KscServer.id)).scalars():
         snap = latest_snapshot(db, server.id)
         if snap is None:
@@ -148,17 +147,17 @@ def observations_from_ksc(db: Session) -> Iterator[Observed]:
         for h in db.execute(select(KscHost).where(KscHost.snapshot_id == snap.id).order_by(KscHost.id)).scalars():
             fqdn = normalize_fqdn(h.fqdn)
             extra = json.loads(h.extra_json or "{}")
-            users_collected, _people, session_groups = ksc_host_users(extra)
+            users_collected, people, session_groups = ksc_host_users(extra)
             yield Observed(
                 source="ksc", source_key=f"{server.id}:{h.host_id}", name=h.name or fqdn.partition(".")[0], fqdn=fqdn, domain=h.domain,
                 ip=h.ip, ips=[h.ip] if h.ip else [], os=h.os, seen_at=snap.collected_at,
                 extra={
                     "group_path": h.group_path, "tags": extra.get("tags", []), "components": json.loads(h.components_json or "[]"),
                     "agent_alive": h.agent_alive, "protection": h.protection, "server_id": server.id,
-                    # Пользователи хоста (§2.1): собраны ли, группы с сеансом и владелец вне списка
-                    # (`{owner_id}`, ссылки на него нет) — только показ.
+                    # Пользователи хоста (§2.1): собраны ли, группы с сеансом и владелец, не ставший
+                    # пользователем хоста (`{owner_id}`, группа, служебная учётка) — только показ.
                     "users_collected": users_collected, "session_groups": session_groups,
-                    "owner_unresolved": _owner_unresolved(extra.get("owner")),
+                    "owner_unresolved": owner_unresolved(extra.get("owner"), people, session_groups, group_sids),
                 },
             )
 
