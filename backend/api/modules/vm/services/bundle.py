@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import tempfile
@@ -24,6 +25,8 @@ from api.modules.vm.services.attack_layer import refresh as refresh_attack_layer
 from api.modules.vm.services.jobs import JobCancelled, JobHandle
 from api.modules.vm.services.scoring import rebuild_cves, rescore_pairs
 from kbaudit import safe_io
+
+log = logging.getLogger(__name__)
 
 #: Записей в архиве: скрипт кладёт около тридцати (NVD за все годы — двадцать пять).
 MAX_ENTRIES = 64
@@ -73,6 +76,7 @@ def _plan(infos: list[zipfile.ZipInfo]) -> tuple[list[tuple[str, zipfile.ZipInfo
     chosen: dict[str, list[zipfile.ZipInfo]] = {name: [] for name in REF_NAMES}
     skipped: list[str] = []
     attack_seen: set[str] = set()
+    nvd_seen: set[str] = set()
     for info in sorted(infos, key=lambda i: (_basename(i.filename).lower(), i.filename)):
         if info.is_dir() or _is_junk(info.filename):
             continue
@@ -84,6 +88,14 @@ def _plan(infos: list[zipfile.ZipInfo]) -> tuple[list[tuple[str, zipfile.ZipInfo
         if ref in _SINGLE and chosen[ref]:
             skipped.append(base)
             continue
+        if ref == "nvd":
+            # Один год дважды (`.json` и `.json.gz`) — один файл: второй загрузил бы те же записи
+            # заново. По сортировке `.json` идёт раньше `.json.gz` и побеждает.
+            year = base.lower().removesuffix(".gz")
+            if year in nvd_seen:
+                skipped.append(base)
+                continue
+            nvd_seen.add(year)
         if ref == "attack":
             kind = "json" if base.lower().endswith(".json") else "csv"
             if kind in attack_seen:
@@ -170,13 +182,26 @@ def _rebuild(db: Session, handle: JobHandle, loaded: set[str], weights: Weights)
         rescore_pairs(db, weights)
 
 
+def _rebuild_after_failure(db: Session, handle: JobHandle, touched: set[str], weights: Weights, name: str) -> None:
+    """Загрузчики коммитят пакетами, и `rollback` не возвращает таблицу упавшего файла:
+    она могла остаться наполовину новой. Поэтому пересборка — и по нему тоже, даже если
+    до него не загрузилось ничего. Сбой самой пересборки пишется в лог, а задача падает
+    с ошибкой файла: причина — он."""
+    try:
+        _rebuild(db, handle, touched, weights)
+    except JobCancelled:
+        raise
+    except Exception:  # исходная ошибка файла важнее
+        db.rollback()
+        log.exception("VM: пересборка после отказа файла архива %s не удалась", name)
+
+
 def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights) -> None:
     into = Path(tempfile.mkdtemp(prefix="ref-bundle-", dir=zip_path.parent))
     try:
         handle.stage("extracting")
         files, skipped = extract(zip_path, into, handle)
         loaded: set[str] = set()
-        failed: tuple[str, BaseException] | None = None
         for ref, path in files:
             try:
                 # Второй файл CTID дописывается к первому, а не заменяет его.
@@ -184,17 +209,12 @@ def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights)
                 refs_service.load_ref(db, handle, ref, path, "bundle", detail=path.name, append=append)
             except JobCancelled:
                 raise
-            except Exception as exc:  # noqa: BLE001 — любой отказ файла называет файл
+            except Exception as exc:  # любой отказ файла называет файл
                 db.rollback()
-                failed = (path.name, exc)
-                break
+                _rebuild_after_failure(db, handle, loaded | {ref}, weights, path.name)
+                raise ValueError(f"{path.name}: {_reason(exc)}") from exc
             loaded.add(ref)
-        # И при отказе: риск не должен остаться посчитанным от старых справочников,
-        # когда часть `vm_ref_*` уже новая.
-        if loaded:
-            _rebuild(db, handle, loaded, weights)
-        if failed is not None:
-            raise ValueError(f"{failed[0]}: {_reason(failed[1])}") from failed[1]
+        _rebuild(db, handle, loaded, weights)
         summary = f"загружено файлов: {len(files)}"
         if skipped:
             summary += "; пропущено: " + ", ".join(skipped)

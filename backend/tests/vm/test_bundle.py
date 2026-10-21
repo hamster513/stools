@@ -142,12 +142,24 @@ def test_bundle_without_known_files_is_422(auth_client: TestClient, app_settings
     assert _leftovers(app_settings) == []
 
 
+def _tree(root: Path) -> set[Path]:
+    return set(root.rglob("*"))
+
+
 def test_bundle_rejects_traversal_and_too_many_entries(auth_client: TestClient, db_session: Any, app_settings: Any) -> None:
-    job = _job(db_session, _post(auth_client, _zip({"../../evil.json": b"{}", "epss_scores-current.csv": _fx("epss.csv")})))
+    """Узнанные имена с `..` и абсолютным путём грузятся, но пишутся только во временный
+    каталог задачи: снаружи дерево данных после задачи то же, что до неё."""
+    (app_settings.data_dir / "vm").mkdir(parents=True, exist_ok=True)
+    root = app_settings.data_dir.parent
+    before = _tree(root)
+    data = _zip({"../../known_exploited_vulnerabilities.json": _fx("kev.json"), "/abs/files_exploits.csv": _fx("exploits.csv")})
+    job = _job(db_session, _post(auth_client, data))
     assert job.status == "done", job.error
-    assert "пропущено: evil.json" in job.message
-    assert not list(app_settings.data_dir.parent.rglob("evil.json"))
-    assert db_session.get(VmRefState, "epss").records == 3
+    states = {s["name"]: s for s in auth_client.get("/api/vm/refs").json()}
+    assert (states["kev"]["source"], states["kev"]["records"]) == ("bundle", 3)
+    assert (states["exploitdb"]["source"], states["exploitdb"]["records"]) == ("bundle", 3)
+    assert _tree(root) == before
+    assert not Path("/abs").exists()
 
     many = {f"junk/x{i:02d}.txt": b"x" for i in range(64)}
     many["epss_scores-current.csv"] = _fx("epss.csv")
@@ -201,6 +213,61 @@ def test_bundle_second_file_broken_keeps_first_and_rescored(
     after = {p.host_id: p.risk_raw for p in db_session.query(VmHostCve).filter_by(cve_id=LOG4J)}
     assert all(after[h] > before[h] for h in before)
     assert _leftovers(app_settings) == []
+
+
+def test_bundle_first_file_broken_still_rebuilds(
+    auth_client: TestClient, db_session: Any, app_settings: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Первый же файл упал: до него ничего не загружено, но его таблица могла остаться
+    наполовину новой (загрузчик коммитит пакетами) — пересборка и пересчёт всё равно идут."""
+    calls = {"rebuild": 0, "rescore": 0}
+    real_rebuild, real_rescore = bundle_service.rebuild_cves, bundle_service.rescore_pairs
+
+    def rebuild(*args: Any, **kwargs: Any) -> int:
+        calls["rebuild"] += 1
+        return real_rebuild(*args, **kwargs)
+
+    def rescore(*args: Any, **kwargs: Any) -> int:
+        calls["rescore"] += 1
+        return real_rescore(*args, **kwargs)
+
+    monkeypatch.setattr(bundle_service, "rebuild_cves", rebuild)
+    monkeypatch.setattr(bundle_service, "rescore_pairs", rescore)
+    data = _zip({"epss_scores-current.csv.gz": b"\x1f\x8b" + b"broken" * 10, "known_exploited_vulnerabilities.json": _fx("kev.json")})
+    job = _job(db_session, _post(auth_client, data))
+    assert job.status == "failed" and job.error.startswith("epss_scores-current.csv.gz: ")
+    assert calls == {"rebuild": 1, "rescore": 1}
+    # До KEV дело не дошло.
+    assert db_session.get(VmRefState, "kev") is None
+    assert _leftovers(app_settings) == []
+
+
+def test_bundle_rebuild_failure_keeps_file_error(
+    auth_client: TestClient, db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args: Any, **kwargs: Any) -> int:
+        raise RuntimeError("rebuild down")
+
+    monkeypatch.setattr(bundle_service, "rebuild_cves", broken)
+    data = _zip({"epss_scores-current.csv": _fx("epss.csv"), "files_exploits.csv": b"\x1f\x8b" + b"broken" * 10})
+    job = _job(db_session, _post(auth_client, data))
+    assert job.status == "failed" and job.error.startswith("files_exploits.csv: ")
+
+
+def test_bundle_nvd_same_year_loads_once(auth_client: TestClient, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    loads: list[str] = []
+    real = bundle_service.refs_service.load_ref
+
+    def counting(db: Any, handle: Any, name: str, path: Path, *args: Any, **kwargs: Any) -> int:
+        loads.append(path.name)
+        return real(db, handle, name, path, *args, **kwargs)
+
+    monkeypatch.setattr(bundle_service.refs_service, "load_ref", counting)
+    data = _zip({"nvdcve-2.0-2021.json.gz": gzip.compress(_fx("nvd-2021.json")), "a/nvdcve-2.0-2021.json": _fx("nvd-2021.json"), "nvdcve-2.0-2019.json": _fx("nvd-2019.json")})
+    job = _job(db_session, _post(auth_client, data))
+    assert job.status == "done", job.error
+    assert loads == ["nvdcve-2.0-2019.json", "nvdcve-2.0-2021.json"]
+    assert "пропущено: nvdcve-2.0-2021.json.gz" in job.message
 
 
 def test_bundle_conflicts_with_running_import(auth_client: TestClient, db_session: Any, app_settings: Any) -> None:
