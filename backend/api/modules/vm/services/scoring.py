@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import datetime as dt
+import json
 import logging
 import threading
 from collections.abc import Callable, Iterable, Sequence
@@ -17,6 +19,8 @@ from sqlalchemy import Table, bindparam, case, cast, delete, func, select, updat
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from api.db.models import AppSetting
+from api.llm_settings import read_setting
 from api.modules.vm.core.risk import (
     CveInputs,
     av_class,
@@ -297,7 +301,32 @@ def recalculate(db: Session, handle: JobHandle, weights: Weights) -> None:
     rebuild_hosts_value(db, weights, handle)
     handle.stage("pairs", message="риск пар")
     n = rescore_pairs(db, weights)
+    # Маркер — только после полного прохода: прерванный пересчёт оставит его старым,
+    # и следующий старт API поставит пересчёт заново.
+    write_formula_version(db)
     handle.stage("done", message=f"пересчитано пар: {n}")
+
+
+#: Версия формулы риска. Растёт, когда меняется сама формула: риск пар, посчитанный
+#: прежней версией, неверен, пока не пройдёт полный `recalculate`.
+FORMULA_VERSION = 2
+#: Ключ в `app_setting`: какой версией формулы посчитан риск пар.
+FORMULA_VERSION_KEY = "vm_formula_version"
+
+
+def read_formula_version(db: Session) -> int:
+    raw = read_setting(db, FORMULA_VERSION_KEY)
+    return 0 if raw is None else int(json.loads(raw))
+
+
+def write_formula_version(db: Session) -> None:
+    row = db.get(AppSetting, FORMULA_VERSION_KEY)
+    if row is None:
+        row = AppSetting(key=FORMULA_VERSION_KEY)
+        db.add(row)
+    row.value_json = json.dumps(FORMULA_VERSION)
+    row.updated_at = dt.datetime.now(dt.UTC)
+    db.commit()
 
 
 def pair_count(db: Session) -> int:
@@ -317,18 +346,16 @@ spawn: Callable[[Callable[[], None]], None] = _in_thread
 
 
 def ensure_rescored(db: Session) -> int | None:
-    """Пересчёт после миграции новой формулы: миграция удалила старые множители, и риск
-    пар считан по старой формуле, пока не пройдёт `recalculate`. Признак — пары есть,
-    справочники загружены, а `vm_cve.likelihood` нигде не посчитан (после любой
-    пересборки он не ниже `prior_epss`). Задача ставится один раз и не поверх идущей.
-    Возвращает номер поставленной задачи или None."""
+    """Пересчёт после смены формулы: риск пар посчитан прежней версией, пока полный
+    `recalculate` не запишет маркер `FORMULA_VERSION`. Признак — пары есть, а маркер
+    нет или он старше. Справочники не нужны: и без них новая формула даёт другие числа.
+    Задача ставится не поверх идущей; прерванная не пишет маркер — следующий старт
+    поставит её снова. Возвращает номер поставленной задачи или None."""
     from api.modules.vm.services.settings import load_settings
 
     if db.execute(select(VmHostCve.host_id).limit(1)).first() is None:
         return None
-    if db.execute(select(VmRefState.name).limit(1)).first() is None:
-        return None
-    if db.execute(select(VmCve.cve_id).where(VmCve.likelihood > 0).limit(1)).first() is not None:
+    if read_formula_version(db) >= FORMULA_VERSION:
         return None
     lock_job_start(db)
     if active_job(db, [*DATA_KINDS, "bulk_status"]) is not None:

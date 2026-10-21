@@ -11,8 +11,8 @@ import { Section } from '@/platform/collector/ui'
 const ABOUT: Record<string, string> = {
   epss: 'Вероятность эксплуатации за 30 дней от FIRST; без неё берётся априор из настроек (0.01) с пометкой.',
   nvd: 'Балл CVSS, метрики и описания CVE; фиды по годам, можно грузить частями.',
-  exploitdb: 'Публичные эксплойты; тип эксплойта — множитель ExDB_param.',
-  msf: 'Модули Metasploit; ранг модуля — множитель MSF_param.',
+  exploitdb: 'Публичные эксплойты; тип эксплойта даёт вероятность p_exdb в члене L.',
+  msf: 'Модули Metasploit; ранг модуля даёт вероятность p_msf в члене L.',
   kev: 'Каталог эксплуатируемых уязвимостей CISA; попадание — вероятность эксплуатации 1.0.',
 }
 const ACCEPT: Record<string, string> = { epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }

@@ -114,6 +114,12 @@ def test_export_csv(loaded: TestClient) -> None:
     lines = [line for line in text.splitlines() if line]
     assert len(lines) == 1 + 3
     assert lines[1].split(";")[4] == "CVE-2021-44228"
+    # KEV — «да» или пустая ячейка, не True/False.
+    kev = {r[4]: r[15] for r in csv.reader(io.StringIO("\n".join(lines[1:])), delimiter=";")}
+    assert kev["CVE-2021-44228"] == "да" and set(kev.values()) <= {"да", ""}
+    full = loaded.get("/api/vm/export").content.decode("utf-8")
+    kev_all = {r[4]: r[15] for r in csv.reader(io.StringIO(full.split("\r\n", 1)[1]), delimiter=";") if r}
+    assert kev_all["CVE-2019-0708"] == ""
 
 
 def test_export_csv_neutralises_formulas(loaded: TestClient, db_session: Any) -> None:

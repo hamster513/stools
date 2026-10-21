@@ -1,4 +1,4 @@
-"""Зоны из Host.UF_Zone и их разметка — источник двух слагаемых Impact."""
+"""Зоны из Host.UF_Zone и их разметка — источник надбавок к ценности хоста и доступа из интернета."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, status

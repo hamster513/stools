@@ -198,12 +198,13 @@ def test_rebuild_subset_and_orphans(app_settings: Any, db_session: Any) -> None:
 
 
 def test_rescore_once_after_migration(app_settings: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """После миграции вероятности нулевые, риск пар — старый: старт API ставит пересчёт один раз."""
+    """Маркера версии формулы нет, пары есть: старт API ставит пересчёт один раз —
+    и без справочников, новая формула и без них даёт другие числа."""
     monkeypatch.setattr(scoring, "spawn", lambda fn: fn())
+    assert ensure_rescored(db_session) is None  # пар нет — пересчитывать нечего
+    assert scoring.read_formula_version(db_session) == 0
     _seed(db_session)
-    assert ensure_rescored(db_session) is None  # справочников нет — пересчитывать нечем
     _log4j_refs(db_session)
-    db_session.add(VmRefState(name="epss", source="file", records=1))
     db_session.commit()
 
     job_id = ensure_rescored(db_session)
@@ -213,8 +214,43 @@ def test_rescore_once_after_migration(app_settings: Any, db_session: Any, monkey
     assert (job.kind, job.status, job.started_by) == ("recalculate", "done", scoring.AUTO_STARTED_BY)
     assert db_session.get(VmCve, "CVE-2021-44228").likelihood == pytest.approx(0.825)
     assert max(p.risk for p in db_session.execute(select(VmHostCve)).scalars()) == 66
-    # Второй старт: вероятности уже посчитаны — задачи нет.
+    assert scoring.read_formula_version(db_session) == scoring.FORMULA_VERSION
+    # Второй старт: маркер записан — задачи нет.
     assert ensure_rescored(db_session) is None
+
+
+def test_rescore_without_references(app_settings: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[Any] = []
+    monkeypatch.setattr(scoring, "spawn", started.append)
+    _seed(db_session)
+    assert ensure_rescored(db_session) is not None and len(started) == 1
+
+
+def test_rescore_again_after_interrupted_recalc(app_settings: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Пересчёт упал до конца — маркер не записан, следующий старт ставит его снова."""
+    def boom(*_a: Any, **_k: Any) -> int:
+        raise RuntimeError("прервано")
+
+    monkeypatch.setattr(scoring, "spawn", lambda fn: fn())
+    monkeypatch.setattr(scoring, "rescore_pairs", boom)
+    _seed(db_session)
+    first = ensure_rescored(db_session)
+    db_session.expire_all()
+    assert first is not None and db_session.get(VmJob, first).status != "done"
+    assert scoring.read_formula_version(db_session) == 0
+    monkeypatch.undo()
+    monkeypatch.setattr(scoring, "spawn", lambda fn: fn())
+    second = ensure_rescored(db_session)
+    assert second is not None and second != first
+    assert scoring.read_formula_version(db_session) == scoring.FORMULA_VERSION
+
+
+def test_no_rescore_when_marker_current(app_settings: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[Any] = []
+    monkeypatch.setattr(scoring, "spawn", started.append)
+    _seed(db_session)
+    scoring.write_formula_version(db_session)
+    assert ensure_rescored(db_session) is None and started == []
 
 
 def test_rescore_not_started_over_running_job(app_settings: Any, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:

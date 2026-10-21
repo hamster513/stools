@@ -292,6 +292,9 @@ def export_csv(
     def rows() -> Iterator[dict[str, Any]]:
         today = f.status.day()
         for row in iter_rows(db, f, sort):
-            yield item_with_state(row, today, f.levels)
+            item = item_with_state(row, today, f.levels)
+            # Признак в таблице читают глазами: «да» у KEV и пустая ячейка у остальных, а не True/False.
+            item["kev"] = "да" if item["kev"] else ""
+            yield item
 
     return export_response(fmt, EXPORT_COLUMNS, rows(), module="vm", name="vulns")
