@@ -403,11 +403,23 @@ export const FIELD_ROLES = {
 // Детализация правила
 // ---------------------------------------------------------------------------
 
+// Порядок, в котором правила мока читают списки: первым — отсутствующий,
+// вторым — пустой. Любое правило с двумя чтениями показывает обе подсветки.
+const READ_ORDER = [
+  ...TABLES.filter((t) => t.state === 'missing').slice(0, 1),
+  ...TABLES.filter((t) => t.state === 'empty').slice(0, 1),
+  ...TABLES.filter((t) => t.state === 'filled'),
+]
+
 export function ruleDetail(uuid: string): RuleDetail | undefined {
   const rule = RULES.find((r) => r.uuid === uuid)
   if (!rule) return undefined
   const findings = FINDINGS.filter((f) => f.object_uuid === uuid)
   const deps = shuffle(rng, RULES.filter((r) => r.uuid !== uuid)).slice(0, rule.table_reads)
+  const reads = READ_ORDER.slice(0, rule.table_reads)
+  // Имена списков дописываются в тело после отрезков находок: те ищутся
+  // по закавыченным литералам и иначе заняли бы имена списков.
+  const body = rule.body + reads.map((t) => `\nand in_list([src.host], "${t.name}")`).join('')
   return {
     ...rule,
     title_ru: rule.name,
@@ -416,8 +428,13 @@ export function ruleDetail(uuid: string): RuleDetail | undefined {
     description_en: null,
     body_hash: `${rule.uuid}-hash`,
     // В списке table_reads — счётчик, в подробностях — сами имена.
-    table_reads: Array.from({ length: rule.table_reads }, (_, i) => `Table_${i + 1}`),
+    table_reads: reads.map((t) => t.name),
     table_writes: [],
+    tables: reads.map((t) => ({
+      name: t.name,
+      exists: t.state !== 'missing',
+      value_count: t.state === 'missing' ? null : t.valueCount,
+    })),
     // Форма повторяет ответ сервера: собственные и унаследованные msgid
     // разделены, зависимости — родители и потомки по именам.
     msgids: {
@@ -430,7 +447,7 @@ export function ruleDetail(uuid: string): RuleDetail | undefined {
     },
     findings: findings.map((f) => ({ id: f.id, kind: f.kind, field: f.field, status: findingStatus(f.id), counted: findingCounted(f.id) })),
     attack: ruleAttack(rule.name),
-    body: rule.body,
+    body,
     // Значения в списке находок не приходят и в моке тоже: отрезки
     // берутся из самого тела — по закавыченным литералам, как их
     // находит и сервер.

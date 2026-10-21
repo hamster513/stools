@@ -339,6 +339,19 @@ export interface RuleBodySpan {
   status: FindingStatus
   /** Неучитываемое замечание (принят риск, ложное срабатывание) гасится. */
   counted: boolean
+  /** Отрезок не замечания, а ссылки на табличный список, который правило
+   *  читает впустую: отсутствует в снапшоте или пуст. */
+  tone?: 'missing' | 'empty'
+  /** Подсказка к такому отрезку — почему он подсвечен. */
+  note?: string
+}
+
+/** Читаемый правилом табличный список и его состояние в снапшоте. */
+export interface RuleTableState {
+  name: string
+  exists: boolean
+  /** Число значений в списке; null — списка в снапшоте нет. */
+  value_count: number | null
 }
 
 export interface RuleDetail {
@@ -369,6 +382,8 @@ export interface RuleDetail {
   dependencies: RuleDependencies
   table_reads: string[]
   table_writes: string[]
+  /** Те же table_reads с состоянием каждого списка. */
+  tables: RuleTableState[]
   findings: RuleFindingSummary[]
   body: string
   attack?: RuleAttackInfo

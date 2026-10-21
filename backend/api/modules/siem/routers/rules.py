@@ -14,7 +14,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, defer
 
 from api.db.base import get_db
-from api.db.models import AppUser, RuleDependency, RuleMsgid, RuleRow, RuleTableRef
+from api.db.models import (
+    AppUser,
+    RuleDependency,
+    RuleMsgid,
+    RuleRow,
+    RuleTableRef,
+    TableListRow,
+)
 from api.db.models import Finding as FindingRow
 from api.deps import get_current_user
 from api.modules.attack.services.attack_bundle import current as current_bundle
@@ -406,6 +413,20 @@ def get_rule(
             RuleTableRef.direction == "write",
         )
     )
+    # Состояние читаемых списков — рядом с телом: правило, читающее
+    # отсутствующий или пустой список, не сработает ни на чём, а в теле
+    # имя списка выглядит так же, как имя исправного. Размер — число
+    # значений, та же мера, по которой список считается пустым везде.
+    sizes: dict[str, int] = {
+        name: count
+        for name, count in db.query(TableListRow.name, TableListRow.value_count).filter(
+            TableListRow.snapshot_id == snapshot_id, TableListRow.name.in_(table_reads)
+        )
+    }
+    tables = [
+        {"name": name, "exists": name in sizes, "value_count": sizes.get(name)}
+        for name in table_reads
+    ]
 
     finding_rows = (
         db.query(FindingRow)
@@ -459,6 +480,7 @@ def get_rule(
         "dependencies": {"parents": parents, "children": children},
         "table_reads": table_reads,
         "table_writes": table_writes,
+        "tables": tables,
         "findings": findings,
         "attack": _attack_of(db, rule, markup_by_rule(db)).model_dump(),
         **_detail_deployment(db, snapshot_id, rule.uuid),

@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, FileCheck2, FileWarning, FileX2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight, Copy, FileCheck2, FileWarning, FileX2 } from 'lucide-react'
 import { useTableReaders, useTableValues } from '@/modules/siem/api/queries'
 import type { TableRankingEntry } from '@/modules/siem/api/types'
 import { useCan } from '@/lib/can'
@@ -56,6 +56,35 @@ export function TableRow({
   }, [values.data])
   const cols = useColumnWidths(`siem-profile-values-${entry.name}`, valueColumns)
 
+  // Имя копируют, чтобы найти список в SIEM: набирать его руками долго
+  // и легко ошибиться в одном символе длинного имени.
+  const nameRef = useRef<HTMLSpanElement>(null)
+  const [copied, setCopied] = useState<'copied' | 'selected' | null>(null)
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(null), 1500)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+
+  async function copyName() {
+    try {
+      await navigator.clipboard.writeText(entry.name)
+      setCopied('copied')
+    } catch {
+      // Буфер бывает закрыт (нет https, отказ в разрешении) — тогда хотя бы
+      // выделяем имя, чтобы его скопировали руками.
+      const el = nameRef.current
+      const selection = window.getSelection()
+      if (el && selection) {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        selection.removeAllRanges()
+        selection.addRange(range)
+        setCopied('selected')
+      }
+    }
+  }
+
   const state = tableState(entry)
   const meta = STATE_META[state]
   const Icon = meta.icon
@@ -71,23 +100,53 @@ export function TableRow({
           className="accent-primary"
           aria-label={`${entry.name}: ограничивает область действия правил`}
         />
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-          aria-expanded={open}
-          title="Показать состав списка и правила, которые его читают"
-        >
-          {open ? (
-            <ChevronDown size={13} className="shrink-0 text-text-secondary" aria-hidden />
-          ) : (
-            <ChevronRight size={13} className="shrink-0 text-text-secondary" aria-hidden />
-          )}
-          <Icon size={14} style={{ color: meta.color }} aria-hidden className="shrink-0" />
-          <span className="min-w-0 truncate font-mono text-text" title={entry.name}>
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="flex shrink-0 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+            aria-expanded={open}
+            aria-label={`${entry.name}: показать состав списка и правила, которые его читают`}
+            title="Показать состав списка и правила, которые его читают"
+          >
+            {open ? (
+              <ChevronDown size={13} className="shrink-0 text-text-secondary" aria-hidden />
+            ) : (
+              <ChevronRight size={13} className="shrink-0 text-text-secondary" aria-hidden />
+            )}
+            <Icon size={14} style={{ color: meta.color }} aria-hidden className="shrink-0" />
+          </button>
+          {/* Имя вне кнопки раскрытия: текст внутри кнопки не выделяется,
+              а выделение мышью не должно раскрывать строку. */}
+          <span
+            ref={nameRef}
+            className="min-w-0 cursor-text truncate font-mono text-text select-text"
+            title={entry.name}
+          >
             {entry.name}
           </span>
-        </button>
+          <span className="relative shrink-0">
+            <button
+              type="button"
+              onClick={copyName}
+              className="rounded p-0.5 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+              aria-label="Скопировать имя списка"
+              title="Скопировать имя списка"
+            >
+              <Copy size={12} aria-hidden />
+            </button>
+            {/* Поверх соседних колонок, а не в потоке: иначе подсказка сжимает
+                имя до нуля, и выделенное при отказе буфера не видно. */}
+            {copied && (
+              <span
+                className="absolute top-1/2 left-full z-10 ml-1 -translate-y-1/2 rounded border border-grid bg-surface px-1.5 py-0.5 whitespace-nowrap text-kind-accepted"
+                role="status"
+              >
+                {copied === 'copied' ? 'скопировано' : 'выделено — скопируйте вручную'}
+              </span>
+            )}
+          </span>
+        </div>
         <span className="w-24 shrink-0 text-text-secondary">{meta.label}</span>
         <span className="w-24 shrink-0 text-right font-mono tabular-nums text-text-secondary">
           {entry.dependant_count} правил

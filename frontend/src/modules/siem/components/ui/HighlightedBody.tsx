@@ -23,6 +23,29 @@ const KIND_COLOR: Record<number, string> = {
   5: 'var(--color-kind-5)',
 }
 
+const TONE_COLOR = {
+  missing: 'var(--color-kind-1)',
+  empty: 'var(--color-risk-high)',
+} as const
+
+function TableMark({ tone, note, text }: { tone: keyof typeof TONE_COLOR; note?: string; text: string }) {
+  const color = TONE_COLOR[tone]
+  return (
+    <mark
+      className="rounded-[2px] px-0.5"
+      style={{
+        backgroundColor: tint(color, 14),
+        color,
+        textDecoration: `underline wavy ${color}`,
+        textUnderlineOffset: '3px',
+      }}
+      title={note}
+    >
+      {text}
+    </mark>
+  )
+}
+
 /**
  * Одно подсвеченное значение.
  *
@@ -32,7 +55,14 @@ const KIND_COLOR: Record<number, string> = {
  * гадает, замечание это или нет. Поэтому у него зелёная пунктирная
  * черта и галочка: решение видно, а не угадывается.
  */
+/**
+ * Ссылка на табличный список, который правило читает впустую. Цвета те
+ * же, что у состояний списка: отсутствующий — красный, пустой —
+ * оранжевый. Волнистая черта отличает её от замечаний: это не значение
+ * из находки, а имя списка.
+ */
 function Mark({ span, text }: { span: RuleBodySpan; text: string }) {
+  if (span.tone) return <TableMark tone={span.tone} note={span.note} text={text} />
   const accepted = !span.counted
   const color = accepted
     ? 'var(--color-kind-accepted)'
