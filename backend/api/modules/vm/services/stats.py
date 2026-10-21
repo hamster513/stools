@@ -15,16 +15,16 @@ from sqlalchemy.orm import Session
 
 from api.db.models import AppSetting
 from api.modules.vm.models import VmCve, VmHost, VmHostCve
-from api.modules.vm.services.query import LEVELS, VulnFilters, base_select, facets
+from api.modules.vm.services.query import VulnFilters, base_select, raw_facets
 
 STATS_KEY = "vm.stats"
 
 
 def compute_stats(db: Session) -> dict[str, Any]:
     pairs = int(db.execute(select(func.count()).select_from(VmHostCve)).scalar() or 0)
-    # Фасеты без фильтров — самый частый запрос таблицы; считаются здесь же.
-    all_facets = facets(db, VulnFilters()) if pairs else {"level": dict.fromkeys(LEVELS, 0)}
-    distribution = all_facets["level"]
+    # Фасеты без фильтров — самый частый запрос таблицы; считаются здесь же. Уровней в кэше
+    # нет, есть гистограмма балла: уровни выводятся при чтении по текущим порогам.
+    all_facets = raw_facets(db, VulnFilters()) if pairs else {}
     top_cves = db.execute(
         select(
             VmHostCve.cve_id,
@@ -59,7 +59,6 @@ def compute_stats(db: Session) -> dict[str, Any]:
     ).all()
     return {
         "pairs": pairs,
-        "distribution": distribution,
         "facets": all_facets,
         "top_cves": [
             {

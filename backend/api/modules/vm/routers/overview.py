@@ -39,8 +39,10 @@ def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current
     stats = load_stats(db)
     # Пары, распределение и «выше порога» — по учитываемым статусам (настройка платформы
     # `counted`): принятый риск по умолчанию не считается. Топы — по всем парам, из кэша.
-    counted = VulnFilters(status=StatusFilter(statuses=finding_svc.counted_statuses(db)))
-    distribution = data_facets(db, counted, stats.get("facets"))["level"]
+    counted = VulnFilters(status=StatusFilter(statuses=finding_svc.counted_statuses(db)), levels=settings.weights.levels)
+    counted_facets = data_facets(db, counted, stats.get("facets"))
+    # Уровни — по порогам настроек на момент чтения: пороги двигают без пересчёта.
+    distribution = counted_facets["level"]
     above = int(
         db.execute(
             base_select([func.count()], state=True).where(VmHostCve.risk >= settings.threshold, *status_conditions(counted.status))
@@ -76,6 +78,8 @@ def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current
         "above_threshold": above,
         "threshold": settings.threshold,
         "distribution": distribution,
+        # Пары с CVE из каталога CISA KEV — по тем же учитываемым статусам.
+        "kev_pairs": counted_facets["kev"].get("yes", 0),
         # Плитки ведут в список, а он показывает только пары текущих данных.
         "findings": finding_svc.summary(db, MODULE, SCOPE, keys_present=pairs_all, present_only=True),
         "top_cves": stats["top_cves"],

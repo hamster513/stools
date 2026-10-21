@@ -47,6 +47,7 @@ from api.jobs import fail_interrupted_jobs
 from api.limits import BodyLimitMiddleware
 from api.modules import MODULE_ROUTERS
 from api.modules.siem.hunting.dispatcher import ensure_hunting_schedules
+from api.modules.vm.services.scoring import ensure_vm_rescored
 from api.origin import OriginMiddleware
 from api.platform import router as settings_router
 from api.platform.findings.expiry import ensure_platform_schedules
@@ -71,6 +72,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Расписания самой платформы (истечение принятых рисков) — если их ещё нет.
     ensure_platform_schedules()
     ensure_hunting_schedules()
+    # После миграции новой формулы риска риск пар VM устарел: пересчёт ставится сам, один раз.
+    ensure_vm_rescored()
     try:
         yield
     finally:

@@ -25,7 +25,7 @@ GET /overview  счётчики, distribution, findings, top_cves, top_hosts, da
 `risk_asc`, `cvss_desc`, `epss_desc`, `exploits_desc`, `host_asc`, `cve_asc`.
 При равных значениях — по паре (`host_id`, `cve_id`): порядок один и тот же в
 каждом запросе, страницы по offset не повторяют и не теряют пар.
-`level`: `low | medium | high | critical` (0–19, 20–39, 40–69, 70–100).
+`level`: `low | medium | high | critical` по порогам `weights.levels` настроек (по умолчанию 0–14, 15–34, 35–59, 60–100; риск = 100 × вероятность × тяжесть × ценность, спека 2026-10-21 §9); `kev=true|false` — CVE в каталоге CISA KEV (фасет `kev`, в обзоре `kev_pairs`).
 
 Многозначные фасеты — `level`, `criticality`, `zone`, `cvss_source`, `os`,
 `assignee`, `status`: несколько значений повторением ключа

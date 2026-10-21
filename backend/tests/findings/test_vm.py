@@ -304,10 +304,10 @@ def test_reconcile_and_list_on_40k_pairs(auth_client: TestClient, db_session: An
 
     hosts = [(f"ws{i:03d}.corp.local", f"10.0.{i // 250}.{i % 250}") for i in range(400)]
     cves = [f"CVE-2024-{1000 + j}" for j in range(100)]
-    bulk_insert(db_session, cast(Table, VmHost.__table__), ("id", "hostname", "ip", "os_name", "groups", "criticality", "zone", "impact"),
-                [(i + 1, h, ip, "Windows 11", "", "High", f"Z{i % 4}", 1.0) for i, (h, ip) in enumerate(hosts)])
-    bulk_insert(db_session, cast(Table, VmCve.__table__), ("cve_id", "cvss_source", "exploits_count", "msf_modules", "cve_factor"),
-                [(c, "none", 0, 0, 0.0) for c in cves])
+    bulk_insert(db_session, cast(Table, VmHost.__table__), ("id", "hostname", "ip", "os_name", "groups", "criticality", "zone", "value", "internet"),
+                [(i + 1, h, ip, "Windows 11", "", "High", f"Z{i % 4}", 1.0, False) for i, (h, ip) in enumerate(hosts)])
+    bulk_insert(db_session, cast(Table, VmCve.__table__), ("cve_id", "cvss_source", "exploits_count", "msf_modules", "likelihood", "kev", "kev_ransomware", "av_class"),
+                [(c, "none", 0, 0, 0.0, False, False, "none") for c in cves])
     bulk_insert(db_session, cast(Table, VmHostCve.__table__), ("host_id", "cve_id", "risk_raw", "risk"),
                 [(i + 1, c, 0.0, (i * 7 + j * 13) % 101) for i in range(len(hosts)) for j, c in enumerate(cves)])
     db_session.add(VmImport(source="file", filename="synthetic.csv", hosts=400, pairs=40_000, cves=100))

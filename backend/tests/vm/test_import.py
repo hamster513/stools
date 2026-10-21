@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -36,9 +37,11 @@ def test_csv_import_creates_hosts_pairs_zones(auth_client: TestClient, db_sessio
     assert set(zones) == {"DMZ", "Internal"} and not zones["DMZ"].marked
     pairs = db_session.execute(select(VmHostCve)).scalars().all()
     assert len(pairs) == 4
-    # Справочников нет: EPSS 0.5, CVSS нейтрален; Impact = крит + нет + нет.
+    # Справочников нет: EPSS — априорный 0.01, CVSS ÷ 10 — 0.5, вектора нет — 0.8;
+    # ценность High 0.8 без надбавок (зона не размечена).
     srv01 = next(p for p in pairs if p.host_id == hosts["srv01.corp.local"].id)
-    assert srv01.risk == 33  # 0.5 × 0.65 = 0.325, половинки вверх
+    assert srv01.risk == 0 and srv01.risk_raw == pytest.approx(0.01 * 0.5 * 0.8 * 0.8)
+    assert hosts["srv01.corp.local"].value == pytest.approx(0.8)
 
 
 def test_reimport_replaces_and_dedupes(auth_client: TestClient, db_session: Any) -> None:

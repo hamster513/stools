@@ -1,10 +1,11 @@
-"""Разбор справочников (спека §6): EPSS, NVD, ExploitDB, Metasploit.
+"""Разбор справочников (спека §6): EPSS, NVD, ExploitDB, Metasploit, CISA KEV.
 
 Справочник CTID (CVE → техника ATT&CK) разбирается в `core/attack_map.py`:
 он нужен и слою экспозиции, и загрузчику, а к риску отношения не имеет.
 
-Все разборщики потоковые и работают с открытым файлом; gzip снимается
-снаружи (`open_maybe_gzip`). Ничего не знают про базу.
+Все разборщики работают с открытым файлом; gzip снимается снаружи
+(`open_maybe_gzip`), потолок распакованного объёма — `limited`. Ничего не знают
+про базу. Потоковые все, кроме KEV: каталог мал (1–2 МБ) и читается целиком.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import csv
 import datetime as dt
 import gzip
 import io
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +21,7 @@ from typing import IO, Any, cast
 
 from api.modules.vm.core.sources import CVE_RE
 
-REF_NAMES = ("epss", "nvd", "exploitdb", "msf", "attack")
+REF_NAMES = ("epss", "nvd", "exploitdb", "msf", "attack", "kev")
 
 
 def open_maybe_gzip(path: Path) -> IO[bytes]:
@@ -28,6 +30,36 @@ def open_maybe_gzip(path: Path) -> IO[bytes]:
     if magic == b"\x1f\x8b":
         return cast(IO[bytes], gzip.open(path, "rb"))
     return path.open("rb")
+
+
+def _size(n: int) -> str:
+    return f"{n // (1024 * 1024)} МБ" if n >= 1024 * 1024 else f"{n} байт"
+
+
+class _Capped(io.RawIOBase):
+    """Счётчик прочитанных байт поверх файла: gzip-бомба (мегабайт сжатого — гигабайты
+    распакованного) останавливается на лимите, а не на конце диска или памяти."""
+
+    def __init__(self, inner: IO[bytes], max_bytes: int) -> None:
+        self._inner = inner
+        self._max = max_bytes
+        self._read = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        data = self._inner.read(len(buffer))
+        self._read += len(data)
+        if self._read > self._max:
+            raise ValueError(f"файл справочника после распаковки больше лимита ({_size(self._max)}), загрузка прервана")
+        buffer[: len(data)] = data
+        return len(data)
+
+
+def limited(fh: IO[bytes], max_bytes: int) -> IO[bytes]:
+    """Тот же поток, но не больше `max_bytes` прочитанных байт: дальше — ValueError."""
+    return cast(IO[bytes], io.BufferedReader(_Capped(fh, max_bytes)))
 
 
 def _text(fh: IO[bytes]) -> IO[str]:
@@ -193,3 +225,49 @@ def parse_msf(fh: IO[bytes]) -> Iterator[MsfRecord]:
             rank=rank,
             cve_ids=sorted(cves),
         )
+
+
+@dataclass
+class KevRecord:
+    cve_id: str
+    date_added: dt.date | None
+    ransomware: bool
+    vendor: str
+    product: str
+    name: str
+    due_date: dt.date | None
+
+
+def _kev_record(row: dict[str, Any]) -> KevRecord | None:
+    cve = str(row.get("cveID") or "").strip().upper()
+    if not cve.startswith("CVE-"):
+        return None
+    return KevRecord(
+        cve_id=cve,
+        date_added=_date(row.get("dateAdded")),
+        # Known | Unknown — флаг только для подтверждённого использования вымогателями.
+        ransomware=str(row.get("knownRansomwareCampaignUse") or "").strip().lower() == "known",
+        vendor=str(row.get("vendorProject") or ""),
+        product=str(row.get("product") or ""),
+        name=str(row.get("vulnerabilityName") or ""),
+        due_date=_date(row.get("dueDate")),
+    )
+
+
+def parse_kev(fh: IO[bytes]) -> Iterator[KevRecord]:
+    """Каталог CISA KEV: JSON (`{"vulnerabilities": [...]}`) или CSV с теми же именами
+    колонок. Формат — по первому непробельному байту, а не по имени файла: в архиве и
+    при загрузке файлом расширение может быть любым."""
+    data = fh.read()
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    if data.lstrip()[:1] in (b"{", b"["):
+        doc = json.loads(data)
+        items = doc.get("vulnerabilities") if isinstance(doc, dict) else doc
+        rows = [i for i in items or [] if isinstance(i, dict)]
+    else:
+        rows = list(csv.DictReader(io.StringIO(data.decode("utf-8", errors="replace"), newline="")))
+    for row in rows:
+        rec = _kev_record(row)
+        if rec is not None:
+            yield rec

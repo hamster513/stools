@@ -30,6 +30,7 @@ TITLES = {
     "exploitdb": "ExploitDB",
     "msf": "Metasploit",
     "attack": "CVE → ATT&CK (CTID)",
+    "kev": "CISA KEV",
 }
 
 

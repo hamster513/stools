@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import update
 
+from api.modules.vm.core.weights import Levels
 from api.modules.vm.findings_adapter import parse_filter
 from api.modules.vm.models import VmHost
 from api.modules.vm.services.query import count
@@ -56,16 +57,16 @@ def test_value_with_comma_is_one_value(loaded: TestClient, db_session: Any) -> N
     db_session.commit()
     assert _total(loaded, os="Windows 10, Pro", status="all") == 1
     assert _total(loaded, os=["Windows 10, Pro", "Windows 10"], status="all") == 1
-    assert count(db_session, parse_filter({"os": ["Windows 10, Pro"], "status": "all"}, login="")) == 1
+    assert count(db_session, parse_filter({"os": ["Windows 10, Pro"], "status": "all"}, login="", levels=Levels())) == 1
 
 
 def test_empty_value_in_list_means_not_set(loaded: TestClient, db_session: Any) -> None:  # noqa: F811
     """'' в наборе — «не задано» (пустая зона у хоста); в запросе — `-`."""
     db_session.execute(update(VmHost).where(VmHost.zone == "Internal").values(zone=""))
     db_session.commit()
-    assert count(db_session, parse_filter({"zone": ["", "DMZ"], "status": "all"}, login="")) == _total(loaded, status="all")
-    assert count(db_session, parse_filter({"zone": [""], "status": "all"}, login="")) == 1
-    assert count(db_session, parse_filter({"zone": "-", "status": "all"}, login="")) == 1
+    assert count(db_session, parse_filter({"zone": ["", "DMZ"], "status": "all"}, login="", levels=Levels())) == _total(loaded, status="all")
+    assert count(db_session, parse_filter({"zone": [""], "status": "all"}, login="", levels=Levels())) == 1
+    assert count(db_session, parse_filter({"zone": "-", "status": "all"}, login="", levels=Levels())) == 1
     assert _total(loaded, zone="-", status="all") == 1
     assert _total(loaded, zone=["DMZ", "-"], status="all") == _total(loaded, status="all")
 

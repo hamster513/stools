@@ -21,9 +21,11 @@ from api.modules.attack.services.attack_bundle import current as current_bundle
 from api.modules.vm.core.attack_map import parse_ctid_csv, parse_ctid_json
 from api.modules.vm.core.refs import (
     REF_NAMES,
+    limited,
     open_maybe_gzip,
     parse_epss,
     parse_exploitdb,
+    parse_kev,
     parse_msf,
     parse_nvd,
 )
@@ -33,6 +35,7 @@ from api.modules.vm.models import (
     VmRefEpss,
     VmRefExploitdb,
     VmRefExploitdbCve,
+    VmRefKev,
     VmRefMsf,
     VmRefMsfCve,
     VmRefNvd,
@@ -57,11 +60,14 @@ URLS = {
     "msf": "https://raw.githubusercontent.com/rapid7/metasploit-framework/master/db/modules_metadata_base.json",
     # В списке справочников показывается первая ссылка: она основная.
     "attack": ATTACK_URLS[0],
+    "kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
 }
 NVD_FIRST_YEAR = 2002
 BATCH = 20_000
 #: Потолок одной скачиваемой ленты (аудит L6): крупнейшая, NVD за год в gzip, — десятки мегабайт.
 MAX_FEED_BYTES = 512 * 1024 * 1024
+#: Каталог KEV читается в память целиком; настоящий — 1–2 МБ (спека §8).
+MAX_KEV_BYTES = 16 * 1024 * 1024
 
 EPSS_T = cast(Table, VmRefEpss.__table__)
 NVD_T = cast(Table, VmRefNvd.__table__)
@@ -70,6 +76,7 @@ EXDB_CVE_T = cast(Table, VmRefExploitdbCve.__table__)
 MSF_T = cast(Table, VmRefMsf.__table__)
 MSF_CVE_T = cast(Table, VmRefMsfCve.__table__)
 ATTACK_T = cast(Table, VmRefAttack.__table__)
+KEV_T = cast(Table, VmRefKev.__table__)
 
 
 def nvd_years_default() -> list[int]:
@@ -133,7 +140,8 @@ def _unique(items: Iterable[Any], key: Callable[[Any], str]) -> Iterable[Any]:
 def _load_epss(db: Session, path: Path, handle: JobHandle) -> int:
     db.execute(delete(EPSS_T))
     n = 0
-    with open_maybe_gzip(path) as fh:
+    with open_maybe_gzip(path) as raw:
+        fh = limited(raw, MAX_FEED_BYTES)
         rows = ((r.cve_id, r.epss, r.percentile) for r in _unique(parse_epss(fh), lambda r: r.cve_id))
         for batch in _batched(rows):
             n += bulk_insert(db, EPSS_T, ("cve_id", "epss", "percentile"), batch)
@@ -145,7 +153,8 @@ def _load_nvd(db: Session, path: Path, handle: JobHandle) -> tuple[int, set[int]
     """Год определяется по данным; удаляются только затронутые годы."""
     years: set[int] = set()
     n = 0
-    with open_maybe_gzip(path) as fh:
+    with open_maybe_gzip(path) as raw:
+        fh = limited(raw, MAX_FEED_BYTES)
         records = _unique(parse_nvd(fh), lambda r: r.cve_id)
         for batch in _batched(
             (r.cve_id, r.year, r.cvss_v3, r.v3_av, r.v3_pr, r.v3_ui, r.cvss_v2, r.v2_av, r.v2_ac, r.v2_au, r.description, r.published, r.modified)
@@ -172,7 +181,8 @@ def _load_exploitdb(db: Session, path: Path, handle: JobHandle) -> int:
     db.execute(delete(EXDB_CVE_T))
     db.execute(delete(EXDB_T))
     n = 0
-    with open_maybe_gzip(path) as fh:
+    with open_maybe_gzip(path) as raw:
+        fh = limited(raw, MAX_FEED_BYTES)
         # В files_exploits.csv встречаются повторы id (461 на осень 2026).
         for records in _batched_records(_unique(parse_exploitdb(fh), lambda r: str(r.exploit_id))):
             n += bulk_insert(
@@ -190,13 +200,26 @@ def _load_msf(db: Session, path: Path, handle: JobHandle) -> int:
     db.execute(delete(MSF_CVE_T))
     db.execute(delete(MSF_T))
     n = 0
-    with open_maybe_gzip(path) as fh:
+    with open_maybe_gzip(path) as raw:
+        fh = limited(raw, MAX_FEED_BYTES)
         for records in _batched_records(_unique(parse_msf(fh), lambda r: r.fullname)):
             n += bulk_insert(db, MSF_T, ("fullname", "name", "rank"), [(r.fullname, r.name, r.rank) for r in records])
             links = {(c, r.fullname) for r in records for c in r.cve_ids}
             if links:
                 bulk_insert(db, MSF_CVE_T, ("cve_id", "fullname"), sorted(links))
             handle.tick(n, message=f"модулей {n}")
+    return n
+
+
+def _load_kev(db: Session, path: Path, handle: JobHandle) -> int:
+    db.execute(delete(KEV_T))
+    n = 0
+    with open_maybe_gzip(path) as raw:
+        records = _unique(parse_kev(limited(raw, MAX_KEV_BYTES)), lambda r: r.cve_id)
+        rows = ((r.cve_id, r.date_added, r.ransomware, r.vendor, r.product, r.name, r.due_date) for r in records)
+        for batch in _batched(rows):
+            n += bulk_insert(db, KEV_T, ("cve_id", "date_added", "ransomware", "vendor", "product", "name", "due_date"), batch)
+            handle.tick(n, message=f"записей {n}")
     return n
 
 
@@ -215,8 +238,8 @@ def _load_attack(db: Session, path: Path, handle: JobHandle, replace: bool) -> i
         seen = {(c, t) for c, t in db.execute(select(ATTACK_T.c.cve_id, ATTACK_T.c.technique_id))}
     rows: list[tuple[Any, ...]] = []
     dropped = 0
-    with open_maybe_gzip(path) as fh:
-        for cve, technique, kind in parser(fh):
+    with open_maybe_gzip(path) as raw:
+        for cve, technique, kind in parser(limited(raw, MAX_FEED_BYTES)):
             if technique not in known:
                 dropped += 1
                 continue
@@ -256,8 +279,13 @@ def load_ref(
         n = _load_exploitdb(db, path, handle)
     elif name == "attack":
         n = _load_attack(db, path, handle, replace=not append)
-    else:
+    elif name == "msf":
         n = _load_msf(db, path, handle)
+    elif name == "kev":
+        n = _load_kev(db, path, handle)
+    else:
+        # Новое имя в REF_NAMES без загрузчика не должно молча уйти в чужой.
+        raise ValueError(f"нет загрузчика справочника: {name}")
     state = db.get(VmRefState, name)
     if state is None:
         state = VmRefState(name=name)
@@ -294,7 +322,7 @@ def rebuild_after_ref(db: Session, handle: JobHandle, name: str, weights: Weight
     handle.stage("enriching", message="пересборка витрины CVE")
     rebuild_cves(db, weights, None, handle)
     handle.stage("scoring", message="риск пар")
-    rescore_pairs(db)
+    rescore_pairs(db, weights)
 
 
 def run_ref_file(db: Session, handle: JobHandle, name: str, paths: list[Path], weights: Weights) -> None:

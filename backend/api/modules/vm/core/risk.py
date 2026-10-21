@@ -1,12 +1,24 @@
-"""Формула риска (спека §4), чистые функции.
+"""Формула риска (спека 2026-10-21 §9), чистые функции.
 
-    Risk  = EPSS × (CVSS ÷ 10) × Impact × CVE_param × ExDB_param × MSF_param
-    score = round(min(1, Risk) × 100)
+    Risk = round(100 × L × S × V), от 0 до 100
 
-Раскладывается на множитель CVE (`cve_factor`) и множитель хоста
-(`host_impact`): первый зависит только от справочников, второй — только
-от критичности и зоны. Это и позволяет пересчитывать миллионы пар одним
-запросом (спека §3).
+    L — вероятность эксплуатации, 0..1:
+        1.0, если CVE в каталоге CISA KEV (эксплуатация — факт, а не прогноз);
+        иначе 1 − (1 − EPSS') × (1 − p_exdb[тип лучшего эксплойта]) × (1 − p_msf[лучший ранг])
+        EPSS' = EPSS или prior_epss («не измерено»)
+    S — тяжесть, 0..1: CVSS ÷ 10 (или cvss_missing) × reach[вектор атаки, доступ из интернета]
+    V — ценность хоста, 0.4..1: min(1, crit[критичность] + conf_bonus × конф. + inet_bonus × интернет)
+
+    Уровень — из балла по порогам настроек (`Weights.levels`), при чтении.
+
+Свидетельства эксплуатации объединяются как независимые вероятности: любое
+из них поднимает L, ни одно не обнуляет остальные (EPSS множителем в первой
+итерации обнулял и CVSS, и хост, и эксплойты).
+
+Раскладка для массового пересчёта: L зависит только от CVE (`vm_cve.likelihood`),
+V — только от хоста (`vm_host.value`), S — от CVE (`cvss10`, `av_class`) и
+доступа хоста из интернета (`vm_host.internet`); reach считается в SQL `CASE`.
+Так пересчёт миллионов пар остаётся одним UPDATE (`services/scoring.rescore_pairs`).
 
 Каждая подстановка при отсутствии данных возвращается флагом в
 `RiskExplanation`: карточка обязана показывать, что число не измерено,
@@ -14,13 +26,16 @@
 """
 from __future__ import annotations
 
+import datetime as dt
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from api.modules.vm.core.weights import EPSS_FALLBACK, MSF_RANKS, Weights
+from api.modules.vm.core.weights import MSF_RANKS, Levels, Weights
 
 Level = Literal["low", "medium", "high", "critical"]
+LEVELS: tuple[Level, ...] = ("low", "medium", "high", "critical")
 
 LEVEL_WORD: dict[Level, str] = {
     "low": "низкий",
@@ -29,24 +44,34 @@ LEVEL_WORD: dict[Level, str] = {
     "critical": "критический",
 }
 
+#: Классы вектора атаки: v3 и v2 называют их по-разному, формуле важен только класс.
+AV_CLASSES = ("network", "adjacent", "local", "none")
+_AV_CLASS = {
+    "NETWORK": "network",
+    "ADJACENT_NETWORK": "adjacent",
+    "ADJACENT": "adjacent",
+    "LOCAL": "local",
+    "PHYSICAL": "local",
+}
+
 
 @dataclass(frozen=True)
 class CveInputs:
     epss: float | None = None
     cvss: float | None = None
-    v3_av: str | None = None
-    v3_pr: str | None = None
-    v3_ui: str | None = None
-    v2_av: str | None = None
-    v2_ac: str | None = None
-    v2_au: str | None = None
+    #: Вектор атаки как в NVD: v3, а если его нет — v2.
+    av: str | None = None
     exploitdb_type: str | None = None
     msf_rank: str | None = None
+    kev: bool = False
+    kev_added: dt.date | None = None
+    #: Справочник KEV загружен: без него «нет в KEV» — не факт, а незнание.
+    kev_loaded: bool = True
 
 
 @dataclass
 class Factor:
-    """Один множитель формулы: значение и откуда оно."""
+    """Один член формулы: значение и откуда оно."""
 
     value: float
     #: Что стояло на входе (метрика, тип, ранг) — для карточки.
@@ -57,28 +82,29 @@ class Factor:
 
 @dataclass
 class RiskExplanation:
-    epss: Factor
-    cvss: Factor
-    cve_param: Factor
-    exdb_param: Factor
-    msf_param: Factor
-    impact: Factor
-    impact_parts: dict[str, Factor] = field(default_factory=dict)
+    likelihood: Factor
+    severity: Factor
+    value: Factor
+    likelihood_parts: dict[str, Factor] = field(default_factory=dict)
+    severity_parts: dict[str, Factor] = field(default_factory=dict)
+    value_parts: dict[str, Factor] = field(default_factory=dict)
     raw: float = 0.0
     score: int = 0
     level: Level = "low"
 
 
 def score(raw: float) -> int:
-    return round(min(1.0, max(0.0, raw)) * 100)
+    """Округление половинок вверх — как `FLOOR(x + 0.5)` в пересчёте пар: Python `round`
+    округлял бы до чётного, и карточка расходилась бы со списком на единицу."""
+    return math.floor(min(1.0, max(0.0, raw)) * 100.0 + 0.5)
 
 
-def level(value: int) -> Level:
-    if value >= 70:
+def level(value: int, levels: Levels) -> Level:
+    if value >= levels.critical:
         return "critical"
-    if value >= 40:
+    if value >= levels.high:
         return "high"
-    if value >= 20:
+    if value >= levels.medium:
         return "medium"
     return "low"
 
@@ -89,77 +115,98 @@ def rank_name(rank: int) -> str:
 
 
 def best_exploit_type(types: Iterable[str], w: Weights) -> str | None:
-    """Тип эксплойта с наибольшим весом: у CVE может быть несколько."""
+    """Тип эксплойта с наибольшей вероятностью: у CVE может быть несколько."""
     known = [t.lower() for t in types if t]
     if not known:
         return None
-    return max(known, key=lambda t: w.exploitdb.get(t, 1.0))
+    return max(known, key=lambda t: w.p_exdb.get(t, 0.0))
 
 
 def best_msf_rank(ranks: Iterable[int], w: Weights) -> str | None:
     names = [rank_name(r) for r in ranks]
     if not names:
         return None
-    return max(names, key=lambda n: w.msf.get(n, 1.0))
+    return max(names, key=lambda n: w.p_msf.get(n, 0.0))
 
 
-def _epss(c: CveInputs) -> Factor:
+def av_class(v3_av: str | None, v2_av: str | None) -> str:
+    """network | adjacent | local | none — по v3, а без него по v2."""
+    av = v3_av or v2_av
+    return _AV_CLASS.get((av or "").upper(), "none")
+
+
+def reach(cls: str, internet: bool, w: Weights) -> float:
+    if cls == "network":
+        return w.reach.network_internet if internet else w.reach.network_internal
+    if cls == "adjacent":
+        return w.reach.adjacent
+    if cls == "local":
+        return w.reach.local
+    return w.reach_unknown
+
+
+def _likelihood_parts(c: CveInputs, w: Weights) -> dict[str, Factor]:
+    if not c.kev_loaded:
+        kev = Factor(0.0, "справочник KEV не загружен", substituted=True)
+    elif c.kev:
+        kev = Factor(1.0, f"CISA KEV, с {c.kev_added:%d.%m.%Y}" if c.kev_added else "CISA KEV")
+    else:
+        # Отсутствие в каталоге — факт о CVE, а не подстановка (спека §8).
+        kev = Factor(0.0, "нет в KEV")
     if c.epss is None:
-        return Factor(EPSS_FALLBACK, "нет в EPSS", substituted=True)
-    return Factor(float(c.epss), "EPSS")
+        epss = Factor(w.prior_epss, "нет в EPSS — не измерено", substituted=True)
+    else:
+        epss = Factor(float(c.epss), "EPSS")
+    if c.exploitdb_type:
+        exploit = Factor(w.p_exdb.get(c.exploitdb_type, 0.0), f"ExploitDB {c.exploitdb_type}")
+    else:
+        exploit = Factor(0.0, "нет в ExploitDB")
+    if c.msf_rank:
+        msf = Factor(w.p_msf.get(c.msf_rank, 0.0), f"Metasploit {c.msf_rank}")
+    else:
+        msf = Factor(0.0, "нет модуля Metasploit")
+    return {"kev": kev, "epss": epss, "exploit": exploit, "msf": msf}
 
 
-def _cvss(c: CveInputs) -> Factor:
+def likelihood(c: CveInputs, w: Weights) -> tuple[Factor, dict[str, Factor]]:
+    """L и его части (KEV, EPSS, эксплойт, Metasploit) — для витрины и карточки."""
+    parts = _likelihood_parts(c, w)
+    if c.kev:
+        return Factor(1.0, "в каталоге KEV — эксплуатируется"), parts
+    miss = (1.0 - parts["epss"].value) * (1.0 - parts["exploit"].value) * (1.0 - parts["msf"].value)
+    total = Factor(
+        1.0 - miss,
+        "1 − (1 − EPSS) × (1 − ExploitDB) × (1 − Metasploit)",
+        substituted=parts["epss"].substituted,
+    )
+    return total, parts
+
+
+def host_value(criticality: str | None, internet: bool, confidential: bool, w: Weights) -> float:
+    crit = criticality if criticality is not None and criticality in w.value.criticality else "None"
+    return min(
+        1.0,
+        w.value.criticality[crit]
+        + (w.value.conf_bonus if confidential else 0.0)
+        + (w.value.inet_bonus if internet else 0.0),
+    )
+
+
+def _severity_parts(c: CveInputs, internet: bool, zone_marked: bool, w: Weights) -> dict[str, Factor]:
     if c.cvss is None:
-        return Factor(1.0, "нет CVSS", substituted=True)
-    return Factor(float(c.cvss) / 10.0, f"CVSS {c.cvss:g}")
-
-
-def _cve_param(c: CveInputs, w: Weights) -> Factor:
-    if c.v3_av:
-        av = w.cvss_v3.av.get(c.v3_av, 1.0)
-        pr = w.cvss_v3.pr.get(c.v3_pr or "", 1.0)
-        ui = w.cvss_v3.ui.get(c.v3_ui or "", 1.0)
-        return Factor(av * pr * ui, f"v3 AV={c.v3_av} PR={c.v3_pr} UI={c.v3_ui}")
-    if c.v2_av:
-        av = w.cvss_v2.av.get(c.v2_av, 1.0)
-        ac = w.cvss_v2.ac.get(c.v2_ac or "", 1.0)
-        au = w.cvss_v2.au.get(c.v2_au or "", 1.0)
-        return Factor(av * ac * au, f"v2 AV={c.v2_av} AC={c.v2_ac} Au={c.v2_au}")
-    return Factor(1.0, "нет метрик CVSS", substituted=True)
-
-
-def _exdb_param(c: CveInputs, w: Weights) -> Factor:
-    if not c.exploitdb_type:
-        return Factor(1.0, "нет в ExploitDB", substituted=True)
-    return Factor(w.exploitdb.get(c.exploitdb_type, 1.0), f"ExploitDB {c.exploitdb_type}")
-
-
-def _msf_param(c: CveInputs, w: Weights) -> Factor:
-    if not c.msf_rank:
-        return Factor(1.0, "нет модуля Metasploit", substituted=True)
-    return Factor(w.msf.get(c.msf_rank, 1.0), f"Metasploit {c.msf_rank}")
-
-
-def cve_factor(c: CveInputs, w: Weights) -> float:
-    return (
-        _epss(c).value
-        * _cvss(c).value
-        * _cve_param(c, w).value
-        * _exdb_param(c, w).value
-        * _msf_param(c, w).value
-    )
-
-
-def host_impact(
-    criticality: str | None, internet: bool, confidential: bool, w: Weights
-) -> float:
-    crit = criticality if criticality is not None and criticality in w.impact.criticality else "None"
-    return (
-        w.impact.criticality[crit]
-        + w.impact.confidential["yes" if confidential else "no"]
-        + w.impact.internet["yes" if internet else "no"]
-    )
+        cvss = Factor(w.cvss_missing, "нет CVSS", substituted=True)
+    else:
+        cvss = Factor(float(c.cvss) / 10.0, f"CVSS {c.cvss:g}")
+    cls = av_class(c.av, None)
+    if cls == "none":
+        r = Factor(w.reach_unknown, "нет вектора атаки", substituted=True)
+    elif cls == "network":
+        # Сетевой вектор зависит от доступа из интернета; у неразмеченной зоны его не знают.
+        where = "хост из интернета" if internet else "хост внутри"
+        r = Factor(reach(cls, internet, w), f"вектор {c.av}, {where}", substituted=not zone_marked)
+    else:
+        r = Factor(reach(cls, internet, w), f"вектор {c.av}")
+    return {"cvss": cvss, "reach": r}
 
 
 def explain(
@@ -170,43 +217,48 @@ def explain(
     zone_marked: bool,
     w: Weights,
 ) -> RiskExplanation:
-    crit_known = criticality is not None and criticality in w.impact.criticality
+    l_total, l_parts = likelihood(c, w)
+    s_parts = _severity_parts(c, internet, zone_marked, w)
+    s_total = Factor(
+        s_parts["cvss"].value * s_parts["reach"].value,
+        "CVSS ÷ 10 × достижимость",
+        substituted=any(p.substituted for p in s_parts.values()),
+    )
+    crit_known = criticality is not None and criticality in w.value.criticality
     crit: str = criticality if crit_known and criticality is not None else "None"
-    parts = {
+    v_parts = {
         "criticality": Factor(
-            w.impact.criticality[crit],
+            w.value.criticality[crit],
             crit if crit_known else "критичность не задана",
             substituted=not crit_known,
         ),
         "confidential": Factor(
-            w.impact.confidential["yes" if confidential else "no"],
+            w.value.conf_bonus if confidential else 0.0,
             "есть" if confidential else "нет",
             substituted=not zone_marked,
         ),
         "internet": Factor(
-            w.impact.internet["yes" if internet else "no"],
+            w.value.inet_bonus if internet else 0.0,
             "доступен" if internet else "недоступен",
             substituted=not zone_marked,
         ),
     }
-    impact_value = sum(p.value for p in parts.values())
+    v_total = Factor(
+        host_value(criticality, internet, confidential, w),
+        "сумма слагаемых, не больше 1",
+        substituted=not zone_marked,
+    )
     e = RiskExplanation(
-        epss=_epss(c),
-        cvss=_cvss(c),
-        cve_param=_cve_param(c, w),
-        exdb_param=_exdb_param(c, w),
-        msf_param=_msf_param(c, w),
-        impact=Factor(impact_value, "сумма слагаемых", substituted=not zone_marked),
-        impact_parts=parts,
+        likelihood=l_total,
+        severity=s_total,
+        value=v_total,
+        likelihood_parts=l_parts,
+        severity_parts=s_parts,
+        value_parts=v_parts,
     )
-    e.raw = (
-        e.epss.value
-        * e.cvss.value
-        * e.cve_param.value
-        * e.exdb_param.value
-        * e.msf_param.value
-        * e.impact.value
-    )
+    # Тот же порядок умножения, что в SQL пересчёта (L × CVSS × reach × V):
+    # иначе на границе половинки карточка и список могли бы разойтись.
+    e.raw = l_total.value * s_parts["cvss"].value * s_parts["reach"].value * v_total.value
     e.score = score(e.raw)
-    e.level = level(e.score)
+    e.level = level(e.score, w.levels)
     return e

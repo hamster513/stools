@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.core.risk import LEVEL_WORD, CveInputs, explain
+from api.modules.vm.core.risk import level as risk_level
 from api.modules.vm.models import (
     VmCve,
     VmHost,
@@ -58,12 +60,14 @@ def _filters(
     level: QueryList = None,
     exploits: bool | None = None,
     msf: bool | None = None,
+    kev: bool | None = None,
     cvss_source: QueryList = None,
     host_id: int | None = None,
     status_: QueryStatus = None,
     assignee: QueryList = None,
     overdue: bool = False,
     risk_expiring: bool = False,
+    db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> VulnFilters:
     """Статус пары: `status` — коды повтором ключа (только он — ещё и через запятую) или `all`, по умолчанию — открытые;
@@ -73,8 +77,9 @@ def _filters(
         sf = status_filter(status_, assignee, overdue, risk_expiring, login=user.login)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
-    return VulnFilters(q, host, cve, multi(criticality), multi(zone), multi(os), multi(level), exploits, msf,
-                       multi(cvss_source), host_id, sf)
+    # Пороги уровней — из настроек, один раз на запрос: `level` в фильтре и в строках по ним.
+    return VulnFilters(q, host, cve, multi(criticality), multi(zone), multi(os), multi(level), exploits, msf, kev,
+                       multi(cvss_source), host_id, sf, load_settings(db).weights.levels)
 
 
 def _with_names(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -115,7 +120,7 @@ def list_vulns(
     # пары без решений, — из него вычитаются пары с решением, не прошедшие фильтр (`data_facets`).
     cached = load_stats(db).get("facets") if f.data_empty() else None
     fac = data_facets(db, f, cached)
-    total_all = sum(cached["level"].values()) if cached and "level" in cached else None
+    total_all = sum(cached["risk"].values()) if cached and "risk" in cached else None
     fac.update(status_facets(db, f, total_all))
     return VulnsResponse(total=sum(fac["level"].values()), items=_with_names(db, page_items(db, f, sort, limit, 0)), facets=fac)
 
@@ -139,17 +144,16 @@ def risk_card(
     assert host is not None and cve is not None
     zone = db.get(VmZone, host.zone) if host.zone else None
     settings = load_settings(db)
+    refs = {s.name: s.loaded_at for s in db.execute(select(VmRefState)).scalars()}
     inputs = CveInputs(
         epss=cve.epss,
         cvss=cve.cvss,
-        v3_av=cve.v3_av,
-        v3_pr=cve.v3_pr,
-        v3_ui=cve.v3_ui,
-        v2_av=cve.v2_av,
-        v2_ac=cve.v2_ac,
-        v2_au=cve.v2_au,
+        av=cve.v3_av or cve.v2_av,
         exploitdb_type=cve.exploitdb_type,
         msf_rank=cve.msf_rank,
+        kev=cve.kev,
+        kev_added=cve.kev_added,
+        kev_loaded="kev" in refs,
     )
     e = explain(
         inputs,
@@ -159,6 +163,7 @@ def risk_card(
         zone_marked=bool(zone and zone.marked),
         w=settings.weights,
     )
+    lvl = risk_level(pair.risk, settings.weights.levels)
     exploits = db.execute(
         select(VmRefExploitdb.exploit_id, VmRefExploitdb.type, VmRefExploitdb.verified, VmRefExploitdb.published)
         .join(VmRefExploitdbCve, VmRefExploitdbCve.exploit_id == VmRefExploitdb.exploit_id)
@@ -173,7 +178,6 @@ def risk_card(
         .order_by(VmRefMsf.rank.desc())
         .limit(20)
     ).all()
-    refs = {s.name: s.loaded_at for s in db.execute(select(VmRefState)).scalars()}
     return {
         "host": {
             "id": host.id,
@@ -195,6 +199,11 @@ def risk_card(
             "cvss_source": cve.cvss_source,
             "epss": cve.epss,
             "epss_percentile": cve.epss_percentile,
+            # KEV: факт эксплуатации; дата, вымогатели и срок CISA — для человека, в балл не входят.
+            "kev": cve.kev,
+            "kev_added": cve.kev_added.isoformat() if cve.kev_added else None,
+            "kev_ransomware": cve.kev_ransomware,
+            "kev_due": cve.kev_due.isoformat() if cve.kev_due else None,
             "nvd_url": f"https://nvd.nist.gov/vuln/detail/{cve.cve_id}",
             "exploits": [
                 {"exploit_id": r.exploit_id, "type": r.type, "verified": r.verified, "published": r.published.isoformat() if r.published else None}
@@ -202,21 +211,23 @@ def risk_card(
             ],
             "msf_modules": [{"fullname": r.fullname, "name": r.name, "rank": r.rank} for r in modules],
         },
+        # Балл и уровень — сохранённые пары (по ним список и фильтры); части — расчёт по текущим
+        # весам: после смены весов до пересчёта они могут разойтись с баллом.
         "risk": {
             "score": pair.risk,
             "raw": pair.risk_raw,
-            "level": e.level,
-            "level_word": LEVEL_WORD[e.level],
+            "level": lvl,
+            "level_word": LEVEL_WORD[lvl],
             "threshold": settings.threshold,
-            "epss": _factor(e.epss),
-            "cvss": _factor(e.cvss),
-            "cve_param": _factor(e.cve_param),
-            "exdb_param": _factor(e.exdb_param),
-            "msf_param": _factor(e.msf_param),
-            "impact": _factor(e.impact),
-            "impact_parts": {k: _factor(v) for k, v in e.impact_parts.items()},
+            "likelihood": _factor(e.likelihood),
+            "likelihood_parts": {k: _factor(v) for k, v in e.likelihood_parts.items()},
+            "severity": _factor(e.severity),
+            "severity_parts": {k: _factor(v) for k, v in e.severity_parts.items()},
+            "value": _factor(e.value),
+            "value_parts": {k: _factor(v) for k, v in e.value_parts.items()},
         },
-        "refs_loaded_at": {k: (v.isoformat() if v else None) for k, v in refs.items()},
+        # Все справочники, в том числе незагруженные (null): карточка показывает и KEV.
+        "refs_loaded_at": {n: (refs[n].isoformat() if refs.get(n) else None) for n in REF_NAMES},
     }
 
 
@@ -225,6 +236,7 @@ def host_detail(host_id: int, db: Session = Depends(get_db), _user: AppUser = De
     host = db.get(VmHost, host_id)
     if host is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="хост не найден")
+    levels = load_settings(db).weights.levels
     rows = db.execute(
         base_select(ROW_COLUMNS).where(VmHostCve.host_id == host_id).order_by(VmHostCve.risk.desc(), VmHostCve.cve_id).limit(500)
     ).all()
@@ -238,7 +250,7 @@ def host_detail(host_id: int, db: Session = Depends(get_db), _user: AppUser = De
             "criticality": host.criticality,
             "zone": host.zone,
         },
-        "items": [row_to_item(r) for r in rows],
+        "items": [row_to_item(r, levels) for r in rows],
     }
 
 
@@ -258,6 +270,7 @@ EXPORT_COLUMNS = [
     Column("zone", "Зона"),
     Column("os_name", "ОС"),
     Column("risk_raw", "Риск (сырой)"),
+    Column("kev", "KEV"),
     Column("status_title", "Статус"),
     Column("assignee", "Исполнитель"),
     Column("due_date", "Срок"),
@@ -279,6 +292,6 @@ def export_csv(
     def rows() -> Iterator[dict[str, Any]]:
         today = f.status.day()
         for row in iter_rows(db, f, sort):
-            yield item_with_state(row, today)
+            yield item_with_state(row, today, f.levels)
 
     return export_response(fmt, EXPORT_COLUMNS, rows(), module="vm", name="vulns")

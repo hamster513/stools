@@ -1,6 +1,7 @@
 """Справочники: парсеры на фикстурах и загрузка через API с обогащением."""
 from __future__ import annotations
 
+import datetime as dt
 import gzip
 from pathlib import Path
 from typing import Any
@@ -14,10 +15,11 @@ from api.modules.vm.core.refs import (
     open_maybe_gzip,
     parse_epss,
     parse_exploitdb,
+    parse_kev,
     parse_msf,
     parse_nvd,
 )
-from api.modules.vm.models import VmCve, VmRefNvd
+from api.modules.vm.models import VmCve, VmJob, VmRefEpss, VmRefKev, VmRefNvd
 from api.modules.vm.services import refs as refs_service
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -45,6 +47,18 @@ def test_parsers() -> None:
         msf = list(parse_msf(fh))
     assert msf[0].fullname == "exploit/multi/http/log4shell_header_injection" and msf[0].rank == 600
     assert msf[0].cve_ids == ["CVE-2021-44228"]
+
+
+@pytest.mark.parametrize("name", ["kev.json", "kev.csv"])
+def test_parse_kev(name: str) -> None:
+    """JSON и CSV — по первому байту, не по имени; Known — флаг вымогателей; битая дата — None."""
+    with (FIXTURES / name).open("rb") as fh:
+        kev = {r.cve_id: r for r in parse_kev(fh)}
+    assert sorted(kev) == ["CVE-2020-1472", "CVE-2021-44228", "CVE-2023-1234"]
+    log4j = kev["CVE-2021-44228"]
+    assert (log4j.date_added, log4j.due_date, log4j.ransomware) == (dt.date(2021, 12, 10), dt.date(2021, 12, 24), True)
+    assert (log4j.vendor, log4j.product, log4j.name) == ("ExampleVendor", "Example Logger", "Example Logger Remote Code Execution")
+    assert kev["CVE-2020-1472"].date_added is None and kev["CVE-2020-1472"].ransomware is False
 
 
 def test_open_maybe_gzip(tmp_path: Path) -> None:
@@ -78,7 +92,8 @@ def test_refs_enrich_imported_cves(auth_client: TestClient, db_session: Any) -> 
     assert (log4j.cvss, log4j.cvss_source, log4j.epss) == (10.0, "nvd_v3", 0.97565)
     assert log4j.exploitdb_type == "remote" and log4j.exploits_count == 2
     assert log4j.msf_rank == "excellent" and log4j.msf_modules == 2
-    assert log4j.cve_factor > 1.0
+    # EPSS 0.97565, remote, excellent: 1 − 0.02435 × 0.7 × 0.5
+    assert log4j.likelihood == pytest.approx(1 - 0.02435 * 0.7 * 0.5) and log4j.cvss10 == 1.0 and log4j.av_class == "network"
     bluekeep = db_session.get(VmCve, "CVE-2019-0708")
     assert bluekeep.cvss == 9.8 and bluekeep.msf_rank == "normal"
 
@@ -132,3 +147,46 @@ def test_feed_download_closes_http_client(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(ValueError, match="HTTP 500"):
         refs_service.run_ref_download(None, _Handle(), "epss", None, http_factory=factory)  # type: ignore[arg-type]
     assert len(clients) == 1 and clients[0].is_closed
+
+
+def test_kev_load_raises_likelihood_to_one(auth_client: TestClient, db_session: Any) -> None:
+    """CVE из каталога: L = 1 — эксплуатация факт; CVE-2023-1234 с EPSS 0.001 поднимается с нуля."""
+    r = auth_client.post("/api/vm/import/file", files={"file": ("hosts.csv", (FIXTURES / "hosts.csv").read_bytes(), "text/csv")})
+    assert r.status_code == 202
+    assert _upload_ref(auth_client, "epss", "epss.csv")["status"] == "done"
+    db_session.expire_all()
+    before = db_session.get(VmCve, "CVE-2023-1234")
+    assert before.likelihood == pytest.approx(0.001) and before.kev is False
+
+    job = _upload_ref(auth_client, "kev", "kev.json")
+    assert job["status"] == "done", job
+    states = {s["name"]: s for s in auth_client.get("/api/vm/refs").json()}
+    assert states["kev"]["records"] == 3 and states["kev"]["title"] == "CISA KEV" and states["kev"]["url"].startswith("https://www.cisa.gov/")
+    db_session.expire_all()
+    assert db_session.query(VmRefKev).count() == 3
+    after = db_session.get(VmCve, "CVE-2023-1234")
+    assert (after.kev, after.likelihood, after.kev_added, after.kev_due) == (True, 1.0, dt.date(2023, 5, 2), dt.date(2023, 5, 23))
+    log4j = db_session.get(VmCve, "CVE-2021-44228")
+    assert log4j.kev_ransomware is True and log4j.likelihood == 1.0
+    assert db_session.get(VmCve, "CVE-2019-0708").kev is False
+
+    # Загрузка CSV заменяет каталог целиком.
+    assert _upload_ref(auth_client, "kev", "kev.csv")["status"] == "done"
+    db_session.expire_all()
+    assert db_session.query(VmRefKev).count() == 3
+
+
+def test_gzip_bomb_is_rejected(auth_client: TestClient, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Аудит: сжатая лента распаковывается не дальше лимита — задача падает с понятной причиной,
+    прежний справочник не тронут."""
+    db_session.add(VmRefEpss(cve_id="CVE-2000-0001", epss=0.5, percentile=0.5))
+    db_session.commit()
+    monkeypatch.setattr(refs_service, "MAX_FEED_BYTES", 10_000)
+    bomb = gzip.compress(b"cve,epss,percentile\n" + b"CVE-2021-44228,0.1,0.1\n" * 5_000)
+    assert len(bomb) < 10_000
+    r = auth_client.post("/api/vm/refs/epss/upload", files=[("files", ("epss.csv.gz", bomb, "application/gzip"))])
+    assert r.status_code == 202, r.text
+    db_session.expire_all()
+    job = db_session.get(VmJob, r.json()["job_id"])
+    assert job.status == "failed" and "больше лимита" in job.error
+    assert [e.cve_id for e in db_session.query(VmRefEpss)] == ["CVE-2000-0001"]
