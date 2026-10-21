@@ -18,13 +18,23 @@ interface Props {
 }
 
 function num(v: number): string {
-  return Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
+  return v.toLocaleString('ru-RU', { maximumFractionDigits: 3 })
 }
 
-function FactorRow({ label, f, loaded }: { label: string; f: Factor; loaded?: string | null }) {
+/** Члены формулы — ровно два знака, как в строке `0,82 × 0,98 × 1,00 × 100 = 81`. */
+function num2(v: number): string {
+  return v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/** `YYYY-MM-DD` → `ДД.ММ.ГГГГ` без Date: разбор через Date сдвигал бы дату на день западнее UTC. */
+function day(iso: string): string {
+  return iso.split('-').reverse().join('.')
+}
+
+function FactorRow({ label, f, loaded, total }: { label: string; f: Factor; loaded?: string | null; total?: boolean }) {
   return (
     <tr className="border-t border-grid/60 align-top">
-      <td className="py-1.5 pr-2 text-text-secondary">{label}</td>
+      <td className={cn('py-1.5 pr-2', total ? 'font-medium text-text' : 'text-text-secondary')}>{label}</td>
       <td className={cn('py-1.5 pr-2 text-right font-mono tabular-nums', f.substituted ? 'text-risk-medium' : 'text-text')}>{num(f.value)}</td>
       <td className="py-1.5 text-text-secondary">
         {f.source}
@@ -35,7 +45,10 @@ function FactorRow({ label, f, loaded }: { label: string; f: Factor; loaded?: st
   )
 }
 
-/** Карточка пары: работа с находкой (статус пары хост × CVE), формула риска с числами и происхождение каждого множителя. */
+/**
+ * Карточка пары: работа с находкой (статус пары хост × CVE), формула риска с числами
+ * и происхождение каждого члена: вероятность эксплуатации × тяжесть × ценность хоста.
+ */
 export function RiskDrawer({ item, onClose, onChanged }: Props) {
   const open = item !== null
   const card = useRiskCard(item?.host_id, item?.cve_id)
@@ -83,26 +96,37 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                   </div>
 
                   <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Формула</div>
-                  <code className="mb-3 block rounded border border-grid bg-app-bg px-2 py-1.5 font-mono text-[11px] text-text">
-                    {num(r.epss.value)} × {num(r.cvss.value)} × {num(r.impact.value)} × {num(r.cve_param.value)} × {num(r.exdb_param.value)} × {num(r.msf_param.value)} = {num(r.raw)} → min(1, ·) × 100 = {r.score}
+                  <code className="mb-1 block rounded border border-grid bg-app-bg px-2 py-1.5 font-mono text-[11px] text-text">
+                    {num2(r.likelihood.value)} × {num2(r.severity.value)} × {num2(r.value.value)} × 100 = {r.score}
                   </code>
+                  <p className="mb-3 text-[11px] text-text-secondary">
+                    вероятность эксплуатации × тяжесть × ценность хоста
+                    {/* Балл — сохранённый при последнем пересчёте, части — по текущим весам: после смены весов они расходятся до пересчёта.
+                        Порядок умножения и округление — как в SQL пересчёта, иначе половинки давали бы ложное расхождение. */}
+                    {Math.floor(r.likelihood.value * r.severity_parts.cvss.value * r.severity_parts.reach.value * r.value.value * 100 + 0.5) !== r.score && ' · части посчитаны по текущим весам, балл — по последнему пересчёту'}
+                  </p>
                   <table className="mb-4 w-full">
                     <tbody>
-                      <FactorRow label="EPSS" f={r.epss} loaded={d.refs_loaded_at.epss} />
-                      <FactorRow label="CVSS ÷ 10" f={r.cvss} loaded={d.refs_loaded_at.nvd} />
-                      <FactorRow label="Impact" f={r.impact} />
-                      <FactorRow label="· критичность" f={r.impact_parts.criticality} />
-                      <FactorRow label="· конфиденциальные данные" f={r.impact_parts.confidential} />
-                      <FactorRow label="· доступ из интернета" f={r.impact_parts.internet} />
-                      <FactorRow label="CVE_param" f={r.cve_param} loaded={d.refs_loaded_at.nvd} />
-                      <FactorRow label="ExDB_param" f={r.exdb_param} loaded={d.refs_loaded_at.exploitdb} />
-                      <FactorRow label="MSF_param" f={r.msf_param} loaded={d.refs_loaded_at.msf} />
+                      <FactorRow label="Вероятность эксплуатации" f={r.likelihood} total />
+                      <FactorRow label="· KEV" f={r.likelihood_parts.kev} loaded={d.refs_loaded_at.kev} />
+                      <FactorRow label="· EPSS" f={r.likelihood_parts.epss} loaded={d.refs_loaded_at.epss} />
+                      <FactorRow label="· эксплойт ExploitDB" f={r.likelihood_parts.exploit} loaded={d.refs_loaded_at.exploitdb} />
+                      <FactorRow label="· модуль Metasploit" f={r.likelihood_parts.msf} loaded={d.refs_loaded_at.msf} />
+                      <FactorRow label="Тяжесть" f={r.severity} total />
+                      <FactorRow label="· CVSS ÷ 10" f={r.severity_parts.cvss} loaded={d.refs_loaded_at.nvd} />
+                      <FactorRow label="· достижимость" f={r.severity_parts.reach} />
+                      <FactorRow label="Ценность хоста" f={r.value} total />
+                      <FactorRow label="· критичность" f={r.value_parts.criticality} />
+                      <FactorRow label="· конфиденциальные данные" f={r.value_parts.confidential} />
+                      <FactorRow label="· доступ из интернета" f={r.value_parts.internet} />
                     </tbody>
                   </table>
-                  {(r.impact.substituted || r.impact_parts.criticality.substituted) && (
+                  {(r.value_parts.internet.substituted || r.value_parts.criticality.substituted || r.likelihood_parts.kev.substituted) && (
                     <p className="mb-4 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-[11px] text-text-secondary">
-                      {r.impact.substituted && <>Зона «{d.host.zone || '—'}» не размечена — доступ из интернета и конфиденциальные данные взяты как «нет». <Link to="/vm/settings#zones" className="text-text underline">Разметить зоны</Link>. </>}
-                      {r.impact_parts.criticality.substituted && <>Критичность хоста в VM не задана — учтена как None.</>}
+                      {r.value_parts.internet.substituted && <>Зона «{d.host.zone || '—'}» не размечена — доступ из интернета и конфиденциальные данные взяты как «нет». <Link to="/vm/settings#zones" className="text-text underline">Разметить зоны</Link>. </>}
+                      {r.value_parts.criticality.substituted && <>Критичность хоста в VM не задана — учтена как None. </>}
+                      {/* Без каталога «нет в KEV» не факт: эксплуатируемая CVE считается только по EPSS и эксплойтам. */}
+                      {r.likelihood_parts.kev.substituted && <>Справочник CISA KEV не загружен — факт эксплуатации не учтён. <Link to="/vm/settings" className="text-text underline">Загрузить справочники</Link>.</>}
                     </p>
                   )}
 
@@ -111,6 +135,16 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                   <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-text-secondary">
                     <dt>CVSS</dt><dd className="font-mono text-text">{d.cve.cvss ?? '—'} <span className="text-[10px] text-text-secondary">{CVSS_SOURCE_LABELS[d.cve.cvss_source]}</span></dd>
                     <dt>EPSS</dt><dd className="font-mono text-text">{d.cve.epss === null ? '—' : `${d.cve.epss.toFixed(4)} (перцентиль ${((d.cve.epss_percentile ?? 0) * 100).toFixed(0)})`}</dd>
+                    {d.cve.kev && (
+                      <>
+                        <dt>CISA KEV</dt>
+                        <dd className="text-risk-critical">
+                          {d.cve.kev_added ? `с ${day(d.cve.kev_added)}` : 'в каталоге'}
+                          {d.cve.kev_ransomware && ', ransomware'}
+                          {d.cve.kev_due && `, срок CISA ${day(d.cve.kev_due)}`}
+                        </dd>
+                      </>
+                    )}
                     <dt>Опубликована</dt><dd className="text-text">{d.cve.published ? new Date(d.cve.published).toLocaleDateString('ru-RU') : '—'}</dd>
                     <dt>NVD</dt><dd><a href={d.cve.nvd_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-text underline">{d.cve.cve_id} <ExternalLink size={11} aria-hidden /></a></dd>
                   </dl>
