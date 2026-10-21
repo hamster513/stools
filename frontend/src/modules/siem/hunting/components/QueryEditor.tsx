@@ -58,9 +58,10 @@ export function QueryEditor({ ref, huntId, draft, view, enabled, readOnly, toggl
       const out = await check.mutateAsync({ query: draft.query, fields: draft.fields, fields_label: draft.fields_label, window: win })
       if (out.ok) return 'ok'
       return out.message === LOGIN_REJECTED ? 'auth' : 'error'
-    } catch {
-      // Отказ нашего API (подключение не настроено, сессия истекла): остальные запросы получат тот же отказ.
-      return 'auth'
+    } catch (exc) {
+      // Отказ нашего API, который повторится у всех запросов (подключение не настроено, сессия истекла,
+      // нет прав), останавливает обход; разовый сбой или занятость сервера — нет.
+      return exc instanceof ApiRequestError && [400, 401, 403].includes(exc.status) ? 'auth' : 'error'
     }
   }
 
@@ -74,7 +75,8 @@ export function QueryEditor({ ref, huntId, draft, view, enabled, readOnly, toggl
 
   // Результат проверки относится к тексту, который проверяли: после правки запроса или полей он устарел.
   function edit(patch: Partial<QueryDraft>) {
-    if ('query' in patch || 'fields' in patch) check.reset()
+    // Подписи тоже входят в результат (это его колонки), поэтому их правка его устаревает.
+    if ('query' in patch || 'fields' in patch || 'fields_label' in patch) check.reset()
     onChange(patch)
   }
 
