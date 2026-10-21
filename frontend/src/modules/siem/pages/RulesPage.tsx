@@ -109,7 +109,9 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
     return out
   }, [allItems])
 
-  const filtered = useMemo(() => {
+  // Отбор по всему, кроме «В SIEM»: от него считаются счётчики этого блока —
+  // иначе выбранное «установлено» обнулило бы счётчик «не установлено».
+  const beforeInstalled = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return allItems.filter((r) => {
       if (author && r.author !== author) return false
@@ -122,15 +124,30 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
       // переходе на снапшот из файла выбранное значение осталось бы невидимым
       // и обнулило бы список.
       if (hasInventory) {
-        if (installedFilter === 'yes' && r.installed !== true) return false
-        if (installedFilter === 'no' && r.installed !== false) return false
         if (setFilter && !r.deployment_sets.includes(setFilter)) return false
         if (folderFilter && folderOf(r) !== folderFilter) return false
       }
       if (needle && !r.name.toLowerCase().includes(needle)) return false
       return true
     })
-  }, [allItems, author, category, onlyScoped, onlyAttention, attackFilter, hasInventory, installedFilter, setFilter, folderFilter, q])
+  }, [allItems, author, category, onlyScoped, onlyAttention, attackFilter, hasInventory, setFilter, folderFilter, q])
+
+  // «все» не равно сумме двух других: правило, которого нет в списке KB
+  // (installed = null), не утверждается ни установленным, ни нет.
+  const installedFacet = useMemo(
+    () => ({
+      all: beforeInstalled.length,
+      yes: beforeInstalled.filter((r) => r.installed === true).length,
+      no: beforeInstalled.filter((r) => r.installed === false).length,
+    }),
+    [beforeInstalled],
+  )
+
+  const filtered = useMemo(() => {
+    if (!hasInventory || installedFilter === 'all') return beforeInstalled
+    const want = installedFilter === 'yes'
+    return beforeInstalled.filter((r) => r.installed === want)
+  }, [beforeInstalled, hasInventory, installedFilter])
 
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -290,12 +307,13 @@ export function RulesPage({ snapshotId }: { snapshotId: number }) {
                       type="button"
                       onClick={() => setInstalledFilter(key)}
                       className={cn(
-                        'flex w-full items-center rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
+                        'flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
                         installedFilter === key ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
                       )}
                       aria-pressed={installedFilter === key}
                     >
-                      {label}
+                      <span className="truncate">{label}</span>
+                      <span className="font-mono tabular-nums text-[11px]">{installedFacet[key]}</span>
                     </button>
                   ))}
                 </div>
