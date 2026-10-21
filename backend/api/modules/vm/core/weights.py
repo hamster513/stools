@@ -11,9 +11,9 @@ Risk = round(100 × L × S × V): вероятность эксплуатаци�
 """
 from __future__ import annotations
 
-from typing import Self
+from typing import Annotated, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 #: Ранги Metasploit по шкале фреймворка: число → имя.
 MSF_RANKS: dict[int, str] = {
@@ -29,6 +29,16 @@ MSF_RANKS: dict[int, str] = {
 CRITICALITIES = ("Critical", "High", "Medium", "Low", "None")
 EXPLOIT_TYPES = ("remote", "webapps", "local", "hardware", "dos")
 
+#: Доля или вероятность: каждое значение словаря весов — от 0 до 1.
+Share = Annotated[float, Field(ge=0.0, le=1.0)]
+
+
+def _exact_keys(value: dict[str, float], keys: tuple[str, ...], what: str) -> dict[str, float]:
+    """Ровно известные ключи: пропущенный упал бы KeyError при пересчёте, а лишний — молча не действовал."""
+    if set(value) != set(keys):
+        raise ValueError(f"{what}: нужны ровно ключи {', '.join(keys)}")
+    return value
+
 
 class ReachWeights(BaseModel):
     """Достижимость по вектору атаки CVE и доступу хоста из интернета."""
@@ -43,7 +53,7 @@ class ReachWeights(BaseModel):
 class ValueWeights(BaseModel):
     """Ценность хоста: база по критичности плюс надбавки зоны, потолок 1.0."""
 
-    criticality: dict[str, float] = Field(
+    criticality: dict[str, Share] = Field(
         default_factory=lambda: {
             "Critical": 1.0,
             "High": 0.8,
@@ -55,6 +65,11 @@ class ValueWeights(BaseModel):
     )
     conf_bonus: float = Field(default=0.1, ge=0.0, le=1.0)
     inet_bonus: float = Field(default=0.1, ge=0.0, le=1.0)
+
+    @field_validator("criticality")
+    @classmethod
+    def _criticality_keys(cls, value: dict[str, float]) -> dict[str, float]:
+        return _exact_keys(value, CRITICALITIES, "ценность по критичности")
 
 
 class Levels(BaseModel):
@@ -80,7 +95,7 @@ class Weights(BaseModel):
     #: Достижимость, когда у CVE нет вектора атаки.
     reach_unknown: float = Field(default=0.8, ge=0.0, le=1.0)
     #: Вероятность эксплуатации по типу лучшего эксплойта ExploitDB.
-    p_exdb: dict[str, float] = Field(
+    p_exdb: dict[str, Share] = Field(
         default_factory=lambda: {
             "remote": 0.30,
             "webapps": 0.25,
@@ -90,7 +105,7 @@ class Weights(BaseModel):
         }
     )
     #: Вероятность эксплуатации по лучшему рангу модуля Metasploit.
-    p_msf: dict[str, float] = Field(
+    p_msf: dict[str, Share] = Field(
         default_factory=lambda: {
             "excellent": 0.50,
             "great": 0.45,
@@ -104,6 +119,16 @@ class Weights(BaseModel):
     reach: ReachWeights = Field(default_factory=ReachWeights)
     value: ValueWeights = Field(default_factory=ValueWeights)
     levels: Levels = Field(default_factory=Levels)
+
+    @field_validator("p_exdb")
+    @classmethod
+    def _exdb_keys(cls, value: dict[str, float]) -> dict[str, float]:
+        return _exact_keys(value, EXPLOIT_TYPES, "вероятность по типу эксплойта")
+
+    @field_validator("p_msf")
+    @classmethod
+    def _msf_keys(cls, value: dict[str, float]) -> dict[str, float]:
+        return _exact_keys(value, tuple(MSF_RANKS.values()), "вероятность по рангу Metasploit")
 
 
 DEFAULT_WEIGHTS = Weights()

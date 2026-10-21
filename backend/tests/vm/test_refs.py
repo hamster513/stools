@@ -19,7 +19,7 @@ from api.modules.vm.core.refs import (
     parse_msf,
     parse_nvd,
 )
-from api.modules.vm.models import VmCve, VmJob, VmRefEpss, VmRefKev, VmRefNvd
+from api.modules.vm.models import VmCve, VmJob, VmRefEpss, VmRefKev, VmRefNvd, VmRefState
 from api.modules.vm.services import refs as refs_service
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -174,6 +174,24 @@ def test_kev_load_raises_likelihood_to_one(auth_client: TestClient, db_session: 
     assert _upload_ref(auth_client, "kev", "kev.csv")["status"] == "done"
     db_session.expire_all()
     assert db_session.query(VmRefKev).count() == 3
+
+
+def test_kev_without_records_keeps_catalog(auth_client: TestClient, db_session: Any) -> None:
+    """Файл, из которого не вышло ни одной записи KEV (страница прокси вместо каталога), —
+    отказ задачи; действующий каталог и его состояние не тронуты."""
+    assert _upload_ref(auth_client, "kev", "kev.json")["status"] == "done"
+    db_session.expire_all()
+    state = db_session.get(VmRefState, "kev")
+    loaded_at, detail = state.loaded_at, state.detail
+    for body in (b"<html><body>proxy login</body></html>", b'{"vulnerabilities": []}'):
+        r = auth_client.post("/api/vm/refs/kev/upload", files=[("files", ("known_exploited_vulnerabilities.json", body, "application/json"))])
+        assert r.status_code == 202, r.text
+        job = auth_client.get(f"/api/vm/jobs/{r.json()['job_id']}").json()
+        assert job["status"] == "failed" and job["error"] == "в файле нет записей KEV"
+    db_session.expire_all()
+    assert db_session.query(VmRefKev).count() == 3
+    state = db_session.get(VmRefState, "kev")
+    assert (state.loaded_at, state.detail, state.records) == (loaded_at, detail, 3)
 
 
 def test_gzip_bomb_is_rejected(auth_client: TestClient, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:

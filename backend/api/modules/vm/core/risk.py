@@ -246,7 +246,8 @@ def explain(
     v_total = Factor(
         host_value(criticality, internet, confidential, w),
         "сумма слагаемых, не больше 1",
-        substituted=not zone_marked,
+        # Как у тяжести: подстановка в любом слагаемом — и неразмеченная зона, и неизвестная критичность.
+        substituted=any(p.substituted for p in v_parts.values()),
     )
     e = RiskExplanation(
         likelihood=l_total,

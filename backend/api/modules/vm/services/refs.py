@@ -212,14 +212,18 @@ def _load_msf(db: Session, path: Path, handle: JobHandle) -> int:
 
 
 def _load_kev(db: Session, path: Path, handle: JobHandle) -> int:
+    """Каталог разбирается до удаления старого: файл не того формата (HTML-страница
+    прокси, чужой CSV) даёт ноль записей и не должен стереть действующий каталог."""
+    with open_maybe_gzip(path) as raw:
+        records = list(_unique(parse_kev(limited(raw, MAX_KEV_BYTES)), lambda r: r.cve_id))
+    if not records:
+        raise ValueError("в файле нет записей KEV")
     db.execute(delete(KEV_T))
     n = 0
-    with open_maybe_gzip(path) as raw:
-        records = _unique(parse_kev(limited(raw, MAX_KEV_BYTES)), lambda r: r.cve_id)
-        rows = ((r.cve_id, r.date_added, r.ransomware, r.vendor, r.product, r.name, r.due_date) for r in records)
-        for batch in _batched(rows):
-            n += bulk_insert(db, KEV_T, ("cve_id", "date_added", "ransomware", "vendor", "product", "name", "due_date"), batch)
-            handle.tick(n, message=f"записей {n}")
+    rows = ((r.cve_id, r.date_added, r.ransomware, r.vendor, r.product, r.name, r.due_date) for r in records)
+    for batch in _batched(rows):
+        n += bulk_insert(db, KEV_T, ("cve_id", "date_added", "ransomware", "vendor", "product", "name", "due_date"), batch)
+        handle.tick(n, message=f"записей {n}")
     return n
 
 

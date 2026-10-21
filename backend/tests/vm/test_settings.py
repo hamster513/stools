@@ -268,6 +268,28 @@ def test_levels_must_be_ordered(auth_client: TestClient) -> None:
     assert auth_client.get("/api/vm/settings").json()["weights"]["levels"]["critical"] == 60
 
 
+def test_weight_dicts_need_known_keys_and_shares(auth_client: TestClient) -> None:
+    """Словари весов: ровно известные ключи и значения 0..1 — пропущенный ключ давал KeyError
+    уже при пересчёте, а не 422 при сохранении."""
+    w = auth_client.get("/api/vm/settings").json()["weights"]
+    no_none = {k: v for k, v in w["value"]["criticality"].items() if k != "None"}
+    bad = [
+        {"value": {**w["value"], "criticality": no_none}},
+        {"value": {**w["value"], "criticality": {**w["value"]["criticality"], "Extra": 0.5}}},
+        {"value": {**w["value"], "criticality": {**w["value"]["criticality"], "High": 1.5}}},
+        {"p_exdb": {k: v for k, v in w["p_exdb"].items() if k != "dos"}},
+        {"p_exdb": {**w["p_exdb"], "remote": -0.1}},
+        {"p_msf": {k: v for k, v in w["p_msf"].items() if k != "manual"}},
+        {"p_msf": {**w["p_msf"], "excellent": 2.0}},
+    ]
+    for weights in bad:
+        r = auth_client.put("/api/vm/settings", json={"weights": weights})
+        assert r.status_code == 422, (weights, r.text)
+    r = auth_client.put("/api/vm/settings", json={"weights": {"p_exdb": {**w["p_exdb"], "dos": 0.0}}})
+    assert r.status_code == 200, r.text
+    assert r.json()["weights"]["p_exdb"]["dos"] == 0.0
+
+
 def test_old_weights_schema_reads_as_defaults(auth_client: TestClient, db_session: Any, caplog: Any, monkeypatch: Any) -> None:
     """Веса первой итерации (impact, cvss_v3, exploitdb, msf) в новую формулу не переводятся:
     действуют умолчания, предупреждение — один раз на процесс; остальные настройки читаются."""
