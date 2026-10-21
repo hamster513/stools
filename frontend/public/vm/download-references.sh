@@ -15,6 +15,11 @@
 set -u
 
 OUT="${OUT:-vm-references-$(date +%Y%m%d).zip}"
+# zip сам дописал бы «.zip» к имени без него — тогда напечатанный путь не совпал бы с файлом.
+case "$OUT" in
+  *.zip|*.ZIP) ;;
+  *) OUT="$OUT.zip" ;;
+esac
 SKIP=$(printf '%s' "${SKIP:-}" | tr ',;' '  ')
 # Для тестов: все файлы с одного адреса, имена те же.
 BASE="${VM_REFS_BASE:-}"
@@ -26,6 +31,22 @@ for s in $SKIP; do
     *) echo "неизвестный справочник в SKIP: $s (есть: epss nvd exploitdb msf attack kev)" >&2; exit 1 ;;
   esac
 done
+
+# Инструменты — до скачивания: иначе ленты скачаны, а упаковать их нечем.
+if ! command -v curl >/dev/null 2>&1; then
+  echo "нужен curl" >&2
+  exit 1
+fi
+if ! command -v zip >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+  echo "нужен zip или python3 — архив собрать нечем" >&2
+  exit 1
+fi
+# Значение не печатается: в адресе прокси бывают логин и пароль.
+if [ -n "${https_proxy:-}${HTTPS_PROXY:-}" ]; then
+  echo "прокси: из переменных окружения"
+else
+  echo "прокси: нет"
+fi
 
 this_year=$(date +%Y)
 if [ "${ALL_YEARS:-}" = 1 ]; then

@@ -103,7 +103,8 @@ def list_refs(db: Session = Depends(get_db), _user: AppUser = Depends(get_curren
     out = []
     for name in REF_NAMES:
         s = states.get(name)
-        running = active_job(db, [f"ref_{name}"])
+        # Архив грузит все справочники сразу: его задача видна на каждой карточке.
+        running = active_job(db, [f"ref_{name}", "ref_bundle"])
         loaded = s.loaded_at if s else None
         if loaded is not None and loaded.tzinfo is None:
             loaded = loaded.replace(tzinfo=dt.UTC)

@@ -21,6 +21,7 @@ from api.modules.vm.core.refs import (
 )
 from api.modules.vm.models import VmCve, VmJob, VmRefEpss, VmRefKev, VmRefNvd, VmRefState
 from api.modules.vm.services import refs as refs_service
+from api.modules.vm.services.jobs import start_job
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -108,6 +109,23 @@ def test_unknown_ref_and_year_validation(auth_client: TestClient) -> None:
     assert auth_client.post("/api/vm/refs/foo/download").status_code == 404
     r = auth_client.post("/api/vm/refs/nvd/download", json={"years": [1990]})
     assert r.status_code == 422
+
+
+def test_refs_show_running_job(auth_client: TestClient, db_session: Any) -> None:
+    """Задача одного справочника — только на его карточке; задача архива — на всех
+    (по одинаковому номеру фронт и узнаёт архив)."""
+    def ids() -> dict[str, int | None]:
+        return {r["name"]: r["active_job_id"] for r in auth_client.get("/api/vm/refs").json()}
+
+    single = start_job(db_session, "ref_epss", "tester")
+    shown = ids()
+    assert shown["epss"] == single and [v for k, v in shown.items() if k != "epss"] == [None] * 5
+    db_session.get(VmJob, single).status = "done"
+    db_session.commit()
+
+    bundle = start_job(db_session, "ref_bundle", "tester")
+    shown = ids()
+    assert len(shown) == 6 and set(shown.values()) == {bundle}
 
 
 class _Handle:

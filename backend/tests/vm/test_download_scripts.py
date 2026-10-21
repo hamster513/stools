@@ -142,6 +142,20 @@ def test_ps1_skip_and_failed_feed(tmp_path: Path, www: Path, port: int) -> None:
 
 
 @needs_pwsh
+def test_ps1_year_range_and_bad_year(tmp_path: Path, www: Path, port: int) -> None:
+    """«2019-2021» — три года (2020 на сервере нет: 404, остальные упакованы); мусор — понятная ошибка, код 1."""
+    skip = "-Skip epss,exploitdb,msf,attack,kev"
+    code, log, archive = _ps(tmp_path, port, f"-Years 2019-2021 {skip}")
+    assert code == 0, log
+    assert "nvdcve-2.0-2020.json.gz (HTTP 404)" in log
+    _check_zip(archive, www, _names("nvd"))
+    archive.unlink()
+    code, log, archive = _ps(tmp_path, port, f"-Years 2019,20x1 {skip}")
+    assert code == 1 and "непонятный год в -Years: 20x1" in log, log
+    assert not archive.exists()
+
+
+@needs_pwsh
 def test_ps1_nothing_packed_exits_1(tmp_path: Path, port: int) -> None:
     skip = ",".join(n for n in REF_NAMES if n != "kev")
     code, log, archive = _ps(tmp_path, port, f"-Skip {skip}", {"kev": "http://127.0.0.1:1"})
@@ -157,7 +171,8 @@ needs_sh = pytest.mark.skipif(not shutil.which("curl") or not (shutil.which("zip
 
 def _sh(tmp_path: Path, port: int, env: dict[str, str], path: str | None = None) -> tuple[int, str, Path]:
     archive = tmp_path / "refs.zip"
-    full = {"PATH": path or os.environ["PATH"], "HOME": str(tmp_path), "OUT": str(archive),
+    # OUT без «.zip»: скрипт дописывает расширение сам, и путь в выводе совпадает с файлом.
+    full = {"PATH": path or os.environ["PATH"], "HOME": str(tmp_path), "OUT": str(tmp_path / "refs"),
             "VM_REFS_BASE": f"http://127.0.0.1:{port}", "NVD_YEARS": "2019 2021", **env}
     run = subprocess.run(["sh", str(SH)], cwd=tmp_path, env=full, capture_output=True, text=True, timeout=120, check=False)
     return run.returncode, run.stdout + run.stderr, archive
@@ -167,14 +182,18 @@ def _sh(tmp_path: Path, port: int, env: dict[str, str], path: str | None = None)
 def test_sh_packs_every_feed(tmp_path: Path, www: Path, port: int) -> None:
     code, log, archive = _sh(tmp_path, port, {})
     assert code == 0, log
+    assert "прокси: нет" in log and f"архив: {archive}" in log
     _check_zip(archive, www, ALL)
 
 
 @needs_sh
 def test_sh_skip_and_failed_feed(tmp_path: Path, www: Path, port: int) -> None:
     (www / "known_exploited_vulnerabilities.json").unlink()  # 404 — лента недоступна
-    code, log, archive = _sh(tmp_path, port, {"SKIP": "epss"})
+    # Значение прокси не печатается; адрес не используется — до 127.0.0.1 curl идёт напрямую.
+    code, log, archive = _sh(tmp_path, port, {"SKIP": "epss", "https_proxy": "http://user:secret@proxy.invalid:3128",
+                                              "no_proxy": "127.0.0.1"})
     assert code == 0, log
+    assert "прокси: из переменных окружения" in log and "secret" not in log and "proxy.invalid" not in log
     assert "known_exploited_vulnerabilities.json" in log and "не вошло" in log
     _check_zip(archive, www, ALL - _names("epss") - _names("kev"))
 
@@ -186,15 +205,27 @@ def test_sh_nothing_packed_exits_1(tmp_path: Path, port: int) -> None:
     assert not archive.exists()
 
 
-@pytest.mark.skipif(not shutil.which("curl"), reason="нужен curl")
-def test_sh_falls_back_to_python_zipfile(tmp_path: Path, www: Path, port: int) -> None:
-    """Без `zip` в PATH архив собирает python3: каталог с одними нужными утилитами."""
+def _bin(tmp_path: Path, tools: tuple[str, ...]) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for tool in ("sh", "curl", "date", "mktemp", "rm", "mv", "mkdir", "tr", "sed", "cat"):
+    for tool in tools:
         found = shutil.which(tool)
         assert found, tool
         (bin_dir / tool).symlink_to(found)
+    return bin_dir
+
+
+@pytest.mark.skipif(not shutil.which("curl"), reason="нужен curl")
+def test_sh_needs_zip_or_python_before_download(tmp_path: Path, port: int) -> None:
+    code, log, archive = _sh(tmp_path, port, {}, path=str(_bin(tmp_path, ("sh", "curl", "date", "tr"))))
+    assert code == 1 and "нужен zip или python3" in log, log
+    assert "→" not in log and not archive.exists()
+
+
+@pytest.mark.skipif(not shutil.which("curl"), reason="нужен curl")
+def test_sh_falls_back_to_python_zipfile(tmp_path: Path, www: Path, port: int) -> None:
+    """Без `zip` в PATH архив собирает python3: каталог с одними нужными утилитами."""
+    bin_dir = _bin(tmp_path, ("sh", "curl", "date", "mktemp", "rm", "mv", "mkdir", "tr", "sed", "cat"))
     (bin_dir / "python3").symlink_to(os.path.realpath(sys.executable))
     code, log, archive = _sh(tmp_path, port, {}, path=str(bin_dir))
     assert code == 0, log

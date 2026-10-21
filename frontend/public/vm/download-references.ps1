@@ -20,7 +20,7 @@
 .PARAMETER Out
   Путь к архиву. По умолчанию vm-references-ГГГГММДД.zip в текущей папке.
 .PARAMETER Years
-  Годы NVD. По умолчанию последние пять: архив укладывается в лимит загрузки (500 МБ).
+  Годы NVD: списком (2024,2025) или диапазоном (2022-2026). По умолчанию последние пять: архив укладывается в лимит загрузки (500 МБ).
 .PARAMETER AllYears
   NVD за все годы, с 2002.
 .PARAMETER Skip
@@ -60,6 +60,24 @@ function Split-List([string[]]$Values) {
   return $list
 }
 
+function Get-Years([string[]]$Values) {
+  # «2024,2025», «2022-2026» и их смесь; прочее — понятная ошибка, а не исключение приведения типа.
+  $list = @()
+  foreach ($p in (Split-List $Values)) {
+    if ($p -match '^(\d{4})-(\d{4})$') {
+      $a = [int]$Matches[1]; $b = [int]$Matches[2]
+      if ($a -gt $b) { Write-Host "в -Years диапазон наоборот: $p" -ForegroundColor Red; exit 1 }
+      $list += @($a..$b)
+    } elseif ($p -match '^\d{4}$') {
+      $list += [int]$p
+    } else {
+      Write-Host "непонятный год в -Years: $p (пример: 2024,2025 или 2022-2026)" -ForegroundColor Red
+      exit 1
+    }
+  }
+  return $list
+}
+
 # Windows PowerShell 5.1 по умолчанию не предлагает TLS 1.2, а NVD и GitHub без него не отвечают.
 # В PowerShell 7 набор протоколов задаёт система, его не сужаем.
 if ($PSVersionTable.PSEdition -ne "Core") {
@@ -78,7 +96,7 @@ $thisYear = (Get-Date).Year
 if ($AllYears) {
   $yearList = @(2002..$thisYear)
 } elseif ($Years.Count -gt 0) {
-  $yearList = @(Split-List $Years | ForEach-Object { [int]$_ })
+  $yearList = @(Get-Years $Years)
 } else {
   $yearList = @(($thisYear - 4)..$thisYear)
 }
@@ -131,17 +149,25 @@ function Save-Feed([string]$Url, [string]$Path) {
   $resp = $req.GetResponse()
   try {
     $src = $resp.GetResponseStream()
-    $dst = [System.IO.File]::Create($Path)
-    try { $src.CopyTo($dst) } finally { $dst.Dispose(); $src.Dispose() }
+    try {
+      $dst = [System.IO.File]::Create($Path)
+      try { $src.CopyTo($dst) } finally { $dst.Dispose() }
+    } finally {
+      $src.Dispose()
+    }
   } finally {
     $resp.Dispose()
   }
 }
 
-function Get-FailReason($Err) {
-  # Только код и вид отказа: текст исключения может содержать адрес прокси.
+function Find-WebException($Err) {
   $e = $Err.Exception
   while ($e -and -not ($e -is [System.Net.WebException])) { $e = $e.InnerException }
+  return $e
+}
+
+function Get-FailReason($Err, $e) {
+  # Только код и вид отказа: текст исключения может содержать адрес прокси.
   if (-not $e) { return $Err.Exception.GetType().Name }
   if ($e.Response) {
     $code = [int]$e.Response.StatusCode
@@ -164,10 +190,8 @@ function Get-FailReason($Err) {
   return [string]$e.Status
 }
 
-function Test-Permanent($Err) {
+function Test-Permanent($e) {
   # 404 и прочие 4xx повтором не лечатся; 408 и 429 — лечатся.
-  $e = $Err.Exception
-  while ($e -and -not ($e -is [System.Net.WebException])) { $e = $e.InnerException }
   if (-not $e -or -not $e.Response) { return $false }
   $code = [int]$e.Response.StatusCode
   return ($code -ge 400 -and $code -lt 500 -and $code -ne 407 -and $code -ne 408 -and $code -ne 429)
@@ -196,9 +220,14 @@ try {
         $reason = ""
         break
       } catch {
-        $reason = Get-FailReason $_
+        $webErr = Find-WebException $_
+        $reason = Get-FailReason $_ $webErr
+        $permanent = Test-Permanent $webErr
+        # На .NET Framework незакрытый ответ с ошибкой занимает одно из двух соединений
+        # к узлу, и следующий запрос к нему ждал бы до тайм-аута.
+        if ($webErr -and $webErr.Response) { $webErr.Response.Close() }
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        if (Test-Permanent $_) { break }
+        if ($permanent) { break }
       }
     }
     if ($reason) {
