@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, CheckCircle2, Pencil, X } from 'lucide-react'
 import { useRuleDetail } from '@/modules/siem/api/queries'
-import type { FindingKind, RuleFindingSummary } from '@/modules/siem/api/types'
+import type { FindingKind, RuleBodySpan, RuleFindingSummary, RuleTableState } from '@/modules/siem/api/types'
 import { FINDING_KIND_ADVICE, FINDING_KIND_EXPLANATION, tacticLabel } from '@/modules/siem/api/types'
 import { AttackStateBadge, attackDisplayState } from '@/modules/attack/components/AttackStateBadge'
 import { ConfidenceBadge } from '@/modules/siem/components/ui/ConfidenceBadge'
@@ -29,6 +29,10 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
   //: менять то, что человек ещё не прочитал.
   const [editing, setEditing] = useState(false)
   const { write } = useCan()
+  const bodySpans = useMemo(
+    () => (data ? withTableSpans(data.body, data.body_spans ?? [], data.tables) : []),
+    [data],
+  )
 
   useEffect(() => {
     if (open) closeRef.current?.focus()
@@ -272,6 +276,13 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
                   )}
                   {/* Легенда только для неучитываемого: остальные цвета
                       совпадают со значками выше и в пояснении не нуждаются. */}
+                  {bodySpans.some((s) => s.tone) && (
+                    <span className="text-xs text-text-secondary">
+                      волной — табличные списки:{' '}
+                      <span className="text-kind-1">нет в снапшоте</span>,{' '}
+                      <span className="text-risk-high">пуст</span>
+                    </span>
+                  )}
                   {data.body_spans?.some((s) => !s.counted) && (
                     <span className="inline-flex items-center gap-1 text-xs text-kind-accepted">
                       <span
@@ -287,7 +298,8 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
                     </span>
                   )}
                 </div>
-                <HighlightedBody body={data.body} spans={data.body_spans ?? []} />
+                <HighlightedBody body={data.body} spans={bodySpans} />
+                <TablesLine tables={data.tables} />
               </div>
             </div>
           )}
@@ -297,6 +309,70 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
   )
 }
 
+
+const TABLE_NOTE = {
+  missing: 'табличный список не найден в снапшоте',
+  empty: 'табличный список пуст: 0 значений',
+} as const
+
+function toneOf(t: RuleTableState): 'missing' | 'empty' | null {
+  if (!t.exists) return 'missing'
+  if (t.value_count === 0) return 'empty'
+  return null
+}
+
+/**
+ * Отрезки тела с именами списков, которые правило читает впустую.
+ *
+ * Считаются здесь, а не на сервере: имена списков клиенту и так известны,
+ * а тело приходит целиком. Ищется имя целиком, как написано в теле, —
+ * иначе `Hosts` подсветился бы внутри `Hosts_Backup`. Отрезки замечаний
+ * важнее: при пересечении остаются они.
+ */
+function withTableSpans(body: string, spans: RuleBodySpan[], tables: RuleTableState[]): RuleBodySpan[] {
+  const extra: RuleBodySpan[] = []
+  for (const t of tables) {
+    const tone = toneOf(t)
+    if (!tone || !t.name) continue
+    const escaped = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'gu')
+    for (const m of body.matchAll(re)) {
+      const start = m.index
+      const end = start + t.name.length
+      if (spans.some((s) => s.start < end && start < s.end)) continue
+      extra.push({ start, end, kind: 0, status: 'new', counted: true, tone, note: TABLE_NOTE[tone] })
+    }
+  }
+  if (extra.length === 0) return spans
+  return [...spans, ...extra].sort((a, b) => a.start - b.start)
+}
+
+/** Состояние читаемых списков словами — чтобы не наводить мышь на каждый. */
+function TablesLine({ tables }: { tables: RuleTableState[] }) {
+  if (tables.length === 0) return null
+  return (
+    <div className="mt-1.5 text-xs text-text-secondary">
+      <span>Табличные списки: </span>
+      {tables.map((t, i) => {
+        const tone = toneOf(t)
+        return (
+          <span key={t.name}>
+            {i > 0 && '; '}
+            <span className="font-mono text-text select-text">{t.name}</span>
+            {' — '}
+            {tone === 'missing' ? (
+              <span className="text-kind-1">нет в снапшоте</span>
+            ) : tone === 'empty' ? (
+              <span className="text-risk-high">пуст</span>
+            ) : (
+              <span className="font-mono tabular-nums">{t.value_count} значений</span>
+            )}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
 
 /**
  * Находки правила, сгруппированные по классу.

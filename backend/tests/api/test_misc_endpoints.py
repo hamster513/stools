@@ -2,6 +2,8 @@
 а страховка от явных ошибок сборки ответа (опечатка в поле, забытый JOIN)."""
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 
@@ -23,6 +25,48 @@ def test_rules_list_and_detail(auth_client: TestClient, snapshot_id: int) -> Non
     detail_body = detail.json()
     assert detail_body["body"] is not None and "srv99" in detail_body["body"]
     assert len(detail_body["findings"]) == 1
+
+
+def test_rule_detail_tells_which_read_lists_are_missing_or_empty(
+    auth_client: TestClient, snapshot_id: int, db_session: Any
+) -> None:
+    """Правило, читающее отсутствующий или пустой список, не сработает ни
+    на чём. Карточка должна сказать это рядом с телом, а не только в
+    профиле инсталляции, где правило ещё надо найти."""
+    from api.db.models import RuleTableRef, TableListRow
+
+    impacket = next(
+        r
+        for r in auth_client.get("/api/siem/rules", params={"snapshot_id": snapshot_id}).json()["items"]
+        if r["name"] == "DEMO_HC_002_029_Impacket"
+    )
+    db_session.add_all(
+        [
+            RuleTableRef(
+                snapshot_id=snapshot_id, rule_uuid=impacket["uuid"],
+                table_name="DEMO_Empty_List", direction="read",
+            ),
+            RuleTableRef(
+                snapshot_id=snapshot_id, rule_uuid=impacket["uuid"],
+                table_name="DEMO_Missing_List", direction="read",
+            ),
+            TableListRow(snapshot_id=snapshot_id, name="DEMO_Empty_List", value_count=0),
+        ]
+    )
+    db_session.commit()
+
+    detail = auth_client.get(
+        f"/api/siem/rules/{impacket['uuid']}", params={"snapshot_id": snapshot_id}
+    ).json()
+    tables = {t["name"]: t for t in detail["tables"]}
+    assert tables["DEMO_Critical_Hosts_by_Rule"] == {
+        "name": "DEMO_Critical_Hosts_by_Rule", "exists": True, "value_count": 1,
+    }
+    assert tables["DEMO_Empty_List"] == {"name": "DEMO_Empty_List", "exists": True, "value_count": 0}
+    assert tables["DEMO_Missing_List"] == {
+        "name": "DEMO_Missing_List", "exists": False, "value_count": None,
+    }
+    assert [t["name"] for t in detail["tables"]] == detail["table_reads"]
 
 
 def test_rules_list_item_has_no_body(auth_client: TestClient, snapshot_id: int) -> None:
