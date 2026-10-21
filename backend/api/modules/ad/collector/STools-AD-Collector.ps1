@@ -403,11 +403,16 @@ function Read-GppFile([string]$file, [string]$scope, [string]$xmlText) {
     }
     # Замена состава группы: перед добавлением участников удаляются все пользователи и/или группы.
     $deleteAll = [bool](($props.GetAttribute("deleteAllUsers") -ceq "1") -or ($props.GetAttribute("deleteAllGroups") -ceq "1"))
+    # Элемент выключен в GPMC: disabled="1" у него или у любого предка (коллекции).
+    $disabled = $false
+    for ($n = $el; $null -ne $n -and $n.get_NodeType() -eq $elementType; $n = $n.get_ParentNode()) {
+      if ($n.GetAttribute("disabled") -ceq "1") { $disabled = $true; break }
+    }
     $out.Add([ordered]@{
       scope = $scope; file = $file; kind = $el.get_Name(); name = $el.GetAttribute("name"); user = $user
       cpassword = [bool]$props.GetAttribute("cpassword"); action = $props.GetAttribute("action"); members = [object[]]$members
       group_sid = $props.GetAttribute("groupSid"); group_name = $props.GetAttribute("groupName"); path = $path
-      filtered = $filtered; delete_all = $deleteAll
+      filtered = $filtered; delete_all = $deleteAll; disabled = $disabled
     })
   }
   $out.ToArray()

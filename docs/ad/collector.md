@@ -130,10 +130,11 @@ User Rights Assignment.
 - настройки GPP `Groups`, `Services` (только у компьютера), `ScheduledTasks`, `DataSources`, `Drives`
   (только у пользователя), `Printers`, `Files` — `<Machine|User>\Preferences\<вид>\<вид>.xml`:
   вид, имя, учётка, действие, участники группы, путь и факт наличия `cpassword`. С версии 2.5 (онлайн-сбор
-  по LDAP 1.4) — ещё два признака элемента: `filtered` — есть нацеливание на уровне элемента (у элемента
+  по LDAP 1.4) — ещё три признака элемента: `filtered` — есть нацеливание на уровне элемента (у элемента
   узел `Filters` хотя бы с одним условием; пустой `Filters` — нет), `delete_all` — состав группы заменяется
-  (`deleteAllUsers="1"` или `deleteAllGroups="1"` у `Properties`). Сами условия нацеливания не собираются.
-  В выгрузках старых сборщиков оба признака `null` — «не собрано». XML с `DOCTYPE` не разбирается, внешние
+  (`deleteAllUsers="1"` или `deleteAllGroups="1"` у `Properties`), `disabled` — элемент выключен в GPMC
+  (`disabled="1"` у самого элемента или у любого его предка, например у коллекции `Groups`). Сами условия
+  нацеливания не собираются. В выгрузках старых сборщиков эти признаки `null` — «не собрано». XML с `DOCTYPE` не разбирается, внешние
   ресурсы не загружаются;
 - `Machine\Microsoft\Windows NT\Audit\audit.csv` — подкатегории расширенного аудита и их значения;
 - `scripts.ini` и `psscripts.ini` в `Machine\Scripts` и `User\Scripts` — фаза и команда; параметры скриптов

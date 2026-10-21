@@ -429,12 +429,16 @@ GPP_TARGETING = {
              '<Members/></Properties></Group></Groups>',
     "empty_filters_groups": '<Groups><Group name="Remote Desktop Users (built-in)"><Properties action="U" groupSid="S-1-5-32-555" '
                             'deleteAllGroups="1"/><Filters/></Group></Groups>',
+    "disabled_item": '<Groups><Group disabled="1" name="Administrators (built-in)"><Properties action="U" groupSid="S-1-5-32-544"/></Group>'
+                     '<Group disabled="0" name="Users (built-in)"><Properties action="U" groupSid="S-1-5-32-545"/></Group></Groups>',
+    "disabled_collection": '<Groups disabled="1"><Group name="Administrators (built-in)"><Properties action="U" groupSid="S-1-5-32-544"/>'
+                           '</Group></Groups>',
 }
 
 
 @needs_pwsh
 def test_gpp_targeting_and_delete_all_match_python(tmp_path: Path) -> None:
-    """Read-GppFile: признаки filtered и delete_all — те же, что у parse_gpp (сборщик 2.5)."""
+    """Read-GppFile: признаки filtered, delete_all и disabled — те же, что у parse_gpp (сборщик 2.5)."""
     (tmp_path / "cases.json").write_text(json.dumps(GPP_TARGETING), encoding="utf-8")
     body = r"""
 $c = Get-Content /t/cases.json -Raw | ConvertFrom-Json
@@ -444,7 +448,8 @@ $out | ConvertTo-Json -Compress -Depth 8
 """
     out = _pwsh(tmp_path, body, ("Read-GppFile",))
     assert out == {k: g.parse_gpp("Groups.xml", "machine", v) for k, v in GPP_TARGETING.items()}
-    assert [(i["filtered"], i["delete_all"]) for k in GPP_TARGETING for i in out[k]] == [(True, True), (False, False), (False, True)]
+    assert [(i["filtered"], i["delete_all"], i["disabled"]) for k in GPP_TARGETING for i in out[k]] == [
+        (True, True, False), (False, False, False), (False, True, False), (False, False, True), (False, False, False), (False, False, True)]
 
 
 @needs_pwsh
