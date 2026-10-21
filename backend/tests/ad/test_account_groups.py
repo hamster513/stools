@@ -32,6 +32,12 @@ def test_primary_group_and_its_parents():
     assert _groups(objs, u1["sid"]) == [("CORP\\Domain Users", True, True), ("CORP\\G3", False, False)]
 
 
+def test_primary_group_also_in_member():
+    u1 = user("u1", 1101, primaryGroupID=513)
+    objs = [u1, group("Domain Users", rid(513), [u1["dn"]])]
+    assert _groups(objs, u1["sid"]) == [("CORP\\Domain Users", True, True)]
+
+
 def test_direct_wins_over_nested():
     u1 = user("u1", 1101)
     objs = [u1, group("G1", rid(1201), [u1["dn"]]), group("G2", rid(1202), [u1["dn"], _dn("G1")])]

@@ -130,7 +130,7 @@ def test_name_subject_resolved():
     g = gpo("Names")
     got = _run([_ou(WS, gpLink=link(g["dn"]))], g, _inf("*S-1-5-32-544__Members = CORP\\G1,OTHER\\x,*S-1-5-11"))
     got_map = {r["group_name"]: (r["group_sid"], r["subject_class"]) for r in got["rights"]}
-    assert got_map == {"CORP\\G1": (G1, "group"), "OTHER\\x": ("", ""), "NT AUTHORITY\\Authenticated Users": ("S-1-5-11", "")}
+    assert got_map == {"CORP\\G1": (G1, "group"), "OTHER\\x": ("", ""), "NT AUTHORITY\\Authenticated Users": ("S-1-5-11", "well_known")}
 
 
 def test_machine_part_disabled_and_unlinked():
@@ -211,3 +211,73 @@ def test_dn_matching():
             computer("PC2", 1102, dn="CN=PC2,ou=ws,dc=CORP,dc=local")]
     got = _run(objs, g, _inf(f"*S-1-5-32-544__Members = *{G1}"))
     assert got["rights"][0]["hosts"] == ["pc2.corp.local"]
+
+
+def test_well_known_subject():
+    g = gpo("Wk")
+    got = _run([_ou(WS, gpLink=link(g["dn"]))], g, _inf("*S-1-5-32-544__Members = *S-1-5-11,*S-1-1-0,*S-1-5-32-545,*S-1-5-21-9-9-9-1105"))
+    got_map = {r["group_sid"]: r["subject_class"] for r in got["rights"]}
+    # BUILTIN Users нет в выгрузке, чужой доменный SID — тоже: не well_known.
+    assert got_map == {"S-1-5-11": "well_known", "S-1-1-0": "well_known", "S-1-5-32-545": "", "S-1-5-21-9-9-9-1105": ""}
+    # BUILTIN-группа из выгрузки — group.
+    got = _run([_ou(WS, gpLink=link(g["dn"]))], g, _inf("*S-1-5-32-555__Members = *S-1-5-32-544"))
+    assert [(r["group_sid"], r["subject_class"]) for r in got["rights"]] == [("S-1-5-32-544", "group")]
+
+
+def test_gpp_disabled_item_skipped():
+    g = gpo("Gpp")
+    members = [{"name": "CORP\\G1", "sid": G1, "action": "ADD"}]
+    got = _run([_ou(WS, gpLink=link(g["dn"]))], g, gpp=_gpp(members, disabled=True, delete_all=True))
+    assert got["rights"] == [] and got["notes"] == []
+    # Выгрузка старого сборщика (disabled нет) — как включённый.
+    got = _run([_ou(WS, gpLink=link(g["dn"]))], g, gpp=_gpp(members))
+    assert [r["group_sid"] for r in got["rights"]] == [G1]
+
+
+def test_gpp_replace_action():
+    g = gpo("Gpp")
+    objs = [_ou(WS, gpLink=link(g["dn"]))]
+    members = [{"name": "CORP\\G1", "sid": G1, "action": "ADD"}, {"name": "CORP\\G2", "sid": G2, "action": "REMOVE"}]
+    got = _run(objs, g, gpp=_gpp(members, action="r", delete_all=False))
+    assert [(r["group_sid"], r["action"]) for r in got["rights"]] == [(G1, "replace"), (G2, "delete")]
+    got = _run(objs, g, gpp=_gpp([], action="R"))
+    assert got["rights"] == [] and got["notes"] == ["GPO «Gpp»: GPP очищает группу Administrators"]
+
+
+def test_gpp_local_group_named_like_domain_group():
+    g = gpo("Gpp")
+    helpdesk = group("Helpdesk", rid(1210))
+    gpp = _gpp([{"name": "CORP\\G1", "sid": G1, "action": "ADD"}], group_sid="", name="Helpdesk", group_name="Helpdesk")
+    got = _run([helpdesk, _ou(WS, gpLink=link(g["dn"]))], g, gpp=gpp)
+    assert got["notes"] == []
+    assert [(r["local_group"], r["local_group_sid"], r["via"]) for r in got["rights"]] == [("Helpdesk", "", "gpp")]
+
+
+def test_bare_local_account_name():
+    g = gpo("Adm")
+    got = _run([_ou(WS, gpLink=link(g["dn"]))], g, _inf("*S-1-5-32-544__Members = Administrator,CORP\\Administrator"))
+    assert sorted((r["group_name"], r["group_sid"], r["subject_class"]) for r in got["rights"]) == [
+        ("Administrator", "", ""), ("CORP\\Administrator", rid(500), "user")]
+
+
+def test_gpp_bad_sid_resolved_by_name():
+    g = gpo("Gpp")
+    gpp = _gpp([{"name": "CORP\\G1", "sid": "S-1-5-21-1-2-3-abc", "action": "ADD"}], group_sid="S-1-5-32-abc")
+    got = _run([_ou(WS, gpLink=link(g["dn"]))], g, gpp=gpp)
+    assert [(r["group_sid"], r["group_name"], r["local_group"], r["local_group_sid"]) for r in got["rights"]] == [
+        (G1, "CORP\\G1", "Administrators", "S-1-5-32-544")]
+
+
+def test_files_read_incompletely_note():
+    g = gpo("Partial")
+    rel = "Machine\\Preferences\\Groups\\Groups.xml"
+    for note in (f"{rel}: не прочитан по SMB", f"{rel}: не прочитан (Access is denied.)",
+                 "MACHINE\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf: не прочитан по SMB",
+                 "Machine: папка не прочитана по SMB (STATUS_ACCESS_DENIED)", "папка GPO не прочитана (Access is denied.)",
+                 "путь GPO вне домена (fs01.other.local) — не читается"):
+        export = mini_export([g, _ou(WS, gpLink=link(g["dn"]))], gpo={g["dn"]: {"notes": [note]}})
+        got = gpo_rights(ExportIndex(export))
+        assert got["notes"] == ["GPO «Partial»: файлы прочитаны не полностью — назначения групп могут быть неполными"], note
+    # Отказ, не касающийся групп, — без оговорки.
+    export = mini_export([g, _ou(WS, gpLink=link(g["dn"]))], gpo={g["dn"]: {"notes": ["Machine\\Registry.pol: не прочитан по SMB"]}})
+    assert gpo_rights(ExportIndex(export))["notes"] == []

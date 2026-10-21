@@ -109,6 +109,11 @@ S-DC-SubnetMissing), `null` — адресов или подсетей нет; `
 локальные группы на каких компьютерах. Считается при запросе по файлу выгрузки снапшота,
 в базе не хранится.
 
+HTTP-ручки — для разовых запросов: каждый вызов читает и разбирает файл выгрузки целиком
+(на больших доменах — секунды и сотни МБ памяти). Массовое использование (модуль Активы) —
+функции `account_groups(idx)` и `gpo_rights(idx)` ниже, один раз за проход синхронизации;
+не вызывать `account-groups` в цикле по SID и `gpo-rights` на каждую карточку.
+
 ```
 GET  /snapshots/{id}/account-groups/{sid}
                                        {snapshot_id, collected_at, sid, name, groups: [GroupRef], notes: [str]}
@@ -150,11 +155,13 @@ from api.modules.ad.core.gpo_rights import gpo_rights           # (idx: ExportIn
 ```
 {"links_known": bool,            # false — в выгрузке нет gPLink (сборщик старой версии)
  "files_known": bool,            # false — файлы GPO (GptTmpl.inf, Groups.xml) не собраны
- "notes": [str],                 # общие оговорки: очистка групп, доменные цели, user-часть GPP, непривязанные GPO
+ "notes": [str],                 # общие оговорки: очистка групп, доменные цели, user-часть GPP, непривязанные GPO,
+                                 # файлы GPO прочитаны не полностью
  "rights": [{
    "group_sid": "S-1-5-21-…" | "",          # субъект: кто становится членом (группа ИЛИ учётка); "" — записан именем без SID
    "group_name": "CORP\\name",
-   "subject_class": "group" | "user" | "computer" | "",   # по выгрузке; "" — не найден
+   "subject_class": "group" | "user" | "computer" | "well_known" | "",
+                                             # по выгрузке; well_known — неявная группа токена (ниже); "" — не найден
    "local_group": "Administrators",          # по RID для S-1-5-32-*, иначе как записано (суффикс " (built-in)" снят)
    "local_group_sid": "S-1-5-32-544" | "",
    "via": "restricted_groups" | "gpp",
@@ -169,8 +176,31 @@ from api.modules.ad.core.gpo_rights import gpo_rights           # (idx: ExportIn
 
 Семантика `action`: `member` — `X__Members` в `GptTmpl.inf` (состав X заменяется
 перечисленными); `memberof` — `X__Memberof` (X добавляется в цель); `add` — GPP ADD;
-`replace` — GPP ADD при `deleteAllUsers`/`deleteAllGroups` = 1 (прочие участники
-удаляются); `delete` — GPP REMOVE.
+`replace` — GPP ADD при `deleteAllUsers`/`deleteAllGroups` = 1 или у элемента с действием
+`R` (Replace) — прочие участники удаляются; `delete` — GPP REMOVE. Элемент GPP с действием
+`D` и выключенный (`disabled` = 1 у элемента или коллекции, сборщики LDAP 1.4 / PowerShell 2.5)
+записей не даёт.
+
+`subject_class: "well_known"` — SID вида `S-1-1-*`, `S-1-2-*`, `S-1-3-*` и `S-1-5-<n>…`, кроме
+доменных (`S-1-5-21-*`) и BUILTIN (`S-1-5-32-*`), которого нет объектом в выгрузке: Everyone,
+Authenticated Users, Interactive, SYSTEM и др. Такие субъекты действуют на всех учёток, но в
+`account_groups` их нет — членство в них даёт токен, а не `member`; потребитель учитывает
+записи `well_known` для любого пользователя. BUILTIN остаётся `group`, если группа есть в выгрузке.
+
+Разрешение имён:
+
+- цель — SID `S-1-5-32-<RID>` или имя встроенной группы (с префиксом `BUILTIN\` и суффиксом
+  ` (built-in)` или без) → английское `local_group` по RID и SID `S-1-5-32-*`; локализованные
+  имена (например «Администраторы») сводятся к ним через группы `CN=Builtin` выгрузки;
+  неизвестный RID встроенной группы → `local_group = "RID-<n>"`;
+- цель Restricted Groups — доменная группа своего домена (по SID или имени) → записи нет,
+  в `notes` — оговорка; у GPP цель всегда локальная: имя как записано, `local_group_sid: ""`,
+  даже если в домене есть одноимённая группа;
+- субъект — голое имя (без домена и SID), совпавшее с учёткой своего домена с RID 500 или 501
+  (Administrator, Guest), — локальная учётка хоста: Windows ищет неквалифицированное имя
+  сначала локально; `group_sid: ""`, имя как записано, `subject_class: ""`. С `CORP\` или
+  по SID — доменная учётка;
+- неверный SID в GPP (`groupSid` элемента, `sid` участника) — как пустой: разрешение по имени.
 
 Оговорки — чего ответ не знает:
 
@@ -185,6 +215,9 @@ from api.modules.ad.core.gpo_rights import gpo_rights           # (idx: ExportIn
   `notes` в `account-groups`.
 - Ссылка GPO на сайт хостов не даёт (компьютеры сайта по выгрузке не определяются) —
   в `scope` она есть, в `notes` записи — оговорка.
+- Сборщик не прочитал `GptTmpl.inf`, `Groups.xml` или папку GPO (отказ в `notes` блока `gpo`) —
+  в `notes` оговорка «GPO «<имя>»: файлы прочитаны не полностью — назначения групп могут быть
+  неполными».
 
 ## Данные центра сертификации
 

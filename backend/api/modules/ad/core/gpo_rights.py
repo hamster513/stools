@@ -43,8 +43,18 @@ _BUILTIN = "S-1-5-32-"
 _BUILTIN_SUFFIX = " (built-in)"
 _BLOCK_INHERITANCE = 1
 _SUBJECT_CLASSES = ("group", "user", "computer")
+#: Голое имя учётки с этим RID своего домена — локальная учётка хоста (Administrator, Guest).
+_LOCAL_ACCOUNT_RIDS = ("500", "501")
+#: Заметки сборщиков об отказе чтения файлов GPO, от которых зависят назначения групп.
+_FILES_INCOMPLETE = re.compile(r"gpttmpl\.inf|groups\.xml|папка .*не прочитана|путь gpo вне домена", re.IGNORECASE)
 #: RDN в DN: экранированные запятые (\,) не делят.
 _RDN = re.compile(r"(?:[^,\\]|\\.)+")
+
+
+def _well_known(sid: str) -> bool:
+    """Неявные группы токена: S-1-1-*, S-1-2-*, S-1-3-*, S-1-5-<n> кроме доменных (21) и BUILTIN (32)."""
+    parts = sid.split("-")
+    return len(parts) > 3 and (parts[2] in ("1", "2", "3") or (parts[2] == "5" and parts[3] not in ("21", "32")))
 
 
 def host_id(obj: AdObject) -> str:
@@ -115,30 +125,37 @@ class _Resolver:
         return self.by_sam.get(sam.strip().lower())
 
     def subject(self, sid: str, name: str = "") -> tuple[str, str, str]:
-        """(SID, имя, класс) участника; без SID — по имени в своём домене, не найден — имя как записано."""
-        if not sid and SID_RE.match(name):
-            sid = name
+        """(SID, имя, класс) участника; без SID — по имени в своём домене, не найден — имя как записано.
+        Неверный SID — как пустой. Голое имя учётки RID 500/501 своего домена — локальная учётка хоста:
+        Windows ищет неквалифицированное имя сначала локально."""
+        if not SID_RE.match(sid):
+            sid = name if SID_RE.match(name) else ""
         if sid:
             resolved = self.idx.principal_name(sid)
             obj = self.idx.by_sid.get(sid)
             cls = obj.cls if obj is not None and obj.cls in _SUBJECT_CLASSES else ""
+            if obj is None and _well_known(sid):
+                cls = "well_known"
             return sid, (name if resolved == sid and name else resolved), cls
         obj = self.own(name)
         if obj is not None and obj.sid:
+            if "\\" not in name and obj.sid.rpartition("-")[2] in _LOCAL_ACCOUNT_RIDS:
+                return "", name, ""
             return obj.sid, self.idx.principal_name(obj.sid), obj.cls
         return "", name, ""
 
-    def target(self, sid: str, name: str = "") -> tuple[str, str, str | None]:
-        """(имя локальной группы, её SID, имя доменной группы) — третье не None, если цель доменная."""
-        if not sid and SID_RE.match(name):
-            sid = name
+    def target(self, sid: str, name: str = "", local: bool = False) -> tuple[str, str, str | None]:
+        """(имя локальной группы, её SID, имя доменной группы) — третье не None, если цель доменная.
+        local — цель всегда локальная (GPP): доменная группа не ищется, имя как записано. Неверный SID — как пустой."""
+        if not SID_RE.match(sid):
+            sid = name if SID_RE.match(name) else ""
         if sid.startswith(_BUILTIN):
             try:
                 rid = int(sid.removeprefix(_BUILTIN))
             except ValueError:
                 return sid, "", None
             return BUILTIN_LOCAL_GROUPS.get(rid, f"RID-{rid}"), sid, None
-        if sid.startswith(self.idx.domain_sid + "-"):
+        if sid.startswith(self.idx.domain_sid + "-") and not local:
             return "", "", self.idx.principal_name(sid)
         written = name.strip()
         if written.lower().endswith(_BUILTIN_SUFFIX):
@@ -154,7 +171,7 @@ class _Resolver:
         if obj is not None and obj.cls == "group" and obj.sid:
             if obj.sid.startswith(_BUILTIN):
                 return self.target(obj.sid)
-            if short == written:
+            if short == written and not local:
                 return "", "", self.idx.principal_name(obj.sid)
         return written, "", None
 
@@ -166,8 +183,8 @@ def _assignments(idx: ExportIndex, res: _Resolver, g: AdObject, label: str) -> t
     user_items = 0
     has = False
 
-    def target(sid: str, name: str = "") -> tuple[str, str] | None:
-        local, local_sid, domain_group = res.target(sid, name)
+    def target(sid: str, name: str = "", local_only: bool = False) -> tuple[str, str] | None:
+        local, local_sid, domain_group = res.target(sid, name, local_only)
         if domain_group is not None:
             notes.append(f"GPO «{label}»: цель {domain_group} — доменная группа, не локальная")
             return None
@@ -196,7 +213,7 @@ def _assignments(idx: ExportIndex, res: _Resolver, g: AdObject, label: str) -> t
 
     data = idx.gpo_data(g)
     for item in data.gpp if data else []:
-        if item.kind != "Group" or item.action.upper() == "D":
+        if item.kind != "Group" or item.action.upper() == "D" or item.disabled is True:
             continue
         if item.scope == "user":
             user_items += 1
@@ -204,13 +221,15 @@ def _assignments(idx: ExportIndex, res: _Resolver, g: AdObject, label: str) -> t
         if item.scope != "machine":
             continue
         has = True
-        local = target(item.group_sid, item.group_name or item.name)
+        local = target(item.group_sid, item.group_name or item.name, local_only=True)
         if local is None:
             continue
-        if item.delete_all is True and not item.members:
+        # Замена состава: deleteAllUsers/deleteAllGroups или действие «R» (Replace) элемента.
+        replace = item.delete_all is True or item.action.upper() == "R"
+        if replace and not item.members:
             notes.append(f"GPO «{label}»: GPP очищает группу {local[0]}")
         for m in item.members:
-            action = {"ADD": "replace" if item.delete_all is True else "add", "REMOVE": "delete"}.get(m.action.upper())
+            action = {"ADD": "replace" if replace else "add", "REMOVE": "delete"}.get(m.action.upper())
             if action is not None:
                 row(res.subject(m.sid, m.name), local, "gpp", action, item.filtered)
     return rows, notes, user_items, has
@@ -233,6 +252,9 @@ def gpo_rights(idx: ExportIndex) -> dict[str, Any]:
             continue
         notes += gpo_notes
         user_items += users
+        data = idx.gpo_data(g)
+        if data is not None and any(_FILES_INCOMPLETE.search(n) for n in data.notes):
+            notes.append(f"GPO «{label}»: файлы прочитаны не полностью — назначения групп могут быть неполными")
         if not rows:
             continue
         scope, hosts, row_notes = scope_hosts(idx, g)
