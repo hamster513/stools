@@ -91,6 +91,10 @@ class KbObject(BaseModel):
     folder_path: str = ""
     origin_id: str = ""
     installed: bool = False
+    #: Наборы установки объекта из самой строки списка (KB 27+ отдаёт `DeploymentSets`);
+    #: `sets_known=False` — поля в строке нет, состав наборов читается по каждому набору отдельно.
+    set_ids: list[str] = []
+    sets_known: bool = False
 
 
 def make_client(conn: ConnectionLike, timeout: float = 60.0) -> httpx.Client:
@@ -207,7 +211,8 @@ class KbClient:
         return [
             KbDeploymentSet(
                 kb_id=str(s["Id"]), parent_kb_id=str(s["ParentSetId"]) if s.get("ParentSetId") else None,
-                name=str(s.get("Name") or ""), system_name=str(s.get("SystemName") or ""),
+                # У набора бывает пустое отображаемое имя — тогда человеку показывается системное.
+                name=str(s.get("Name") or s.get("SystemName") or ""), system_name=str(s.get("SystemName") or ""),
                 general_status=_text(s.get("GeneralStatus")), compilation_status=_text(s.get("CompilationStatus")),
                 deployment_statuses=_statuses(s.get("DeploymentStatuses")),
             )
@@ -242,9 +247,12 @@ class KbClient:
             for i in rows:
                 if not isinstance(i, dict) or not i.get("Id"):
                     continue
+                sets = i.get("DeploymentSets")
                 yield KbObject(
                     guid=str(i["Id"]).lower(), short_id=str(i.get("ObjectId") or ""), name=str(i.get("SystemName") or ""),
                     folder_path=str(i.get("FolderPath") or "").replace("\\", "/"), origin_id=str(i.get("OriginId") or ""),
+                    set_ids=[str(c["Id"]) for c in sets if isinstance(c, dict) and c.get("Id")] if isinstance(sets, list) else [],
+                    sets_known=isinstance(sets, list),
                     # KB 26 отдаёт `DeploymentStatus`, KB 27+/R28 — `GeneralDeploymentStatus` (как в mpsiemlib);
                     # статус бывает строкой или объектом с Name.
                     installed=_text(i.get("DeploymentStatus") or i.get("GeneralDeploymentStatus")).lower() == "installed",

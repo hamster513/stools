@@ -1,12 +1,14 @@
 """Сбор правил из базы знаний по API: инвентарь, экспорт, конвейер разбора."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
+from api.db.models import SiemRuleDeployment
 from tests.api.conftest import U1, U2, _build_kb_zip, collect_and_wait
 from tests.api.fake_kb import INSTALL_SET, ROOT, TOKEN, FakeKb, kb_object
 from tests.export_check import csv_rows
@@ -238,3 +240,15 @@ def test_collect_export_forbidden_names_the_missing_right(auth_client: TestClien
     job = collect_and_wait(auth_client)
     assert job["status"] == "failed"
     assert job["error"].startswith("нет прав — экспорт не отдан: HTTP 403") and "право экспорта" in job["error"]
+
+
+def test_collect_set_membership_from_rows_when_group_filter_is_ignored(auth_client: TestClient, kb: FakeKb, db_session: Any) -> None:
+    """KB 27+: без учёта DeploymentSets в строках каждый набор «содержал» бы всю базу."""
+    kb.sets_in_rows = {U1: [INSTALL_SET], U2: [], U3: []}
+    job = collect_and_wait(auth_client)
+    assert job["status"] == "done"
+    sets = auth_client.get(f"/api/siem/snapshots/{job['snapshot_id']}/deployment-sets").json()
+    counts = {s["system_name"]: s["rule_count"] for s in sets["sets"]}
+    assert counts["install"] == 1 and counts["all"] == 3
+    deployment = {d.rule_uuid: d for d in db_session.query(SiemRuleDeployment).filter_by(snapshot_id=job["snapshot_id"])}
+    assert json.loads(deployment[U1].set_ids_json) == [INSTALL_SET] and json.loads(deployment[U2].set_ids_json) == []

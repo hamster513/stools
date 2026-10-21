@@ -146,10 +146,20 @@ def _collect_inventory(db: Session, job: Job, conn: ConnectionLike, zip_path: Pa
         _set_stage(db, job, "listing")
         inventory.sets = client.deployment_sets(database.name)
         inventory.objects = list(client.correlation_objects(database.name))
-        for deployment_set in inventory.sets:
-            inventory.members[deployment_set.kb_id] = [
-                o.guid for o in client.correlation_objects(database.name, group_id=deployment_set.kb_id)
-            ]
+        if inventory.objects and all(o.sets_known for o in inventory.objects):
+            # KB 27+: наборы объекта лежат в его строке, а фильтр `groupId` сервер игнорирует —
+            # чтение «по набору» вернуло бы всю базу в каждый набор. Корневой набор содержит всё.
+            inventory.members = {s.kb_id: [] for s in inventory.sets}
+            for o in inventory.objects:
+                for kb_id in o.set_ids:
+                    inventory.members.setdefault(kb_id, []).append(o.guid)
+                if ROOT_SET_ID in inventory.members:
+                    inventory.members[ROOT_SET_ID].append(o.guid)
+        else:
+            for deployment_set in inventory.sets:
+                inventory.members[deployment_set.kb_id] = [
+                    o.guid for o in client.correlation_objects(database.name, group_id=deployment_set.kb_id)
+                ]
         # Сводка установки — только справочная цифра для лога: статус каждого правила уже взят из
         # списка объектов. На неё у токена бывает отдельное право (403) — сбор из-за этого не падает.
         try:

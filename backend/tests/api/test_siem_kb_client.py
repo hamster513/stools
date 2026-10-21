@@ -15,7 +15,7 @@ from api.modules.siem.core.kb import (
     public_error,
 )
 from api.modules.siem.services.kb_settings import KbConnection
-from tests.api.fake_kb import DB, INSTALL_SET, TOKEN, FakeKb, kb_object
+from tests.api.fake_kb import DB, INSTALL_SET, ROOT, SETS, TOKEN, FakeKb, kb_object, many_objects
 
 CONN = KbConnection(host="mp.corp.local", api_token=TOKEN)
 
@@ -225,3 +225,15 @@ def test_installed_from_general_deployment_status_r28() -> None:
     del c["DeploymentStatus"]; c["GeneralDeploymentStatus"] = "NotInstalled"
     got = {o.name: o.installed for o in _client(FakeKb(objects=[a, b, c])).correlation_objects(DB)}
     assert got == {"A": True, "B": True, "C": False}
+
+
+def test_sets_from_rows_and_empty_set_name_falls_back_to_system_name() -> None:
+    """KB 27+: наборы объекта в строке; у набора без имени показывается системное имя."""
+    fake = FakeKb(objects=many_objects(3))
+    fake.sets_in_rows = {fake.objects[0]["Id"]: [INSTALL_SET], fake.objects[1]["Id"]: [INSTALL_SET, ROOT]}
+    fake.sets = [dict(SETS[0]), dict(SETS[1], Name="")]
+    client = _client(fake)
+    objs = list(client.correlation_objects(DB))
+    assert all(o.sets_known for o in objs)
+    assert [o.set_ids for o in objs] == [[INSTALL_SET], [INSTALL_SET, ROOT], []]
+    assert [s.name for s in client.deployment_sets(DB)] == ["Все объекты", "install"]

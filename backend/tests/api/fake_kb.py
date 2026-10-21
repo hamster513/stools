@@ -52,6 +52,8 @@ class FakeKb:
         self.export_status = 200
         #: Право на сводку установки у токена бывает отдельным: 403 не должен ронять сбор.
         self.stats_status = 200
+        #: KB 27+: состав наборов — в строках объектов (`DeploymentSets`), а `groupId` сервер игнорирует.
+        self.sets_in_rows: dict[str, list[str]] | None = None
         #: Новый экспорт (KB 27+/R28): `POST /api-studio/siem/export` отвечает 201 с потоком файла;
         #: None — путь не существует (KB 26), тогда клиент обязан откатиться на старый GET.
         self.studio_export_status: int | None = 201
@@ -87,7 +89,11 @@ class FakeKb:
             assert body["filters"] == {"SiemObjectType": ["Correlation"]} and body["recursive"] is True
             rows = self.objects
             group = body.get("groupId")
-            if group and group != ROOT:
+            if self.sets_in_rows is not None:
+                # KB 27+: фильтр по набору игнорируется, зато у каждой строки есть DeploymentSets.
+                by_guid = {k.lower(): v for k, v in self.sets_in_rows.items()}
+                rows = [dict(o, DeploymentSets=[{"Id": s, "SystemName": s} for s in by_guid.get(str(o["Id"]).lower(), [])]) for o in rows]
+            elif group and group != ROOT:
                 allowed = set(self.members.get(group, []))
                 rows = [o for o in rows if o["Id"] in allowed]
             take = body["take"] if self.page_cap is None else min(body["take"], self.page_cap)
