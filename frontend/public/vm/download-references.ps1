@@ -49,7 +49,7 @@ $ProgressPreference = "SilentlyContinue"
 Set-StrictMode -Version Latest
 
 $UserAgent = "STools-references/1"
-$Retries = 2
+$Retries = 3
 $Known = @("epss", "nvd", "exploitdb", "msf", "attack", "kev")
 
 function Split-List([string[]]$Values) {
@@ -145,12 +145,20 @@ function Save-Feed([string]$Url, [string]$Path) {
   $req.Proxy = $Proxy
   $req.UserAgent = $UserAgent
   $req.Timeout = 60000
-  $req.ReadWriteTimeout = 300000
+  # Простой дольше 2 минут — обрыв попытки; NVD отдаёт ленты медленно и с паузами.
+  $req.ReadWriteTimeout = 120000
+  # Докачка: если от прошлой попытки остался кусок, просим продолжение (Range); сервер,
+  # который диапазоны не умеет, ответит 200 — тогда файл пишется заново.
+  $have = 0
+  if (Test-Path -LiteralPath $Path) { $have = (Get-Item -LiteralPath $Path).Length }
+  if ($have -gt 0) { $req.AddRange([long]$have) }
   $resp = $req.GetResponse()
   try {
+    $append = ($have -gt 0) -and ([int]$resp.StatusCode -eq 206)
     $src = $resp.GetResponseStream()
     try {
-      $dst = [System.IO.File]::Create($Path)
+      if ($append) { $dst = [System.IO.File]::Open($Path, [System.IO.FileMode]::Append) }
+      else { $dst = [System.IO.File]::Create($Path) }
       try { $src.CopyTo($dst) } finally { $dst.Dispose() }
     } finally {
       $src.Dispose()
@@ -226,7 +234,8 @@ try {
         # На .NET Framework незакрытый ответ с ошибкой занимает одно из двух соединений
         # к узлу, и следующий запрос к нему ждал бы до тайм-аута.
         if ($webErr -and $webErr.Response) { $webErr.Response.Close() }
-        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        # Частично скачанный файл остаётся для докачки; при окончательном отказе удаляется ниже.
+        if ($permanent -or $attempt -eq $Retries) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
         if ($permanent) { break }
       }
     }

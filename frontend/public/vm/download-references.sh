@@ -78,7 +78,18 @@ fetch() {
   # «&» в имени CTID кодируется в адресе, а файл сохраняется под буквальным именем.
   [ -n "$BASE" ] && url="$BASE/$(printf '%s' "$2" | sed 's/&/%26/g')"
   echo "→ $2"
-  if curl -fL --retry 2 --connect-timeout 20 -A 'STools-references/1' -o "$tmp/$2.part" "$url"; then
+  # NVD отдаёт ленты медленно и рвёт соединение после простоя (curl: 18, «partial file»), а
+  # --retry такой обрыв не повторяет. Поэтому до 4 попыток с докачкой с места обрыва (-C -);
+  # --speed-time/--speed-limit прерывают попытку при простое дольше 2 минут, а не по общему времени.
+  ok=0; attempt=1
+  while [ $attempt -le 4 ]; do
+    [ $attempt -gt 1 ] && echo "  повтор $((attempt - 1)) из 3 (докачка)"
+    if curl -fL -C - --connect-timeout 20 --speed-limit 1024 --speed-time 120 -A 'STools-references/1' -o "$tmp/$2.part" "$url"; then
+      ok=1; break
+    fi
+    attempt=$((attempt + 1))
+  done
+  if [ $ok -eq 1 ]; then
     mv "$tmp/$2.part" "$tmp/$2"
     packed="$packed $2"
   else
