@@ -11,6 +11,7 @@ import {
   type UserDetail,
   type UserDevice,
   type UserGroup,
+  type UserObservation,
 } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
@@ -38,12 +39,22 @@ function title(u: { id: number; sam: string; display_name: string; upn: string }
   return u.sam || u.display_name || u.upn || `пользователь #${u.id}`
 }
 
-/** Связь с устройством: сеанс на хосте без сбора пользователей считается прошлым (API: users_collected). */
+/** Связь с устройством: сеанс на хосте без сбора пользователей считается прошлым (API: users_collected); пропавшая — в прошедшем времени. */
 function linkLabel(d: UserDevice): string {
+  if (d.gone_at) return d.kind === 'owner' ? 'был владельцем' : d.kind === 'local_group' ? 'был в локальной группе' : d.active ? 'был в системе' : 'заходил раньше'
   if (d.kind === 'owner') return 'владелец'
   if (d.kind === 'local_group') return 'локальная группа'
   return d.active && d.users_collected ? 'в системе на момент сбора' : 'заходил раньше'
 }
+
+/** Самое свежее наблюдение AD (`live` — только живое); наблюдений у учётки может быть несколько (домены, пересопоставление). */
+function latestAd(u: UserDetail, live: boolean): UserObservation | undefined {
+  return u.observations
+    .filter((o) => o.source === 'ad' && (!live || !o.gone_at))
+    .reduce<UserObservation | undefined>((best, o) => (!best || (o.seen_at ?? '') > (best.seen_at ?? '') ? o : best), undefined)
+}
+
+const TAG_MAX = 100
 
 /** Почему строка приглушена или чем оговорена; null — оговорок нет. */
 function linkReason(d: UserDevice): string | null {
@@ -55,8 +66,7 @@ function linkReason(d: UserDevice): string | null {
 
 function Identity({ u }: { u: UserDetail }) {
   const state = userState(u.enabled)
-  const adLive = u.observations.some((o) => o.source === 'ad' && !o.gone_at)
-  const adGone = !adLive ? u.observations.find((o) => o.source === 'ad') : undefined
+  const adGone = latestAd(u, true) ? undefined : latestAd(u, false)
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
       <dt className="text-text-secondary">Учётка</dt><dd className="font-mono break-all text-text">{u.sam || '—'}</dd>
@@ -91,7 +101,7 @@ function Identity({ u }: { u: UserDetail }) {
 
 /** Флаги учётки из живого наблюдения AD (поля выгрузки на момент сбора). */
 function AdFlags({ u }: { u: UserDetail }) {
-  const ad = u.observations.find((o) => o.source === 'ad' && !o.gone_at)
+  const ad = latestAd(u, true)
   if (!ad) return null
   const d = ad.data
   return (
@@ -124,11 +134,12 @@ function GroupList({ groups }: { groups: UserGroup[] }) {
 function Groups({ u }: { u: UserDetail }) {
   const direct = u.groups.filter((g) => g.direct)
   const nested = u.groups.filter((g) => !g.direct)
+  const adLive = latestAd(u, true) !== undefined
   const adSeen = u.observations.some((o) => o.source === 'ad')
   return (
     <>
       <SectionTitle>Группы AD</SectionTitle>
-      {u.groups.length === 0 && <p className="text-text-secondary">{adSeen ? 'групп нет' : 'AD учётку не видел — групп нет'}</p>}
+      {u.groups.length === 0 && <p className="text-text-secondary">{adLive ? 'групп нет' : adSeen ? 'AD больше не видит учётку — группы не известны' : 'AD учётку не видел — групп нет'}</p>}
       {direct.length > 0 && (
         <>
           <div className="mt-1 mb-1 text-text-secondary">Прямые, с основной группой ({direct.length})</div>
@@ -208,7 +219,11 @@ function Discrepancies({ u }: { u: UserDetail }) {
         {u.discrepancies.map((d, i) => (
           <li key={`${d.code}:${d.host_asset_id ?? ''}:${i}`} className="flex items-start gap-2 px-1 py-0.5">
             <span className={cn('shrink-0', CODE_TEXT[d.code])}>{USER_CODE_LABELS[d.code]}</span>
-            <span className="min-w-0 flex-1 text-text-secondary">{d.text}</span>
+            {d.host_asset_id !== null ? (
+              <Link to={`/assets/list?asset=${d.host_asset_id}`} className="min-w-0 flex-1 text-text-secondary hover:text-primary hover:underline">{d.text}</Link>
+            ) : (
+              <span className="min-w-0 flex-1 text-text-secondary">{d.text}</span>
+            )}
           </li>
         ))}
       </ul>
@@ -229,7 +244,12 @@ function ManualFields({ u, write }: { u: UserDetail; write: boolean }) {
       </dl>
     )
   }
+  const tagList = tags.split(',').map((t) => t.trim()).filter(Boolean)
+  // API принимает теги не длиннее 100 символов: длинный не отрезается молча, а показывается.
+  const tooLong = tagList.filter((t) => t.length > TAG_MAX)
   const dirty = tags !== u.tags.join(', ') || note !== u.note
+  // Форма — из нормализованного ответа (обрезанные пробелы, без повторов): после сохранения без изменений «Сохранить» гаснет.
+  const save = () => patch.mutate({ tags: tagList, note }, { onSuccess: (r) => { setTags(r.tags.join(', ')); setNote(r.note) } })
   return (
     <div className="flex flex-col gap-2">
       <label className="block">
@@ -241,7 +261,8 @@ function ManualFields({ u, write }: { u: UserDetail; write: boolean }) {
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={cn(FIELD, 'text-xs')} />
       </label>
       <div className="flex items-center gap-2">
-        <Button variant="primary" disabled={!dirty} loading={patch.isPending} onClick={() => patch.mutate({ tags: tags.split(',').map((t) => t.trim()).filter(Boolean), note })}>Сохранить</Button>
+        <Button variant="primary" disabled={!dirty || tooLong.length > 0} loading={patch.isPending} onClick={save}>Сохранить</Button>
+        {tooLong.length > 0 && <span className="text-kind-1">тег длиннее {TAG_MAX} символов: {tooLong.map((t) => `${t.slice(0, 24)}…`).join(', ')}</span>}
         {patch.error && <span className="text-kind-1">{patch.error.message}</span>}
       </div>
     </div>

@@ -312,6 +312,12 @@ function UsersBlock({ a }: { a: AssetDetail }) {
     { label: 'В локальных группах', users: live.filter((u) => u.kind === 'local_group') },
   ]
   const gone = (a.users ?? []).filter((u) => u.gone)
+  // Одна группа может прийти от нескольких наблюдений KSC: без повторов, «в системе», если так хоть в одном.
+  const sessionGroups = new Map<string, { label: string; active: boolean }>()
+  for (const g of a.session_groups ?? []) {
+    const key = g.sid || g.sam
+    sessionGroups.set(key, { label: g.sam || g.sid, active: g.active || (sessionGroups.get(key)?.active ?? false) })
+  }
   return (
     <>
       <SectionTitle>Пользователи</SectionTitle>
@@ -332,12 +338,13 @@ function UsersBlock({ a }: { a: AssetDetail }) {
         )}
       </div>
       {a.owner_unresolved && <p className="mt-1 text-kind-1">владелец задан в KSC, но его нет в списке пользователей хоста</p>}
-      {a.session_groups && a.session_groups.length > 0 && (
+      {sessionGroups.size > 0 && (
         <p className="mt-1 text-text-secondary">
-          Группы с сеансом: {a.session_groups.map((g) => `${g.sam || g.sid}${g.active ? ' (в системе)' : ''}`).join(', ')}
+          Группы с сеансом: {[...sessionGroups.values()].map((g) => `${g.label}${g.active ? ' (в системе)' : ''}`).join(', ')}
         </p>
       )}
-      {a.users?.length !== 0 && <Link to={`/assets/users?host_id=${a.id}`} className="mt-1 inline-block text-primary hover:underline">все пользователи хоста</Link>}
+      {/* Фильтр списка по хосту ловит и устаревшие и пропавшие связи — ссылка нужна и когда пользователи не собраны. */}
+      {(a.users === null || a.users.length > 0) && <Link to={`/assets/users?host_id=${a.id}`} className="mt-1 inline-block text-primary hover:underline">все пользователи хоста</Link>}
     </>
   )
 }
