@@ -50,6 +50,8 @@ class FakeKb:
         self.unauthorized = False
         self.forbidden = False
         self.export_status = 200
+        #: Право на сводку установки у токена бывает отдельным: 403 не должен ронять сбор.
+        self.stats_status = 200
         #: Новый экспорт (KB 27+/R28): `POST /api-studio/siem/export` отвечает 201 с потоком файла;
         #: None — путь не существует (KB 26), тогда клиент обязан откатиться на старый GET.
         self.studio_export_status: int | None = 201
@@ -76,6 +78,8 @@ class FakeKb:
         if p == "/api-studio/siem/deploymentSets":
             return httpx.Response(200, json=self.sets)
         if p == "/api-studio/siem/deploy/stats":
+            if self.stats_status != 200:
+                return httpx.Response(self.stats_status, json={"detail": "forbidden"})
             installed = sum(1 for o in self.objects if o["DeploymentStatus"] == "Installed")
             return httpx.Response(200, json={"Installed": installed, "NotInstalled": len(self.objects) - installed, "Outdated": 0})
         if p == "/api-studio/siem/objects/list":

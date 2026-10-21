@@ -123,6 +123,10 @@ def _run_collect(db: Session, job_id: int, settings: Settings) -> None:
                 # Не ошибка KB (БД, диск, секрет): адреса в трассе нет, а без неё первый живой сбой не разобрать.
                 logger.exception("сбор из базы знаний прерван не на стороне KB")
             message = public_error(exc)
+            # Шаг и код ответа — в текст задачи: пути вызовов KB не секретны, а без них
+            # «нет прав» не говорит, какого права не хватает.
+            if isinstance(exc, KbError) and exc.status is not None:
+                message = f"{message} — {exc}"
         else:
             message = _safe_error(exc)  # пишет трассу в журнал сам
         # Дубликат — рабочий снапшот, его не трогаем; свой недоразобранный — удаляем.
@@ -144,7 +148,15 @@ def _collect_inventory(db: Session, job: Job, conn: ConnectionLike, zip_path: Pa
             inventory.members[deployment_set.kb_id] = [
                 o.guid for o in client.correlation_objects(database.name, group_id=deployment_set.kb_id)
             ]
-        inventory.stats_installed = client.deploy_stats(database.name).installed
+        # Сводка установки — только справочная цифра для лога: статус каждого правила уже взят из
+        # списка объектов. На неё у токена бывает отдельное право (403) — сбор из-за этого не падает.
+        try:
+            inventory.stats_installed = client.deploy_stats(database.name).installed
+        except KbError as exc:
+            if exc.status not in (403, 404):
+                raise
+            inventory.stats_installed = -1
+            logger.warning("KB %s: сводка установки недоступна (%s), сбор продолжается", database.name, exc)
         logger.info(
             "KB %s: объектов Correlation %d, установлено %d, наборов %d, deploy/stats installed=%d",
             database.name, len(inventory.objects), sum(o.installed for o in inventory.objects),

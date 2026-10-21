@@ -111,7 +111,8 @@ def test_collect_failure_on_export_leaves_no_snapshot(
     with caplog.at_level(logging.WARNING, logger="api.modules.siem.services.kb_collect"):
         job = collect_and_wait(auth_client)
     assert job["status"] == "failed" and job["snapshot_id"] is None
-    assert job["error"] == "ошибка сервера (HTTP 500)"
+    # Шаг и код — в тексте задачи, чтобы «нет прав» или «ошибка сервера» говорили, где именно.
+    assert job["error"] == "ошибка сервера (HTTP 500) — экспорт не отдан: HTTP 500"
     assert auth_client.get("/api/siem/snapshots").json() == []
     # В журнале сервера — какой шаг и каким кодом отказал, но без адреса KB и токена.
     assert any("экспорт не отдан: HTTP 500" in r.message for r in caplog.records)
@@ -212,3 +213,20 @@ def test_export_applies_inventory_filters(auth_client: TestClient, kb: FakeKb) -
     assert [r[0] for r in rows[1:]] == ["DEMO_HC_002_029_Impacket"] and rows[1][-1] == "в SIEM"
     listed = auth_client.get("/api/siem/rules", params={"snapshot_id": sid, "folder": "DEMO"}).json()
     assert listed["total"] == 2
+
+
+def test_collect_survives_forbidden_deploy_stats(auth_client: TestClient, kb: FakeKb, caplog: pytest.LogCaptureFixture) -> None:
+    """У токена нет права на сводку установки (403 на deploy/stats): сбор всё равно доходит до конца."""
+    kb.stats_status = 403
+    with caplog.at_level(logging.WARNING, logger="api.modules.siem.services.kb_collect"):
+        job = collect_and_wait(auth_client)
+    assert job["status"] == "done" and job["snapshot_id"] is not None
+    assert any("сводка установки недоступна" in r.message and "HTTP 403" in r.message for r in caplog.records)
+
+
+def test_collect_forbidden_step_is_named(auth_client: TestClient, kb: FakeKb) -> None:
+    kb.forbidden = True
+    job = collect_and_wait(auth_client)
+    assert job["status"] == "failed"
+    assert job["error"].startswith("нет прав — KB /api-studio/")
+    assert "HTTP 403" in job["error"]
