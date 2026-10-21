@@ -58,6 +58,15 @@ WINDOW_TITLES = {"1h": "час", "24h": "сутки", "7d": "неделю"}
 CHECK_TIMEOUT_CAP_S = 60.0
 
 
+def _events(n: int) -> str:
+    """«1 событие», «3 события», «5 событий» — счёт в сообщении проверки читается человеком."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} событие"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} события"
+    return f"{n} событий"
+
+
 class EnabledIn(BaseModel):
     enabled: bool
 
@@ -340,7 +349,7 @@ def check_query(
     rows = [["" if e.get(f) is None else e[f] for f in fields] for e in events[: payload.limit]]
     limit_hit = len(events) >= payload.limit
     title = WINDOW_TITLES[payload.window]
-    message = f"{len(rows)} событий за {title}" if rows else f"событий за {title} нет"
+    message = f"{_events(len(rows))} за {title}" if rows else f"событий за {title} нет"
     if limit_hit:
         message += f", лимит {payload.limit} достигнут"
     return CheckOut(

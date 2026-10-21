@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Download, Library, Plus, Upload } from 'lucide-react'
+import { Download, Library, Play, Plus, Upload } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
@@ -33,6 +33,13 @@ const COLUMNS: ColumnDef[] = [
   { key: 'fresh', label: 'Новых находок', width: 112, align: 'right' },
 ]
 
+// Проверка ханта нужна тем, кто пишет (как «проверить запрос» в карточке): у остальных колонки действия нет.
+// Действие первым, чтобы не уезжало за край на узком экране; «резиновое» название ужато на ширину кнопки.
+const WRITE_COLUMNS: ColumnDef[] = [
+  { key: 'check', label: '', width: 36, resizable: false },
+  ...COLUMNS.map((c) => (c.key === 'name' ? { ...c, width: 344 } : c)),
+]
+
 type Enabled = 'all' | 'on' | 'off'
 
 /** Прогон, после которого хант «с ошибками»: запрос упал или прогон оборвался. */
@@ -53,7 +60,7 @@ export function LibraryPage() {
   const [errorsOnly, setErrorsOnly] = useState(false)
   const [importing, setImporting] = useState(false)
   const filtersPanel = useFiltersPanel('siem-th-library')
-  const cols = useColumnWidths('siem-th-library-columns', COLUMNS)
+  const cols = useColumnWidths('siem-th-library-columns', write ? WRITE_COLUMNS : COLUMNS)
   const query = useHunts({ enabled: enabled === 'all' ? undefined : enabled === 'on', technique: technique || undefined })
   // Техники для фильтра берём из всей библиотеки, а не из отобранного: иначе выбранную технику не снять.
   const everything = useHunts()
@@ -157,6 +164,23 @@ export function LibraryPage() {
                   className={cn(ROW_FOCUS, 'grid cursor-pointer items-center border-b border-grid text-xs hover:bg-row-hover', !h.enabled && 'text-text-secondary')}
                   style={{ ...cols.gridStyle, height: ROW_HEIGHT }}
                 >
+                  {write && (
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          // Иначе щелчок дойдёт до строки и та откроет карточку второй раз, уже без `?run=1`.
+                          e.stopPropagation()
+                          navigate(`/siem/hunting/library/${h.id}?run=1`)
+                        }}
+                        aria-label="Проверить хант сейчас"
+                        title="Проверить хант сейчас"
+                        className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                      >
+                        <Play size={14} aria-hidden />
+                      </button>
+                    </div>
+                  )}
                   <div className="min-w-0 truncate px-2"><ScheduleLink enabled={h.enabled} /></div>
                   <div className="min-w-0 truncate px-2 font-mono text-text">{h.code}</div>
                   <div className="min-w-0 truncate px-2 text-text" title={h.name}>{h.name}</div>

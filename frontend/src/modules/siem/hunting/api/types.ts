@@ -113,14 +113,30 @@ export interface HuntIn {
   queries: QueryIn[]
 }
 
+/** Окно проверки запроса: за какой срок до «сейчас» смотреть события. */
+export type CheckWindow = '1h' | '24h' | '7d'
+
 export interface CheckQueryIn {
   query: string
   fields: string
+  fields_label?: string
+  window?: CheckWindow
+  /** 1..1000; по умолчанию 200 — предпросмотр, а не выгрузка. */
+  limit?: number
 }
 
+/** Разобранный ответ проверки. При отказе `ok=false`, в `message` класс причины, строк нет. */
 export interface CheckQueryOut {
   ok: boolean
   message: string
+  period_from: string | null
+  period_to: string | null
+  columns: ThColumn[]
+  /** Значения по порядку колонок: строка, число, объект или массив. */
+  rows: unknown[][]
+  returned: number
+  limit_hit: boolean
+  duration_ms: number
 }
 
 /** Что сделает импорт с ханта из файла: new — создаст, revive — вернёт удалённый, changed — отличается от базы, same — совпадает. */

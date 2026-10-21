@@ -257,7 +257,7 @@ def test_check_returns_parsed_rows(auth_client: TestClient, fake_events: FakeEve
     configure(auth_client)
     r = auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS)
     data = r.json()
-    assert r.status_code == 200 and data["ok"] is True and data["message"] == "3 событий за сутки"
+    assert r.status_code == 200 and data["ok"] is True and data["message"] == "3 события за сутки"
     assert data["columns"] == [
         {"field": "time", "label": "Время"}, {"field": "event_src.host", "label": "Хост"},
         {"field": "object", "label": "Объект"},
@@ -285,10 +285,19 @@ def test_check_limit_hit_and_window(auth_client: TestClient, fake_events: FakeEv
     configure(auth_client)
     data = auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS | {"limit": 2, "window": "7d"}).json()
     assert data["returned"] == 2 and len(data["rows"]) == 2 and data["limit_hit"] is True
-    assert data["message"] == "2 событий за неделю, лимит 2 достигнут"
+    assert data["message"] == "2 события за неделю, лимит 2 достигнут"
     body = _json.loads(fake_events.calls[-1].content)
     assert body["limit"] == 2 and body["timeTo"] - body["timeFrom"] == 7 * 24 * 3600
     assert dt.datetime.fromisoformat(data["period_to"]) - dt.datetime.fromisoformat(data["period_from"]) == dt.timedelta(days=7)
+
+
+def test_check_message_counts_events_in_russian() -> None:
+    from api.modules.siem.routers.hunting.library import _events
+
+    assert [_events(n) for n in (1, 3, 5, 11, 12, 21, 22, 111, 200)] == [
+        "1 событие", "3 события", "5 событий", "11 событий", "12 событий", "21 событие", "22 события",
+        "111 событий", "200 событий",
+    ]
 
 
 def test_check_empty_result_message(auth_client: TestClient, fake_events: FakeEvents) -> None:

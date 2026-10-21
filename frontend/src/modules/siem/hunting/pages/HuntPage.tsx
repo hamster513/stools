@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Plus } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
@@ -11,8 +11,9 @@ import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { useDeleteHunt, useHunt, useSaveHunt, useToggleQuery } from '../api/queries'
-import type { HuntView } from '../api/types'
-import { QueryEditor } from '../components/QueryEditor'
+import type { CheckWindow, HuntView } from '../api/types'
+import { WindowSelect } from '../components/CheckResult'
+import { QueryEditor, type QueryCheckHandle } from '../components/QueryEditor'
 import { QueryStatus } from '../components/QueryStatus'
 import { ScheduleLink } from '../components/ScheduleLink'
 import { draftSignature, emptyHunt, emptyQuery, fromHunt, toHuntIn, type HuntDraft, type QueryDraft } from '../draft'
@@ -64,7 +65,7 @@ export function HuntPage({ id }: { id: number | 'new' }) {
  * (попадёт в ближайшую ночь), у сохранённого уходит текущее значение.
  */
 function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
-  const { navigate } = useRouter()
+  const { path, search, navigate } = useRouter()
   const { write } = useCan()
   const [draft, setDraft] = useState<HuntDraft>(() => (hunt ? fromHunt(hunt) : emptyHunt()))
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -73,6 +74,11 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
   const toggleQuery = useToggleQuery()
   const runCols = useColumnWidths('siem-th-hunt-runs-columns', RUN_COLUMNS)
   const findingCols = useColumnWidths('siem-th-hunt-findings-columns', FINDING_COLUMNS)
+  const editors = useRef(new Map<string, QueryCheckHandle>())
+  const [checkWindow, setCheckWindow] = useState<CheckWindow>('24h')
+  const [progress, setProgress] = useState<{ at: number; of: number } | null>(null)
+  const [stopped, setStopped] = useState(false)
+  const autoRun = useRef(false)
 
   const readOnly = !write
   const dirty = !hunt || draftSignature(draft, true) !== draftSignature(fromHunt(hunt), true)
@@ -99,6 +105,36 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
     else toggleQuery.mutate({ queryPk: q.pk, enabled: next })
   }
 
+  // Без запроса или полей проверять нечего: сервер ответит «обязательны», а счётчик «i из n» соврёт.
+  const checkable = draft.queries.filter((q) => q.query.trim() && q.fields.trim())
+
+  /**
+   * Проверка всех запросов черновика (включённых и выключенных, с несохранёнными правками) строго по очереди:
+   * MaxPatrol отвечает одному клиенту по одному, а параллельная пачка упрётся в занятый слот.
+   * Отказ авторизации или нашего API останавливает обход — остальные получили бы тот же отказ.
+   */
+  async function checkAll(win: CheckWindow) {
+    setStopped(false)
+    for (let i = 0; i < checkable.length; i += 1) {
+      setProgress({ at: i + 1, of: checkable.length })
+      const status = await editors.current.get(checkable[i].key)?.check(win)
+      if (status === 'auth') {
+        setStopped(true)
+        break
+      }
+    }
+    setProgress(null)
+  }
+
+  // `?run=1` — переход из библиотеки «Проверить хант сейчас»: проверка за сутки сразу после загрузки карточки, один раз.
+  // Метка убирается из адреса, чтобы возврат на карточку не запускал проверку снова.
+  useEffect(() => {
+    if (!hunt || !write || autoRun.current || !new URLSearchParams(search).has('run')) return
+    autoRun.current = true
+    navigate(path, { replace: true })
+    void checkAll('24h')
+  })
+
   const errors = ([save.error, toggleQuery.error, remove.error] as unknown[])
     .filter((e) => e instanceof Error)
     .map((e) => (e instanceof ApiRequestError ? e.message : 'Не удалось выполнить'))
@@ -114,12 +150,18 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
         {hunt && <span className="text-xs text-text-secondary">изменён {ruStamp(hunt.updated_at)}, {hunt.updated_by}</span>}
         {write && (
           <div className="ml-auto flex items-center gap-2">
+            {progress && <span className="font-mono text-xs tabular-nums text-text-secondary" role="status">{progress.at} из {progress.of}</span>}
+            <WindowSelect value={checkWindow} onChange={setCheckWindow} disabled={!!progress} />
+            <Button onClick={() => void checkAll(checkWindow)} loading={!!progress} disabled={!!progress || checkable.length === 0} className="px-2.5 py-1 text-xs">
+              Проверить все запросы
+            </Button>
             {hunt && <Button variant="danger" onClick={() => setConfirmDelete(true)} className="px-2.5 py-1 text-xs">Удалить хант</Button>}
             <Button variant="primary" onClick={onSave} loading={save.isPending} disabled={!dirty} className="px-2.5 py-1 text-xs">
               {hunt ? 'Сохранить' : 'Создать хант'}
             </Button>
           </div>
         )}
+        {stopped && <p className="basis-full text-xs text-kind-1" role="alert">Проверка остановлена: MaxPatrol или сервер отказал, остальные запросы не проверялись.</p>}
         {errors.length > 0 && <p className="basis-full text-xs text-kind-1" role="alert">{errors.join('; ')}</p>}
       </header>
 
@@ -168,12 +210,17 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
               return (
                 <QueryEditor
                   key={q.key}
+                  ref={(handle) => {
+                    if (handle) editors.current.set(q.key, handle)
+                    else editors.current.delete(q.key)
+                  }}
                   huntId={hunt?.id}
                   draft={q}
                   view={view}
                   enabled={view ? view.enabled : q.enabled}
                   readOnly={readOnly}
                   toggling={toggleQuery.isPending && toggleQuery.variables?.queryPk === q.pk}
+                  columnsKey={`siem-th-events-columns:${hunt?.code ?? 'new'}:${q.query_id}`}
                   onChange={(next) => patchQuery(q.key, next)}
                   onToggle={(next) => onToggleQuery(q, next)}
                   onRemove={() => setDraft((d) => ({ ...d, queries: d.queries.filter((x) => x.key !== q.key) }))}
