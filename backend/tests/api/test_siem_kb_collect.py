@@ -104,12 +104,18 @@ def test_recollect_same_archive_updates_inventory_only(auth_client: TestClient, 
     assert db_session.get(SiemRuleDeployment, (first["snapshot_id"], U1)).installed is False
 
 
-def test_collect_failure_on_export_leaves_no_snapshot(auth_client: TestClient, kb: FakeKb) -> None:
-    kb.export_status = 500
-    job = collect_and_wait(auth_client)
+def test_collect_failure_on_export_leaves_no_snapshot(
+    auth_client: TestClient, kb: FakeKb, caplog: pytest.LogCaptureFixture,
+) -> None:
+    kb.studio_export_status = 500
+    with caplog.at_level(logging.WARNING, logger="api.modules.siem.services.kb_collect"):
+        job = collect_and_wait(auth_client)
     assert job["status"] == "failed" and job["snapshot_id"] is None
     assert job["error"] == "ошибка сервера (HTTP 500)"
     assert auth_client.get("/api/siem/snapshots").json() == []
+    # В журнале сервера — какой шаг и каким кодом отказал, но без адреса KB и токена.
+    assert any("экспорт не отдан: HTTP 500" in r.message for r in caplog.records)
+    assert not any(TOKEN in r.message or ":8091" in r.message for r in caplog.records)
 
 
 def test_non_kb_failure_is_logged_with_traceback(

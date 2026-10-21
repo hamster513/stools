@@ -50,6 +50,9 @@ class FakeKb:
         self.unauthorized = False
         self.forbidden = False
         self.export_status = 200
+        #: Новый экспорт (KB 27+/R28): `POST /api-studio/siem/export` отвечает 201 с потоком файла;
+        #: None — путь не существует (KB 26), тогда клиент обязан откатиться на старый GET.
+        self.studio_export_status: int | None = 201
         self.calls: list[httpx.Request] = []
         #: Потолок строк на страницу: настоящий сервер может отдавать меньше `take`.
         self.page_cap: int | None = None
@@ -85,6 +88,13 @@ class FakeKb:
                 rows = [o for o in rows if o["Id"] in allowed]
             take = body["take"] if self.page_cap is None else min(body["take"], self.page_cap)
             return httpx.Response(200, json={"Rows": rows[body["skip"] : body["skip"] + take]})
+        if p == "/api-studio/siem/export" and request.method == "POST":
+            if self.studio_export_status is None:
+                return httpx.Response(404)
+            body = json.loads(request.content)
+            assert body == {"mode": "deploymentSet", "setId": ROOT}
+            ok = self.studio_export_status in (200, 201)
+            return httpx.Response(self.studio_export_status, content=self.export if ok else b"")
         if p == "/api/siem/export/kbpackage":
             assert request.url.params["contentMode"] == "deploymentSet" and request.url.params["groupId"] == ROOT
             assert request.url.params["contentDatabase"] == DB

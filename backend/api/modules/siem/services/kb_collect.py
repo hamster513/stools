@@ -116,8 +116,9 @@ def _run_collect(db: Session, job_id: int, settings: Settings) -> None:
         db.rollback()
         if collecting:
             if isinstance(exc, KbError):
-                # Трасса httpx может содержать URL с адресом KB — в журнал только класс ошибки.
-                logger.warning("сбор из базы знаний прерван: %s", type(exc).__name__)
+                # Текст KbError клиент собирает сам: путь и код ответа без адреса и токена —
+                # без них первый живой отказ KB не разобрать. Трасса httpx (с URL) в журнал не идёт.
+                logger.warning("сбор из базы знаний прерван: %s", exc)
             else:
                 # Не ошибка KB (БД, диск, секрет): адреса в трассе нет, а без неё первый живой сбой не разобрать.
                 logger.exception("сбор из базы знаний прерван не на стороне KB")

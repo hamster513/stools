@@ -170,7 +170,8 @@ class KbClient:
     def _request(self, method: str, path: str, *, db: str | None = None, params: dict[str, Any] | None = None, body: Any = None) -> Any:
         try:
             with self.http.stream(method, f"{self.base}{path}", headers=self._headers(db), params=params, json=body) as r:
-                if r.status_code != 200:
+                # Любой 2xx с JSON годится: новые релизы KB отвечают 201 там, где прежние — 200.
+                if not 200 <= r.status_code < 300:
                     raise KbError(f"KB {path}: HTTP {r.status_code}", r.status_code)
                 return self._json(r)
         except httpx.HTTPError as exc:
@@ -253,25 +254,35 @@ class KbClient:
     def export_all(self, db: str, to_path: Path, on_bytes: Callable[[int], None] | None = None) -> int:
         """Экспорт базы в формате kb потоком в файл; возвращает число байт.
 
-        При любой ошибке (отказ KB, обрыв, лимит, сбой записи) частичный файл
-        удаляется: на диске остаётся либо целая выгрузка, либо ничего."""
-        params = {"contentMode": "deploymentSet", "groupId": ROOT_SET_ID, "contentDatabase": db}
-        url = f"{self.base}/api/siem/export/kbpackage"
+        Сначала новый путь (KB 27+/R28, как в mpsiemlib): `POST /api-studio/siem/export`
+        с телом {mode: deploymentSet, setId}, ответ 200 или 201 с потоком файла. Если его нет
+        (404) — старый `GET /api/siem/export/kbpackage` (KB 26). При любой ошибке (отказ KB,
+        обрыв, лимит, сбой записи) частичный файл удаляется: на диске остаётся либо целая
+        выгрузка, либо ничего."""
+        studio = ("POST", f"{self.base}/api-studio/siem/export", None, {"mode": "deploymentSet", "setId": ROOT_SET_ID})
+        legacy = (
+            "GET", f"{self.base}/api/siem/export/kbpackage",
+            {"contentMode": "deploymentSet", "groupId": ROOT_SET_ID, "contentDatabase": db}, None,
+        )
         size = 0
         done = False
         try:
-            with self.http.stream("GET", url, headers=self._headers(db), params=params, timeout=600.0) as r:
-                if r.status_code != 200:
-                    raise KbError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
-                with to_path.open("wb") as out:
-                    for chunk in r.iter_bytes():
-                        size += len(chunk)
-                        if size > EXPORT_LIMIT:
-                            raise KbError("экспорт больше лимита загрузки выгрузки")
-                        out.write(chunk)
-                        if on_bytes is not None:
-                            on_bytes(size)
-            done = True
+            for attempt, (method, url, params, body) in enumerate((studio, legacy)):
+                with self.http.stream(method, url, headers=self._headers(db), params=params, json=body, timeout=600.0) as r:
+                    if r.status_code == 404 and attempt == 0:
+                        continue  # нового пути нет — это старый KB
+                    if r.status_code not in (200, 201):
+                        raise KbError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
+                    with to_path.open("wb") as out:
+                        for chunk in r.iter_bytes():
+                            size += len(chunk)
+                            if size > EXPORT_LIMIT:
+                                raise KbError("экспорт больше лимита загрузки выгрузки")
+                            out.write(chunk)
+                            if on_bytes is not None:
+                                on_bytes(size)
+                    done = True
+                    break
         except httpx.HTTPError as exc:
             raise KbError(f"экспорт прерван — {exc.__class__.__name__}") from exc
         except OSError as exc:  # путь в тексте не нужен: он внутренний

@@ -164,3 +164,37 @@ def test_public_error_classes() -> None:
     assert "mp.corp.local" not in public_error(link_exc.value)
 
     assert public_error(KbShapeError("нет БД контента, подключённой к SIEM")) == "нет БД контента, подключённой к SIEM"
+
+
+def test_export_uses_studio_post_and_accepts_201(tmp_path: Path) -> None:
+    """KB 27+/R28: экспорт набора — `POST /api-studio/siem/export`, ответ 201 с потоком файла."""
+    fake = FakeKb()
+    out = tmp_path / "kb.zip"
+    assert _client(fake).export_all(DB, out) == out.stat().st_size == 22
+    assert [(c.method, c.url.path) for c in fake.calls] == [("POST", "/api-studio/siem/export")]
+
+
+def test_export_falls_back_to_legacy_get_when_studio_path_missing(tmp_path: Path) -> None:
+    """KB 26: нового пути нет (404) — клиент идёт старым `GET /api/siem/export/kbpackage`."""
+    fake = FakeKb()
+    fake.studio_export_status = None
+    out = tmp_path / "kb.zip"
+    assert _client(fake).export_all(DB, out) == 22
+    assert [c.url.path for c in fake.calls] == ["/api-studio/siem/export", "/api/siem/export/kbpackage"]
+
+
+def test_export_refused_by_both_paths_reports_status(tmp_path: Path) -> None:
+    fake = FakeKb()
+    fake.studio_export_status = None
+    fake.export_status = 500
+    with pytest.raises(KbError, match="HTTP 500") as exc_info:
+        _client(fake).export_all(DB, tmp_path / "kb.zip")
+    assert exc_info.value.status == 500 and not (tmp_path / "kb.zip").exists()
+
+
+def test_json_requests_accept_any_2xx() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, json=[{"Name": "Default", "IsDeployable": True}])
+
+    client = KbClient(CONN, httpx.Client(transport=httpx.MockTransport(handler)))
+    assert [d.name for d in client.databases()] == ["Default"]
