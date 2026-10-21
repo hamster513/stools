@@ -230,7 +230,8 @@ def test_check_query_uses_events_client(auth_client: TestClient, fake_events: Fa
 
     body = _json.loads(call.content)
     assert body["filter"] == "filter(object.name = 'ScreenSave') | select(time, msgid) | sort(time desc)"
-    assert body["limit"] == 1 and body["timeTo"] - body["timeFrom"] == 3600
+    # По умолчанию окно сутки и предел предпросмотра 200 строк.
+    assert body["limit"] == 200 and body["timeTo"] - body["timeFrom"] == 24 * 3600
     assert TOKEN not in r.text and "corp.local" not in r.text
 
 
@@ -242,6 +243,104 @@ def test_check_query_failure_has_no_secrets(auth_client: TestClient, fake_events
     assert TOKEN not in r.text and "corp.local" not in r.text
     r = auth_client.post(f"{BASE}/queries/check", json={"query": "  ", "fields": "time"})
     assert r.status_code == 200 and r.json()["ok"] is False
+
+
+EVENTS = [
+    {"time": f"2026-10-19T00:{i}0:00Z", "event_src.host": f"host-{i}", "object": {"name": "x", "id": i}}
+    for i in range(3)
+]
+CHECK_FIELDS = {"query": "object.name = 'ScreenSave'", "fields": "time, event_src.host, object", "fields_label": "Время, Хост, Объект"}
+
+
+def test_check_returns_parsed_rows(auth_client: TestClient, fake_events: FakeEvents) -> None:
+    fake_events.events_by_query["ScreenSave"] = EVENTS
+    configure(auth_client)
+    r = auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS)
+    data = r.json()
+    assert r.status_code == 200 and data["ok"] is True and data["message"] == "3 события за сутки"
+    assert data["columns"] == [
+        {"field": "time", "label": "Время"}, {"field": "event_src.host", "label": "Хост"},
+        {"field": "object", "label": "Объект"},
+    ]
+    assert len(data["rows"]) == 3 and all(len(row) == 3 for row in data["rows"])
+    # Вложенное значение отдаётся как есть: сериализует фронт.
+    assert data["rows"][1] == ["2026-10-19T00:10:00Z", "host-1", {"name": "x", "id": 1}]
+    assert data["returned"] == 3 and data["limit_hit"] is False and isinstance(data["duration_ms"], int)
+    assert dt.datetime.fromisoformat(data["period_to"]) - dt.datetime.fromisoformat(data["period_from"]) == dt.timedelta(hours=24)
+
+
+def test_check_shapes_values_like_findings(auth_client: TestClient, fake_events: FakeEvents) -> None:
+    # Только поля запроса; None и отсутствующее поле дают "". Без подписей колонки названы именем поля.
+    fake_events.events_by_query["x"] = [{"time": None, "extra": "лишнее"}]
+    configure(auth_client)
+    data = auth_client.post(f"{BASE}/queries/check", json={"query": "x", "fields": "time, msgid"}).json()
+    assert data["rows"] == [["", ""]]
+    assert data["columns"] == [{"field": "time", "label": "time"}, {"field": "msgid", "label": "msgid"}]
+
+
+def test_check_limit_hit_and_window(auth_client: TestClient, fake_events: FakeEvents) -> None:
+    import json as _json
+
+    fake_events.events_by_query["ScreenSave"] = EVENTS
+    configure(auth_client)
+    data = auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS | {"limit": 2, "window": "7d"}).json()
+    assert data["returned"] == 2 and len(data["rows"]) == 2 and data["limit_hit"] is True
+    assert data["message"] == "2 события за неделю, лимит 2 достигнут"
+    body = _json.loads(fake_events.calls[-1].content)
+    assert body["limit"] == 2 and body["timeTo"] - body["timeFrom"] == 7 * 24 * 3600
+    assert dt.datetime.fromisoformat(data["period_to"]) - dt.datetime.fromisoformat(data["period_from"]) == dt.timedelta(days=7)
+
+
+def test_check_message_counts_events_in_russian() -> None:
+    from api.modules.siem.routers.hunting.library import _events
+
+    assert [_events(n) for n in (1, 3, 5, 11, 12, 21, 22, 111, 200)] == [
+        "1 событие", "3 события", "5 событий", "11 событий", "12 событий", "21 событие", "22 события",
+        "111 событий", "200 событий",
+    ]
+
+
+def test_check_empty_result_message(auth_client: TestClient, fake_events: FakeEvents) -> None:
+    configure(auth_client)
+    data = auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS | {"query": "nothing", "window": "1h"}).json()
+    assert data["ok"] is True and data["message"] == "событий за час нет"
+    assert data["rows"] == [] and data["returned"] == 0 and data["limit_hit"] is False
+
+
+def test_check_rejects_unknown_window_and_limit(auth_client: TestClient, fake_events: FakeEvents) -> None:
+    assert auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS | {"window": "2h"}).status_code == 422
+    assert auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS | {"limit": 1001}).status_code == 422
+    assert auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS | {"limit": 0}).status_code == 422
+
+
+def test_check_timeout_is_capped(auth_client: TestClient, fake_events: FakeEvents, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[float] = []
+
+    def spy(conn: Any, timeout: float = 60.0) -> Any:
+        seen.append(timeout)
+        return fake_events.http_factory(conn, timeout)
+
+    monkeypatch.setattr("api.modules.siem.routers.hunting.library.make_client", spy)
+    configure(auth_client)
+    settings = auth_client.get(f"{BASE}/settings").json()
+    assert settings["request_timeout_s"] == 300  # по умолчанию ночной таймаут больше интерактивного
+    auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS)
+    assert seen == [60.0]
+    put = {**{k: v for k, v in settings.items() if k != "schedule"}, "request_timeout_s": 20}
+    assert auth_client.put(f"{BASE}/settings", json=put).status_code == 200
+    auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS)
+    assert seen == [60.0, 20.0]
+
+
+def test_check_auth_failure_has_empty_rows(auth_client: TestClient, fake_events: FakeEvents) -> None:
+    fake_events.status_once["ScreenSave"] = [401]
+    configure(auth_client)
+    r = auth_client.post(f"{BASE}/queries/check", json=CHECK_FIELDS)
+    data = r.json()
+    assert r.status_code == 200 and data["ok"] is False and data["message"]
+    assert data["rows"] == [] and data["columns"] == [] and data["returned"] == 0 and data["limit_hit"] is False
+    assert data["period_from"] and data["period_to"]
+    assert TOKEN not in r.text and "corp.local" not in r.text
 
 
 def test_check_query_needs_connection(auth_client: TestClient, fake_events: FakeEvents) -> None:

@@ -1,16 +1,28 @@
-import { useState } from 'react'
+import { useImperativeHandle, useState, type Ref } from 'react'
 import { Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
 import { Link } from '@/lib/router'
 import { useCheckQuery } from '../api/queries'
-import type { QueryView } from '../api/types'
+import type { CheckWindow, QueryView } from '../api/types'
 import type { QueryDraft } from '../draft'
 import { ruStamp } from '../format'
+import { CheckResult, WindowSelect } from './CheckResult'
 import { QueryStatus } from './QueryStatus'
 
 const LABEL = 'mb-1 block text-xs font-medium text-text'
+// Тот же текст, что `LOGIN_REJECTED` в api/hosts.py: им сервер называет отказ авторизации в MaxPatrol.
+const LOGIN_REJECTED = 'вход отклонён'
+
+/** Исход проверки для карточки ханта: `auth` — дальше проверять бессмысленно, следующие запросы упрутся в то же. */
+export type CheckStatus = 'ok' | 'error' | 'auth'
+
+/** Запуск проверки снаружи — кнопкой «Проверить все запросы» карточки ханта. */
+export interface QueryCheckHandle {
+  check: (window: CheckWindow) => Promise<CheckStatus>
+}
+
 const LINK = 'rounded text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 
 /**
@@ -19,7 +31,8 @@ const LINK = 'rounded text-xs text-primary hover:underline focus-visible:outline
  * у ещё не сохранённого он правит черновик. `view` — сохранённая версия: последний запуск, ссылка «в большой хант».
  * Только чтение: поля заблокированы, кнопок нет.
  */
-export function QueryEditor({ huntId, draft, view, enabled, readOnly, toggling, onChange, onToggle, onRemove }: {
+export function QueryEditor({ ref, huntId, draft, view, enabled, readOnly, toggling, columnsKey, onChange, onToggle, onRemove }: {
+  ref?: Ref<QueryCheckHandle>
   /** Номер ханта в базе — ссылка «в большой хант» несёт его, чтобы страница читала одну карточку; у несохранённого ханта пуст. */
   huntId: number | undefined
   draft: QueryDraft
@@ -28,16 +41,42 @@ export function QueryEditor({ huntId, draft, view, enabled, readOnly, toggling, 
   enabled: boolean
   readOnly: boolean
   toggling: boolean
+  /** Ключ ширин колонок результата проверки — тот же, что у событий находки этого запроса. */
+  columnsKey: string
   onChange: (patch: Partial<QueryDraft>) => void
   onToggle: (enabled: boolean) => void
   onRemove: () => void
 }) {
   const check = useCheckQuery()
   const [confirmed, setConfirmed] = useState(false)
+  const [span, setSpan] = useState<CheckWindow>('24h')
+  const [hidden, setHidden] = useState(false)
+
+  async function run(win: CheckWindow): Promise<CheckStatus> {
+    setHidden(false)
+    try {
+      const out = await check.mutateAsync({ query: draft.query, fields: draft.fields, fields_label: draft.fields_label, window: win })
+      if (out.ok) return 'ok'
+      return out.message === LOGIN_REJECTED ? 'auth' : 'error'
+    } catch (exc) {
+      // Отказ нашего API, который повторится у всех запросов (подключение не настроено, сессия истекла,
+      // нет прав), останавливает обход; разовый сбой или занятость сервера — нет.
+      return exc instanceof ApiRequestError && [400, 401, 403].includes(exc.status) ? 'auth' : 'error'
+    }
+  }
+
+  // Проверка из шапки ханта ставит выбранное там окно и в этот запрос: видно, за какой срок результат.
+  useImperativeHandle(ref, () => ({
+    check: (win) => {
+      setSpan(win)
+      return run(win)
+    },
+  }))
 
   // Результат проверки относится к тексту, который проверяли: после правки запроса или полей он устарел.
   function edit(patch: Partial<QueryDraft>) {
-    if ('query' in patch || 'fields' in patch) check.reset()
+    // Подписи тоже входят в результат (это его колонки), поэтому их правка его устаревает.
+    if ('query' in patch || 'fields' in patch || 'fields_label' in patch) check.reset()
     onChange(patch)
   }
 
@@ -121,13 +160,15 @@ export function QueryEditor({ huntId, draft, view, enabled, readOnly, toggling, 
 
       {!readOnly && (
         <div className="mt-2 flex flex-wrap items-center gap-3">
-          <Button onClick={() => check.mutate({ query: draft.query, fields: draft.fields })} loading={check.isPending} disabled={!draft.query.trim() || !draft.fields.trim()}>
+          <Button onClick={() => void run(span)} loading={check.isPending} disabled={!draft.query.trim() || !draft.fields.trim()}>
             проверить запрос
           </Button>
-          {check.data && <span className={check.data.ok ? 'text-xs text-kind-accepted' : 'text-xs text-kind-1'} role="status">{check.data.message}</span>}
+          <WindowSelect value={span} onChange={setSpan} disabled={check.isPending} />
+          {check.data && !check.data.ok && <span className="text-xs text-kind-1" role="alert">{check.data.message}</span>}
           {checkError && <span className="text-xs text-kind-1" role="alert">{checkError}</span>}
         </div>
       )}
+      {!readOnly && check.data?.ok && !hidden && <CheckResult result={check.data} storageKey={columnsKey} onHide={() => setHidden(true)} />}
     </section>
   )
 }

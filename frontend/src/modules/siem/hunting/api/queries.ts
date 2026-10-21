@@ -158,7 +158,7 @@ export function useToggleQuery() {
   })
 }
 
-/** Принимает ли MaxPatrol запрос: результат не сохраняется, кэш не меняется. */
+/** Проверка запроса: события за выбранное окно разобранной таблицей; результат не сохраняется, кэш не меняется. */
 export function useCheckQuery() {
   return useMutation<CheckQueryOut, ApiRequestError, CheckQueryIn>({
     mutationFn: (body) => api.post(`${BASE}/queries/check`, body),

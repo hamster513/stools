@@ -5,10 +5,13 @@
  * находки (состояние, настройки статусов, справочник исполнителей): смена статуса и исполнителя правит находку в памяти.
  * Подключается в `siem/mocks/browser.ts` рядом с остальными модулями.
  */
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import { noSession } from '@/modules/siem/mocks/handlers'
 import type { FindingEvent, FindingState, FindingStatus } from '@/platform/findings/types'
 import type {
+  CheckQueryIn,
+  CheckQueryOut,
+  CheckWindow,
   DeepCreate,
   DeepDetail,
   DeepView,
@@ -72,6 +75,24 @@ const splitFields = (s: string) => s.split(',').map((f) => f.trim()).filter(Bool
 function alignLabels(fields: string[], labels: string): string[] {
   const given = labels.trim() ? labels.split(',').map((l) => l.trim()) : []
   return [...given, ...fields.slice(given.length)].slice(0, fields.length)
+}
+
+const CHECK_WINDOWS: Record<CheckWindow, number> = { '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000 }
+const CHECK_TITLES: Record<CheckWindow, string> = { '1h': 'час', '24h': 'сутки', '7d': 'неделю' }
+
+/** Счёт в сообщении проверки — как у сервера: «1 событие», «3 события», «5 событий». */
+function eventsWord(n: number): string {
+  if (n % 10 === 1 && n % 100 !== 11) return `${n} событие`
+  if (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14)) return `${n} события`
+  return `${n} событий`
+}
+
+/** Синтетическое значение поля для проверки: время, хост, вложенный объект — чтобы таблица показала все виды значений. */
+function checkValue(field: string, i: number, now: Date): unknown {
+  if (field === 'time') return new Date(now.getTime() - (i + 1) * 7 * 60_000).toISOString()
+  if (field.includes('host')) return `host-${i + 1}`
+  if (field === 'object') return { name: 'ScreenSave', id: i + 1 }
+  return `${field}-${i + 1}`
 }
 
 // --- Виды ---------------------------------------------------------------------
@@ -486,10 +507,29 @@ export const huntingHandlers = [
   http.post(`${P}/queries/check`, async ({ request }) => {
     const denied = noSession()
     if (denied) return denied
-    const body = (await request.json()) as { query: string; fields: string }
-    if (!body.query.trim() || !splitFields(body.fields).length) return HttpResponse.json({ ok: false, message: 'запрос и поля обязательны' })
-    if (body.query.includes('???')) return HttpResponse.json({ ok: false, message: 'MaxPatrol отклонил запрос: ошибка разбора' })
-    return HttpResponse.json({ ok: true, message: 'запрос принят, за последний час есть события' })
+    const body = (await request.json()) as CheckQueryIn
+    const fields = splitFields(body.fields)
+    const empty = { period_from: null, period_to: null, columns: [], rows: [], returned: 0, limit_hit: false, duration_ms: 0 }
+    if (!body.query.trim() || !fields.length) return HttpResponse.json<CheckQueryOut>({ ok: false, message: 'запрос и поля обязательны', ...empty })
+    const window = body.window ?? '24h'
+    const limit = body.limit ?? 200
+    const to = new Date()
+    const from = new Date(to.getTime() - CHECK_WINDOWS[window])
+    const period = { period_from: from.toISOString(), period_to: to.toISOString() }
+    // Пауза как у живого MaxPatrol: иначе индикатор «i из n» при проверке всех запросов не разглядеть.
+    await delay(600)
+    if (body.query.includes('???')) return HttpResponse.json<CheckQueryOut>({ ok: false, message: 'MaxPatrol отклонил запрос: ошибка разбора', ...empty, ...period })
+    const rows = Array.from({ length: Math.min(5, limit) }, (_, i) => fields.map((f) => checkValue(f, i, to)))
+    const limitHit = limit <= 5
+    const title = CHECK_TITLES[window]
+    let message = rows.length ? `${eventsWord(rows.length)} за ${title}` : `событий за ${title} нет`
+    if (limitHit) message += `, лимит ${limit} достигнут`
+    const labels = alignLabels(fields, body.fields_label ?? '')
+    return HttpResponse.json<CheckQueryOut>({
+      ok: true, message, ...period,
+      columns: fields.map((field, i) => ({ field, label: labels[i] })),
+      rows, returned: rows.length, limit_hit: limitHit, duration_ms: 412,
+    })
   }),
 
   http.post(`${P}/queries/:pk/enabled`, async ({ params, request }) => {

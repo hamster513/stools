@@ -8,7 +8,8 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+import time
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -21,7 +22,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import InstrumentedAttribute
@@ -36,7 +37,9 @@ from api.modules.siem.hunting import yaml_io
 from api.modules.siem.hunting.events_client import EventsClient, make_client, public_error
 from api.modules.siem.hunting.library import HuntIn, LibraryError
 from api.modules.siem.hunting.models import ThFinding, ThHunt, ThQuery, ThRunQuery
-from api.modules.siem.hunting.pdql import build_pdql, split_fields
+from api.modules.siem.hunting.pdql import align_labels, build_pdql, split_fields
+from api.modules.siem.hunting.settings import load_th_settings
+from api.modules.siem.routers.hunting.findings import ColumnView
 from api.modules.siem.services.kb_settings import load_connection
 from api.platform.findings.service import effective_status, state_map
 
@@ -47,8 +50,21 @@ SCOPE_ID = 1
 NOT_CONFIGURED = "подключение не настроено: нужны адрес и API-токен"
 RUNS_SHOWN = 30
 FINDINGS_SHOWN = 50
-#: Проверка запроса смотрит только последний час и просит одно событие: цель — принял ли MaxPatrol запрос.
-CHECK_WINDOW = dt.timedelta(hours=1)
+#: Окна проверки запроса: аналитик сам выбирает, за какой срок смотреть события.
+WINDOWS = {"1h": dt.timedelta(hours=1), "24h": dt.timedelta(hours=24), "7d": dt.timedelta(days=7)}
+#: Название окна в сообщении: «N событий за сутки».
+WINDOW_TITLES = {"1h": "час", "24h": "сутки", "7d": "неделю"}
+#: Проверка запроса интерактивная — человек ждёт ответа, поэтому ночной таймаут (по умолчанию 300 с) режется до минуты.
+CHECK_TIMEOUT_CAP_S = 60.0
+
+
+def _events(n: int) -> str:
+    """«1 событие», «3 события», «5 событий» — счёт в сообщении проверки читается человеком."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} событие"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} события"
+    return f"{n} событий"
 
 
 class EnabledIn(BaseModel):
@@ -58,11 +74,21 @@ class EnabledIn(BaseModel):
 class CheckIn(BaseModel):
     query: str
     fields: str
+    fields_label: str = ""
+    window: Literal["1h", "24h", "7d"] = "24h"
+    limit: int = Field(200, ge=1, le=1000)
 
 
 class CheckOut(BaseModel):
     ok: bool
     message: str
+    period_from: dt.datetime | None = None
+    period_to: dt.datetime | None = None
+    columns: list[ColumnView] = []
+    rows: list[list[Any]] = []
+    returned: int = 0
+    limit_hit: bool = False
+    duration_ms: int = 0
 
 
 def _library_error(exc: LibraryError) -> HTTPException:
@@ -294,7 +320,7 @@ def set_hunt_enabled(
 def check_query(
     payload: CheckIn, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
 ) -> CheckOut:
-    """Принимает ли MaxPatrol запрос: один вызов событий за последний час. Результат не сохраняется."""
+    """Проверка запроса: один вызов событий за выбранное окно, разобранный ответ. Результат не сохраняется."""
     fields = split_fields(payload.fields)
     if not payload.query.strip() or not fields:
         return CheckOut(ok=False, message="запрос и поля обязательны")
@@ -302,18 +328,35 @@ def check_query(
     if not conn.configured:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=NOT_CONFIGURED)
     now = dt.datetime.now(dt.UTC)
+    period_from = now - WINDOWS[payload.window]
+    timeout = min(float(load_th_settings(db).request_timeout_s), CHECK_TIMEOUT_CAP_S)
     slot = take_slot("siem", user.id)
+    started = time.monotonic()
     try:
-        with make_client(conn, 30.0) as http:
-            found = EventsClient(conn.unsealed(), http).search(
-                build_pdql(payload.query.strip(), fields), now - CHECK_WINDOW, now, 1,
+        with make_client(conn, timeout) as http:
+            events = EventsClient(conn.unsealed(), http).search(
+                build_pdql(payload.query.strip(), fields), period_from, now, payload.limit,
             )
     # Любая причина отказа доходит до человека классом, без адреса, токена и текста ответа.
     except Exception as exc:  # noqa: BLE001
-        return CheckOut(ok=False, message=public_error(exc))
+        return CheckOut(ok=False, message=public_error(exc), period_from=period_from, period_to=now)
     finally:
         slot.release()
-    return CheckOut(ok=True, message="запрос принят" + (", за последний час есть события" if found else ", за последний час событий нет"))
+    duration_ms = int((time.monotonic() - started) * 1000)
+    labels = align_labels(fields, payload.fields_label)
+    # Значения формируются как у события находки (`nightly.event_rows`): только поля запроса, пустое — "".
+    # Вложенные значения (dict, список) отдаются как есть — в строку их превращает экран.
+    rows = [["" if e.get(f) is None else e[f] for f in fields] for e in events[: payload.limit]]
+    limit_hit = len(events) >= payload.limit
+    title = WINDOW_TITLES[payload.window]
+    message = f"{_events(len(rows))} за {title}" if rows else f"событий за {title} нет"
+    if limit_hit:
+        message += f", лимит {payload.limit} достигнут"
+    return CheckOut(
+        ok=True, message=message, period_from=period_from, period_to=now,
+        columns=[ColumnView(field=f, label=label) for f, label in zip(fields, labels, strict=True)],
+        rows=rows, returned=len(rows), limit_hit=limit_hit, duration_ms=duration_ms,
+    )
 
 
 def _read_yaml(file: UploadFile) -> list[HuntIn]:
