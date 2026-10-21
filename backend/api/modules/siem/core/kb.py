@@ -256,9 +256,10 @@ class KbClient:
 
         Сначала новый путь (KB 27+/R28, как в mpsiemlib): `POST /api-studio/siem/export`
         с телом {mode: deploymentSet, setId}, ответ 200 или 201 с потоком файла. Если его нет
-        (404) — старый `GET /api/siem/export/kbpackage` (KB 26). При любой ошибке (отказ KB,
-        обрыв, лимит, сбой записи) частичный файл удаляется: на диске остаётся либо целая
-        выгрузка, либо ничего."""
+        (404) или он запрещён токену (403: право на экспорт в KB отдельное) — старый
+        `GET /api/siem/export/kbpackage` (KB 26); если и он отказал, наружу идёт первый отказ.
+        При любой ошибке (отказ KB, обрыв, лимит, сбой записи) частичный файл удаляется:
+        на диске остаётся либо целая выгрузка, либо ничего."""
         studio = ("POST", f"{self.base}/api-studio/siem/export", None, {"mode": "deploymentSet", "setId": ROOT_SET_ID})
         legacy = (
             "GET", f"{self.base}/api/siem/export/kbpackage",
@@ -266,12 +267,17 @@ class KbClient:
         )
         size = 0
         done = False
+        first_refusal: KbError | None = None
         try:
             for attempt, (method, url, params, body) in enumerate((studio, legacy)):
                 with self.http.stream(method, url, headers=self._headers(db), params=params, json=body, timeout=600.0) as r:
-                    if r.status_code == 404 and attempt == 0:
-                        continue  # нового пути нет — это старый KB
+                    if r.status_code in (403, 404) and attempt == 0:
+                        # Нового пути нет (старый KB) или он запрещён токену — пробуем старый.
+                        first_refusal = KbError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
+                        continue
                     if r.status_code not in (200, 201):
+                        if first_refusal is not None and r.status_code in (403, 404):
+                            raise first_refusal
                         raise KbError(f"экспорт не отдан: HTTP {r.status_code}", r.status_code)
                     with to_path.open("wb") as out:
                         for chunk in r.iter_bytes():

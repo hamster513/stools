@@ -198,3 +198,18 @@ def test_json_requests_accept_any_2xx() -> None:
 
     client = KbClient(CONN, httpx.Client(transport=httpx.MockTransport(handler)))
     assert [d.name for d in client.databases()] == ["Default"]
+
+
+def test_export_forbidden_on_studio_tries_legacy_and_reports_first_refusal(tmp_path: Path) -> None:
+    """403 на новом пути — право на экспорт отдельное: пробуем старый; если и он отказал — наружу первый 403."""
+    fake = FakeKb()
+    fake.studio_export_status = 403
+    out = tmp_path / "kb.zip"
+    assert _client(fake).export_all(DB, out) == 22  # старый путь отдал файл
+    assert [c.url.path for c in fake.calls] == ["/api-studio/siem/export", "/api/siem/export/kbpackage"]
+    fake = FakeKb()
+    fake.studio_export_status = 403
+    fake.export_status = 404
+    with pytest.raises(KbError, match="HTTP 403") as exc_info:
+        _client(fake).export_all(DB, tmp_path / "kb2.zip")
+    assert exc_info.value.status == 403

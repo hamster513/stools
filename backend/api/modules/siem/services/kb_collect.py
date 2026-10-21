@@ -127,6 +127,8 @@ def _run_collect(db: Session, job_id: int, settings: Settings) -> None:
             # «нет прав» не говорит, какого права не хватает.
             if isinstance(exc, KbError) and exc.status is not None:
                 message = f"{message} — {exc}"
+                if exc.status == 403 and "экспорт" in str(exc):
+                    message += "; токену нужно право экспорта контента в KB"
         else:
             message = _safe_error(exc)  # пишет трассу в журнал сам
         # Дубликат — рабочий снапшот, его не трогаем; свой недоразобранный — удаляем.

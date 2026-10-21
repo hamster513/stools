@@ -230,3 +230,11 @@ def test_collect_forbidden_step_is_named(auth_client: TestClient, kb: FakeKb) ->
     assert job["status"] == "failed"
     assert job["error"].startswith("нет прав — KB /api-studio/")
     assert "HTTP 403" in job["error"]
+
+
+def test_collect_export_forbidden_names_the_missing_right(auth_client: TestClient, kb: FakeKb) -> None:
+    kb.studio_export_status = 403
+    kb.export_status = 403
+    job = collect_and_wait(auth_client)
+    assert job["status"] == "failed"
+    assert job["error"].startswith("нет прав — экспорт не отдан: HTTP 403") and "право экспорта" in job["error"]
