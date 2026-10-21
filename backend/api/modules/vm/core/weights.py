@@ -1,14 +1,19 @@
-"""Веса формулы риска и их значения по умолчанию.
+"""Веса формулы риска и их значения по умолчанию (спека 2026-10-21 §9).
 
-Значения — из формулы, документированной в интерфейсе первой итерации
-(спека §4): она самосогласована с приведённым там контрольным примером.
-Веса первой итерации из базы до расчёта не доезжали (ключи не совпадали),
-поэтому именно документированные, а не «фактически работавшие», и есть
-то, что аналитики считали правилом.
+Risk = round(100 × L × S × V): вероятность эксплуатации × тяжесть × ценность
+хоста. Все три члена — от 0 до 1, поэтому веса здесь — вероятности, доли и
+надбавки, а не множители вокруг единицы, как в первой итерации: там EPSS
+множителем обнулял почти всё, а подстановки поднимали неизвестное выше
+известного (критика — в спеке §9).
+
+Пороги уровней тоже здесь: уровень вычисляется из балла при чтении, поэтому
+их можно двигать без пересчёта пар.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Annotated, Self
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 #: Ранги Metasploit по шкале фреймворка: число → имя.
 MSF_RANKS: dict[int, str] = {
@@ -24,76 +29,109 @@ MSF_RANKS: dict[int, str] = {
 CRITICALITIES = ("Critical", "High", "Medium", "Low", "None")
 EXPLOIT_TYPES = ("remote", "webapps", "local", "hardware", "dos")
 
+#: Доля или вероятность: каждое значение словаря весов — от 0 до 1.
+Share = Annotated[float, Field(ge=0.0, le=1.0)]
 
-class ImpactWeights(BaseModel):
-    criticality: dict[str, float] = Field(
+
+def _exact_keys(value: dict[str, float], keys: tuple[str, ...], what: str) -> dict[str, float]:
+    """Ровно известные ключи: пропущенный упал бы KeyError при пересчёте, а лишний — молча не действовал."""
+    if set(value) != set(keys):
+        raise ValueError(f"{what}: нужны ровно ключи {', '.join(keys)}")
+    return value
+
+
+class ReachWeights(BaseModel):
+    """Достижимость по вектору атаки CVE и доступу хоста из интернета."""
+
+    network_internet: float = Field(default=1.0, ge=0.0, le=1.0)
+    network_internal: float = Field(default=0.8, ge=0.0, le=1.0)
+    adjacent: float = Field(default=0.6, ge=0.0, le=1.0)
+    #: LOCAL и PHYSICAL: нужен доступ к самой машине.
+    local: float = Field(default=0.4, ge=0.0, le=1.0)
+
+
+class ValueWeights(BaseModel):
+    """Ценность хоста: база по критичности плюс надбавки зоны, потолок 1.0."""
+
+    criticality: dict[str, Share] = Field(
         default_factory=lambda: {
-            "Critical": 0.33,
-            "High": 0.25,
-            "Medium": 0.20,
-            "Low": 0.10,
-            "None": 0.20,
+            "Critical": 1.0,
+            "High": 0.8,
+            "Medium": 0.6,
+            "Low": 0.4,
+            # Не задана — середина шкалы, а не минимум: «не знаем» не значит «неважный».
+            "None": 0.6,
         }
     )
-    confidential: dict[str, float] = Field(default_factory=lambda: {"yes": 0.33, "no": 0.20})
-    internet: dict[str, float] = Field(default_factory=lambda: {"yes": 0.33, "no": 0.20})
+    conf_bonus: float = Field(default=0.1, ge=0.0, le=1.0)
+    inet_bonus: float = Field(default=0.1, ge=0.0, le=1.0)
+
+    @field_validator("criticality")
+    @classmethod
+    def _criticality_keys(cls, value: dict[str, float]) -> dict[str, float]:
+        return _exact_keys(value, CRITICALITIES, "ценность по критичности")
 
 
-class CvssV3Weights(BaseModel):
-    av: dict[str, float] = Field(
-        default_factory=lambda: {
-            "NETWORK": 1.20,
-            "ADJACENT_NETWORK": 1.10,
-            "LOCAL": 0.95,
-            "PHYSICAL": 0.85,
-        }
-    )
-    pr: dict[str, float] = Field(default_factory=lambda: {"NONE": 1.20, "LOW": 1.00, "HIGH": 0.85})
-    ui: dict[str, float] = Field(default_factory=lambda: {"NONE": 1.15, "REQUIRED": 0.90})
+class Levels(BaseModel):
+    """Нижние границы уровней по баллу; ниже `medium` — низкий."""
 
+    medium: int = Field(default=15, ge=1, le=100)
+    high: int = Field(default=35, ge=1, le=100)
+    critical: int = Field(default=60, ge=1, le=100)
 
-class CvssV2Weights(BaseModel):
-    av: dict[str, float] = Field(
-        default_factory=lambda: {"NETWORK": 1.20, "ADJACENT_NETWORK": 1.10, "LOCAL": 0.95}
-    )
-    ac: dict[str, float] = Field(default_factory=lambda: {"LOW": 1.10, "MEDIUM": 1.00, "HIGH": 0.90})
-    au: dict[str, float] = Field(
-        default_factory=lambda: {"NONE": 1.15, "SINGLE": 1.00, "MULTIPLE": 0.90}
-    )
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if not 0 < self.medium < self.high < self.critical <= 100:
+            raise ValueError("пороги уровней: нужно 0 < средний < высокий < критический ≤ 100")
+        return self
 
 
 class Weights(BaseModel):
-    impact: ImpactWeights = Field(default_factory=ImpactWeights)
-    cvss_v3: CvssV3Weights = Field(default_factory=CvssV3Weights)
-    cvss_v2: CvssV2Weights = Field(default_factory=CvssV2Weights)
-    exploitdb: dict[str, float] = Field(
+    #: EPSS для CVE, которых нет в EPSS: «не измерено» — малая априорная вероятность,
+    #: а не середина шкалы (иначе неизвестные CVE оказывались выше 90 % известных).
+    prior_epss: float = Field(default=0.01, ge=0.0, le=1.0)
+    #: CVSS ÷ 10 для CVE без балла в NVD.
+    cvss_missing: float = Field(default=0.5, ge=0.0, le=1.0)
+    #: Достижимость, когда у CVE нет вектора атаки.
+    reach_unknown: float = Field(default=0.8, ge=0.0, le=1.0)
+    #: Вероятность эксплуатации по типу лучшего эксплойта ExploitDB.
+    p_exdb: dict[str, Share] = Field(
         default_factory=lambda: {
-            "remote": 1.30,
-            "webapps": 1.20,
-            "local": 1.05,
-            "hardware": 1.00,
-            "dos": 0.85,
+            "remote": 0.30,
+            "webapps": 0.25,
+            "local": 0.15,
+            "hardware": 0.10,
+            "dos": 0.05,
         }
     )
-    msf: dict[str, float] = Field(
+    #: Вероятность эксплуатации по лучшему рангу модуля Metasploit.
+    p_msf: dict[str, Share] = Field(
         default_factory=lambda: {
-            "excellent": 1.30,
-            "great": 1.25,
-            "good": 1.25,
-            "normal": 1.20,
-            "average": 1.10,
-            "low": 0.80,
-            "manual": 1.00,
-            "unknown": 0.80,
+            "excellent": 0.50,
+            "great": 0.45,
+            "good": 0.40,
+            "normal": 0.30,
+            "average": 0.20,
+            "low": 0.10,
+            "manual": 0.05,
         }
     )
+    reach: ReachWeights = Field(default_factory=ReachWeights)
+    value: ValueWeights = Field(default_factory=ValueWeights)
+    levels: Levels = Field(default_factory=Levels)
+
+    @field_validator("p_exdb")
+    @classmethod
+    def _exdb_keys(cls, value: dict[str, float]) -> dict[str, float]:
+        return _exact_keys(value, EXPLOIT_TYPES, "вероятность по типу эксплойта")
+
+    @field_validator("p_msf")
+    @classmethod
+    def _msf_keys(cls, value: dict[str, float]) -> dict[str, float]:
+        return _exact_keys(value, tuple(MSF_RANKS.values()), "вероятность по рангу Metasploit")
 
 
 DEFAULT_WEIGHTS = Weights()
 
 #: Порог, выше которого пара считается требующей действия.
 DEFAULT_THRESHOLD = 70
-
-#: Что подставляется, когда EPSS для CVE нет: середина шкалы, а не ноль —
-#: ноль означал бы «точно не эксплуатируют», чего никто не утверждал.
-EPSS_FALLBACK = 0.5

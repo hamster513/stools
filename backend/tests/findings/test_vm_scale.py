@@ -33,10 +33,10 @@ def synthetic(db: Any, *, hosts: int, cves: int, states: int, absent: int, login
     """`hosts × cves` пар, `states` строк состояния на присутствующих парах (статусы по кругу
     `STATUSES`, у `in_work` — исполнитель `login`) и `absent` строк на парах, которых нет."""
     cve_ids = [f"CVE-2024-{10000 + j}" for j in range(cves)]
-    bulk_insert(db, cast(Table, VmHost.__table__), ("id", "hostname", "ip", "os_name", "groups", "criticality", "zone", "impact"),
-                [(i + 1, *_host(i), "Windows 11", "", "High", f"Z{i % 4}", 1.0) for i in range(hosts)])
-    bulk_insert(db, cast(Table, VmCve.__table__), ("cve_id", "cvss_source", "exploits_count", "msf_modules", "cve_factor"),
-                [(c, "none", 0, 0, 0.0) for c in cve_ids])
+    bulk_insert(db, cast(Table, VmHost.__table__), ("id", "hostname", "ip", "os_name", "groups", "criticality", "zone", "value", "internet"),
+                [(i + 1, *_host(i), "Windows 11", "", "High", f"Z{i % 4}", 1.0, False) for i in range(hosts)])
+    bulk_insert(db, cast(Table, VmCve.__table__), ("cve_id", "cvss_source", "exploits_count", "msf_modules", "likelihood", "kev", "kev_ransomware", "av_class"),
+                [(c, "none", 0, 0, 0.0, False, False, "none") for c in cve_ids])
     bulk_insert(db, cast(Table, VmHostCve.__table__), ("host_id", "cve_id", "risk_raw", "risk"),
                 ((i + 1, c, 0.0, (i * 7 + j * 13) % 101) for i in range(hosts) for j, c in enumerate(cve_ids)))
     db.add(VmImport(source="file", filename="synthetic.csv", hosts=hosts, pairs=hosts * cves, cves=cves))

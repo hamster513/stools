@@ -67,6 +67,10 @@ def _reject_if_running(db: Session) -> None:
         )
     if active_job(db, ["bulk_status"]) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="идёт массовая смена статусов")
+    # Архив справочников в конце пересчитывает риск всех пар — замена пар посреди него смешала бы данные.
+    bundle = active_job(db, ["ref_bundle"])
+    if bundle is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт загрузка архива справочников (задача #{bundle.id})")
 
 
 @router.post("/vm", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)

@@ -34,7 +34,7 @@ from api.modules.vm.services.jobs import JobHandle
 from api.modules.vm.services.scoring import (
     drop_orphan_cves,
     rebuild_cves,
-    rebuild_hosts_impact,
+    rebuild_hosts_value,
     rescore_pairs,
 )
 from api.modules.vm.services.settings import VmSettings
@@ -136,7 +136,7 @@ def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tupl
     db.execute(delete(HOST_T))
     db.execute(
         insert(HOST_T).from_select(
-            ["hostname", "ip", "os_name", "groups", "criticality", "zone", "impact"],
+            ["hostname", "ip", "os_name", "groups", "criticality", "zone"],
             select(
                 STAGE_HOST.c.hostname,
                 STAGE_HOST.c.ip,
@@ -144,7 +144,6 @@ def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tupl
                 STAGE_HOST.c.groups,
                 STAGE_HOST.c.criticality,
                 STAGE_HOST.c.zone,
-                func.coalesce(0.0, 0.0),
             ),
         )
     )
@@ -223,9 +222,9 @@ def run_import(
         stats, new_cves = _replace_current(db, hosts)
         handle.stage("enriching", total=len(new_cves) or 1, message=f"новых CVE {len(new_cves)}")
         rebuild_cves(db, settings.weights, new_cves, handle if new_cves else None)
-        rebuild_hosts_impact(db, settings.weights)
+        rebuild_hosts_value(db, settings.weights)
         handle.stage("scoring", message="риск пар")
-        rescore_pairs(db)
+        rescore_pairs(db, settings.weights)
         done = VmImport(
             finished_at=dt.datetime.now(dt.UTC),
             source=source,

@@ -28,8 +28,17 @@ function Table({ title, rows, labels, onChange }: { title: string; rows: Record<
   )
 }
 
-const YESNO = { yes: 'есть', no: 'нет' }
-const INET = { yes: 'доступен', no: 'недоступен' }
+const REACH = { network_internet: 'сеть, хост из интернета', network_internal: 'сеть, хост внутри', adjacent: 'соседняя сеть', local: 'локально / физически' }
+
+function Scalar({ label, value, onChange, step = 0.05 }: { label: string; value: number; onChange: (v: number) => void; step?: number }) {
+  const { write } = useCan()
+  return (
+    <label className="flex items-center justify-between gap-3 py-0.5 text-xs">
+      <span className="text-text-secondary">{label}</span>
+      <input className={NUM} type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} disabled={!write} />
+    </label>
+  )
+}
 
 /** Веса формулы. Сохранение ставит задачу пересчёта: он идёт секунды, а не часы. */
 export function WeightsSection({ settings }: { settings: SettingsView }) {
@@ -41,11 +50,12 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
   const [dirty, setDirty] = useState(false)
   useEffect(() => { setW(settings.weights); setThreshold(settings.threshold); setDirty(false) }, [settings.weights, settings.threshold])
 
-  function set(path: (draft: Weights) => Record<string, number>, k: string, v: number) {
+  // Черновик меняется копией: вложенные словари общие с данными запроса, мутировать их нельзя.
+  function edit(change: (draft: Weights) => void) {
     setDirty(true)
     setW((prev) => {
       const next: Weights = JSON.parse(JSON.stringify(prev))
-      path(next)[k] = v
+      change(next)
       return next
     })
   }
@@ -61,38 +71,49 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
     )
   }
 
+  const { medium, high, critical } = w.levels
+  // Та же проверка, что на сервере (422): не отправлять заведомо неверные пороги.
+  const levelsOk = [medium, high, critical].every(Number.isInteger) && 0 < medium && medium < high && high < critical && critical <= 100
+
   return (
     <Section
       title="Формула риска"
-      about={<>Risk = EPSS × (CVSS ÷ 10) × Impact × CVE_param × ExDB_param × MSF_param; балл = min(1, Risk) × 100. Impact — сумма трёх слагаемых, CVE_param — произведение множителей CVSS v3 (или v2, если v3 нет), ExDB и MSF — по самому весомому эксплойту и модулю. Нет данных — множитель 1, нет EPSS — 0.5. Значения по умолчанию — из документированной формулы первой итерации.</>}
+      about={<>Risk = round(100 × L × S × V). L — вероятность эксплуатации: 1, если CVE в каталоге CISA KEV, иначе 1 − (1 − EPSS) × (1 − p_exdb[тип лучшего эксплойта]) × (1 − p_msf[лучший ранг модуля]); нет EPSS — «EPSS по умолчанию» с пометкой «не измерено», нет эксплойта или модуля — 0. S — тяжесть: CVSS ÷ 10 (v3, иначе v2; нет CVSS — «CVSS по умолчанию») × достижимость по вектору атаки CVE и доступу хоста из интернета (нет метрик — «достижимость без метрик»). V — ценность хоста: критичность + бонус за конф. данные + бонус за интернет, не больше 1; зона не размечена — обе галочки «нет». Уровень вычисляется из балла по порогам при чтении: пороги меняются без пересчёта.</>}
     >
       <div className="mb-4 flex items-center gap-3">
         <label htmlFor="risk-threshold" className="text-xs text-text">Порог риска</label>
         <input id="risk-threshold" className={NUM} type="number" min={0} max={100} value={threshold} onChange={(e) => { setDirty(true); setThreshold(Number(e.target.value)) }} aria-label="Порог риска" disabled={!write} />
         <span className="text-[11px] text-text-secondary">выше порога — «требует действия» на обзоре и в карточке</span>
       </div>
+      <div className="mb-4">
+        <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Уровни</div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+          {/* Нижние границы по баллу; ниже «среднего» — низкий. */}
+          средний ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={medium} onChange={(e) => edit((d) => { d.levels.medium = Number(e.target.value) })} aria-label="Уровни: средний от" disabled={!write} />
+          высокий ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={high} onChange={(e) => edit((d) => { d.levels.high = Number(e.target.value) })} aria-label="Уровни: высокий от" disabled={!write} />
+          критический ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={critical} onChange={(e) => edit((d) => { d.levels.critical = Number(e.target.value) })} aria-label="Уровни: критический от" disabled={!write} />
+          {!levelsOk && <span className="text-kind-1">нужны целые: 0 &lt; средний &lt; высокий &lt; критический ≤ 100</span>}
+        </div>
+      </div>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <Table title="Impact: критичность" rows={w.impact.criticality} onChange={(k, v) => set((d) => d.impact.criticality, k, v)} />
-        <div className="flex flex-col gap-4">
-          <Table title="Impact: конф. данные" rows={w.impact.confidential} labels={YESNO} onChange={(k, v) => set((d) => d.impact.confidential, k, v)} />
-          <Table title="Impact: интернет" rows={w.impact.internet} labels={INET} onChange={(k, v) => set((d) => d.impact.internet, k, v)} />
+        <div className="flex flex-col gap-0.5">
+          <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Подстановки и бонусы</div>
+          <Scalar label="EPSS по умолчанию" value={w.prior_epss} onChange={(v) => edit((d) => { d.prior_epss = v })} />
+          <Scalar label="CVSS по умолчанию" value={w.cvss_missing} onChange={(v) => edit((d) => { d.cvss_missing = v })} />
+          <Scalar label="достижимость без метрик" value={w.reach_unknown} onChange={(v) => edit((d) => { d.reach_unknown = v })} />
+          <Scalar label="бонус за конф. данные" value={w.value.conf_bonus} onChange={(v) => edit((d) => { d.value.conf_bonus = v })} />
+          <Scalar label="бонус за интернет" value={w.value.inet_bonus} onChange={(v) => edit((d) => { d.value.inet_bonus = v })} />
         </div>
+        <Table title="Эксплойт: вероятность по типу" rows={w.p_exdb} onChange={(k, v) => edit((d) => { d.p_exdb[k] = v })} />
+        <Table title="Metasploit: вероятность по рангу" rows={w.p_msf} onChange={(k, v) => edit((d) => { d.p_msf[k] = v })} />
         <div className="flex flex-col gap-4">
-          <Table title="CVSS v3: Attack Vector" rows={w.cvss_v3.av} onChange={(k, v) => set((d) => d.cvss_v3.av, k, v)} />
-          <Table title="CVSS v3: Privileges" rows={w.cvss_v3.pr} onChange={(k, v) => set((d) => d.cvss_v3.pr, k, v)} />
-          <Table title="CVSS v3: User Interaction" rows={w.cvss_v3.ui} onChange={(k, v) => set((d) => d.cvss_v3.ui, k, v)} />
+          <Table title="Достижимость" rows={w.reach} labels={REACH} onChange={(k, v) => edit((d) => { d.reach[k as keyof Weights['reach']] = v })} />
+          <Table title="Ценность: критичность" rows={w.value.criticality} labels={{ None: 'не задана' }} onChange={(k, v) => edit((d) => { d.value.criticality[k] = v })} />
         </div>
-        <div className="flex flex-col gap-4">
-          <Table title="CVSS v2: Access Vector" rows={w.cvss_v2.av} onChange={(k, v) => set((d) => d.cvss_v2.av, k, v)} />
-          <Table title="CVSS v2: Complexity" rows={w.cvss_v2.ac} onChange={(k, v) => set((d) => d.cvss_v2.ac, k, v)} />
-          <Table title="CVSS v2: Authentication" rows={w.cvss_v2.au} onChange={(k, v) => set((d) => d.cvss_v2.au, k, v)} />
-        </div>
-        <Table title="ExploitDB: тип" rows={w.exploitdb} onChange={(k, v) => set((d) => d.exploitdb, k, v)} />
-        <Table title="Metasploit: ранг" rows={w.msf} onChange={(k, v) => set((d) => d.msf, k, v)} />
       </div>
       {write && (
         <div className="mt-4 flex items-center gap-2 border-t border-grid pt-3">
-          <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}><Save size={13} aria-hidden /> Сохранить и пересчитать</Button>
+          <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty || !levelsOk}><Save size={13} aria-hidden /> Сохранить и пересчитать</Button>
           <Button onClick={reset}><RotateCcw size={13} aria-hidden /> По умолчанию</Button>
           {save.error && <span className="text-xs text-kind-1">{save.error instanceof ApiRequestError ? save.error.message : 'Не удалось сохранить'}</span>}
           {recalc.data && !dirty && <span className="text-xs text-text-secondary">пересчёт запущен, задача #{recalc.data.job_id}</span>}

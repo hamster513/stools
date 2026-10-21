@@ -36,6 +36,7 @@ from sqlalchemy import func, insert, select, text
 from sqlalchemy.orm import Session
 
 from api.db.models import AppUser
+from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmFindingStateRef, VmHost, VmHostCve, VmImport
 from api.modules.vm.services.jobs import (
     DATA_KINDS,
@@ -55,6 +56,7 @@ from api.modules.vm.services.query import (
     pair_key,
     status_filter,
 )
+from api.modules.vm.services.settings import load_settings
 from api.platform.filters import multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.adapters import (
@@ -144,8 +146,10 @@ class VmFindingAdapter:
             .join(VmHost, VmHost.id == VmHostCve.host_id)
             .execution_options(yield_per=_STREAM)
         )
+        levels = load_settings(db).weights.levels
         for hostname, ip, cve_id, risk in rows:
-            yield CurrentFinding(key=pair_key(hostname, ip, cve_id), title=title_of(hostname, cve_id), severity=level_of(int(risk)))
+            yield CurrentFinding(key=pair_key(hostname, ip, cve_id), title=title_of(hostname, cve_id),
+                                 severity=level_of(int(risk), levels))
 
     def _lookup(self, db: Session, keys: Sequence[str]) -> list[Any]:
         parts = [p for p in map(split_key, keys) if p is not None]
@@ -167,9 +171,10 @@ class VmFindingAdapter:
 
     def describe(self, db: Session, scope_id: int, keys: Sequence[str]) -> dict[str, CurrentFinding]:
         found = {}
+        levels = load_settings(db).weights.levels
         for r in self._lookup(db, keys):
             key = pair_key(r.hostname, r.ip, r.cve_id)
-            found[key] = CurrentFinding(key=key, title=title_of(r.hostname, r.cve_id), severity=level_of(int(r.risk)))
+            found[key] = CurrentFinding(key=key, title=title_of(r.hostname, r.cve_id), severity=level_of(int(r.risk), levels))
         return found
 
     def on_states_created(self, db: Session, states: Sequence[FindingState]) -> None:
@@ -233,6 +238,7 @@ class BulkFilter(BaseModel):
     level: Multi = None
     exploits: bool | None = None
     msf: bool | None = None
+    kev: bool | None = None
     cvss_source: Multi = None
     host_id: int | None = None
     status: Multi = None
@@ -241,17 +247,18 @@ class BulkFilter(BaseModel):
     risk_expiring: bool | None = None
 
 
-def parse_filter(raw: dict[str, Any], *, login: str) -> VulnFilters:
-    """Ошибка — ValueError (в том числе ValidationError): платформа отвечает 422 до запуска задачи."""
+def parse_filter(raw: dict[str, Any], *, login: str, levels: Levels) -> VulnFilters:
+    """Ошибка — ValueError (в том числе ValidationError): платформа отвечает 422 до запуска задачи.
+    `levels` — пороги уровней из настроек: фильтр `level` выбирает те же пары, что список."""
     b = BulkFilter.model_validate(raw)
     sf = status_filter(b.status, b.assignee, b.overdue, b.risk_expiring, login=login)
     return VulnFilters(b.q, b.host, b.cve, multi(b.criticality), multi(b.zone), multi(b.os), multi(b.level),
-                       b.exploits, b.msf, multi(b.cvss_source), b.host_id, sf)
+                       b.exploits, b.msf, b.kev, multi(b.cvss_source), b.host_id, sf, levels)
 
 
 def keys_by_filter(db: Session, scope_id: int, raw: dict[str, Any]) -> Iterator[str]:
     """`register_bulk_filter`: фильтр разбирается сразу, ключи — по мере чтения."""
-    return iter_keys(db, parse_filter(raw, login=""), BULK_CHUNK)
+    return iter_keys(db, parse_filter(raw, login="", levels=load_settings(db).weights.levels), BULK_CHUNK)
 
 
 def start_bulk_job(db: Session, req: BulkJobRequest) -> tuple[int, Callable[[], None]]:
@@ -259,7 +266,7 @@ def start_bulk_job(db: Session, req: BulkJobRequest) -> tuple[int, Callable[[], 
     импорта или пересчёта (`BulkConflict`): пары выбираются кусками, и замена данных посреди
     смены смешала бы два импорта. Импорт, записанный всё же посреди задачи (сменился последний
     `VmImport`), останавливает её; сделанное до остановки остаётся."""
-    f = parse_filter(req.filter, login=req.actor)
+    f = parse_filter(req.filter, login=req.actor, levels=load_settings(db).weights.levels)
     lock_job_start(db)
     if active_job(db, DATA_KINDS) is not None:
         raise BulkConflict("идёт импорт VM — повторите после него")

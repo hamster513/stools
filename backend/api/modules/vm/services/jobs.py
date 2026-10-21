@@ -16,7 +16,8 @@ from api.modules.vm.models import VmJob
 __all__ = ["DATA_KINDS", "JobCancelled", "JobHandle", "active_job", "fail_job", "lock_job_start", "run_job", "start_job"]
 
 #: Задачи, которые заменяют или пересчитывают пары: массовая смена статусов с ними одновременно не идёт.
-DATA_KINDS = ("import_vm", "import_file", "recalculate")
+#: Архив справочников — тоже: в конце он пересчитывает риск всех пар.
+DATA_KINDS = ("import_vm", "import_file", "recalculate", "ref_bundle")
 
 
 def lock_job_start(db: Session) -> None:

@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { AlertTriangle, ArrowRight, Database, ServerCog, ShieldAlert } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useOverview } from '@/modules/vm/api/queries'
-import { LEVEL_LABELS, LEVELS, type Overview, type RiskLevel } from '@/modules/vm/api/types'
+import { useOverview, useVmSettings } from '@/modules/vm/api/queries'
+import { LEVEL_LABELS, LEVELS, type Levels, type Overview, type RiskLevel } from '@/modules/vm/api/types'
 import { LEVEL_TEXT } from '@/modules/vm/components/RiskBadge'
 import { OPEN_STATUSES } from '@/platform/findings/types'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -11,7 +11,7 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
-const REF_TITLES: Record<string, string> = { epss: 'EPSS', nvd: 'NVD', exploitdb: 'ExploitDB', msf: 'Metasploit' }
+const REF_TITLES: Record<string, string> = { epss: 'EPSS', nvd: 'NVD', exploitdb: 'ExploitDB', msf: 'Metasploit', kev: 'CISA KEV' }
 const BAR: Record<RiskLevel, string> = {
   low: 'var(--color-risk-low)',
   medium: 'var(--color-risk-medium)',
@@ -56,6 +56,11 @@ function distributionLabel(o: Overview): string {
   return LEVELS.map((l) => `${LEVEL_LABELS[l]}: ${o.distribution[l]}`).join(', ')
 }
 
+/** Границы шкалы — из настроек: пороги уровней редактируются, констант в интерфейсе нет. */
+function scaleLabel(l: Levels): string {
+  return `0–${l.medium - 1} низкий · ${l.medium}–${l.high - 1} средний · ${l.high}–${l.critical - 1} высокий · ${l.critical}–100 критический`
+}
+
 function ago(iso: string | null): string {
   if (!iso) return 'не загружен'
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
@@ -66,6 +71,8 @@ function ago(iso: string | null): string {
 
 export function OverviewPage() {
   const overview = useOverview()
+  // Пороги уровней и подстановка EPSS — только для подписей: обзор показывается и без них.
+  const weights = useVmSettings().data?.weights
 
   if (overview.isLoading) return <FullPageSpinner />
   if (overview.isError || !overview.data) {
@@ -80,7 +87,7 @@ export function OverviewPage() {
         <EmptyState
           icon={ServerCog}
           title="Уязвимостей ещё нет"
-          description="Импортируйте хосты и CVE из MaxPatrol VM по API или из файла экспорта — в настройках модуля. Справочники EPSS, NVD, ExploitDB и Metasploit можно загрузить до или после импорта."
+          description="Импортируйте хосты и CVE из MaxPatrol VM по API или из файла экспорта — в настройках модуля. Справочники EPSS, NVD, ExploitDB, Metasploit и CISA KEV можно загрузить до или после импорта."
           action={
             <Link to="/vm/settings" className="inline-flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
               Настроить импорт <ArrowRight size={13} aria-hidden />
@@ -114,7 +121,7 @@ export function OverviewPage() {
         <Stat label="Хостов с уязвимостями" value={o.hosts} to="/vm/vulns?sort=host_asc" />
         <Stat label={o.pairs === o.pairs_all ? 'Пар хост–CVE' : `Пар хост–CVE (всего ${o.pairs_all.toLocaleString('ru-RU')})`} value={o.pairs} to="/vm/vulns" />
         <Stat label="Уникальных CVE" value={o.cves} to="/vm/vulns?sort=cve_asc" />
-        <Stat label={`Выше порога ${o.threshold}`} value={o.above_threshold} to="/vm/vulns?level=critical" tone="text-risk-critical" />
+        <Stat label={`Выше порога ${o.threshold}`} value={o.above_threshold} to="/vm/vulns?sort=risk_desc" tone="text-risk-critical" />
       </div>
 
       {/* Статусы пар (общий механизм находок): пары, распределение и «выше порога» выше
@@ -128,7 +135,7 @@ export function OverviewPage() {
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <Card className="lg:col-span-2">
-          <CardHeader title="Распределение по шкале риска" subtitle="0–19 низкий · 20–39 средний · 40–69 высокий · 70–100 критический" />
+          <CardHeader title="Распределение по шкале риска" subtitle={weights ? scaleLabel(weights.levels) : 'по порогам уровней из настроек'} />
           {/* Одна полоса на все пары: доли уровней видны сразу, а не по четырём
               полоскам с разным масштабом. Пустой уровень в полосе не рисуется,
               в легенде остаётся с нулём. */}
@@ -157,6 +164,12 @@ export function OverviewPage() {
                 </span>
               </Link>
             ))}
+          </div>
+          <div className="mt-3 text-xs">
+            <Link to="/vm/vulns?kev=true" className="text-text hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+              в каталоге KEV: <span className={cn('font-mono tabular-nums', o.kev_pairs ? 'text-risk-critical' : 'text-text-secondary')}>{o.kev_pairs.toLocaleString('ru-RU')}</span> пар
+            </Link>
+            <span className="ml-1.5 text-[11px] text-text-secondary">— CVE эксплуатируются в реальных атаках (CISA)</span>
           </div>
         </Card>
 
@@ -222,7 +235,7 @@ export function OverviewPage() {
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-text-secondary"><AlertTriangle size={12} aria-hidden /> Пропуски</div>
               <ul className="flex flex-col gap-1 text-xs">
                 <li className="flex justify-between"><Link to="/vm/vulns?cvss_source=none" className="text-text hover:text-primary">CVE без записи в NVD</Link><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_nvd.toLocaleString('ru-RU')}</span></li>
-                <li className="flex justify-between"><span className="text-text">CVE без EPSS (взято 0.5)</span><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_epss.toLocaleString('ru-RU')}</span></li>
+                <li className="flex justify-between"><span className="text-text">CVE без EPSS ({weights ? `взято ${weights.prior_epss.toLocaleString('ru-RU')}` : 'подставлено'})</span><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_epss.toLocaleString('ru-RU')}</span></li>
                 <li className="flex justify-between"><Link to="/vm/settings#zones" className="text-text hover:text-primary">Зоны без разметки</Link><span className={cn('font-mono tabular-nums', o.data.unmarked_zones ? 'text-risk-medium' : 'text-text-secondary')}>{o.data.unmarked_zones}</span></li>
               </ul>
             </div>

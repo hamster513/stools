@@ -6,7 +6,7 @@ import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleVa
 import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 import { cn } from '@/lib/cn'
 
-export type VulnFilters = Pick<VulnsQuery, 'level' | 'criticality' | 'zone' | 'os' | 'exploits' | 'msf' | 'cvss_source'> & FindingFacetFilters
+export type VulnFilters = Pick<VulnsQuery, 'level' | 'criticality' | 'zone' | 'os' | 'exploits' | 'msf' | 'kev' | 'cvss_source'> & FindingFacetFilters
 
 const CRITICALITIES = ['Critical', 'High', 'Medium', 'Low', 'None', '']
 
@@ -122,6 +122,9 @@ export function FacetPanel({ facets, remembered, filters, onToggle, total, myLog
       </Section>
 
       <Section title="Эксплуатируемость">
+        <Row active={filters.kev === true} count={facets?.kev.yes} onClick={() => onToggle('kev', filters.kev === true ? undefined : true)}>
+          в каталоге CISA KEV
+        </Row>
         <Row active={filters.exploits === true} count={facets?.exploits.yes} onClick={() => onToggle('exploits', filters.exploits === true ? undefined : true)}>
           есть эксплойт в ExploitDB
         </Row>

@@ -35,6 +35,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement, Subquery
 
+from api.modules.vm.core.risk import level as risk_level
+from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmFindingStateRef, VmHost, VmHostCve
 from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
@@ -52,7 +54,20 @@ def pair_key(hostname: str, ip: str, cve_id: str) -> str:
     return f"{hostname}|{ip}|{cve_id}"
 
 LEVELS = ("low", "medium", "high", "critical")
-LEVEL_BOUNDS = {"low": (0, 19), "medium": (20, 39), "high": (40, 69), "critical": (70, 100)}
+
+
+def level_bounds(levels: Levels) -> dict[str, tuple[int, int]]:
+    """Уровни как отрезки балла по порогам настроек: уровень не хранится, а выводится из балла."""
+    return {
+        "low": (0, levels.medium - 1),
+        "medium": (levels.medium, levels.high - 1),
+        "high": (levels.high, levels.critical - 1),
+        "critical": (levels.critical, 100),
+    }
+
+
+def level_of(risk: int, levels: Levels) -> str:
+    return risk_level(risk, levels)
 
 #: Последние ключи — пара целиком: при равных значениях сортировки порядок один и тот же
 #: в каждом запросе, и страницы по offset не повторяют и не теряют пар.
@@ -160,23 +175,17 @@ class VulnFilters:
     level: frozenset[str] | None = None
     exploits: bool | None = None
     msf: bool | None = None
+    kev: bool | None = None
     cvss_source: frozenset[str] | None = None
     host_id: int | None = None
     #: По умолчанию — все статусы: обзор и карточка хоста считают все пары.
     status: StatusFilter = field(default_factory=StatusFilter)
+    #: Пороги уровней из настроек — для фильтра `level` и фасета уровней; не фильтр.
+    levels: Levels = field(default_factory=Levels)
 
     def data_empty(self) -> bool:
-        """Нет фильтров по данным пары (статус не в счёт)."""
-        return all(getattr(self, f.name) is None for f in fields(self) if f.name != "status")
-
-
-def level_expr() -> ColumnElement[str]:
-    return case(
-        (VmHostCve.risk >= 70, "critical"),
-        (VmHostCve.risk >= 40, "high"),
-        (VmHostCve.risk >= 20, "medium"),
-        else_="low",
-    )
+        """Нет фильтров по данным пары (статус и пороги не в счёт)."""
+        return all(getattr(self, f.name) is None for f in fields(self) if f.name not in ("status", "levels"))
 
 
 def _overdue(today: dt.date) -> ColumnElement[bool]:
@@ -237,13 +246,16 @@ def conditions(f: VulnFilters, *, with_status: bool = True) -> list[ColumnElemen
     if f.os is not None:
         conds.append(one_of(VmHost.os_name, f.os))
     # Неизвестные уровни пропускаются, как и раньше одиночный: фильтр из одних таких не задан.
-    bounds = [VmHostCve.risk.between(*LEVEL_BOUNDS[lvl]) for lvl in sorted(f.level or ()) if lvl in LEVEL_BOUNDS]
+    known = level_bounds(f.levels)
+    bounds = [VmHostCve.risk.between(*known[lvl]) for lvl in sorted(f.level or ()) if lvl in known]
     if bounds:
         conds.append(or_(*bounds))
     if f.exploits is not None:
         conds.append(VmCve.exploits_count > 0 if f.exploits else VmCve.exploits_count == 0)
     if f.msf is not None:
         conds.append(VmCve.msf_modules > 0 if f.msf else VmCve.msf_modules == 0)
+    if f.kev is not None:
+        conds.append(VmCve.kev.is_(f.kev))
     if f.cvss_source is not None:
         conds.append(one_of(VmCve.cvss_source, f.cvss_source))
     if f.host_id is not None:
@@ -281,6 +293,8 @@ ROW_COLUMNS = [
     VmCve.exploits_count,
     VmCve.msf_rank,
     VmCve.msf_modules,
+    VmCve.kev,
+    VmCve.kev_ransomware,
 ]
 
 
@@ -293,11 +307,7 @@ STATE_COLUMNS = [
 ]
 
 
-def level_of(risk: int) -> str:
-    return next(k for k, (lo, hi) in LEVEL_BOUNDS.items() if lo <= risk <= hi)
-
-
-def row_to_item(row: Any) -> dict[str, Any]:
+def row_to_item(row: Any, levels: Levels) -> dict[str, Any]:
     risk = int(row.risk)
     return {
         "key": pair_key(row.hostname, row.ip, row.cve_id),
@@ -310,7 +320,7 @@ def row_to_item(row: Any) -> dict[str, Any]:
         "cve_id": row.cve_id,
         "risk": risk,
         "risk_raw": float(row.risk_raw),
-        "level": level_of(risk),
+        "level": level_of(risk, levels),
         "cvss": row.cvss,
         "cvss_source": row.cvss_source,
         "epss": row.epss,
@@ -318,15 +328,17 @@ def row_to_item(row: Any) -> dict[str, Any]:
         "exploits_count": row.exploits_count,
         "msf_rank": row.msf_rank,
         "msf_modules": row.msf_modules,
+        "kev": bool(row.kev),
+        "kev_ransomware": bool(row.kev_ransomware),
     }
 
 
-def item_with_state(row: Any, today: dt.date) -> dict[str, Any]:
+def item_with_state(row: Any, today: dt.date, levels: Levels) -> dict[str, Any]:
     """Строка списка и экспорта: пара и поля её статуса (спека §5). Возраста у пар VM нет —
     модуль не хранит истории импортов по парам; `first_seen_at` — из строки состояния, если есть."""
     status = row.st_status or "new"
     return {
-        **row_to_item(row),
+        **row_to_item(row, levels),
         "status": status,
         "status_title": STATUS_TITLES[status],
         "assignee": row.st_assignee,
@@ -343,7 +355,7 @@ def page_items(db: Session, f: VulnFilters, sort: str, limit: int, offset: int) 
         base_select(ROW_COLUMNS + STATE_COLUMNS, state=True).where(*conditions(f)).order_by(*order).limit(limit).offset(offset)
     ).all()
     today = f.status.day()
-    return [item_with_state(r, today) for r in rows]
+    return [item_with_state(r, today, f.levels) for r in rows]
 
 
 def count(db: Session, f: VulnFilters) -> int:
@@ -357,13 +369,17 @@ def _counts(db: Session, expr: Any, conds: list[ColumnElement[bool]], state: boo
     return {str(k if k is not None else ""): int(n) for k, n in db.execute(stmt).all()}
 
 
+#: Вместо фасета уровней — гистограмма балла (не больше 101 значения): уровень выводится
+#: из неё по порогам настроек (`with_levels`), поэтому кэш пересчёта не устаревает,
+#: когда пороги двигают.
 FACET_EXPRS: dict[str, Any] = {
-    "level": level_expr(),
+    "risk": VmHostCve.risk,
     "criticality": VmHost.criticality,
     "zone": VmHost.zone,
     "os": VmHost.os_name,
     "exploits": case((VmCve.exploits_count > 0, "yes"), else_="no"),
     "msf": case((VmCve.msf_modules > 0, "yes"), else_="no"),
+    "kev": case((VmCve.kev.is_(True), "yes"), else_="no"),
     "cvss_source": VmCve.cvss_source,
 }
 
@@ -392,25 +408,39 @@ def _facets_one_pass(db: Session, conds: list[ColumnElement[bool]], state: bool)
 
 
 def facets_where(db: Session, conds: list[ColumnElement[bool]], *, state: bool) -> dict[str, dict[str, int]]:
+    """Сырые фасеты: с гистограммой `risk`, без `level` (его добавляет `with_levels`)."""
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         raw = _facets_one_pass(db, conds, state)
         top_os = dict(sorted(raw["os"].items(), key=lambda kv: kv[1], reverse=True)[:20])
-        levels = raw["level"]
-        return {**raw, "level": {lvl: levels.get(lvl, 0) for lvl in LEVELS}, "os": top_os}
-    levels = _counts(db, FACET_EXPRS["level"], conds, state)
+        return {**raw, "os": top_os}
     return {
-        "level": {lvl: levels.get(lvl, 0) for lvl in LEVELS},
+        "risk": _counts(db, FACET_EXPRS["risk"], conds, state),
         "criticality": _counts(db, FACET_EXPRS["criticality"], conds, state),
         "zone": _counts(db, FACET_EXPRS["zone"], conds, state),
         "os": _counts(db, FACET_EXPRS["os"], conds, state, limit=20),
         "exploits": _counts(db, FACET_EXPRS["exploits"], conds, state),
         "msf": _counts(db, FACET_EXPRS["msf"], conds, state),
+        "kev": _counts(db, FACET_EXPRS["kev"], conds, state),
         "cvss_source": _counts(db, FACET_EXPRS["cvss_source"], conds, state),
     }
 
 
-def facets(db: Session, f: VulnFilters) -> dict[str, dict[str, int]]:
+def with_levels(raw: dict[str, dict[str, int]], levels: Levels) -> dict[str, dict[str, int]]:
+    """Фасеты для ответа: гистограмма балла сворачивается в уровни по порогам настроек."""
+    out = {name: dict(counts) for name, counts in raw.items() if name != "risk"}
+    by_level = dict.fromkeys(LEVELS, 0)
+    for risk, n in raw.get("risk", {}).items():
+        by_level[level_of(int(risk), levels)] += n
+    out["level"] = by_level
+    return out
+
+
+def raw_facets(db: Session, f: VulnFilters) -> dict[str, dict[str, int]]:
     return facets_where(db, conditions(f), state=not f.status.is_noop())
+
+
+def facets(db: Session, f: VulnFilters) -> dict[str, dict[str, int]]:
+    return with_levels(raw_facets(db, f), f.levels)
 
 
 def _minus(whole: dict[str, dict[str, int]], part: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
@@ -418,7 +448,7 @@ def _minus(whole: dict[str, dict[str, int]], part: dict[str, dict[str, int]]) ->
     for name, counts in whole.items():
         sub = part.get(name, {})
         left = {k: n - sub.get(k, 0) for k, n in counts.items()}
-        out[name] = left if name == "level" else {k: n for k, n in left.items() if n > 0}
+        out[name] = {k: n for k, n in left.items() if n > 0}
     return out
 
 
@@ -426,13 +456,14 @@ def data_facets(db: Session, f: VulnFilters, cached: dict[str, Any] | None) -> d
     """Фасеты по данным пар. Без фильтров по данным и при статусном фильтре, который пропускает
     пары без решений (по умолчанию — открытые), — из кэша пересчёта (`vm.stats`, все пары) за
     вычетом пар с решением, не прошедших фильтр: их единицы, и проход по всем парам не нужен."""
-    if not (cached and "criticality" in cached and f.data_empty() and f.status.keeps_undecided()):
+    # Кэш старого вида (с `level`, без гистограммы `risk`) не годится: до пересчёта — по базе.
+    if not (cached and "criticality" in cached and "risk" in cached and f.data_empty() and f.status.keeps_undecided()):
         return facets(db, f)
     sc = status_conditions(f.status)
     if not sc:
-        return {name: dict(counts) for name, counts in cached.items()}
+        return with_levels(cached, f.levels)
     excluded = facets_where(db, [ST.c.state_id.is_not(None), not_(and_(*sc))], state=True)
-    return _minus(cached, excluded)
+    return with_levels(_minus(cached, excluded), f.levels)
 
 
 def _passes(sf: StatusFilter, status: str, assignee: str | None, overdue: bool, expiring: bool, *skip: str) -> bool:

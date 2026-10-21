@@ -16,7 +16,7 @@ const COLUMNS: ColumnDef[] = [
   { key: 'risk', label: 'Риск', width: 208 },
   { key: 'host', label: 'Хост', width: 240, flex: true },
   { key: 'ip', label: 'IP', width: 128 },
-  { key: 'cve', label: 'CVE', width: 144 },
+  { key: 'cve', label: 'CVE', width: 176 },
   { key: 'cvss', label: 'CVSS', width: 96 },
   { key: 'epss', label: 'EPSS', width: 80 },
   { key: 'exploit', label: 'Эксплойт', width: 96 },
@@ -139,7 +139,11 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
               <div className="min-w-0 overflow-hidden px-2"><RiskBadge score={item.risk} level={item.level} /></div>
               <div className="min-w-0 truncate px-2 font-mono text-text" title={item.hostname}>{item.hostname}</div>
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary">{item.ip}</div>
-              <div className="min-w-0 truncate px-2 font-mono text-text">{item.cve_id}</div>
+              <div className="flex min-w-0 items-center gap-1.5 px-2">
+                <span className="min-w-0 truncate font-mono text-text">{item.cve_id}</span>
+                {/* Колонки KEV нет (спека §5): признак — бейдж у CVE, вымогатели — в подсказке; при узкой колонке обрезается номер, а не бейдж. */}
+                {item.kev && <span className="shrink-0 text-[10px] font-semibold text-risk-critical" title={item.kev_ransomware ? 'CISA KEV · ransomware' : 'CISA KEV'}>KEV</span>}
+              </div>
               <div className="min-w-0 truncate px-2 font-mono tabular-nums text-text-secondary">
                 {item.cvss ?? '—'}
                 {item.cvss !== null && <span className="ml-1 text-[10px]">{CVSS_SOURCE_LABELS[item.cvss_source]}</span>}

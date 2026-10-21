@@ -146,6 +146,22 @@ export function useUploadRef() {
   })
 }
 
+/** Архив справочников от скрипта download-references: одна задача на все ленты. */
+export function useUploadBundle() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, File>({
+    mutationFn: (file) => {
+      const form = new FormData()
+      form.append('file', file)
+      return api.postForm('/api/vm/refs/bundle/upload', form)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['vm-refs'] })
+      qc.invalidateQueries({ queryKey: ['vm-jobs'] })
+    },
+  })
+}
+
 export function useRecalculate() {
   const qc = useQueryClient()
   return useMutation<{ job_id: number }, ApiRequestError, void>({

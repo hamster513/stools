@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
+import logging
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
@@ -19,6 +21,10 @@ from api.hosts import validate_host
 from api.modules.vm.core.weights import DEFAULT_THRESHOLD, Weights
 
 VM_KEY = "vm"
+
+log = logging.getLogger(__name__)
+#: Предупреждение о старой схеме весов — один раз на процесс, а не на каждый запрос.
+_old_weights_warned = False
 
 #: Ниже этого риска пара не считается экспозицией в матрице ATT&CK.
 DEFAULT_ATTACK_MIN_RISK = 40
@@ -103,7 +109,18 @@ def load_settings(db: Session) -> VmSettings:
     row = db.get(AppSetting, VM_KEY)
     if row is None or not row.value_json or row.value_json == "{}":
         return VmSettings()
-    return VmSettings.model_validate_json(row.value_json)
+    data = json.loads(row.value_json)
+    weights = data.get("weights")
+    if isinstance(weights, dict) and "levels" not in weights:
+        # Веса первой итерации (impact, cvss_v3, exploitdb, msf…) в новую формулу не
+        # переводятся: другие члены и шкалы (спека 2026-10-21 §9). Действуют умолчания,
+        # пока веса не сохранят заново; в базе старый JSON не трогается.
+        global _old_weights_warned
+        if not _old_weights_warned:
+            _old_weights_warned = True
+            log.warning("VM: веса формулы риска в старой схеме — действуют умолчания новой формулы")
+        data["weights"] = {}
+    return VmSettings.model_validate(data)
 
 
 def changed_fields(current: VmSettings, incoming: VmSettingsIn) -> list[str]:

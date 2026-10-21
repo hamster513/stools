@@ -10,7 +10,13 @@ def test_defaults_and_secrets_hidden(auth_client: TestClient) -> None:
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["threshold"] == 70
-    assert body["weights"]["exploitdb"]["remote"] == 1.3
+    w = body["weights"]
+    assert (w["prior_epss"], w["cvss_missing"], w["reach_unknown"]) == (0.01, 0.5, 0.8)
+    assert w["p_exdb"]["remote"] == 0.3 and w["p_msf"]["excellent"] == 0.5
+    assert w["reach"] == {"network_internet": 1.0, "network_internal": 0.8, "adjacent": 0.6, "local": 0.4}
+    assert w["value"]["criticality"]["Critical"] == 1.0 and w["value"]["conf_bonus"] == 0.1
+    assert w["levels"] == {"medium": 15, "high": 35, "critical": 60}
+    assert body["defaults"]["weights"] == w
     assert body["connection"]["api_token_set"] is False
     assert "api_token" not in body["connection"]
     assert body["defaults"]["threshold"] == 70
@@ -253,3 +259,57 @@ def test_token_is_stripped_and_must_be_printable_ascii(auth_client: TestClient) 
     for bad in ("пат_токен", "t\t1", "   "):
         r = auth_client.put("/api/vm/settings", json={**FIRST, "connection": {"host": "vm.local", "api_token": bad}})
         assert r.status_code == (200 if bad.strip() == "" else 422), (bad, r.text)
+
+
+def test_levels_must_be_ordered(auth_client: TestClient) -> None:
+    for levels in ({"medium": 35, "high": 35, "critical": 60}, {"medium": 15, "high": 70, "critical": 60}, {"medium": 15, "high": 35, "critical": 101}):
+        r = auth_client.put("/api/vm/settings", json={"weights": {"levels": levels}})
+        assert r.status_code == 422, (levels, r.text)
+    assert auth_client.get("/api/vm/settings").json()["weights"]["levels"]["critical"] == 60
+
+
+def test_weight_dicts_need_known_keys_and_shares(auth_client: TestClient) -> None:
+    """Словари весов: ровно известные ключи и значения 0..1 — пропущенный ключ давал KeyError
+    уже при пересчёте, а не 422 при сохранении."""
+    w = auth_client.get("/api/vm/settings").json()["weights"]
+    no_none = {k: v for k, v in w["value"]["criticality"].items() if k != "None"}
+    bad = [
+        {"value": {**w["value"], "criticality": no_none}},
+        {"value": {**w["value"], "criticality": {**w["value"]["criticality"], "Extra": 0.5}}},
+        {"value": {**w["value"], "criticality": {**w["value"]["criticality"], "High": 1.5}}},
+        {"p_exdb": {k: v for k, v in w["p_exdb"].items() if k != "dos"}},
+        {"p_exdb": {**w["p_exdb"], "remote": -0.1}},
+        {"p_msf": {k: v for k, v in w["p_msf"].items() if k != "manual"}},
+        {"p_msf": {**w["p_msf"], "excellent": 2.0}},
+    ]
+    for weights in bad:
+        r = auth_client.put("/api/vm/settings", json={"weights": weights})
+        assert r.status_code == 422, (weights, r.text)
+    r = auth_client.put("/api/vm/settings", json={"weights": {"p_exdb": {**w["p_exdb"], "dos": 0.0}}})
+    assert r.status_code == 200, r.text
+    assert r.json()["weights"]["p_exdb"]["dos"] == 0.0
+
+
+def test_old_weights_schema_reads_as_defaults(auth_client: TestClient, db_session: Any, caplog: Any, monkeypatch: Any) -> None:
+    """Веса первой итерации (impact, cvss_v3, exploitdb, msf) в новую формулу не переводятся:
+    действуют умолчания, предупреждение — один раз на процесс; остальные настройки читаются."""
+    import json
+    import logging
+
+    from api.db.models import AppSetting
+    from api.modules.vm.services import settings as settings_service
+
+    monkeypatch.setattr(settings_service, "_old_weights_warned", False)
+    old = {
+        "connection": {"host": "vm.local", "api_token": ""},
+        "weights": {"impact": {"criticality": {"Critical": 0.33}}, "cvss_v3": {}, "cvss_v2": {}, "exploitdb": {"remote": 1.3}, "msf": {}},
+        "threshold": 65,
+    }
+    db_session.add(AppSetting(key="vm", value_json=json.dumps(old)))
+    db_session.commit()
+    with caplog.at_level(logging.WARNING, logger="api.modules.vm.services.settings"):
+        first = auth_client.get("/api/vm/settings").json()
+        second = auth_client.get("/api/vm/settings").json()
+    assert first["weights"] == first["defaults"]["weights"] == second["weights"]
+    assert first["threshold"] == 65 and first["connection"]["host"] == "vm.local"
+    assert [r.message for r in caplog.records].count("VM: веса формулы риска в старой схеме — действуют умолчания новой формулы") == 1

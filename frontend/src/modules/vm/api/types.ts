@@ -35,6 +35,7 @@ export interface VulnItem {
   cve_id: string
   risk: number
   risk_raw: number
+  /** По порогам настроек на момент чтения: клиент уровни из балла не выводит. */
   level: RiskLevel
   cvss: number | null
   cvss_source: CvssSource
@@ -43,6 +44,9 @@ export interface VulnItem {
   exploits_count: number
   msf_rank: string | null
   msf_modules: number
+  /** CVE в каталоге CISA KEV — эксплуатируется в реальных атаках. */
+  kev: boolean
+  kev_ransomware: boolean
   status: FindingStatus
   status_title: string
   assignee: string | null
@@ -61,6 +65,7 @@ export interface VulnsFacets {
   os: Record<string, number>
   exploits: Record<string, number>
   msf: Record<string, number>
+  kev: Record<string, number>
   cvss_source: Record<string, number>
   status: Record<FindingStatus, number>
   /** Логин → число; `none` — без исполнителя. */
@@ -95,6 +100,7 @@ export interface VulnsQuery {
   level?: RiskLevel[]
   exploits?: boolean
   msf?: boolean
+  kev?: boolean
   cvss_source?: CvssSource[]
   host_id?: number
   /** Коды (ключ повторяется) или `all`; не задан — открытые. */
@@ -136,6 +142,11 @@ export interface RiskCard {
     epss: number | null
     epss_percentile: number | null
     nvd_url: string
+    kev: boolean
+    /** Даты — `YYYY-MM-DD`; дата, вымогатели и срок CISA для человека, в балл не входят. */
+    kev_added: string | null
+    kev_ransomware: boolean
+    kev_due: string | null
     exploits: { exploit_id: number; type: string; verified: boolean; published: string | null }[]
     msf_modules: { fullname: string; name: string; rank: number }[]
   }
@@ -145,13 +156,15 @@ export interface RiskCard {
     level: RiskLevel
     level_word: string
     threshold: number
-    epss: Factor
-    cvss: Factor
-    cve_param: Factor
-    exdb_param: Factor
-    msf_param: Factor
-    impact: Factor
-    impact_parts: { criticality: Factor; confidential: Factor; internet: Factor }
+    /** L — вероятность эксплуатации. */
+    likelihood: Factor
+    likelihood_parts: { kev: Factor; epss: Factor; exploit: Factor; msf: Factor }
+    /** S — тяжесть: CVSS ÷ 10 × достижимость. */
+    severity: Factor
+    severity_parts: { cvss: Factor; reach: Factor }
+    /** V — ценность хоста. */
+    value: Factor
+    value_parts: { criticality: Factor; confidential: Factor; internet: Factor }
   }
   refs_loaded_at: Record<string, string | null>
 }
@@ -178,6 +191,8 @@ export interface Overview {
   above_threshold: number
   threshold: number
   distribution: Record<RiskLevel, number>
+  /** Пары с CVE из каталога CISA KEV, по учитываемым статусам. */
+  kev_pairs: number
   findings: FindingSummary
   top_cves: { cve_id: string; hosts: number; risk_sum: number; risk_max: number; cvss: number | null; epss: number | null; exploitdb_type: string | null }[]
   top_hosts: { host_id: number; hostname: string; ip: string; zone: string; criticality: string; pairs: number; risk_sum: number; risk_max: number }[]
@@ -198,12 +213,23 @@ export interface Zone {
   hosts: number
 }
 
+/** Нижние границы уровней по баллу; ниже `medium` — низкий. Сервер требует 0 < medium < high < critical ≤ 100. */
+export interface Levels {
+  medium: number
+  high: number
+  critical: number
+}
+
+/** Веса формулы Risk = round(100 × L × S × V) (спека 2026-10-21 §9): все значения — доли 0..1, кроме уровней. */
 export interface Weights {
-  impact: { criticality: Record<string, number>; confidential: Record<string, number>; internet: Record<string, number> }
-  cvss_v3: { av: Record<string, number>; pr: Record<string, number>; ui: Record<string, number> }
-  cvss_v2: { av: Record<string, number>; ac: Record<string, number>; au: Record<string, number> }
-  exploitdb: Record<string, number>
-  msf: Record<string, number>
+  prior_epss: number
+  cvss_missing: number
+  reach_unknown: number
+  p_exdb: Record<string, number>
+  p_msf: Record<string, number>
+  reach: { network_internet: number; network_internal: number; adjacent: number; local: number }
+  value: { criticality: Record<string, number>; conf_bonus: number; inet_bonus: number }
+  levels: Levels
 }
 
 export interface ConnectionView {
@@ -267,6 +293,8 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   ref_nvd: 'Справочник NVD',
   ref_exploitdb: 'Справочник ExploitDB',
   ref_msf: 'Справочник Metasploit',
+  ref_kev: 'Справочник KEV',
+  ref_bundle: 'Архив справочников',
   recalculate: 'Пересчёт риска',
   bulk_status: 'Массовая смена статусов',
 }
@@ -279,9 +307,10 @@ export const STAGE_LABELS: Record<string, string> = {
   enriching: 'обогащение',
   scoring: 'расчёт риска',
   downloading: 'скачивание',
+  extracting: 'распаковка',
   loading: 'загрузка',
-  cves: 'множители CVE',
-  hosts: 'Impact хостов',
+  cves: 'вероятность и тяжесть CVE',
+  hosts: 'ценность хостов',
   pairs: 'риск пар',
   status: 'смена статусов',
   done: 'готово',
@@ -297,7 +326,7 @@ export interface RefState {
   title: string
   url: string
   loaded_at: string | null
-  source: string | null
+  source: 'network' | 'file' | 'bundle' | null
   records: number
   detail: string
   stale: boolean

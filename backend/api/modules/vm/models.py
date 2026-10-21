@@ -1,9 +1,11 @@
 """Таблицы модуля Vulnerability Management (префикс vm_).
 
 Модель нормализована намеренно (спека §3): пара хост–CVE хранит только
-риск, всё остальное лежит в `vm_host` и `vm_cve`. Формула раскладывается
-на множитель CVE (`vm_cve.cve_factor`) и множитель хоста (`vm_host.impact`),
-поэтому пересчёт миллионов пар — один UPDATE, а не проход по строкам.
+риск, всё остальное лежит в `vm_host` и `vm_cve`. Формула (спека 2026-10-21 §9)
+раскладывается на члены CVE (`vm_cve.likelihood`, `cvss10`, `av_class`) и хоста
+(`vm_host.value`, `internet`), поэтому пересчёт миллионов пар — один UPDATE,
+а не проход по строкам. Уровень не хранится: он вычисляется из балла по порогам
+настроек при чтении.
 
 Справочники `vm_ref_*` хранятся сырыми и заменяются целиком; `vm_cve` —
 витрина, которая собирается из них для CVE, встречающихся у хостов.
@@ -48,8 +50,11 @@ class VmHost(Base):
     #: Как пришло из VM: Critical | High | Medium | Low | None | ''.
     criticality: Mapped[str] = mapped_column(String(32), default="", index=True)
     zone: Mapped[str] = mapped_column(String(255), default="", index=True)
-    #: Слагаемые Impact по критичности и разметке зоны — пересчитывается.
-    impact: Mapped[float] = mapped_column(Float, default=0.0)
+    #: V формулы: ценность по критичности и разметке зоны — пересчитывается.
+    value: Mapped[float] = mapped_column(Float, default=0.6)
+    #: Доступ из интернета по разметке зоны — копия на хосте, чтобы reach
+    #: считался в том же UPDATE пар без соединения с зонами.
+    internet: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class VmCve(Base):
@@ -73,8 +78,18 @@ class VmCve(Base):
     msf_modules: Mapped[int] = mapped_column(Integer, default=0)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     published: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
-    #: EPSS × CVSS/10 × CVE_param × ExDB × MSF — пересчитывается.
-    cve_factor: Mapped[float] = mapped_column(Float, default=0.0)
+    #: В каталоге CISA KEV: эксплуатация — факт, L = 1.
+    kev: Mapped[bool] = mapped_column(Boolean, default=False)
+    kev_added: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    kev_ransomware: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Срок устранения по CISA — показывается в карточке, в балл не входит.
+    kev_due: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    #: L формулы: вероятность эксплуатации — пересчитывается.
+    likelihood: Mapped[float] = mapped_column(Float, default=0.0)
+    #: CVSS ÷ 10; NULL — балла нет, в пересчёте подставляется `cvss_missing` из весов.
+    cvss10: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: network | adjacent | local | none — класс вектора атаки для reach.
+    av_class: Mapped[str] = mapped_column(String(16), default="none")
 
 
 class VmHostCve(Base):
@@ -116,7 +131,7 @@ class VmZone(Base):
     """Зона из Host.UF_Zone и её разметка человеком.
 
     Разметка — единственный источник «доступа из интернета» и
-    «конфиденциальных данных» для Impact: сам VM этого не отдаёт.
+    «конфиденциальных данных» для ценности хоста: сам VM этого не отдаёт.
     """
 
     __tablename__ = "vm_zone"
@@ -198,6 +213,21 @@ class VmRefAttack(Base):
     mapping_type: Mapped[str] = mapped_column(String(32), default="")
 
 
+class VmRefKev(Base):
+    """Каталог эксплуатируемых уязвимостей CISA KEV; заменяется целиком."""
+
+    __tablename__ = "vm_ref_kev"
+
+    cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    date_added: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    #: knownRansomwareCampaignUse = Known.
+    ransomware: Mapped[bool] = mapped_column(Boolean, default=False)
+    vendor: Mapped[str] = mapped_column(Text, default="")
+    product: Mapped[str] = mapped_column(Text, default="")
+    name: Mapped[str] = mapped_column(Text, default="")
+    due_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
+
 class VmRefState(Base):
     """Когда, откуда и сколько загружено в каждый справочник."""
 
@@ -231,7 +261,7 @@ class VmImport(Base):
 class VmJob(JobColumns, Base):
     """Фоновая задача модуля: импорт, справочник, пересчёт.
 
-    kind: import_vm | import_file | ref_epss | ref_nvd | ref_exploitdb | ref_msf | recalculate
+    kind: import_vm | import_file | ref_epss | ref_nvd | ref_exploitdb | ref_msf | ref_kev | recalculate
     """
 
     __tablename__ = "vm_job"

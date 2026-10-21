@@ -63,6 +63,8 @@ export function VulnsPage() {
     os: fromWire(listFrom(params, 'os')),
     cvss_source: listFrom<CvssSource>(params, 'cvss_source', Object.keys(CVSS_SOURCE_LABELS) as CvssSource[]),
     exploits: params.get('exploits') === 'true' ? true : undefined,
+    // Сюда ведёт счётчик KEV с обзора.
+    kev: params.get('kev') === 'true' ? true : undefined,
     // Пару по ссылке ищут при любом статусе: она могла быть закрыта.
     status: linked ? [...STATUSES] : statusesFrom(params),
     assignee: listFrom(params, 'assignee'),
@@ -158,6 +160,7 @@ export function VulnsPage() {
   chips.push(...valueChips('Зона', filters.zone, (z) => z || 'без зоны', (v) => toggle('zone', v)))
   if (filters.exploits) chips.push({ label: 'есть эксплойт в ExploitDB', clear: () => toggle('exploits', undefined) })
   if (filters.msf) chips.push({ label: 'есть модуль Metasploit', clear: () => toggle('msf', undefined) })
+  if (filters.kev) chips.push({ label: 'В KEV: да', clear: () => toggle('kev', undefined) })
   chips.push(...valueChips('Источник CVSS', filters.cvss_source, (c) => CVSS_SOURCE_LABELS[c], (v) => toggle('cvss_source', v)))
   chips.push(...valueChips('ОС', filters.os, (o) => o || 'не определена', (v) => toggle('os', v)))
 

@@ -1,0 +1,4 @@
+cveID,vendorProject,product,vulnerabilityName,dateAdded,shortDescription,requiredAction,dueDate,knownRansomwareCampaignUse,notes
+CVE-2021-44228,ExampleVendor,Example Logger,Example Logger Remote Code Execution,2021-12-10,Synthetic entry.,Apply updates.,2021-12-24,Known,
+CVE-2020-1472,ExampleVendor,Example Netlogon,Example Privilege Escalation,not-a-date,"Synthetic entry, with a broken date.",Apply updates.,2020-09-21,Unknown,
+cve-2023-1234,OtherVendor,Other Product,Other Product Flaw,2023-05-02,Synthetic entry.,Apply updates.,2023-05-23,Unknown,

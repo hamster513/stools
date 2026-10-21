@@ -7,17 +7,22 @@
 
 ```
 GET /vulns     q, host, cve, criticality, zone, os, level, exploits, msf,
-               cvss_source, host_id, status, assignee, overdue, risk_expiring,
+               kev, cvss_source, host_id, status, assignee, overdue, risk_expiring,
                sort, limit≤1000 (200), offset
                → {total|null, items[], facets|null}  total и фасеты только
                при offset=0: следующие страницы их не пересчитывают
-GET /vulns/{host_id}/{cve_id}   карточка расчёта: host, cve, risk{множители
-                                с source и substituted}, refs_loaded_at
+GET /vulns/{host_id}/{cve_id}   карточка расчёта: host, cve (с kev, kev_added,
+                                kev_ransomware, kev_due), risk{score, raw, level,
+                                likelihood, severity, value и их части
+                                likelihood_parts, severity_parts, value_parts:
+                                {value, source, substituted}}, refs_loaded_at
+                                (все справочники, незагруженные — null)
 GET /hosts/{host_id}            хост и его пары (до 500, по риску)
 GET /export    format=csv|xlsx (csv), те же фильтры и `sort`, что у списка,
                и так же по умолчанию — только открытые пары (`status=all` —
                все) → файл; CSV потоком, XLSX — до 100 000 строк;
-               последние колонки — Статус, Исполнитель, Срок
+               колонка KEV — «да» или пусто; последние — Статус,
+               Исполнитель, Срок
 GET /overview  счётчики, distribution, findings, top_cves, top_hosts, data{…}
 ```
 
@@ -25,7 +30,7 @@ GET /overview  счётчики, distribution, findings, top_cves, top_hosts, da
 `risk_asc`, `cvss_desc`, `epss_desc`, `exploits_desc`, `host_asc`, `cve_asc`.
 При равных значениях — по паре (`host_id`, `cve_id`): порядок один и тот же в
 каждом запросе, страницы по offset не повторяют и не теряют пар.
-`level`: `low | medium | high | critical` (0–19, 20–39, 40–69, 70–100).
+`level`: `low | medium | high | critical` по порогам `weights.levels` настроек (по умолчанию 0–14, 15–34, 35–59, 60–100; риск = 100 × вероятность × тяжесть × ценность, спека 2026-10-21 §9); `kev=true|false` — CVE в каталоге CISA KEV (фасет `kev`, в обзоре `kev_pairs`).
 
 Многозначные фасеты — `level`, `criticality`, `zone`, `cvss_source`, `os`,
 `assignee`, `status`: несколько значений повторением ключа
@@ -100,10 +105,22 @@ GET  /import                    {last: vm_import|null, active: job|null}
 GET  /refs                      [{name, title, url, loaded_at, source, records, detail, stale, active_job_id}]
 POST /refs/{name}/download      {years?} (nvd)  → {job_id} | 409
 POST /refs/{name}/upload        multipart files=…  → {job_id}
+POST /refs/bundle/upload        multipart file=<zip>  → 202 {job_id} | 409 идёт
+                                задача данных VM, массовая смена или загрузка
+                                справочника | 422 в архиве нет известных
+                                справочников
 POST /recalculate               {job_id} | 409
 ```
 
-`name`: `epss | nvd | exploitdb | msf | attack` (CVE → ATT&CK, CTID).
+`name`: `epss | nvd | exploitdb | msf | attack` (CVE → ATT&CK, CTID) `| kev`
+(CISA KEV, `.json` или `.csv`).
+
+Архив справочников (спека 2026-10-21 §4, §8) собирают скрипты
+`frontend/public/vm/download-references.{ps1,sh}`; справочник узнаётся по
+имени файла, незнакомые файлы пропускаются. Одна задача `ref_bundle`, стадии
+`extracting → loading → enriching → scoring → done`; пересборка витрины CVE и
+пересчёт риска — один раз в конце. Отказ файла останавливает задачу с его
+именем, загруженное до него остаётся и пересчитывается.
 
 ## Настройки
 
@@ -122,6 +139,15 @@ GET  /zones      [{name, internet_access, confidential_data, marked, hosts}]
 PUT  /zones      [{name, internet_access, confidential_data}] → 204
 ```
 
+`weights` (спека 2026-10-21 §9; риск = round(100 × L × S × V)):
+`prior_epss` (EPSS, если не измерен), `p_exdb{тип эксплойта: 0..1}`,
+`p_msf{ранг модуля: 0..1}` — для L; `cvss_missing`, `reach{network_internet,
+network_internal, adjacent, local}`, `reach_unknown` — для S;
+`value{criticality{…: 0..1}, conf_bonus, inet_bonus}` — для V;
+`levels{medium, high, critical}` — целые пороги уровней (low — ниже medium).
+Веса старой схемы (множители первой итерации), сохранённые до обновления, не
+переводятся: действуют умолчания новой формулы, пока веса не сохранят заново.
+
 ## Задачи
 
 ```
@@ -133,6 +159,8 @@ POST /jobs/{id}/cancel  204 | 409 уже завершена
 ```
 
 `kind`: `import_vm | import_file | ref_epss | ref_nvd | ref_exploitdb | ref_msf |
-ref_attack | recalculate | bulk_status`.
+ref_attack | ref_kev | ref_bundle | recalculate | bulk_status`. После обновления
+формулы старт API сам ставит `recalculate` (`started_by` — «после обновления»),
+пока полный пересчёт не запишет версию формулы в `app_setting['vm_formula_version']`.
 Стадии импорта: `fetching → parsing → writing → enriching → scoring → done`;
 отмена принимается до `writing`.
