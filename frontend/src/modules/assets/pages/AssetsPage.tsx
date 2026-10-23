@@ -44,6 +44,7 @@ import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidth
 import { findingFacetChips, fromWire, listFrom, statusForFlag, STATUS_OPTIONS, toggleStatus, toggleValue, toWire, valueChips, type FindingFacetFilters } from '@/platform/findings/facets'
 import { useFindingSettings } from '@/platform/findings/queries'
 import { MANUAL_STATUSES, NEEDS_REASON, STATUSES, STATUS_TITLES, type FindingChange, type FindingStatus } from '@/platform/findings/types'
+import { AdCellNote } from '../components/AdCellNote'
 import { AssetDrawer } from './AssetDrawer'
 
 const ROW_HEIGHT = 40
@@ -91,6 +92,12 @@ function networkIdsFrom(params: URLSearchParams): number[] | undefined {
   return ids?.length ? ids : undefined
 }
 
+/** Снапшот из ссылки сводки AD: не число — не передаётся, и сервер ответит 422 на ячейку без снапшота. */
+function snapshotFrom(params: URLSearchParams): number | undefined {
+  const id = Number(params.get('ad_snapshot'))
+  return Number.isInteger(id) && id > 0 ? id : undefined
+}
+
 type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'laps' | 'cluster' | 'zone' | 'network_id'
 
 const has = <T extends string | number>(list: readonly T[] | undefined, value: T) => list?.includes(value) ?? false
@@ -128,7 +135,7 @@ export function FacetSection({ title, children }: { title: string; children: Rea
 const INPUT_BASE = 'rounded border border-border bg-app-bg px-2 py-1 text-xs text-text placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const INPUT = `w-full ${INPUT_BASE}`
 
-function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, port, onPort, tag, onTag }: {
+function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, port, onPort, tag, onTag, adLabel, onClearAd }: {
   facets: AssetsFacets | null
   /** Зоны, которые панель уже показывала (ушедшие в ноль — с 0); считает страница, чтобы память жила, пока панель закрыта. */
   zones: FacetValue[]
@@ -141,6 +148,8 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, por
   onPort: (v: string) => void
   tag: string
   onTag: (v: string) => void
+  adLabel: string
+  onClearAd: () => void
 }) {
   const networks = useNetworks()
   const pick = <K extends MultiKey>(key: K, value: NonNullable<Filters[K]>[number]) =>
@@ -210,6 +219,12 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, por
           <input value={tag} onChange={(e) => onTag(e.target.value)} placeholder="тег" aria-label="Тег" className={INPUT} />
         </div>
       </FacetSection>
+      {/* Ячейка сводки AD приходит ссылкой со страницы «Сводка»; здесь её можно только снять. */}
+      {(filters.ad_snapshot !== undefined || filters.ad_cell !== undefined) && (
+        <FacetSection title="Сводка AD">
+          <FacetRow active count={undefined} noCount onClick={onClearAd}>{adLabel}</FacetRow>
+        </FacetSection>
+      )}
     </div>
   )
 }
@@ -414,6 +429,8 @@ export function AssetsPage() {
     laps: listFrom<LapsFilter>(params, 'laps', LAPS_VALUES),
     cluster: listFrom<ClusterKind>(params, 'cluster', CLUSTER_KINDS),
     network_id: networkIdsFrom(params),
+    ad_snapshot: snapshotFrom(params),
+    ad_cell: params.get('ad_cell') ?? undefined,
   }))
   const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
@@ -451,7 +468,16 @@ export function AssetsPage() {
   const selected: AssetItem | null = items[selectedIndex] ?? null
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
-  function clearAll() { setFilters({}); setDisc({}); setSearchInput(''); setPortInput(''); setTagInput('') }
+  // Страница не пишет фильтры в адрес: ячейка снимается и из адреса, иначе вернётся после перезагрузки.
+  function dropAdFromUrl() {
+    if (!params.has('ad_snapshot') && !params.has('ad_cell')) return
+    const rest = new URLSearchParams(params)
+    rest.delete('ad_snapshot')
+    rest.delete('ad_cell')
+    navigate(`/assets/list${rest.size ? `?${rest}` : ''}`, { replace: true })
+  }
+  function clearAd() { setFilters((prev) => ({ ...prev, ad_snapshot: undefined, ad_cell: undefined })); dropAdFromUrl() }
+  function clearAll() { setFilters({}); setDisc({}); setSearchInput(''); setPortInput(''); setTagInput(''); dropAdFromUrl() }
   function check(index: number, range: boolean) {
     const from = range && lastChecked.current !== null ? lastChecked.current : index
     const on = !checked.has(items[index].id)
@@ -465,7 +491,12 @@ export function AssetsPage() {
   function checkAll(on: boolean) { setChecked(on ? new Set(items.map((a) => a.id)) : new Set()); lastChecked.current = null }
   // Что выбрано, пока панель свёрнута: фильтр из ссылки обзора не должен действовать незаметно.
   // Чип на каждое выбранное значение: крестик снимает только его.
+  // Чип и при половине пары из адреса: сервер ответит 422, и снять её должно быть чем.
+  const adOn = filters.ad_snapshot !== undefined || filters.ad_cell !== undefined
+  const adCheck = adOn ? first?.ad_cell : undefined
+  const adLabel = adCheck ? `Сводка AD: ${adCheck.label}` : 'Сводка AD'
   const chips: FilterChip[] = [
+    ...(adOn ? [{ label: adLabel, clear: clearAd }] : []),
     ...valueChips('Расхождения', filters.code, (c) => (c === 'any' ? ANY_CODE_LABEL : CODE_LABELS[c]), (v) => toggle('code', v)),
     ...valueChips('Источник есть', filters.source_has, (s) => SOURCE_LABELS[s], (v) => toggle('source_has', v)),
     ...valueChips('Источника нет', filters.source_missing, (s) => SOURCE_LABELS[s], (v) => toggle('source_missing', v)),
@@ -500,7 +531,9 @@ export function AssetsPage() {
   }, [items.length, selected, openId])
 
   const hasFilters = Object.values(filters).some((v) => v !== undefined) || Object.values(disc).some((v) => v !== undefined) || q !== '' || port !== '' || tag !== ''
-  const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить активы' : null
+  const errorMessage = query.error instanceof ApiRequestError
+    ? (adOn && (query.error.status === 404 || query.error.status === 409) ? `Ячейка сводки AD не открывается: ${query.error.message}` : query.error.message)
+    : query.isError ? 'Не удалось загрузить активы' : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -515,9 +548,10 @@ export function AssetsPage() {
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
         {!filtersPanel.open && <FilterChips chips={chips} />}
+        {adCheck && filters.ad_snapshot !== undefined && filters.ad_cell !== undefined && <AdCellNote check={adCheck} snapshot={filters.ad_snapshot} cell={filters.ad_cell} page="assets" />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} zones={zones} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} zones={zones} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} adLabel={adLabel} onClearAd={clearAd} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           {write && checked.size > 0 && (
             <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)} facets={first?.facets ?? null} code={filters.code?.length === 1 ? filters.code[0] : undefined}

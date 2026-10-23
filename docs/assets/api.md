@@ -34,8 +34,8 @@ GET  /overview                         {assets_total, by_zone, by_source, codes,
 GET   /assets                          q, source_has, source_missing, code, network_id, zone, port,
                                        tag, criticality (Critical|High|Medium|Low|none), laps (yes|no),
                                        cluster (cluster|role|node — вид кластера Windows по наблюдению AD),
-                                       disc_status, assignee, overdue, limit≤500 (200), offset
-                                       → {total, items, facets|null}
+                                       disc_status, assignee, overdue, ad_snapshot + ad_cell, limit≤500 (200), offset
+                                       → {total, items, facets|null, ad_cell?}
                                        items: [{id, cluster: cluster|role|node|null, name, fqdn, domain, ip, os, network: {id, cidr, title,
                                        zone}|null, first_seen, last_seen, criticality, tags, pinned,
                                        sources: [{source, live, fresh, seen_at}], discrepancy_count, codes}]
@@ -47,6 +47,7 @@ GET   /assets                          q, source_has, source_missing, code, netw
                                        (без disc_status — учитываемые)
                                        code: код ниже или any — хотя бы одно расхождение
                                        неизвестное значение source_*/code/criticality/laps/cluster/disc_status — 422
+                                       ad_snapshot + ad_cell — компьютеры ячейки сводки AD (ниже)
 GET   /assets/{id}                     + network_manual, note, merged_into, created_at, updated_at,
                                        observations: [{id, source, source_key, name, fqdn, domain, ip, ips,
                                        os, seen_at, gone_at, extra, marks: {поле: stale|conflict}}],
@@ -162,14 +163,16 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 ```
 GET   /users                           q, source (ad|ksc), state (enabled|disabled|unknown),
                                        session (active|past|none), local (yes|no), privileged (yes|no),
-                                       code (код ниже или any), host_id (числа), limit≤500 (200), offset
-                                       → {total, items, facets|null}
+                                       code (код ниже или any), host_id (числа), ad_snapshot + ad_cell,
+                                       limit≤500 (200), offset
+                                       → {total, items, facets|null, ad_cell?}
                                        items: [{id, sam, upn, display_name, domain, local, enabled: bool|null,
                                        privileged, sources: [{source, live, fresh, seen_at}], hosts_active,
                                        hosts_total, last_seen, codes}]
                                        facets: {source, state, session, local, privileged, code: {…, any}}
                                        — только при offset=0
                                        неизвестное значение фильтра — 422
+                                       ad_snapshot + ad_cell — учётки ячейки сводки AD (ниже)
 GET   /users/{id}                      {id, sid, name_key, sam, upn, display_name, domain, local, enabled,
                                        privileged, first_seen, last_seen, merged_into, note, tags, created_at,
                                        updated_at, sources, hosts_active, hosts_total, codes,
@@ -219,6 +222,25 @@ GET   /users/export                    format=csv|xlsx (csv) и те же фил
 Состояние, Привилегированная, Источники, В системе, Хостов, Виден,
 Расхождения» (состояние — включена | отключена | неизвестно, расхождения —
 подписями через запятую).
+
+### Ячейка сводки AD
+
+`ad_snapshot=<id снапшота AD>&ad_cell=<ячейка>` — пара, её ставят ссылки со
+страницы «Сводка» модуля AD: `/users` ограничивается учётками ячейки (по SID),
+`/assets` — активами с наблюдением AD этих компьютеров. Фильтр складывается
+(И) с остальными, фасеты считаются внутри него; доходит до выгрузок `/export`
+и до `/assets/ids` («все по фильтру» не выходят за ячейку). Задан один из пары
+— 422; нет снапшота или ячейки — 404; файл выгрузки снапшота не читается — 409
+«файл выгрузки снапшота недоступен».
+
+При фильтре и offset=0 ответ списка несёт `ad_cell: {label, collected_at,
+domain, in_summary, found, not_managed, other}`: `label` — подпись ячейки,
+`collected_at` и `domain` — снапшота; `in_summary` — участников ячейки этого
+вида (число в сводке); `found` — сколько из них есть в «Активах» без учёта
+прочих фильтров (число строк списка может отличаться — фильтры, слияния);
+`not_managed` — учётки, которые «Активы» не заводят (без SID или доверия —
+`sam` на `$`; у `/assets` всегда 0); `other` — участники другого вида (компьютеры на
+`/users`, пользователи на `/assets`).
 
 ### Коды расхождений пользователей
 

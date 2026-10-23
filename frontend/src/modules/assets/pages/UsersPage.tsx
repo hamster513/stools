@@ -39,6 +39,7 @@ import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { listFrom, toggleValue, valueChips } from '@/platform/findings/facets'
+import { AdCellNote } from '../components/AdCellNote'
 import { FacetRow, FacetSection } from './AssetsPage'
 import { UserDrawer } from './UserDrawer'
 
@@ -63,7 +64,7 @@ const USER_COLUMNS: ColumnDef[] = [
 const FILTERS_PAGE = 'assets-users'
 
 type Filters = Omit<UsersQuery, 'q'>
-type MultiKey = Exclude<keyof Filters, 'host_id'>
+type MultiKey = Exclude<keyof Filters, 'host_id' | 'ad_snapshot' | 'ad_cell'>
 
 const has = <T extends string | number>(list: readonly T[] | undefined, value: T) => list?.includes(value) ?? false
 
@@ -81,12 +82,20 @@ function hostIdsFrom(params: URLSearchParams): number[] | undefined {
   return ids?.length ? ids : undefined
 }
 
-function UserFacetPanel({ facets, filters, onToggle, total, hostLabel }: {
+/** Снапшот из ссылки сводки AD: не число — не передаётся, и сервер ответит 422 на ячейку без снапшота. */
+function snapshotFrom(params: URLSearchParams): number | undefined {
+  const id = Number(params.get('ad_snapshot'))
+  return Number.isInteger(id) && id > 0 ? id : undefined
+}
+
+function UserFacetPanel({ facets, filters, onToggle, total, hostLabel, adLabel, onClearAd }: {
   facets: UsersFacets | null
   filters: Filters
   onToggle: <K extends keyof Filters>(key: K, value: Filters[K]) => void
   total: number
   hostLabel: (id: number) => string
+  adLabel: string
+  onClearAd: () => void
 }) {
   const pick = <K extends MultiKey>(key: K, value: NonNullable<Filters[K]>[number]) =>
     onToggle(key, toggleValue(filters[key] as (typeof value)[] | undefined, value) as Filters[K])
@@ -131,6 +140,12 @@ function UserFacetPanel({ facets, filters, onToggle, total, hostLabel }: {
           {filters.host_id.map((id) => (
             <FacetRow key={id} active count={undefined} noCount onClick={() => onToggle('host_id', toggleValue(filters.host_id, id))}>{hostLabel(id)}</FacetRow>
           ))}
+        </FacetSection>
+      )}
+      {/* Ячейка сводки AD приходит ссылкой со страницы «Сводка»; здесь её можно только снять. */}
+      {(filters.ad_snapshot !== undefined || filters.ad_cell !== undefined) && (
+        <FacetSection title="Сводка AD">
+          <FacetRow active count={undefined} noCount onClick={onClearAd}>{adLabel}</FacetRow>
         </FacetSection>
       )}
     </div>
@@ -214,6 +229,8 @@ export function UsersPage() {
     privileged: listFrom<YesNo>(params, 'privileged', YES_NO),
     code: listFrom<UserCodeFilter>(params, 'code', ['any', ...USER_CODES]),
     host_id: hostIdsFrom(params),
+    ad_snapshot: snapshotFrom(params),
+    ad_cell: params.get('ad_cell') ?? undefined,
   }))
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
   const q = useDebouncedValue(searchInput, 250)
@@ -236,8 +253,22 @@ export function UsersPage() {
   const hostLabel = (id: number) => (id === oneHost && host.data ? host.data.name || host.data.fqdn || host.data.ip || `актив #${id}` : `актив #${id}`)
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
-  function clearAll() { setFilters({}); setSearchInput('') }
+  // Страница не пишет фильтры в адрес: ячейка снимается и из адреса, иначе вернётся после перезагрузки.
+  function dropAdFromUrl() {
+    if (!params.has('ad_snapshot') && !params.has('ad_cell')) return
+    const rest = new URLSearchParams(params)
+    rest.delete('ad_snapshot')
+    rest.delete('ad_cell')
+    navigate(`/assets/users${rest.size ? `?${rest}` : ''}`, { replace: true })
+  }
+  function clearAd() { setFilters((prev) => ({ ...prev, ad_snapshot: undefined, ad_cell: undefined })); dropAdFromUrl() }
+  function clearAll() { setFilters({}); setSearchInput(''); dropAdFromUrl() }
+  // Чип и при половине пары из адреса: сервер ответит 422, и снять её должно быть чем.
+  const adOn = filters.ad_snapshot !== undefined || filters.ad_cell !== undefined
+  const adCheck = adOn ? first?.ad_cell : undefined
+  const adLabel = adCheck ? `Сводка AD: ${adCheck.label}` : 'Сводка AD'
   const chips: FilterChip[] = [
+    ...(adOn ? [{ label: adLabel, clear: clearAd }] : []),
     ...valueChips('Хост', filters.host_id, hostLabel, (v) => toggle('host_id', v)),
     ...valueChips('Расхождения', filters.code, (c) => (c === 'any' ? ANY_CODE_LABEL : USER_CODE_LABELS[c]), (v) => toggle('code', v)),
     ...valueChips('Источник видит', filters.source, (s) => SOURCE_LABELS[s], (v) => toggle('source', v)),
@@ -268,7 +299,9 @@ export function UsersPage() {
   }, [items.length, selected, openId])
 
   const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== ''
-  const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить пользователей' : null
+  const errorMessage = query.error instanceof ApiRequestError
+    ? (adOn && (query.error.status === 404 || query.error.status === 409) ? `Ячейка сводки AD не открывается: ${query.error.message}` : query.error.message)
+    : query.isError ? 'Не удалось загрузить пользователей' : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -283,9 +316,10 @@ export function UsersPage() {
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>
         {!filtersPanel.open && <FilterChips chips={chips} />}
+        {adCheck && filters.ad_snapshot !== undefined && filters.ad_cell !== undefined && <AdCellNote check={adCheck} snapshot={filters.ad_snapshot} cell={filters.ad_cell} page="users" />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <UserFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} hostLabel={hostLabel} />}
+        {filtersPanel.open && <UserFacetPanel facets={first?.facets ?? null} filters={filters} onToggle={toggle} total={total} hostLabel={hostLabel} adLabel={adLabel} onClearAd={clearAd} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           <div className="min-h-0 flex-1">
             {query.isLoading && <FullPageSpinner />}

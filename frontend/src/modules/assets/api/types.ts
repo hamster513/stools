@@ -125,6 +125,23 @@ export interface AssetsResponse {
   total: number
   items: AssetItem[]
   facets: AssetsFacets | null
+  /** Сверка с ячейкой сводки AD — только при фильтре `ad_snapshot` + `ad_cell` и offset=0. */
+  ad_cell?: AdCellCheck
+}
+
+/**
+ * Сверка списка с ячейкой сводки AD (`ad_snapshot` + `ad_cell`). `found` — сколько участников ячейки нашлось в
+ * «Активах» без учёта прочих фильтров страницы; `not_managed` — учётки, которых «Активы» не заводят (доверия);
+ * `other` — участники другого вида (компьютеры на странице пользователей и наоборот).
+ */
+export interface AdCellCheck {
+  label: string
+  collected_at: string
+  domain: string
+  in_summary: number
+  found: number
+  not_managed: number
+  other: number
 }
 
 export interface AssetsQuery {
@@ -145,6 +162,9 @@ export interface AssetsQuery {
   /** Исполнитель расхождения: `me`, `none` или логин; несколько — «ИЛИ». */
   assignee?: string[]
   overdue?: boolean
+  /** Состав ячейки сводки AD: снапшот и ячейка задаются вместе (ссылки со страницы «Сводка»). */
+  ad_snapshot?: number
+  ad_cell?: string
 }
 
 export interface Observation {
@@ -478,6 +498,8 @@ export interface UsersResponse {
   total: number
   items: UserItem[]
   facets: UsersFacets | null
+  /** Сверка с ячейкой сводки AD — только при фильтре `ad_snapshot` + `ad_cell` и offset=0. */
+  ad_cell?: AdCellCheck
 }
 
 /** Многозначные — повторением ключа: внутри оси «или», между осями «и». */
@@ -491,6 +513,9 @@ export interface UsersQuery {
   code?: UserCodeFilter[]
   /** Пользователи со связью с этими активами-хостами (и пропавшей тоже). */
   host_id?: number[]
+  /** Состав ячейки сводки AD: снапшот и ячейка задаются вместе (ссылки со страницы «Сводка»). */
+  ad_snapshot?: number
+  ad_cell?: string
 }
 
 export interface UserObservation {
