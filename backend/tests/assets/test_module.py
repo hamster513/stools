@@ -71,6 +71,16 @@ def test_group_member_indexes(db_session: Session) -> None:
     assert columns["group_key"]["type"].length == 800 and columns["os_family"]["type"].length == 8
 
 
+def test_list_and_delete_indexes(db_session: Session) -> None:
+    """Удаление пользователя — индекс самоссылки `merged_into`."""
+    from sqlalchemy import text
+
+    defs = dict(db_session.execute(text(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN ('ix_asset_user_merged_into')"
+    )).tuples().all())
+    assert defs["ix_asset_user_merged_into"].endswith("(merged_into)")
+
+
 def test_group_cascades(db_session: Session) -> None:
     """Удаление хоста уносит его локальные группы с составом; удаление участника лишь рвёт ссылку."""
     host, member_host = Asset(name="WS01"), Asset(name="SRV01")

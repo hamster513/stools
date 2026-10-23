@@ -164,7 +164,8 @@ class AssetUser(Base):
     privileged: Mapped[bool] = mapped_column(Boolean, default=False)
     first_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    merged_into: Mapped[int | None] = mapped_column(ForeignKey("asset_user.id", ondelete="SET NULL"), nullable=True)
+    #: С индексом: удаление пользователя (`SET NULL` самоссылки) ищет ссылки на него по этому столбцу.
+    merged_into: Mapped[int | None] = mapped_column(ForeignKey("asset_user.id", ondelete="SET NULL"), nullable=True, index=True)
     note: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[list[str]] = mapped_column(JSONType, default=list)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
