@@ -320,3 +320,79 @@ def test_vm_only_pass_runs_groups_step(loaded: Session, now: dt.datetime) -> Non
     assert "groups_failed" not in out and "groups" in out
     loaded.refresh(adm)
     assert adm.gone_at is not None
+
+
+# ---- Сопоставление хоста: правила общего сопоставителя (`core.matching.match`) -------------------------
+
+
+def matched_hosts(db: Session) -> dict[int, set[str]]:
+    rows = db.execute(select(AssetGroup.host_asset_id, AssetGroup.name).where(AssetGroup.local.is_(True), AssetGroup.gone_at.is_(None)))
+    out: dict[int, set[str]] = {}
+    for host_id, name in rows.tuples():
+        out.setdefault(int(host_id), set()).add(name)
+    return out
+
+
+def add_asset(db: Session, name: str, *, fqdn: str = "", ip: str = "", merged_into: int | None = None) -> int:
+    """Актив без наблюдений (как заведённый руками или из RackTables): кандидат сопоставления по своим полям."""
+    a = Asset(name=name, name_key=name.lower(), fqdn=fqdn, domain=fqdn.partition(".")[2], ip=ip, merged_into=merged_into)
+    db.add(a)
+    db.commit()
+    return a.id
+
+
+def test_short_name_of_other_domain_is_not_matched(loaded: Session, now: dt.datetime) -> None:
+    """VM `srv01.dmz.local`: актива с таким FQDN нет, srv01 из corp.local — другой хост."""
+    put_groups(loaded, [*snapshot(), win(("srv01.dmz.local", "srv01", "10.9.0.11"), "dmz admins", "S-1-5-32-545")], now - dt.timedelta(hours=1))
+    got = sync(loaded)
+    assert got["vm_hosts_unmatched"] == 2
+    assert loaded.execute(select(AssetGroup).where(AssetGroup.name == "dmz admins")).first() is None
+
+
+def test_address_of_other_named_host_is_not_matched(loaded: Session, now: dt.datetime) -> None:
+    """VM `ws17.corp.local / 10.0.0.42` неизвестен по имени, адрес сейчас у актива ws42 — не он."""
+    add_asset(loaded, "ws42", fqdn="ws42.corp.local", ip="10.0.0.42")
+    put_groups(loaded, [*snapshot(), win(("ws17.corp.local", "ws17", "10.0.0.42"), "ws admins", "S-1-5-32-545")], now - dt.timedelta(hours=1))
+    got = sync(loaded)
+    assert got["vm_hosts_unmatched"] == 2
+    assert loaded.execute(select(AssetGroup).where(AssetGroup.name == "ws admins")).first() is None
+
+
+def test_short_name_without_domain_matches_and_ambiguous_does_not(loaded: Session, now: dt.datetime) -> None:
+    app01 = add_asset(loaded, "app01")
+    add_asset(loaded, "app02")
+    add_asset(loaded, "app02")
+    put_groups(loaded, [
+        *snapshot(),
+        win(("app01.corp.local", "app01", "10.0.0.31"), "app admins", "S-1-5-32-545"),
+        win(("app02.corp.local", "app02", "10.0.0.32"), "app2 admins", "S-1-5-32-545"),
+    ], now - dt.timedelta(hours=1))
+    got = sync(loaded)
+    assert got["vm_hosts_unmatched"] == 2  # srv03 и неоднозначный app02
+    assert matched_hosts(loaded)[app01] == {"app admins"}
+    assert loaded.execute(select(AssetGroup).where(AssetGroup.name == "app2 admins")).first() is None
+
+
+def test_merged_asset_survivor_gets_groups(loaded: Session, now: dt.datetime) -> None:
+    survivor = add_asset(loaded, "app03", fqdn="app03.corp.local")
+    old = add_asset(loaded, "app03", fqdn="app03.corp.local", merged_into=survivor)
+    put_groups(loaded, [*snapshot(), win(("app03.corp.local", "app03", "10.0.0.33"), "app3 admins", "S-1-5-32-545")], now - dt.timedelta(hours=1))
+    got = sync(loaded)
+    assert got["vm_hosts_unmatched"] == 1
+    hosts = matched_hosts(loaded)
+    assert hosts[survivor] == {"app3 admins"} and old not in hosts
+
+
+def test_host_without_dns_name_matched_by_observation_key(db_session: Session, app_settings: Any, now: dt.datetime) -> None:
+    """VM без имени хоста: `vm_host.hostname` — адрес; строка групп с пустым FQDN и именем-адресом находит его."""
+    db_session.add(AssetSettings(data={"sync_after_import": False}))
+    db_session.commit()
+    load_vm(db_session, [("10.0.0.51", "10.0.0.51", "Windows Server 2022"), ("10.0.0.52", "", "Windows Server 2022")], now - dt.timedelta(hours=3))
+    put_groups(db_session, [
+        win(("", "10.0.0.51", "10.0.0.51"), "administrators", ADMINS),
+        win(("", "10.0.0.52", "10.0.0.52"), "administrators", ADMINS),
+    ], now - dt.timedelta(hours=2))
+    got = sync(db_session)
+    assert "vm_hosts_unmatched" not in got
+    keys = dict(db_session.execute(select(AssetObservation.source_key, AssetObservation.asset_id).where(AssetObservation.source == "vm")).tuples().all())
+    assert set(matched_hosts(db_session)) == {keys["10.0.0.51|10.0.0.51"], keys["10.0.0.52|"]}

@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle
 from api.modules.assets.core.groups import group_key, is_well_known, normalize_sid
-from api.modules.assets.core.matching import normalize_fqdn, normalize_ip, normalize_name
+from api.modules.assets.core.matching import Observed, match, normalize_fqdn
 from api.modules.assets.models import (
     Asset,
     AssetGroup,
@@ -42,7 +42,7 @@ from api.modules.assets.models import (
     AssetObservation,
     AssetUser,
 )
-from api.modules.assets.services.assets import domain_map, load_settings, settings_row
+from api.modules.assets.services.assets import MatchIndex, domain_map, load_settings, settings_row
 from api.modules.assets.services.users import CHUNK, TICK_EVERY, AdExportCache, read_ad_export
 
 if TYPE_CHECKING:
@@ -403,11 +403,17 @@ def _put(index: dict[str, int | None], key: str, asset_id: int) -> None:
         index[key] = asset_id if index.get(key, asset_id) == asset_id else None
 
 
+#: Источник наблюдения-запроса: ни одно записанное наблюдение не совпадает с ним по ключу (правило 1).
+_VM_GROUPS_PROBE = "vm_groups"
+
+
 def _match_vm_hosts(db: Session, hosts: list[VmHostKey]) -> tuple[dict[VmHostKey, int], int]:
-    """Хост VM → актив: наблюдение `vm` (`hostname|ip`, `hostname` — FQDN или имя строки), иначе живой актив
-    с тем же FQDN, иначе с тем же коротким именем, иначе с тем же IP. Первый уровень, где ключ есть, решает:
-    неоднозначно или нигде — хост без актива (второе в ответе — их число). Контроллеры домена (признак `dc`
-    наблюдения AD) в ответ не входят: локальных групп у них нет."""
+    """Хост VM → актив. Сначала живое наблюдение `vm` с ключом `hostname|ip` (без учёта регистра), где
+    `hostname` — FQDN или имя строки групп, либо адрес (`ip|ip`, `ip|` — у хоста VM без DNS-имени `@Host`
+    — адрес); иначе правила 2–5 общего сопоставителя (`core.matching.match`) по живым активам: FQDN, имя с тем
+    же доменом, короткое имя — только если у одной стороны нет домена, адрес — только если у одной стороны нет
+    имени. Неоднозначно или нигде — хост без актива (второе в ответе — их число). Контроллеры домена (признак
+    `dc` наблюдения AD) в ответ не входят: локальных групп у них нет."""
     alive = _alive(db)
     by_vm: dict[str, int | None] = {}
     obs = select(AssetObservation.source, AssetObservation.source_key, AssetObservation.asset_id, AssetObservation.extra).where(
@@ -418,29 +424,21 @@ def _match_vm_hosts(db: Session, hosts: list[VmHostKey]) -> tuple[dict[VmHostKey
             _put(by_vm, key.lower(), alive(aid))
         elif (extra or {}).get("dc"):
             dcs.add(alive(aid))
-    by_fqdn: dict[str, int | None] = {}
-    by_name: dict[str, int | None] = {}
-    by_ip: dict[str, int | None] = {}
-    for aid, fqdn, name_key, ip in db.execute(select(Asset.id, Asset.fqdn, Asset.name_key, Asset.ip).where(Asset.merged_into.is_(None))).tuples():
-        _put(by_fqdn, normalize_fqdn(fqdn or ""), aid)
-        _put(by_name, (name_key or "").lower(), aid)
-        _put(by_ip, normalize_ip(ip or ""), aid)
+    index = MatchIndex.load(db)
 
-    def match(fqdn: str, hostname: str, ip: str) -> int | None:
-        hits = {by_vm[k] for k in {f"{h}|{ip}".lower() for h in (fqdn, hostname) if h} if k in by_vm}
+    def match_host(fqdn: str, hostname: str, ip: str) -> int | None:
+        keys = {f"{h}|{ip}".lower() for h in (fqdn, hostname, ip) if h} | ({f"{ip}|"} if ip else set())
+        hits = {by_vm[k] for k in keys if k in by_vm}
         if hits:
             return hits.pop() if len(hits) == 1 else None
-        levels = ((by_fqdn, normalize_fqdn(fqdn) or normalize_fqdn(hostname)), (by_name, normalize_name(hostname or fqdn)[0]),
-                  (by_ip, normalize_ip(ip)))
-        for index, key in levels:
-            if key and key in index:
-                return index[key]
-        return None
+        probe = Observed(source=_VM_GROUPS_PROBE, source_key="", name=hostname or fqdn, fqdn=normalize_fqdn(fqdn),
+                         ip=ip, ips=[ip] if ip else [])
+        return match(probe, index.candidates_for(probe), index.domain_map)[0]
 
     out: dict[VmHostKey, int] = {}
     unmatched = 0
     for host in hosts:
-        aid = match(host[1], host[2], host[3])
+        aid = match_host(host[1], host[2], host[3])
         if aid is None:
             unmatched += 1
         elif aid not in dcs:
