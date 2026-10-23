@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from api.modules.ad.models import AdDomain
@@ -265,7 +266,15 @@ def test_card_domain_group(analyst: TestClient, state: dict[str, Any]) -> None:
                                   "host_name": "SRV01", "via": []}
     assert local[s["adm_ws01"].id]["via"] == [{"id": s["it"].id, "name": "IT"}]
     assert local[s["adm_ws01"].id]["host_name"] == "WS01"
-    assert card["rights"]["fact"] == card["local_member_of"]
+    assert card["local_member_of_total"] == 2
+    # По хостам — по имени хоста; права по факту — свод по (локальная группа, цепочка).
+    assert [x["host_name"] for x in card["local_member_of"]] == ["SRV01", "WS01"]
+    assert card["rights"]["fact"] == [
+        {"local_group": "Administrators", "local_group_sid": "S-1-5-32-544", "via": [{"id": s["it"].id, "name": "IT"}],
+         "hosts_total": 1, "hosts": [{"group_id": s["adm_ws01"].id, "host_asset_id": s["ws01"].id, "host_name": "WS01"}]},
+        {"local_group": "Remote Desktop Users", "local_group_sid": "S-1-5-32-555", "via": [],
+         "hosts_total": 1, "hosts": [{"group_id": s["rdu"].id, "host_asset_id": s["srv01"].id, "host_name": "SRV01"}]},
+    ]
 
     policy = card["rights"]["policy"]
     assert {p["gpo_name"] for p in policy} == {"Admins GPO", "RDP GPO"}
@@ -284,12 +293,61 @@ def test_card_local_group(analyst: TestClient, state: dict[str, Any]) -> None:
     card = analyst.get(f"/api/assets/groups/{s['adm_ws01'].id}").json()
     assert (card["local"], card["domain_label"], card["host_name"], card["host_asset_id"]) == (True, "WS01", "WS01", s["ws01"].id)
     assert {(m["kind"], m["id"], m["source"]) for m in card["members"]} == {("group", s["it"].id, "vm"), ("user", s["admin"].id, "vm")}
-    assert card["member_of"] == [] and card["local_member_of"] == []
+    assert card["member_of"] == [] and card["local_member_of"] == [] and card["local_member_of_total"] == 0
     # По политике: записи с её SID (или именем без SID) и её хостом; чужой хост — нет.
     policy = card["rights"]["policy"]
     assert [p["gpo_name"] for p in policy] == ["Admins GPO", "Named GPO"]
     assert all(p["through"] is None for p in policy)
     assert card["rights"]["fact"] == []
+
+
+def test_card_fact_same_local_group_direct_and_via_parent(analyst: TestClient, state: dict[str, Any], db_session: Session) -> None:
+    """Helpdesk прямо в Administrators на SRV01 и через IT — в Administrators на WS01: одна локальная группа (SID),
+    разные цепочки — две строки свода."""
+    s = state
+    adm_srv01 = mk_group(db_session, "Administrators", "S-1-5-32-544", host=s["srv01"])
+    mk_member(db_session, adm_srv01, "group", ref=s["helpdesk"], source="vm")
+    db_session.commit()
+    fact = analyst.get(f"/api/assets/groups/{s['helpdesk'].id}").json()["rights"]["fact"]
+    adm = [(r["via"], [h["host_name"] for h in r["hosts"]]) for r in fact if r["local_group_sid"] == "S-1-5-32-544"]
+    assert adm == [([], ["SRV01"]), ([{"id": s["it"].id, "name": "IT"}], ["WS01"])]
+
+
+def test_card_local_member_of_capped_and_fact_grouped(analyst: TestClient, db_session: Session) -> None:
+    """Wide — в локальных Administrators 1200 хостов: по хостам — первые 1000 и полный счёт, свод — одна строка
+    с 50 хостами. Цепочка «локальная в локальной» не продолжается: Nested на H0000 содержит Administrators хоста."""
+    db = db_session
+    wide = mk_group(db, "Wide", dsid(4001))
+    hosts = db.execute(insert(Asset).returning(Asset.id, Asset.name), [
+        {"name": f"H{i:04d}", "name_key": f"h{i:04d}", "fqdn": f"h{i:04d}.corp.local", "domain": "corp.local"} for i in range(1200)
+    ]).tuples().all()
+    groups = db.execute(insert(AssetGroup).returning(AssetGroup.id), [
+        {"group_key": group_key(local=True, domain="", host_asset_id=aid, sid="S-1-5-32-544", name="Administrators"),
+         "sid": "S-1-5-32-544", "name": "Administrators", "domain": "", "local": True, "host_asset_id": aid,
+         "description": "", "sources": ["vm"], "in_ad": False, "first_seen": NOW, "last_seen": NOW}
+        for aid, _name in hosts
+    ]).scalars().all()
+    db.execute(insert(AssetGroupMember), [
+        {"group_id": gid, "member_kind": "group", "member_group_id": wide.id, "member_sid": wide.sid, "member_name": "Wide",
+         "member_domain": "corp.local", "primary": False, "source": "vm"}
+        for gid in groups
+    ])
+    first = db.get(Asset, hosts[0][0])
+    assert first is not None
+    nested = mk_group(db, "Nested", "S-1-5-21-4444444444-5555555555-6666666666-1001", host=first)
+    mk_member(db, nested, "group", ref=db.get(AssetGroup, groups[0]), source="vm")
+    db.commit()
+
+    card = analyst.get(f"/api/assets/groups/{wide.id}").json()
+    assert card["local_member_of_total"] == 1200 and len(card["local_member_of"]) == 1000
+    assert card["local_member_of"][0]["host_name"] == "H0000" and card["local_member_of"][-1]["host_name"] == "H0999"
+    assert nested.id not in {x["group_id"] for x in card["local_member_of"]}
+    fact = card["rights"]["fact"]
+    assert len(fact) == 1
+    row = fact[0]
+    assert (row["local_group"], row["local_group_sid"], row["via"], row["hosts_total"]) == ("Administrators", "S-1-5-32-544", [], 1200)
+    assert [h["host_name"] for h in row["hosts"]] == [f"H{i:04d}" for i in range(50)]
+    assert row["hosts"][0] == {"group_id": groups[0], "host_asset_id": hosts[0][0], "host_name": "H0000"}
 
 
 def test_card_404_and_auditor(analyst: TestClient, state: dict[str, Any], client_as: Callable[[str], TestClient]) -> None:

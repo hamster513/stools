@@ -249,8 +249,11 @@ GET   /groups/{id}                     поля списка + host_name ('' у 
                                        members_total — всего,
                                        member_of: [{id, name, domain, direct}],
                                        local_member_of: [{group_id, name, host_asset_id, host_name,
-                                       via: [{id, name}]}],
-                                       rights: {fact: [как local_member_of],
+                                       via: [{id, name}]}] — по имени хоста, не больше 1000,
+                                       local_member_of_total — всего,
+                                       rights: {fact: [{local_group, local_group_sid, via: [{id, name}],
+                                       hosts_total, hosts: [{group_id, host_asset_id, host_name}]
+                                       (первые 50 по имени хоста)}],
                                        policy: [{local_group, via: restricted_groups|gpp, action, gpo_name,
                                        filtered, hosts_total, hosts: [{name, asset_id|null}],
                                        through: {id, name}|null}],
@@ -288,9 +291,15 @@ GET   /groups/export                   format=csv|xlsx (csv) и те же фил
 субъекта («все прошедшие проверку пользователи и компьютеры»), у прочих
 пусто. `member_of` — доменные группы, куда группа входит, `direct: false`
 — через вложенность. `local_member_of` — локальные группы хостов, где
-участник — сама группа или её предок; `via` — группы цепочки от группы до
-участника (без самой группы, кратчайшая), `[]` — прямо. `rights.fact` —
-то же самое («по факту», VM). `rights.policy` («по политике», GPO): у
+прямо состоит сама группа или её доменный предок (выше локальной группы
+подъём не идёт: локальная группа Windows не вкладывается в локальную);
+`via` — группы цепочки от группы до участника (без самой группы,
+кратчайшая), `[]` — прямо. `rights.fact` («по факту», VM) — те же
+вхождения сводом: строка на локальную группу (по SID, без SID — по имени
+без учёта регистра) и цепочку `via`, с числом хостов и первыми 50 по имени
+хоста; порядок — по числу хостов (больше — выше), затем по имени. У Domain
+Users и Domain Admins это локальные группы почти каждого хоста, поэтому
+список по хостам ограничен 1000, а свод — 50 хостами на строку. `rights.policy` («по политике», GPO): у
 доменной — записи прав GPO с SID группы или её доменного предка (`through`
 — предок, `null` — сама группа; SID `S-1-5-21-*` сравнивается сам по себе,
 прочие — ещё и с доменом GPO); у локальной — записи, которые назначают

@@ -5,8 +5,11 @@
 - Список: все оси — столбцы группы, поэтому отбор, фасеты и страница считаются в базе. Фасет оси — по группам
   под всеми фильтрами, кроме фильтра этой оси; `q`, `domain` и `host_id` сужают и фасеты.
 - Карточка: прямой состав (до `MEMBERS_MAX` строк), предки — подъёмом по `member_group_id` (родители фронта
-  одним запросом на шаг): доменные — «Куда входит», локальные — «права по факту» (группа или её предок —
-  участник локальной группы хоста). По политике — строки `asset_group_gpo`: у доменной — с SID группы или её
+  одним запросом на шаг) только через доменные группы: доменные предки — «Куда входит», локальные группы, где
+  прямо состоит сама группа или её доменный предок, — «права по факту» (спека §5). Выше локальной группы подъём
+  не идёт: локальная группа Windows не вкладывается в локальную. По хостам — до `LOCAL_OF_MAX` строк по имени
+  хоста; свод по факту — строка на (локальная группа: SID, без SID — имя; цепочка) с `FACT_HOSTS_MAX` хостами
+  (у Domain Users и Domain Admins — локальные группы почти каждого хоста). По политике — строки `asset_group_gpo`: у доменной — с SID группы или её
   доменного предка (SID `S-1-5-21-*` — по одному SID, прочие — ещё и по домену GPO), у локальной — с её SID
   (у строки без SID цели — по имени) и её хостом в списке хостов GPO.
 - Полный состав: спуск от группы по `asset_group_member` (участники фронта одним запросом на шаг), только
@@ -43,6 +46,10 @@ MEMBERS = ("some", "none")
 AXES = ("kind", "source", "state", "members")
 #: Прямой состав в карточке: у Domain Users через primaryGroupID — все учётки домена; полный счёт — `members_total`.
 MEMBERS_MAX = 1000
+#: Локальных групп «по хостам» в карточке; полный счёт — `local_member_of_total`.
+LOCAL_OF_MAX = 1000
+#: Хостов в строке свода «по факту»; полный счёт — `hosts_total`.
+FACT_HOSTS_MAX = 50
 #: Тупиков полного состава в ответе; полный счёт — `dead_ends_total`.
 DEAD_ENDS_MAX = 500
 #: Столько id в одном `IN` при обходе.
@@ -173,7 +180,8 @@ def _group_row(conn: Connection, group_id: int) -> Any:
 
 
 def _parents(conn: Connection, start: int) -> dict[int, list[int]]:
-    """Группа → группы, куда она прямо входит, — для всех групп выше `start` (подъём фронтом)."""
+    """Группа → группы, куда она прямо входит: `start` и его доменные предки (подъём фронтом); родители-локальные
+    группы попадают в ответ, но сами не раскрываются."""
     parents: dict[int, list[int]] = defaultdict(list)
     loaded: set[int] = set()
     frontier = {start}
@@ -181,13 +189,15 @@ def _parents(conn: Connection, start: int) -> dict[int, list[int]]:
         loaded |= frontier
         found: set[int] = set()
         for chunk in _chunks(frontier):
-            for child, parent in conn.execute(
-                select(AssetGroupMember.member_group_id, AssetGroupMember.group_id)
+            for child, parent, local in conn.execute(
+                select(AssetGroupMember.member_group_id, AssetGroupMember.group_id, AssetGroup.local)
+                .join(AssetGroup, AssetGroup.id == AssetGroupMember.group_id)
                 .where(AssetGroupMember.member_group_id.in_(chunk)).distinct()
             ).tuples():
                 if child is not None:
                     parents[child].append(parent)
-                    found.add(parent)
+                    if not local:
+                        found.add(parent)
         frontier = found - loaded
     for v in parents.values():
         v.sort()
@@ -338,6 +348,23 @@ def _gpo_notes(db: Session, domains: Iterable[str]) -> list[dict[str, Any]]:
     return [{"domain": d, **notes[d]} for d in sorted({x.lower() for x in domains if x}) if d in notes]
 
 
+def _fact(local_of: list[dict[str, Any]], meta: dict[int, GroupMeta]) -> list[dict[str, Any]]:
+    """Свод «по факту»: строка на (локальная группа — SID, без SID — имя в нижнем регистре; цепочка). `local_of`
+    уже по имени хоста — первые хосты строки тоже по нему."""
+    rows: dict[tuple[str, tuple[int, ...]], dict[str, Any]] = {}
+    for x in local_of:
+        sid = meta[x["group_id"]][4]
+        key = (sid or x["name"].lower(), tuple(v["id"] for v in x["via"]))
+        row = rows.get(key)
+        if row is None:
+            row = rows[key] = {"local_group": x["name"], "local_group_sid": sid, "via": x["via"], "hosts_total": 0, "hosts": []}
+        row["hosts_total"] += 1
+        if len(row["hosts"]) < FACT_HOSTS_MAX:
+            row["hosts"].append({"group_id": x["group_id"], "host_asset_id": x["host_asset_id"], "host_name": x["host_name"]})
+    return sorted(rows.values(), key=lambda r: (-r["hosts_total"], r["local_group"].lower(), len(r["via"]),
+                                                [v["name"].lower() for v in r["via"]]))
+
+
 def group_detail(db: Session, group_id: int) -> dict[str, Any]:
     """Карточка: поля списка, `host_name`, прямой состав, куда входит, права по факту и по политике (см. модуль)."""
     conn = db.connection()
@@ -352,9 +379,10 @@ def group_detail(db: Session, group_id: int) -> dict[str, Any]:
     by_chain = sorted(chains, key=lambda a: (len(chains[a]), meta[a][0].lower(), a))
     member_of = [{"id": a, "name": meta[a][0], "domain": meta[a][1], "direct": len(chains[a]) == 1}
                  for a in by_chain if not meta[a][2]]
+    local_ids = sorted((a for a in chains if meta[a][2]),
+                       key=lambda a: (hosts.get(meta[a][3] or 0, "").lower(), meta[a][0].lower(), a))
     local_of = [{"group_id": a, "name": meta[a][0], "host_asset_id": meta[a][3], "host_name": hosts.get(meta[a][3] or 0, ""),
-                 "via": [_ref(meta, x) for x in chains[a][1:]]}
-                for a in by_chain if meta[a][2]]
+                 "via": [_ref(meta, x) for x in chains[a][1:]]} for a in local_ids]
     if card["local"]:
         policy_rows = _policy_local(conn, card["sid"], card["name"], card["host_asset_id"])
         host_domain = conn.execute(select(Asset.domain).where(Asset.id == card["host_asset_id"])).scalar() or ""
@@ -366,8 +394,8 @@ def group_detail(db: Session, group_id: int) -> dict[str, Any]:
         **card,
         "members": members, "members_total": members_total,
         "member_of": member_of,
-        "local_member_of": local_of,
-        "rights": {"fact": local_of, "policy": _policy_items(conn, policy_rows, group_id, meta), "notes": _gpo_notes(db, domains)},
+        "local_member_of": local_of[:LOCAL_OF_MAX], "local_member_of_total": len(local_of),
+        "rights": {"fact": _fact(local_of, meta), "policy": _policy_items(conn, policy_rows, group_id, meta), "notes": _gpo_notes(db, domains)},
     }
 
 
