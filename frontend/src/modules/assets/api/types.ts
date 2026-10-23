@@ -65,11 +65,16 @@ export interface AssetSourceBadge {
   seen_at: string
 }
 
+/** Сеть актива с признаками её группы: где хост — внутри, в DMZ, снаружи. */
 export interface AssetNetwork {
   id: number
   cidr: string
   title: string
   zone: string | null
+  zone_title: string | null
+  placement: Placement
+  internet_facing: boolean
+  confidential: boolean
 }
 
 /** Признак кластера Windows из наблюдения AD: учётка кластера и роль — виртуальные имена, не хосты. */
@@ -105,6 +110,8 @@ export interface AssetsFacets {
   /** Активы с расхождением кода под статусами фильтра (без фильтра — учитываемые в подсчётах). */
   code: Record<CodeFilter, number>
   zone: Record<string, number>
+  /** Расположение по группе сети актива; '' — вне сети или группа без расположения. */
+  placement: Record<Placement, number>
   criticality: Record<Criticality | 'none', number>
   /** Только активы с наблюдением AD. */
   laps: Record<LapsFilter, number>
@@ -150,6 +157,8 @@ export interface AssetsQuery {
   code?: CodeFilter[]
   network_id?: number[]
   zone?: string[]
+  /** internal | dmz | external | `-` (не задано). */
+  placement?: string[]
   tag?: string
   criticality?: (Criticality | 'none')[]
   laps?: LapsFilter[]
@@ -272,16 +281,48 @@ export function defaultCidr(ip: string): string {
   return v4.length === 4 ? `${v4.slice(0, 3).join('.')}.0/24` : `${ip}/64`
 }
 
-/** Поля сети, которые задаёт человек. */
+/** Расположение группы сетей; '' — не задано. */
+export type Placement = 'internal' | 'dmz' | 'external' | ''
+export const PLACEMENTS: Placement[] = ['internal', 'dmz', 'external', '']
+/** Те же подписи, что в выгрузке сетей. */
+export const PLACEMENT_LABELS: Record<Placement, string> = { internal: 'внутренняя', dmz: 'DMZ', external: 'внешняя', '': 'не задано' }
+
+/** Признаки группы строкой: «DMZ · доступна из интернета · конфиденциальные данные»; '' — признаков нет. */
+export function placementText(n: { placement: Placement; internet_facing: boolean; confidential?: boolean }): string {
+  return [n.placement ? PLACEMENT_LABELS[n.placement] : '', n.internet_facing ? 'доступна из интернета' : '', n.confidential ? 'конфиденциальные данные' : '']
+    .filter(Boolean).join(' · ')
+}
+
+/** Откуда у сети группа: вручную, по правилу, публичный адрес RackTables, не назначена. */
+export type ZoneSource = 'manual' | 'rule' | 'racktables' | ''
+export const ZONE_SOURCES: ZoneSource[] = ['manual', 'rule', 'racktables', '']
+export const ZONE_SOURCE_LABELS: Record<ZoneSource, string> = { manual: 'вручную', rule: 'по правилу', racktables: 'публичный адрес (RackTables)', '': 'не назначена' }
+
+/** Откуда сеть: описана вручную или создана проходом RackTables. */
+export type NetworkOrigin = '' | 'racktables'
+export const NETWORK_ORIGINS: NetworkOrigin[] = ['', 'racktables']
+export const NETWORK_ORIGIN_LABELS: Record<NetworkOrigin, string> = { '': 'вручную', racktables: 'RackTables' }
+
+/** Поля сети, которые задаёт человек. `zone_mode`: rules — группу назначают правила, manual — закрепить `zone`. */
 export interface NetworkIn {
   cidr: string
   title: string
   description: string
   zone: string | null
+  zone_mode?: 'manual' | 'rules'
   site: string
   owner: string
   vlan: number | null
   tags: string[]
+}
+
+/** Фильтры списка сетей; многозначные — повтором ключа, `-` — не задано. */
+export interface NetworksQuery {
+  q?: string
+  zone?: string[]
+  placement?: string[]
+  zone_source?: string[]
+  origin?: string[]
 }
 
 /** Расписание задачи модуля (DNS, RackTables, синхронизация) — общее расписание планировщика (platform/collector). */
@@ -294,17 +335,16 @@ export interface NetworkItem {
   title: string
   zone: string | null
   zone_title: string | null
-  /** Расположение группы: internal | dmz | external | '' (не задано или сеть без группы). */
-  placement: string
+  /** Расположение группы; '' — не задано или сеть без группы. */
+  placement: Placement
   internet_facing: boolean
-  /** Откуда группа: manual | rule | racktables | '' (не назначена). */
-  zone_source: string
+  zone_source: ZoneSource
   vlan: number | null
   site: string
   tags: string[]
   implicit_tags: string[]
   /** Пусто — описана вручную; racktables — создана проходом RackTables, который обновляет её название, описание, VLAN и теги. */
-  origin: string
+  origin: NetworkOrigin
   /** Активов в сети (без слитых). */
   assets: number
 }
@@ -328,7 +368,7 @@ export interface Network extends NetworkItem {
   owner: string
   confidential: boolean
   zone_rule_id: number | null
-  zone_rule: { id: number; match: string; value: string; position: number } | null
+  zone_rule: { id: number; match: RuleMatch; value: string; position: number } | null
   origin_key: string
   origin_seen_at: string | null
   /** Объемлющие — от узкой к широкой. */
@@ -340,15 +380,56 @@ export interface Network extends NetworkItem {
   updated_at: string
 }
 
+/** Группа сетей (в API — зона) с признаками; в расчёт риска признаки не идут. */
 export interface Zone {
   name: string
   title: string
   description: string
+  placement: Placement
+  /** Сети группы доступны из интернета. */
+  internet_facing: boolean
+  /** В сетях группы конфиденциальные данные. */
+  confidential: boolean
   /** Сколько сетей ссылается на зону: пока не ноль, удалить её нельзя. */
   networks: number
 }
 
 export type ZoneIn = Omit<Zone, 'networks'>
+export type ZonePatch = Partial<Omit<Zone, 'name' | 'networks'>>
+
+/** Условие правила группы: по имени сети (без учёта регистра), тегу (явному или унаследованному), адресу. */
+export type RuleMatch = 'name_prefix' | 'name_contains' | 'name_regex' | 'tag' | 'cidr'
+export const RULE_MATCHES: RuleMatch[] = ['name_prefix', 'name_contains', 'name_regex', 'tag', 'cidr']
+export const RULE_MATCH_LABELS: Record<RuleMatch, string> = {
+  name_prefix: 'имя начинается с',
+  name_contains: 'имя содержит',
+  name_regex: 'имя подходит под шаблон',
+  tag: 'есть тег',
+  cidr: 'сеть внутри',
+}
+
+/** Правило отнесения сети к группе: проверяются по порядку, срабатывает первое включённое подошедшее. */
+export interface ZoneRule {
+  id: number
+  position: number
+  enabled: boolean
+  zone: string
+  match: RuleMatch
+  value: string
+  note: string
+  /** Сетей сейчас в группе по этому правилу. */
+  networks: number
+  created_at: string
+  updated_at: string
+}
+
+export type ZoneRuleIn = Pick<ZoneRule, 'match' | 'value' | 'zone' | 'enabled' | 'note'>
+
+/** Какие не ручные сети забрало бы правило на этом месте (первые 20); база не меняется. */
+export interface ZoneRulePreview {
+  count: number
+  sample: { id: number; cidr: string; title: string; zone_before: string | null }[]
+}
 
 export type DnsMode = 'direct' | 'ad'
 

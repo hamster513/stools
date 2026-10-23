@@ -1,13 +1,14 @@
 /** Хуки TanStack Query модуля Assets. */
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
 import { nextPageOffset } from '@/platform/collector/paging'
 import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/queries'
 import type { FindingSummary } from '@/platform/findings/types'
 import type {
   AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, GroupDetail, GroupExpanded,
-  GroupsQuery, GroupsResponse, Job, Network, NetworkIn, NetworkList,
+  GroupsQuery, GroupsResponse, Job, Network, NetworkIn, NetworkList, NetworksQuery,
   NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScheduleIn, SyncStatus, UserDetail, UserPatch, UsersQuery, UsersResponse, Zone, ZoneIn,
+  ZonePatch, ZoneRule, ZoneRuleIn, ZoneRulePreview,
 } from './types'
 
 export const ASSETS_PAGE_SIZE = 200
@@ -273,15 +274,47 @@ export function useJob(id: number | null) {
   })
 }
 
-/** Первые 500 сетей по адресу (больше сервер за раз не отдаёт) — для выбора сети и страницы «Сети». */
-export function useNetworks() {
-  return useQuery<NetworkList, ApiRequestError>({ queryKey: ['assets-networks'], queryFn: () => api.get('/api/assets/networks?limit=500') })
+/** Список сетей по страницам (сетей тысячи): поиск и фасеты — на сервере. */
+export function useNetworkList(query: NetworksQuery) {
+  return useInfiniteQuery<NetworkList, ApiRequestError>({
+    queryKey: ['assets-networks', 'list', query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get(`/api/assets/networks${buildQuery({ ...query, limit: ASSETS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
+    placeholderData: (prev) => prev,
+  })
 }
 
-/** Карточка сети: форма правки берёт поля отсюда — в строке списка нет описания и владельца. */
+/** Сколько сетей показывает выбор сети: первые совпадения поиска, а не весь список. */
+export const NETWORK_PICK_LIMIT = 50
+
+/** Выбор сети: первые совпадения поиска (адрес, имя, тег, VLAN); пустой поиск — ничего не запрашивает. */
+export function useNetworkSearch(q: string) {
+  return useQuery<NetworkList, ApiRequestError>({
+    queryKey: ['assets-networks', 'search', q],
+    queryFn: () => api.get(`/api/assets/networks${buildQuery({ q, limit: NETWORK_PICK_LIMIT })}`),
+    enabled: q !== '',
+    placeholderData: (prev) => prev,
+  })
+}
+
+/** Карточка сети: CIDR, группа и «почему», признаки, теги, объемлющие и вложенные. */
 export function useNetwork(id: number | null) {
   return useQuery<Network, ApiRequestError>({ queryKey: ['assets-networks', id], queryFn: () => api.get(`/api/assets/networks/${id}`), enabled: id !== null })
 }
+
+/** Карточки нескольких сетей (подписи выбранных в фильтре) — тот же кэш, что у useNetwork. */
+export function useNetworkCards(ids: number[]): Map<number, Network> {
+  const results = useQueries({
+    queries: ids.map((id) => ({ queryKey: ['assets-networks', id], queryFn: (): Promise<Network> => api.get(`/api/assets/networks/${id}`) })),
+  })
+  const out = new Map<number, Network>()
+  for (const r of results) if (r.data) out.set(r.data.id, r.data)
+  return out
+}
+
+/** Группа сети меняет расположение хостов: после правки сети, группы или правил обновить и сети, и активы. */
+const NETWORK_KEYS = ['assets-networks', 'assets-zones', 'assets-zone-rules', 'assets-list', 'assets-asset']
 
 /** Сеть изменилась — активы могли переехать в другую сеть: обновить и список, и карточку, и зоны (счётчик сетей). */
 function useNetworkMutation<V, R>(fn: (vars: V) => Promise<R>) {
@@ -289,7 +322,7 @@ function useNetworkMutation<V, R>(fn: (vars: V) => Promise<R>) {
   return useMutation<R, ApiRequestError, V>({
     mutationFn: fn,
     onSuccess: () => {
-      for (const key of ['assets-networks', 'assets-zones', 'assets-list', 'assets-asset']) qc.invalidateQueries({ queryKey: [key] })
+      for (const key of NETWORK_KEYS) qc.invalidateQueries({ queryKey: [key] })
     },
   })
 }
@@ -300,8 +333,16 @@ export function useSaveNetwork() {
   )
 }
 
+/** Удалённая карточка не перезапрашивается (иначе 404), а забывается. */
 export function useDeleteNetwork() {
-  return useNetworkMutation<number, void>((id) => api.del(`/api/assets/networks/${id}`))
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/assets/networks/${id}`),
+    onSuccess: (_void, id) => {
+      qc.removeQueries({ queryKey: ['assets-networks', id] })
+      for (const key of NETWORK_KEYS) qc.invalidateQueries({ queryKey: [key] })
+    },
+  })
 }
 
 export function useZones() {
@@ -314,6 +355,42 @@ export function useCreateZone() {
 
 export function useDeleteZone() {
   return useNetworkMutation<string, void>((name) => api.del(`/api/assets/zones/${encodeURIComponent(name)}`))
+}
+
+/** Признаки и подписи группы сетей: меняют расположение у сетей и хостов. */
+export function usePatchZone() {
+  return useNetworkMutation<{ name: string; body: ZonePatch }, Zone>(({ name, body }) => api.patch(`/api/assets/zones/${encodeURIComponent(name)}`, body))
+}
+
+export function useZoneRules() {
+  return useQuery<ZoneRule[], ApiRequestError>({ queryKey: ['assets-zone-rules'], queryFn: () => api.get('/api/assets/networks/zone-rules') })
+}
+
+/** Любая правка правил пересчитывает группы всех не ручных сетей. */
+export function useSaveZoneRule() {
+  return useNetworkMutation<{ id?: number; body: ZoneRuleIn }, ZoneRule>(({ id, body }) =>
+    id === undefined ? api.post('/api/assets/networks/zone-rules', body) : api.put(`/api/assets/networks/zone-rules/${id}`, body),
+  )
+}
+
+export function useDeleteZoneRule() {
+  return useNetworkMutation<number, void>((id) => api.del(`/api/assets/networks/zone-rules/${id}`))
+}
+
+/** Новый порядок — id всех правил. */
+export function useReorderZoneRules() {
+  return useNetworkMutation<number[], ZoneRule[]>((ids) => api.put('/api/assets/networks/zone-rules/order', ids))
+}
+
+/** Проверка до сохранения: сколько не ручных сетей забрало бы правило на месте `position` (без него — в конце). */
+export function usePreviewZoneRule() {
+  return useMutation<ZoneRulePreview, ApiRequestError, { match: string; value: string; zone: string; position?: number }>({
+    mutationFn: (body) => api.post('/api/assets/networks/zone-rules/preview', body),
+  })
+}
+
+export function useApplyZoneRules() {
+  return useNetworkMutation<void, { changed: number }>(() => api.post('/api/assets/networks/zone-rules/apply'))
 }
 
 export function useDnsServers() {

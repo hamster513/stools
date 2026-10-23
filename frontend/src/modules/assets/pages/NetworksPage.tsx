@@ -1,145 +1,298 @@
-import { useEffect, useState } from 'react'
-import { Network as NetworkIcon, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronRight, FilterX, Network as NetworkIcon, Plus, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useDeleteNetwork, useNetwork, useNetworks } from '@/modules/assets/api/queries'
-import type { NetworkItem } from '@/modules/assets/api/types'
+import { useNetworkList } from '@/modules/assets/api/queries'
+import {
+  NETWORK_ORIGIN_LABELS,
+  NETWORK_ORIGINS,
+  num,
+  PLACEMENT_LABELS,
+  PLACEMENTS,
+  ZONE_SOURCE_LABELS,
+  ZONE_SOURCES,
+  type NetworkItem,
+  type NetworkList,
+  type NetworkOrigin,
+  type NetworksQuery,
+  type Placement,
+  type ZoneSource,
+} from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
+import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { useCan } from '@/lib/can'
+import { cn } from '@/lib/cn'
 import { Link, useRouter, useSearchParams } from '@/lib/router'
 import { ExportButton } from '@/platform/filters/ExportButton'
-import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
+import { exportHref } from '@/platform/filters/exportHref'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { facetValues, useRememberedFacets, type FacetValue } from '@/platform/filters/useRememberedFacets'
+import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { NetworkForm } from './NetworkForm'
+import { fromWire, listFrom, toggleValue, toWire, valueChips } from '@/platform/findings/facets'
+import { FacetRow, FacetSection } from './AssetsPage'
+import { NetworkDrawer } from './NetworkDrawer'
+import { ZoneRulesPanel } from './ZoneRulesPanel'
 
-const COLUMNS: ColumnDef[] = [
-  { key: 'cidr', label: 'CIDR', width: 136 },
-  { key: 'title', label: 'Название', width: 96, flex: true },
-  { key: 'zone', label: 'Зона', width: 80 },
-  { key: 'site', label: 'Площадка', width: 96 },
-  { key: 'assets', label: 'Активов', width: 84, align: 'right' },
+const ROW_HEIGHT = 40
+
+// Колонки — те же, что у выгрузки /networks/export, в том же порядке.
+const NETWORK_COLUMNS: ColumnDef[] = [
+  { key: 'cidr', label: 'CIDR', width: 152 },
+  { key: 'title', label: 'Название', width: 200, flex: true },
+  { key: 'zone', label: 'Группа', width: 140 },
+  { key: 'placement', label: 'Расположение', width: 132 },
+  { key: 'vlan', label: 'VLAN', width: 64, align: 'right' },
+  { key: 'site', label: 'Площадка', width: 120 },
+  { key: 'tags', label: 'Теги', width: 200 },
+  { key: 'assets', label: 'Активов', width: 80, align: 'right' },
+  { key: 'open', label: 'Открыть', width: 32, resizable: false },
 ]
-// Кнопки только у тех, кому можно менять: без них пустая колонка не занимает места.
-const WRITE_COLUMNS: ColumnDef[] = [...COLUMNS, { key: 'actions', label: 'Действие', width: 112, resizable: false }]
-const HEADER = {
-  actions: <span className="sr-only">Действие</span>,
+const FILTERS_PAGE = 'assets-networks'
+
+/** Внутри страницы «не задано» — ''; в запрос уходит как `-` (toWire). */
+interface Filters {
+  zone?: string[]
+  placement?: Placement[]
+  zone_source?: ZoneSource[]
+  origin?: NetworkOrigin[]
+}
+type Facets = NonNullable<NetworkList['facets']>
+
+const has = <T extends string>(list: readonly T[] | undefined, value: T) => list?.includes(value) ?? false
+const zoneLabel = (z: string) => z || 'без группы'
+
+function isTypingTarget(el: EventTarget | null): boolean {
+  return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
 }
 
-function ConfirmDelete({ network, onDone }: { network: NetworkItem; onDone: () => void }) {
-  const remove = useDeleteNetwork()
+/** Значения фильтра из ссылки: `-` — не задано; чужие значения отбрасываются. */
+function wireFrom<T extends string>(params: URLSearchParams, key: string, allowed?: readonly T[]): T[] | undefined {
+  const list = fromWire(listFrom(params, key))?.filter((v): v is T => !allowed || (allowed as readonly string[]).includes(v))
+  return list?.length ? list : undefined
+}
+
+function NetworkFacetPanel({ facets, zones, filters, onToggle, total }: {
+  facets: Facets | null
+  /** Группы, которые панель уже показывала (ушедшие в ноль — с 0); считает страница. */
+  zones: FacetValue[]
+  filters: Filters
+  onToggle: <K extends keyof Filters>(key: K, value: Filters[K]) => void
+  total: number
+}) {
+  const pick = <K extends keyof Filters>(key: K, value: NonNullable<Filters[K]>[number]) =>
+    onToggle(key, toggleValue(filters[key] as (typeof value)[] | undefined, value) as Filters[K])
   return (
-    <div role="dialog" aria-label="Удалить сеть" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded border border-grid bg-surface p-4">
-        <div className="mb-2 text-sm font-semibold text-text">Удалить сеть {network.cidr}?</div>
-        <p className="mb-4 text-xs text-text-secondary">
-          Активы сети ({network.assets}) перейдут в самую узкую из оставшихся сетей, содержащую их адрес, или останутся без сети;
-          привязка вручную к этой сети сбрасывается.
-        </p>
-        {remove.error && <p className="mb-2 text-xs text-kind-1">{remove.error instanceof ApiRequestError ? remove.error.message : 'Не удалось удалить'}</p>}
-        <div className="flex justify-end gap-2">
-          <Button onClick={onDone}>Отмена</Button>
-          <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate(network.id, { onSuccess: onDone })}>Удалить</Button>
-        </div>
+    <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
+      <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Сетей <span className="font-mono tabular-nums text-text">{num(total)}</span></div>
+      {zones.length > 0 && (
+        <FacetSection title="Группа сетей">
+          {zones.map(({ value: z, count }) => (
+            <FacetRow key={z} active={has(filters.zone, z)} count={count} onClick={() => pick('zone', z)}>{zoneLabel(z)}</FacetRow>
+          ))}
+        </FacetSection>
+      )}
+      <FacetSection title="Расположение">
+        {PLACEMENTS.map((p) => (
+          <FacetRow key={p} active={has(filters.placement, p)} count={facets?.placement[p]} onClick={() => pick('placement', p)}>{PLACEMENT_LABELS[p]}</FacetRow>
+        ))}
+      </FacetSection>
+      <FacetSection title="Источник группы">
+        {ZONE_SOURCES.map((s) => (
+          <FacetRow key={s} active={has(filters.zone_source, s)} count={facets?.zone_source[s]} onClick={() => pick('zone_source', s)}>{ZONE_SOURCE_LABELS[s]}</FacetRow>
+        ))}
+      </FacetSection>
+      <FacetSection title="Откуда сеть">
+        {NETWORK_ORIGINS.map((o) => (
+          <FacetRow key={o} active={has(filters.origin, o)} count={facets?.origin[o]} onClick={() => pick('origin', o)}>{NETWORK_ORIGIN_LABELS[o]}</FacetRow>
+        ))}
+      </FacetSection>
+    </div>
+  )
+}
+
+function NetworksTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd }: {
+  items: NetworkItem[]
+  selectedIndex: number
+  onSelectIndex: (i: number) => void
+  onOpen: (i: number) => void
+  onReachEnd?: () => void
+}) {
+  const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
+  const cols = useColumnWidths('assets-networks-list-columns', NETWORK_COLUMNS)
+  return (
+    <div ref={parentRef} data-col-resize-root className="h-full overflow-auto">
+      <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
+        <ResizableHeader cols={cols} as="div" className="px-2 py-2" content={{ open: <span className="sr-only">Открыть</span> }} />
+      </div>
+      <div style={{ height: totalSize, position: 'relative' }}>
+        {rows.map((v) => {
+          const n = items[v.index]
+          const selected = v.index === selectedIndex
+          const tags = [...n.tags, ...n.implicit_tags.filter((t) => !n.tags.includes(t))]
+          return (
+            <div key={n.id} {...clickableRow(() => { onSelectIndex(v.index); onOpen(v.index) })} className={cn(ROW_FOCUS, 'absolute top-0 left-0 grid w-full cursor-pointer items-center border-b border-grid text-xs', selected ? 'bg-row-selected' : 'hover:bg-row-hover')} style={{ ...cols.gridStyle, height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}>
+              <div className="min-w-0 truncate px-2 font-mono text-text" title={n.cidr}>{n.cidr}</div>
+              <div className="flex min-w-0 items-center gap-1 px-2">
+                <span className="min-w-0 truncate text-text" title={n.title}>{n.title || '—'}</span>
+                {n.origin === 'racktables' && <span className="shrink-0 rounded border border-grid px-1 text-[10px] text-text-secondary">RT</span>}
+              </div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={n.zone ? `${n.zone_title || n.zone} · ${ZONE_SOURCE_LABELS[n.zone_source]}` : undefined}>
+                {n.zone ?? '—'}{n.zone && n.zone_source === 'manual' && <span className="ml-1 text-[10px]">вручную</span>}
+              </div>
+              <div className="min-w-0 truncate px-2 text-text-secondary">
+                {n.placement ? PLACEMENT_LABELS[n.placement] : '—'}{n.internet_facing && <span className="ml-1 text-[10px] text-kind-1" title="доступна из интернета">интернет</span>}
+              </div>
+              <div className="min-w-0 truncate px-2 text-right font-mono tabular-nums text-text-secondary">{n.vlan ?? '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={n.site || undefined}>{n.site || '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={tags.join(', ') || undefined}>{tags.join(', ') || '—'}</div>
+              <div className="min-w-0 truncate px-2 text-right font-mono tabular-nums">
+                {/* Ссылка в строке-кнопке: щелчок ведёт в список активов сети, а не в карточку. */}
+                <span onClick={(e) => e.stopPropagation()}><Link to={`/assets/list?network_id=${n.id}`} className="text-text hover:text-primary hover:underline">{num(n.assets)}</Link></span>
+              </div>
+              <div className="flex justify-end pr-2"><ChevronRight size={14} className="shrink-0 text-text-secondary/40" aria-hidden /></div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
 }
 
-/** Правка сети: поля формы — из карточки (в строке списка нет описания и владельца). */
-function EditNetwork({ id, onDone }: { id: number; onDone: () => void }) {
-  const card = useNetwork(id)
-  if (card.isError) return <ErrorState message={card.error instanceof ApiRequestError ? card.error.message : 'Не удалось загрузить сеть'} onRetry={() => card.refetch()} />
-  if (!card.data) return <FullPageSpinner />
-  return <NetworkForm network={card.data} onDone={onDone} onCancel={onDone} />
-}
-
-/** Сети: CIDR, зона, площадка, сколько активов. Строка — правка сети. */
-export function NetworksPage() {
-  const { write } = useCan()
-  const networks = useNetworks()
-  // `?new=<cidr>` — ссылка «создать сеть» из карточки актива без сети: форма новой сети открыта сразу, CIDR подставлен.
+/** Вкладка «Сети»: поиск по адресу, имени, тегу и VLAN, фасеты, список по страницам, карточка сбоку. */
+function NetworksTab({ drawerOpen, onOpen, onCreate, onCloseDrawer }: { drawerOpen: boolean; onOpen: (id: number) => void; onCreate: () => void; onCloseDrawer: () => void }) {
   const params = useSearchParams()
-  const { navigate } = useRouter()
-  const [newCidr, setNewCidr] = useState(() => params.get('new') ?? '')
-  // undefined — форма закрыта, null — новая сеть, число — id изменяемой сети.
-  const [editing, setEditing] = useState<number | null | undefined>(() => (newCidr ? null : undefined))
-  // Параметр снимается: закрытая форма не откроется снова при обновлении страницы.
-  useEffect(() => { if (params.has('new')) navigate('/assets/networks', { replace: true }) }, [params, navigate])
-  function closeForm() { setEditing(undefined); setNewCidr('') }
-  const [deleting, setDeleting] = useState<NetworkItem | null>(null)
-  const cols = useColumnWidths('assets-networks-columns', write ? WRITE_COLUMNS : COLUMNS)
+  const { write } = useCan()
+  const [filters, setFilters] = useState<Filters>(() => ({
+    zone: wireFrom(params, 'zone'),
+    placement: wireFrom<Placement>(params, 'placement', PLACEMENTS),
+    zone_source: wireFrom<ZoneSource>(params, 'zone_source', ZONE_SOURCES),
+    origin: wireFrom<NetworkOrigin>(params, 'origin', NETWORK_ORIGINS),
+  }))
+  const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
+  const q = useDebouncedValue(searchInput.trim(), 250)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const filtersPanel = useFiltersPanel(FILTERS_PAGE)
 
-  if (networks.isLoading) return <FullPageSpinner />
-  if (networks.isError || !networks.data) {
-    const msg = networks.error instanceof ApiRequestError ? networks.error.message : 'Не удалось загрузить сети'
-    return <div className="p-6"><ErrorState message={msg} onRetry={() => networks.refetch()} /></div>
-  }
-  const list = networks.data.items
+  const queryArgs = useMemo<NetworksQuery>(() => ({
+    q: q || undefined, zone: toWire(filters.zone), placement: toWire(filters.placement), zone_source: toWire(filters.zone_source), origin: toWire(filters.origin),
+  }), [filters, q])
+  const query = useNetworkList(queryArgs)
+  const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
+  const first = query.data?.pages[0]
+  const total = first?.total ?? 0
+  // Группы считаются по отфильтрованному набору: ушедшие в ноль страница помнит, иначе вторую группу не выбрать.
+  const zones = useRememberedFacets(first?.facets ? { zone: facetValues(first.facets.zone) } : undefined).zone ?? []
+  useEffect(() => { setSelectedIndex(0) }, [queryArgs])
+  const selected: NetworkItem | null = items[selectedIndex] ?? null
+
+  function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
+  function clearAll() { setFilters({}); setSearchInput('') }
+  const chips: FilterChip[] = [
+    ...valueChips('Группа', filters.zone, zoneLabel, (v) => toggle('zone', v)),
+    ...valueChips('Расположение', filters.placement, (p) => PLACEMENT_LABELS[p], (v) => toggle('placement', v)),
+    ...valueChips('Источник группы', filters.zone_source, (s) => ZONE_SOURCE_LABELS[s], (v) => toggle('zone_source', v)),
+    ...valueChips('Откуда', filters.origin, (o) => NETWORK_ORIGIN_LABELS[o], (v) => toggle('origin', v)),
+  ]
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') { if (drawerOpen) return onCloseDrawer(); if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); return }
+      if (drawerOpen || isTypingTarget(e.target)) return
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
+      if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
+      if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
+      // Enter на ссылке «активов» в строке — её собственное действие, а не карточка выбранной сети.
+      if (e.key === 'Enter' && selected && !(e.target instanceof Element && e.target.closest('a, button'))) { e.preventDefault(); onOpen(selected.id) }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [items.length, selected, drawerOpen, onOpen, onCloseDrawer])
+
+  const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== ''
+  const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить сети' : null
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="mb-4 flex items-start gap-3">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-base font-semibold text-text">Сети</h1>
-            <ExportButton href={(fmt) => `/api/assets/networks/export?format=${fmt}`} total={networks.data.total} />
-          </div>
-          <p className="max-w-2xl text-xs text-text-secondary">
-            Актив привязывается к самой узкой сети, содержащей его адрес; в карточке актива сеть можно задать вручную. Пересечение сетей допустимо.
-          </p>
+    <>
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2">
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref('/api/assets/networks/export', queryArgs)} total={first?.total} disabled={query.isLoading} />
+        <div className="relative max-w-sm flex-1">
+          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
+          <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} maxLength={200} placeholder="Адрес, CIDR, имя, тег, VLAN… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
         </div>
-        {write && editing === undefined && <Button className="ml-auto shrink-0" onClick={() => setEditing(null)}><Plus size={13} aria-hidden /> Добавить сеть</Button>}
+        {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
+        <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${num(items.length)} из ${num(total)}` : num(total)) : '…'}</div>
+        {write && <Button className="ml-auto" onClick={onCreate}><Plus size={13} aria-hidden /> Добавить сеть</Button>}
+        {!filtersPanel.open && <FilterChips chips={chips} />}
       </div>
-
-      {editing !== undefined && (
-        <div className="mb-4">
-          {editing === null
-            ? <NetworkForm key="new" network={null} initialCidr={newCidr} onDone={closeForm} onCancel={closeForm} />
-            : <EditNetwork key={editing} id={editing} onDone={closeForm} />}
+      <div className="flex min-h-0 flex-1">
+        {filtersPanel.open && <NetworkFacetPanel facets={first?.facets ?? null} zones={zones} filters={filters} onToggle={toggle} total={total} />}
+        <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
+          <div className="min-h-0 flex-1">
+            {query.isLoading && <FullPageSpinner />}
+            {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
+            {!query.isLoading && !errorMessage && items.length === 0 && (
+              <div className="p-6">
+                <EmptyState
+                  icon={hasFilters ? FilterX : NetworkIcon}
+                  title={hasFilters ? 'Ничего не найдено' : 'Сетей ещё нет'}
+                  description={hasFilters ? 'Ни одна сеть не подходит под поиск и фильтры.' : 'Опишите сети вручную или подключите RackTables в настройках модуля: активы привяжутся к самой узкой сети, содержащей их адрес.'}
+                />
+              </div>
+            )}
+            {!query.isLoading && !errorMessage && items.length > 0 && (
+              <NetworksTable items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => onOpen(items[i].id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }} />
+            )}
+          </div>
         </div>
-      )}
+      </div>
+    </>
+  )
+}
 
-      {list.length === 0 ? (
-        <EmptyState icon={NetworkIcon} title="Сетей ещё нет" description="Опишите сети с зоной и площадкой: активы привяжутся к ним по адресу." />
-      ) : (
-        <div className="overflow-x-auto rounded border border-grid bg-surface">
-          <table className="w-full text-xs" style={cols.tableStyle}>
-            <ColGroup cols={cols} />
-            <thead className="text-[11px] tracking-wide text-text-secondary uppercase">
-              <tr className="border-b border-grid">
-                <ResizableHeader cols={cols} className="px-3 py-2" content={HEADER} />
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((n) => (
-                <tr key={n.id} className="border-t border-grid align-top hover:bg-row-hover">
-                  <td className="truncate px-3 py-2 font-mono text-text" title={n.cidr}>{n.cidr}</td>
-                  <td className="px-3 py-2 break-words text-text">
-                  {n.title || '—'}{n.vlan !== null && <span className="ml-1 text-text-secondary">· VLAN {n.vlan}</span>}
-                  {n.origin === 'racktables' && <span className="ml-1 rounded border border-grid px-1 text-[11px] text-text-secondary" title="Создана проходом RackTables: название, описание, VLAN и теги обновляет он; зона и площадка — ваши">RackTables</span>}
-                </td>
-                  <td className="truncate px-3 py-2 text-text-secondary" title={n.zone ?? undefined}>{n.zone ?? '—'}</td>
-                  <td className="truncate px-3 py-2 text-text-secondary" title={n.site || undefined}>{n.site || '—'}</td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums">
-                    <Link to={`/assets/list?network_id=${n.id}`} className="text-text hover:underline">{n.assets}</Link>
-                  </td>
-                  {write && (
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap items-start justify-end gap-1 whitespace-nowrap">
-                        <Button variant="ghost" onClick={() => setEditing(n.id)}>изменить</Button>
-                        <Button variant="ghost" onClick={() => setDeleting(n)} aria-label={`Удалить сеть ${n.cidr}`}><Trash2 size={13} aria-hidden /></Button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+/**
+ * Сети: вкладка списка (поиск, фасеты, карточка сбоку) и вкладка «Правила групп». Ссылки: `?id=<id>` открывает карточку
+ * сети, `?new=<cidr>` — карточку новой сети (из карточки актива без сети), `?tab=rules` — правила.
+ */
+export function NetworksPage() {
+  const params = useSearchParams()
+  const { navigate } = useRouter()
+  const [tab, setTab] = useState<'list' | 'rules'>(() => (params.get('tab') === 'rules' ? 'rules' : 'list'))
+  const [openId, setOpenId] = useState<number | null>(() => (Number(params.get('id')) > 0 ? Number(params.get('id')) : null))
+  // Не null — открыта карточка новой сети с этим CIDR (ссылка «создать сеть» из карточки актива или кнопка).
+  const [newCidr, setNewCidr] = useState<string | null>(() => params.get('new'))
+  const openCard = useCallback((id: number) => { setNewCidr(null); setOpenId(id) }, [])
+  const closeDrawer = useCallback(() => { setNewCidr(null); setOpenId(null) }, [])
+  // Карточка по ссылке открывается один раз: параметры снимаются, и закрытая карточка не откроется снова при обновлении.
+  useEffect(() => {
+    if (!params.has('id') && !params.has('new')) return
+    const rest = new URLSearchParams(params)
+    rest.delete('id')
+    rest.delete('new')
+    navigate(`/assets/networks${rest.size ? `?${rest}` : ''}`, { replace: true })
+  }, [params, navigate])
+  const tabClass = (on: boolean) => cn('rounded px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', on ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+        <h1 className="text-sm font-semibold text-text">Сети</h1>
+        <div role="tablist" className="flex gap-1">
+          <button type="button" role="tab" aria-selected={tab === 'list'} className={tabClass(tab === 'list')} onClick={() => setTab('list')}>Сети</button>
+          <button type="button" role="tab" aria-selected={tab === 'rules'} className={tabClass(tab === 'rules')} onClick={() => setTab('rules')}>Правила групп</button>
         </div>
-      )}
-      {deleting && <ConfirmDelete network={deleting} onDone={() => setDeleting(null)} />}
+      </header>
+      {tab === 'list'
+        ? <NetworksTab drawerOpen={openId !== null || newCidr !== null} onOpen={openCard} onCreate={() => { setOpenId(null); setNewCidr('') }} onCloseDrawer={closeDrawer} />
+        : <div className="min-h-0 flex-1 bg-app-bg"><ZoneRulesPanel /></div>}
+      <NetworkDrawer networkId={openId} newCidr={newCidr} onClose={closeDrawer} onOpen={openCard} />
     </div>
   )
 }

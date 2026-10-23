@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useQueryClient } from '@tanstack/react-query'
-import { invalidateDiscrepancies, useAsset, useAssets, useDeleteAsset, useDetachObservation, useMergeAssets, useNetworks, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
+import { invalidateDiscrepancies, NETWORK_PICK_LIMIT, useAsset, useAssets, useDeleteAsset, useDetachObservation, useMergeAssets, useNetwork, useNetworkSearch, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
 import {
   CODE_LABELS,
   CRITICALITIES,
@@ -10,6 +10,7 @@ import {
   CRITICALITY_LABELS,
   defaultCidr,
   MARK_TEXT,
+  placementText,
   SOURCE_LABELS,
   type AssetDetail,
   type Criticality,
@@ -147,12 +148,27 @@ function CanonicalCard({ a, write }: { a: AssetDetail; write: boolean }) {
         })}
         <dt className="text-text-secondary">Сеть</dt>
         <dd className="col-span-2 text-text">
-          {a.network ? `${a.network.cidr}${a.network.title ? ` — ${a.network.title}` : ''}${a.network.zone ? ` · ${a.network.zone}` : ''}${a.network_manual ? ' (задана вручную)' : ''}` : '—'}
+          {a.network ? (
+            <>
+              <Link to={`/assets/networks?id=${a.network.id}`} className="font-mono hover:text-primary hover:underline">{a.network.cidr}</Link>
+              {a.network.title && ` — ${a.network.title}`}
+              {a.network_manual && <span className="text-text-secondary"> (задана вручную)</span>}
+            </>
+          ) : '—'}
           {/* Адрес не входит ни в одну сеть: создать её тут же; после сохранения актив привяжется сам. */}
           {!a.network && a.ip && write && (
             <Link to={`/assets/networks?new=${encodeURIComponent(defaultCidr(a.ip))}`} className="ml-2 text-[11px] text-primary hover:underline">создать сеть {defaultCidr(a.ip)}</Link>
           )}
         </dd>
+        {/* Где хост — по группе его сети: группа и её признаки (расположение, доступ из интернета). */}
+        {a.network && (
+          <>
+            <dt className="text-text-secondary">Группа сети</dt>
+            <dd className="col-span-2 text-text">{a.network.zone ? (a.network.zone_title && a.network.zone_title !== a.network.zone ? `${a.network.zone} — ${a.network.zone_title}` : a.network.zone) : 'без группы'}</dd>
+            <dt className="text-text-secondary">Расположение</dt>
+            <dd className="col-span-2 text-text">{placementText(a.network) || 'не задано'}</dd>
+          </>
+        )}
         {a.cluster && (
           <>
             <dt className="text-text-secondary">Кластер</dt>
@@ -336,7 +352,6 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
   const [criticality, setCriticality] = useState<Criticality | ''>(a.criticality)
   const [tags, setTags] = useState(a.tags.join(', '))
   const [note, setNote] = useState(a.note)
-  const networks = useNetworks()
   // '' — сеть по адресу (самая узкая, содержащая IP); иначе id сети, выбранной вручную.
   const currentNetwork = a.network_manual && a.network ? String(a.network.id) : ''
   const [network, setNetwork] = useState(currentNetwork)
@@ -365,13 +380,7 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
         <span className="mb-1 block text-text-secondary">Теги через запятую</span>
         <input value={tags} onChange={(e) => setTags(e.target.value)} className={cn(FIELD, 'text-xs')} />
       </label>
-      <label className="block">
-        <span className="mb-1 block text-text-secondary">Сеть</span>
-        <select value={network} onChange={(e) => setNetwork(e.target.value)} className={cn(FIELD, 'text-xs')}>
-          <option value="">по адресу — самая узкая сеть, содержащая IP</option>
-          {(networks.data?.items ?? []).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}{n.zone ? ` · ${n.zone}` : ''}</option>)}
-        </select>
-      </label>
+      <NetworkPicker value={network} onChange={setNetwork} />
       <label className="block">
         <span className="mb-1 block text-text-secondary">Заметка</span>
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={cn(FIELD, 'text-xs')} />
@@ -380,6 +389,46 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
         <Button variant="primary" disabled={!dirty} loading={patch.isPending} onClick={() => patch.mutate({ criticality, tags: tags.split(',').map((t) => t.trim()).filter(Boolean), note, ...networkPatch })}>Сохранить</Button>
         {patch.error && <span className="text-kind-1">{patch.error.message}</span>}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Выбор сети актива: сетей тысячи, поэтому — поиск (адрес, имя, тег, VLAN) и первые совпадения; выбранная сеть
+ * подгружается своей карточкой и видна всегда. `value`: '' — по адресу, иначе id сети.
+ */
+function NetworkPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [input, setInput] = useState('')
+  const q = useDebouncedValue(input.trim(), 250)
+  const found = useNetworkSearch(q)
+  const chosen = useNetwork(value ? Number(value) : null)
+  const items = found.data?.items ?? []
+  const label = (n: { cidr: string; title: string; zone: string | null }) => `${n.cidr}${n.title ? ` — ${n.title}` : ''}${n.zone ? ` · ${n.zone}` : ''}`
+  return (
+    <div className="block">
+      <span className="mb-1 block text-text-secondary">Сеть</span>
+      <div className="mb-1 flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-text">
+          {value ? (chosen.data ? label(chosen.data) : `сеть #${value}`) : 'по адресу — самая узкая сеть, содержащая IP'}
+        </span>
+        {value && <button type="button" onClick={() => onChange('')} className="shrink-0 rounded px-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">по адресу</button>}
+      </div>
+      <input value={input} onChange={(e) => setInput(e.target.value)} maxLength={200} placeholder="найти сеть: адрес, CIDR, имя, тег, VLAN" aria-label="Поиск сети" className={cn(FIELD, 'text-xs')} />
+      {q && (
+        <ul className="mt-1 flex max-h-48 flex-col overflow-y-auto">
+          {found.isLoading && <li className="text-text-secondary">поиск…</li>}
+          {found.error && <li className="text-kind-1">{found.error.message}</li>}
+          {!found.isLoading && !found.error && items.length === 0 && <li className="text-text-secondary">не найдено</li>}
+          {items.map((n) => (
+            <li key={n.id}>
+              <button type="button" onClick={() => { onChange(String(n.id)); setInput('') }} aria-pressed={String(n.id) === value} className={cn('w-full truncate rounded px-1.5 py-1 text-left hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', String(n.id) === value ? 'text-primary' : 'text-text')}>
+                {label(n)}
+              </button>
+            </li>
+          ))}
+          {found.data && found.data.total > items.length && <li className="px-1.5 text-text-secondary">показаны первые {NETWORK_PICK_LIMIT} из {found.data.total} — уточните поиск</li>}
+        </ul>
+      )}
     </div>
   )
 }

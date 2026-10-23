@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, FilterX, Search, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useAssetIds, useAssets, useBulkDelete, useBulkUpdate, useDiscrepancyBulk, useNetworks } from '@/modules/assets/api/queries'
+import { NETWORK_PICK_LIMIT, useAssetIds, useAssets, useBulkDelete, useBulkUpdate, useDiscrepancyBulk, useNetworkCards, useNetworkSearch } from '@/modules/assets/api/queries'
 import {
   ANY_CODE_LABEL,
   CLUSTER_KINDS,
@@ -12,6 +12,8 @@ import {
   CRITICALITY_LABELS,
   LAPS_LABELS,
   LAPS_VALUES,
+  PLACEMENT_LABELS,
+  PLACEMENTS,
   SOURCE_LABELS,
   SOURCES,
   type AssetItem,
@@ -23,6 +25,8 @@ import {
   type Criticality,
   type DiscrepancyCode,
   type LapsFilter,
+  type Network,
+  type Placement,
 } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
@@ -52,7 +56,7 @@ const ROW_HEIGHT = 40
 const LIST_COLUMNS: ColumnDef[] = [
   { key: 'name', label: 'Имя', width: 240, flex: true },
   { key: 'ip', label: 'IP', width: 128 },
-  { key: 'network', label: 'Сеть · зона', width: 176 },
+  { key: 'network', label: 'Сеть · группа', width: 176 },
   { key: 'os', label: 'ОС', width: 192 },
   { key: 'sources', label: 'Источники', width: 160 },
   { key: 'seen', label: 'Виден', width: 112 },
@@ -98,7 +102,7 @@ function snapshotFrom(params: URLSearchParams): number | undefined {
   return Number.isInteger(id) && id > 0 ? id : undefined
 }
 
-type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'laps' | 'cluster' | 'zone' | 'network_id'
+type MultiKey = 'code' | 'source_has' | 'source_missing' | 'criticality' | 'laps' | 'cluster' | 'zone' | 'placement' | 'network_id'
 
 const has = <T extends string | number>(list: readonly T[] | undefined, value: T) => list?.includes(value) ?? false
 
@@ -132,13 +136,48 @@ export function FacetSection({ title, children }: { title: string; children: Rea
   )
 }
 
+/** Подпись сети в фильтре: по карточке (тот же кэш, что у useNetwork), пока её нет — номер. */
+function networkLabel(id: number, cards: Map<number, Network>): string {
+  const n = cards.get(id)
+  return n ? `${n.cidr}${n.title ? ` — ${n.title}` : ''}` : `сеть #${id}`
+}
+
+/** Добавить сеть в фильтр: сетей тысячи — поиск и первые совпадения, а не весь список. */
+function NetworkFacetSearch({ chosen, onPick }: { chosen: number[] | undefined; onPick: (id: number) => void }) {
+  const [input, setInput] = useState('')
+  const q = useDebouncedValue(input.trim(), 250)
+  const found = useNetworkSearch(q)
+  const items = (found.data?.items ?? []).filter((n) => !has(chosen, n.id))
+  return (
+    <div className="flex flex-col gap-0.5">
+      <input value={input} onChange={(e) => setInput(e.target.value)} maxLength={200} placeholder={chosen ? 'добавить сеть: адрес, имя, тег…' : 'сеть: адрес, имя, тег, VLAN'} aria-label="Поиск сети" className={INPUT} />
+      {q && (
+        <ul className="flex max-h-48 flex-col overflow-y-auto">
+          {found.isLoading && <li className="px-2 py-1 text-[11px] text-text-secondary">поиск…</li>}
+          {!found.isLoading && items.length === 0 && <li className="px-2 py-1 text-[11px] text-text-secondary">не найдено</li>}
+          {items.map((n) => (
+            <li key={n.id}>
+              <button type="button" onClick={() => { onPick(n.id); setInput('') }} className="w-full truncate rounded px-2 py-1 text-left text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+                <span className="font-mono">{n.cidr}</span>{n.title ? ` — ${n.title}` : ''}
+              </button>
+            </li>
+          ))}
+          {found.data && found.data.total > found.data.items.length && <li className="px-2 py-1 text-[11px] text-text-secondary">первые {NETWORK_PICK_LIMIT} из {found.data.total} — уточните поиск</li>}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 const INPUT_BASE = 'rounded border border-border bg-app-bg px-2 py-1 text-xs text-text placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const INPUT = `w-full ${INPUT_BASE}`
 
-function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, tag, onTag, adLabel, onClearAd }: {
+function FacetPanel({ facets, zones, networkCards, filters, onToggle, disc, onDisc, total, tag, onTag, adLabel, onClearAd }: {
   facets: AssetsFacets | null
   /** Зоны, которые панель уже показывала (ушедшие в ноль — с 0); считает страница, чтобы память жила, пока панель закрыта. */
   zones: FacetValue[]
+  /** Карточки выбранных в фильтре сетей — для подписей. */
+  networkCards: Map<number, Network>
   filters: Filters
   onToggle: <K extends keyof Filters>(key: K, value: Filters[K]) => void
   disc: DiscFilters
@@ -149,7 +188,6 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, tag
   adLabel: string
   onClearAd: () => void
 }) {
-  const networks = useNetworks()
   const pick = <K extends MultiKey>(key: K, value: NonNullable<Filters[K]>[number]) =>
     onToggle(key, toggleValue(filters[key] as (typeof value)[] | undefined, value) as Filters[K])
   return (
@@ -195,24 +233,26 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, tag
           <FacetRow key={v} active={has(filters.cluster, v)} count={facets?.cluster[v]} onClick={() => pick('cluster', v)}>{CLUSTER_LABELS[v]}</FacetRow>
         ))}
       </FacetSection>
+      {/* Расположение — признак группы сети актива; вне сети или в группе без расположения — «не задано». */}
+      <FacetSection title="Расположение">
+        {PLACEMENTS.map((p) => (
+          <FacetRow key={p} active={has(filters.placement, p)} count={facets?.placement[p]} onClick={() => pick('placement', p)}>{PLACEMENT_LABELS[p]}</FacetRow>
+        ))}
+      </FacetSection>
       {zones.length > 0 && (
-        <FacetSection title="Зона">
+        <FacetSection title="Группа сети">
           {zones.map(({ value: z, count }) => (
             <FacetRow key={z} active={has(filters.zone, z)} count={count} onClick={() => pick('zone', z)}>{z}</FacetRow>
           ))}
         </FacetSection>
       )}
-      <FacetSection title="Сеть, открытый порт и тег">
-        {/* Сетей сотни — выбранные показаны строками-переключателями, новая добавляется из списка. */}
-        {(filters.network_id ?? []).map((id) => {
-          const n = networks.data?.items.find((x) => x.id === id)
-          return <FacetRow key={id} active count={undefined} noCount onClick={() => pick('network_id', id)}>{n ? `${n.cidr}${n.title ? ` — ${n.title}` : ''}` : `#${id}`}</FacetRow>
-        })}
+      <FacetSection title="Сеть и тег">
+        {/* Сетей тысячи — выбранные показаны строками-переключателями, новая добавляется поиском. */}
+        {(filters.network_id ?? []).map((id) => (
+          <FacetRow key={id} active count={undefined} noCount onClick={() => pick('network_id', id)}>{networkLabel(id, networkCards)}</FacetRow>
+        ))}
         <div className="flex flex-col gap-1.5 px-2">
-          <select value="" onChange={(e) => { if (e.target.value) pick('network_id', Number(e.target.value)) }} aria-label="Сеть" className={INPUT}>
-            <option value="">{filters.network_id ? 'добавить сеть…' : 'все сети'}</option>
-            {(networks.data?.items ?? []).filter((n) => !has(filters.network_id, n.id)).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}</option>)}
-          </select>
+          <NetworkFacetSearch chosen={filters.network_id} onPick={(id) => pick('network_id', id)} />
           <input value={tag} onChange={(e) => onTag(e.target.value)} placeholder="тег" aria-label="Тег" className={INPUT} />
         </div>
       </FacetSection>
@@ -422,6 +462,7 @@ export function AssetsPage() {
     source_missing: listFrom<AssetSource>(params, 'source_missing', SOURCES),
     code: listFrom<CodeFilter>(params, 'code', ['any', ...CODES]),
     zone: fromWire(listFrom(params, 'zone')),
+    placement: fromWire(listFrom(params, 'placement'))?.filter((p) => (PLACEMENTS as string[]).includes(p)) as Placement[] | undefined,
     criticality: listFrom<Criticality | 'none'>(params, 'criticality', [...CRITICALITIES, 'none']),
     laps: listFrom<LapsFilter>(params, 'laps', LAPS_VALUES),
     cluster: listFrom<ClusterKind>(params, 'cluster', CLUSTER_KINDS),
@@ -438,7 +479,6 @@ export function AssetsPage() {
   const [openId, setOpenId] = useState<number | null>(() => (Number(params.get('asset')) > 0 ? Number(params.get('asset')) : null))
   const searchRef = useRef<HTMLInputElement>(null)
   const { write } = useCan()
-  const networks = useNetworks()
   const filtersPanel = useFiltersPanel(FILTERS_PAGE)
   const [checked, setChecked] = useState<Set<number>>(() => new Set())
   const lastChecked = useRef<number | null>(null)
@@ -446,7 +486,7 @@ export function AssetsPage() {
 
   const queryArgs = useMemo<AssetsQuery>(
     () => ({
-      ...filters, zone: toWire(filters.zone), q: q || undefined, tag: tag.trim() || undefined,
+      ...filters, zone: toWire(filters.zone), placement: toWire(filters.placement), q: q || undefined, tag: tag.trim() || undefined,
       disc_status: disc.status, assignee: disc.assignee, overdue: disc.overdue || undefined,
     }),
     [filters, q, tag, disc],
@@ -461,6 +501,7 @@ export function AssetsPage() {
   // Новый фильтр — другой список: курсор в начало, отметки сняты.
   useEffect(() => { setSelectedIndex(0); setChecked(new Set()); lastChecked.current = null }, [queryArgs])
   const selected: AssetItem | null = items[selectedIndex] ?? null
+  const networkCards = useNetworkCards(filters.network_id ?? [])
 
   function toggle<K extends keyof Filters>(key: K, value: Filters[K]) { setFilters((prev) => ({ ...prev, [key]: value })) }
   // Страница не пишет фильтры в адрес: ячейка снимается и из адреса, иначе вернётся после перезагрузки.
@@ -498,8 +539,9 @@ export function AssetsPage() {
     ...valueChips('Критичность', filters.criticality, (c) => CRITICALITY_LABELS[c], (v) => toggle('criticality', v)),
     ...valueChips('LAPS', filters.laps, (v) => LAPS_LABELS[v], (v) => toggle('laps', v)),
     ...valueChips('Кластер', filters.cluster, (v) => CLUSTER_LABELS[v], (v) => toggle('cluster', v)),
-    ...valueChips('Зона', filters.zone, (z) => z, (v) => toggle('zone', v)),
-    ...valueChips('Сеть', filters.network_id, (id) => networks.data?.items.find((n) => n.id === id)?.cidr ?? `#${id}`, (v) => toggle('network_id', v)),
+    ...valueChips('Расположение', filters.placement, (p) => PLACEMENT_LABELS[p as Placement] ?? p, (v) => toggle('placement', v)),
+    ...valueChips('Группа сети', filters.zone, (z) => z || 'без группы', (v) => toggle('zone', v)),
+    ...valueChips('Сеть', filters.network_id, (id) => networkLabel(id, networkCards), (v) => toggle('network_id', v)),
   ]
   if (tagInput.trim()) chips.push({ label: `тег ${tagInput.trim()}`, clear: () => setTagInput('') })
   chips.push(...findingFacetChips(disc, setDisc).map((c) => ({ ...c, label: `расхождения · ${c.label.toLowerCase()}` })))
@@ -546,7 +588,7 @@ export function AssetsPage() {
         {adCheck && filters.ad_snapshot !== undefined && filters.ad_cell !== undefined && <AdCellNote check={adCheck} snapshot={filters.ad_snapshot} cell={filters.ad_cell} page="assets" />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} zones={zones} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} tag={tagInput} onTag={setTagInput} adLabel={adLabel} onClearAd={clearAd} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} zones={zones} networkCards={networkCards} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} tag={tagInput} onTag={setTagInput} adLabel={adLabel} onClearAd={clearAd} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           {write && checked.size > 0 && (
             <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)} facets={first?.facets ?? null} code={filters.code?.length === 1 ? filters.code[0] : undefined}
