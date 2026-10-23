@@ -132,7 +132,9 @@ export interface AssetsResponse {
 /**
  * Сверка списка с ячейкой сводки AD (`ad_snapshot` + `ad_cell`). `found` — сколько участников ячейки нашлось в
  * «Активах» без учёта прочих фильтров страницы; `not_managed` — учётки, которых «Активы» не заводят (доверия);
- * `other` — участники другого вида (компьютеры на странице пользователей и наоборот).
+ * `other` — участники другого вида (компьютеры на странице пользователей и наоборот); `summary_n` — число ячейки на
+ * странице сводки AD (оба вида вместе), `null` — числа нет. У сводки без сохранённых настроек состав считается по
+ * текущим настройкам AD, и `in_summary + other` может с ним разойтись.
  */
 export interface AdCellCheck {
   label: string
@@ -142,6 +144,7 @@ export interface AdCellCheck {
   found: number
   not_managed: number
   other: number
+  summary_n: number | null
 }
 
 export interface AssetsQuery {

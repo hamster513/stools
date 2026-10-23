@@ -532,7 +532,8 @@ export function AssetsPage() {
 
   const hasFilters = Object.values(filters).some((v) => v !== undefined) || Object.values(disc).some((v) => v !== undefined) || q !== '' || port !== '' || tag !== ''
   const errorMessage = query.error instanceof ApiRequestError
-    ? (adOn && (query.error.status === 404 || query.error.status === 409) ? `Ячейка сводки AD не открывается: ${query.error.message}` : query.error.message)
+    ? (adOn && query.error.status === 422 ? 'Ссылка из сводки AD неполная — откройте её со страницы сводки заново.'
+      : adOn && (query.error.status === 404 || query.error.status === 409) ? `Ячейка сводки AD не открывается: ${query.error.message}` : query.error.message)
     : query.isError ? 'Не удалось загрузить активы' : null
 
   return (
