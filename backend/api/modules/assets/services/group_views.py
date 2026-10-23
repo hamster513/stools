@@ -116,16 +116,33 @@ def _members_count() -> Any:
 
 
 def _item(row: Any) -> dict[str, Any]:
-    gid, name, domain, local, host_id, sid, description, sources, in_ad, gone_at, host_name, members = row
+    gid, name, domain, local, host_id, sid, description, sources, in_ad, gone_at, host_name, members, os_family = row
     return {"id": gid, "name": name, "domain_label": (host_name or "") if local else domain, "host_asset_id": host_id,
-            "local": local, "sid": sid, "description": description, "sources": _sources(sources),
+            "local": local, "os_family": os_family, "sid": sid, "description": description, "sources": _sources(sources),
             "members_direct": int(members), "in_ad": in_ad, "gone": gone_at is not None}
 
 
 def _item_columns() -> tuple[Any, ...]:
     g = AssetGroup
     return (g.id, g.name, g.domain, g.local, g.host_asset_id, g.sid, g.description, g.sources, g.in_ad, g.gone_at, Asset.name,
-            _members_count())
+            _members_count(), g.os_family)
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value else None
+
+
+def _dates(conn: Connection, group_id: int, os_family: str) -> dict[str, str | None]:
+    """Даты шапки карточки; у локальной — ещё время снимка VM, которым семейство её хоста записано полностью
+    последний раз (`VmGroupImport.<семейство>_ok`)."""
+    from api.modules.vm.models import VmGroupImport
+
+    first, last, gone = conn.execute(
+        select(AssetGroup.first_seen, AssetGroup.last_seen, AssetGroup.gone_at).where(AssetGroup.id == group_id)
+    ).one()
+    flag = {"windows": VmGroupImport.windows_ok, "linux": VmGroupImport.linux_ok}.get(os_family)
+    snapshot = conn.execute(select(func.max(VmGroupImport.finished_at)).where(flag.is_(True))).scalar() if flag is not None else None
+    return {"first_seen": _iso(first), "last_seen": _iso(last), "gone_at": _iso(gone), "vm_snapshot_at": _iso(snapshot)}
 
 
 def list_groups(
@@ -366,11 +383,13 @@ def _fact(local_of: list[dict[str, Any]], meta: dict[int, GroupMeta]) -> list[di
 
 
 def group_detail(db: Session, group_id: int) -> dict[str, Any]:
-    """Карточка: поля списка, `host_name`, прямой состав, куда входит, права по факту и по политике (см. модуль)."""
+    """Карточка: поля списка, `host_name`, даты (`first_seen`, `last_seen`, `gone_at`, у локальной — `vm_snapshot_at`),
+    прямой состав, куда входит, права по факту и по политике (см. модуль)."""
     conn = db.connection()
     row = _group_row(conn, group_id)
     card = _item(row)
     card["host_name"] = row[10] or ""
+    card.update(_dates(conn, group_id, card["os_family"]))
     members, members_total = _direct_members(conn, group_id)
     parents = _parents(conn, group_id)
     chains = ancestors({group_id}, lambda gid: parents.get(gid, []))

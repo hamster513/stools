@@ -215,7 +215,8 @@ export function GroupsPage() {
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
       if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
       if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
-      if (e.key === 'Enter' && selected) { e.preventDefault(); setOpenId(selected.id) }
+      // Enter на ссылке или кнопке (ссылка хоста в строке) — их собственное действие, а не карточка выбранной группы.
+      if (e.key === 'Enter' && selected && !(e.target instanceof Element && e.target.closest('a, button'))) { e.preventDefault(); setOpenId(selected.id) }
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)

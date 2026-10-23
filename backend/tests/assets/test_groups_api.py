@@ -23,6 +23,7 @@ from api.modules.assets.models import (
     AssetUser,
     AssetUserGroup,
 )
+from api.modules.vm.models import VmGroupImport
 from tests.export_check import check_export, csv_rows
 
 DOMAIN_SID = "S-1-5-21-1111111111-2222222222-3333333333"
@@ -43,11 +44,13 @@ NOW = dt.datetime(2026, 10, 23, 10, 0, tzinfo=dt.UTC)
 
 
 def mk_group(db: Session, name: str, sid: str = "", *, domain: str = "corp.local", host: Asset | None = None,
-             sources: list[str] | None = None, in_ad: bool = True, gone: bool = False, description: str = "") -> AssetGroup:
+             sources: list[str] | None = None, in_ad: bool = True, gone: bool = False, description: str = "",
+             os_family: str = "windows") -> AssetGroup:
     local = host is not None
     g = AssetGroup(
         group_key=group_key(local=local, domain=domain, host_asset_id=host.id if host else None, sid=sid, name=name),
         sid=sid, name=name, domain="" if local else domain, local=local, host_asset_id=host.id if host else None,
+        os_family=os_family if local else "",
         description=description, sources=sources or (["vm"] if local else ["ad"]), in_ad=in_ad and not local,
         first_seen=NOW, last_seen=NOW, gone_at=NOW if gone else None,
     )
@@ -116,7 +119,7 @@ def state(db_session: Session) -> dict[str, Any]:
     old = mk_group(db, "OldGone", dsid(2199), gone=True)
     adm_ws01 = mk_group(db, "Administrators", "S-1-5-32-544", host=ws01)
     rdu = mk_group(db, "Remote Desktop Users", "S-1-5-32-555", host=srv01)
-    wheel = mk_group(db, "wheel", "", host=srv01, description="GID 10")
+    wheel = mk_group(db, "wheel", "", host=srv01, description="GID 10", os_family="linux")
 
     mk_member(db, helpdesk, "user", user=u1, sid=u1.sid, name="user01")
     mk_member(db, helpdesk, "well_known", sid=AUTH_USERS, name="NT AUTHORITY\\Authenticated Users", domain="")
@@ -178,10 +181,12 @@ def test_list_shape_and_default_live(analyst: TestClient, state: dict[str, Any])
     assert body["total"] == 8 and names(body) == LIVE
     hd = next(i for i in body["items"] if i["name"] == "Helpdesk")
     assert hd == {"id": state["helpdesk"].id, "name": "Helpdesk", "domain_label": "corp.local", "host_asset_id": None,
-                  "local": False, "sid": dsid(2101), "description": "первая линия", "sources": ["ad"], "members_direct": 5,
-                  "in_ad": True, "gone": False}
+                  "local": False, "os_family": "", "sid": dsid(2101), "description": "первая линия", "sources": ["ad"],
+                  "members_direct": 5, "in_ad": True, "gone": False}
     adm = next(i for i in body["items"] if i["domain_label"] == "WS01")
-    assert (adm["local"], adm["host_asset_id"], adm["members_direct"], adm["sources"]) == (True, state["ws01"].id, 2, ["vm"])
+    assert (adm["local"], adm["host_asset_id"], adm["members_direct"], adm["sources"], adm["os_family"]) == (
+        True, state["ws01"].id, 2, ["vm"], "windows")
+    assert next(i for i in body["items"] if i["name"] == "wheel")["os_family"] == "linux"
     # Порядок: по имени, затем по домену или хосту.
     assert [i["name"] for i in body["items"]][:3] == ["Administrators", "Administrators", "Allstaff"]
 
@@ -244,6 +249,8 @@ def test_card_domain_group(analyst: TestClient, state: dict[str, Any]) -> None:
     s = state
     card = analyst.get(f"/api/assets/groups/{s['helpdesk'].id}").json()
     assert (card["name"], card["domain_label"], card["members_direct"], card["host_name"]) == ("Helpdesk", "corp.local", 5, "")
+    assert (card["os_family"], card["first_seen"], card["last_seen"], card["gone_at"], card["vm_snapshot_at"]) == (
+        "", NOW.isoformat(), NOW.isoformat(), None, None)
     members = {(m["kind"], m["name"]): m for m in card["members"]}
     assert card["members_total"] == 5
     assert members[("user", "user01")]["id"] == s["u1"].id
@@ -299,6 +306,23 @@ def test_card_local_group(analyst: TestClient, state: dict[str, Any]) -> None:
     assert [p["gpo_name"] for p in policy] == ["Admins GPO", "Named GPO"]
     assert all(p["through"] is None for p in policy)
     assert card["rights"]["fact"] == []
+
+
+def test_card_dates_and_vm_snapshot_of_family(analyst: TestClient, state: dict[str, Any], db_session: Session) -> None:
+    """Шапка: даты группы; у локальной — последний снимок VM, где её семейство записано полностью."""
+    s = state
+    win_at, lin_at = NOW - dt.timedelta(days=1), NOW - dt.timedelta(hours=1)
+    db_session.add_all([
+        VmGroupImport(finished_at=win_at, hosts=2, rows=3, windows_ok=True, linux_ok=False),
+        VmGroupImport(finished_at=lin_at, hosts=1, rows=1, windows_ok=False, linux_ok=True),
+    ])
+    db_session.commit()
+    adm = analyst.get(f"/api/assets/groups/{s['adm_ws01'].id}").json()
+    assert (adm["os_family"], adm["first_seen"], adm["last_seen"], adm["gone_at"], adm["vm_snapshot_at"]) == (
+        "windows", NOW.isoformat(), NOW.isoformat(), None, win_at.isoformat())
+    assert analyst.get(f"/api/assets/groups/{s['wheel'].id}").json()["vm_snapshot_at"] == lin_at.isoformat()
+    old = analyst.get(f"/api/assets/groups/{s['old'].id}").json()
+    assert (old["gone_at"], old["vm_snapshot_at"]) == (NOW.isoformat(), None)
 
 
 def test_card_fact_same_local_group_direct_and_via_parent(analyst: TestClient, state: dict[str, Any], db_session: Session) -> None:

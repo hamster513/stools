@@ -239,11 +239,14 @@ GET   /groups                          q, kind (local|domain), source (ad|vm), s
                                        live, all — все), members (some|none), domain (домен или имя хоста),
                                        host_id (числа), limit≤500 (200), offset
                                        → {total, items, facets|null}
-                                       items: [{id, name, domain_label, host_asset_id|null, local, sid,
-                                       description, sources: [ad|vm], members_direct, in_ad, gone}]
+                                       items: [{id, name, domain_label, host_asset_id|null, local,
+                                       os_family: ''|windows|linux, sid, description, sources: [ad|vm],
+                                       members_direct, in_ad, gone}]
                                        facets: {kind, source, state, members} — только при offset=0
                                        неизвестное значение фильтра — 422
 GET   /groups/{id}                     поля списка + host_name ('' у доменной),
+                                       first_seen|null, last_seen|null, gone_at|null,
+                                       vm_snapshot_at|null (у локальной),
                                        members: [{kind: group|user|computer|well_known|unknown, id|null, name,
                                        domain, sid, primary, source: ad|vm, text}] — не больше 1000,
                                        members_total — всего,
@@ -284,9 +287,13 @@ GET   /groups/export                   format=csv|xlsx (csv) и те же фил
 оси считается по группам под всеми фильтрами, кроме фильтра этой оси
 (`q`, `domain`, `host_id` сужают и фасеты). `domain_label` — домен у
 доменной, имя хоста у локальной. Порядок — по имени, затем по
-`domain_label`.
+`domain_label`. `os_family` — семейство ОС локальной группы по снимку VM
+(`windows`, `linux`), у доменной пусто.
 
-Карточка. `members.id` — по виду: пользователь (`user_id`), группа
+Карточка. `first_seen`, `last_seen`, `gone_at` — даты группы (ISO);
+`vm_snapshot_at` — у локальной время последнего снимка групп VM, где её
+семейство записано полностью (запрос прошёл, выгрузка того формата, без
+лимита подключения), у доменной и без такого снимка — `null`. `members.id` — по виду: пользователь (`user_id`), группа
 (`group_id`), компьютер (актив-хост); `text` — пояснение встроенного
 субъекта («все прошедшие проверку пользователи и компьютеры»), у прочих
 пусто. `member_of` — доменные группы, куда группа входит, `direct: false`

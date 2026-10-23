@@ -50,9 +50,12 @@ function onHosts(n: number): string {
   return `на ${num(n)} ${n % 10 === 1 && n % 100 !== 11 ? 'хосте' : 'хостах'}`
 }
 
-/** Локальная группа Linux: синхронизация пишет в описание «GID n», SID у неё нет. */
-function isLinuxGroup(g: GroupItem): boolean {
-  return g.local && /^GID \d+$/.test(g.description)
+function day(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleDateString('ru-RU') : '—'
+}
+
+function dayTime(iso: string): string {
+  return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 function groupTitle(g: { id: number; name: string; sid: string }): string {
@@ -142,10 +145,18 @@ function Identity({ g }: { g: GroupDetail }) {
       <dt className="text-text-secondary">Описание</dt><dd className="break-words text-text">{g.description || '—'}</dd>
       <dt className="text-text-secondary">Источники</dt>
       <dd className="text-text">{g.sources.length ? g.sources.map((s) => GROUP_SOURCE_LABELS[s]).join(', ') : '—'}</dd>
+      <dt className="text-text-secondary">Видна</dt>
+      <dd className="text-text">впервые {day(g.first_seen)}, последний раз {day(g.last_seen)}</dd>
+      {g.local && (
+        <>
+          <dt className="text-text-secondary">Снимок VM</dt>
+          <dd className="text-text">{g.vm_snapshot_at ? `снимок VM от ${dayTime(g.vm_snapshot_at)}` : 'полного снимка групп VM нет'}</dd>
+        </>
+      )}
       {g.gone && (
         <>
           <dt className="text-text-secondary">Состояние</dt>
-          <dd className="text-risk-medium">пропала: последняя синхронизация её больше не видит</dd>
+          <dd className="text-risk-medium">пропала {day(g.gone_at)}: последняя синхронизация её больше не видит</dd>
         </>
       )}
     </dl>
@@ -175,7 +186,7 @@ function Members({ g, onOpenGroup }: { g: GroupDetail; onOpenGroup: (id: number)
       <ul className="flex flex-col">
         {g.members.map((m, i) => <MemberRow key={`${m.kind}:${m.id ?? m.sid ?? m.name}:${i}`} m={m} onOpenGroup={onOpenGroup} />)}
       </ul>
-      {isLinuxGroup(g) && <p className="mt-1 text-text-secondary">основная группа пользователя (по GID учётки) в составе не видна</p>}
+      {g.os_family === 'linux' && <p className="mt-1 text-text-secondary">основная группа пользователя (по GID учётки) в составе не видна</p>}
     </>
   )
 }
@@ -387,16 +398,20 @@ function Rights({ g, onOpenGroup }: { g: GroupDetail; onOpenGroup: (id: number) 
   return (
     <>
       <SectionTitle>Права</SectionTitle>
-      <SubBlock title="По факту (VM)" hint="локальные группы хостов, где группа состоит по данным MaxPatrol VM">
+      <SubBlock title="По факту (VM)" hint={g.local ? 'состав этой локальной группы на её хосте по данным MaxPatrol VM' : 'локальные группы хостов, где группа состоит по данным MaxPatrol VM'}>
         {g.rights.fact.length === 0 ? (
-          <p className="text-text-secondary">VM не видит группу в локальных группах хостов</p>
+          g.local ? (
+            <p className="text-text-secondary">фактический состав — блок «Состав», хост <HostLink id={g.host_asset_id} name={g.host_name || g.domain_label} /></p>
+          ) : (
+            <p className="text-text-secondary">VM не видит группу в локальных группах хостов</p>
+          )
         ) : (
           <ul className="flex flex-col">
             {g.rights.fact.map((f, i) => <FactRow key={`${f.local_group_sid || f.local_group}:${i}`} f={f} onOpenGroup={onOpenGroup} />)}
           </ul>
         )}
       </SubBlock>
-      <SubBlock title="По политике (GPO)" hint="записи Restricted Groups и GPP, которые назначают группу в локальные группы">
+      <SubBlock title="По политике (GPO)" hint={g.local ? 'записи Restricted Groups и GPP, которые назначают участников этой локальной группе на этом хосте — по политике должны быть' : 'записи Restricted Groups и GPP, которые назначают группу в локальные группы'}>
         {g.rights.policy.length === 0 ? (
           <p className="text-text-secondary">записей GPO нет</p>
         ) : (

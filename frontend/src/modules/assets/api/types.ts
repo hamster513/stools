@@ -588,6 +588,8 @@ export interface GroupItem {
   domain_label: string
   host_asset_id: number | null
   local: boolean
+  /** Семейство ОС локальной группы по снимку VM; у доменной пусто. */
+  os_family: '' | 'windows' | 'linux'
   sid: string
   description: string
   sources: GroupSource[]
@@ -690,6 +692,11 @@ export interface GroupGpoNotes {
 
 export interface GroupDetail extends GroupItem {
   host_name: string
+  first_seen: string | null
+  last_seen: string | null
+  gone_at: string | null
+  /** У локальной — последний снимок VM, где её семейство записано полностью; null — такого нет (и у доменной). */
+  vm_snapshot_at: string | null
   /** Не больше 1000; всего — members_total. */
   members: GroupMember[]
   members_total: number
