@@ -174,7 +174,8 @@ GET   /users/{id}                      {id, sid, name_key, sam, upn, display_nam
                                        privileged, first_seen, last_seen, merged_into, note, tags, created_at,
                                        updated_at, sources, hosts_active, hosts_total, codes,
                                        observations: [{id, source, source_key, seen_at, gone_at, data}],
-                                       groups: [{sid, name, direct, source}] — прямые, затем вложенные, по имени,
+                                       groups: [{sid, name, direct, source, group_id|null}] — прямые, затем
+                                       вложенные, по имени; group_id — доменная группа /groups (ниже),
                                        group_notes: [текст] — оговорки домена AD учётки,
                                        devices: [{asset_id, name, ip, os, kind: session|owner|local_group, active,
                                        seen_at, gone_at, users_collected, stale}] — живые сначала,
@@ -230,6 +231,95 @@ GET   /users/export                    format=csv|xlsx (csv) и те же фил
 | `not_in_ad` | сеансы есть, учётка не локальная, живого наблюдения AD нет, а выгрузка её домена прочитана | «учётки нет в AD corp.local, сеансы на WS01 (заходил раньше)» |
 | `privileged_on_workstation` | привилегированная (admin_rids, privileged_rids, privileged_groups настроек AD или RID 500) с сеансом на рабочей станции (ОС Windows/macOS без «server») | «привилегированная учётка на рабочей станции WS01: в системе на момент сбора» |
 | `owner_without_session` | владелец устройства по KSC без сеанса на нём; хост, где пользователи не собраны, не судится | «владелец WS02 по KSC, но сеансов на нём нет» |
+
+## Группы
+
+```
+GET   /groups                          q, kind (local|domain), source (ad|vm), state (live|gone; не задан —
+                                       live, all — все), members (some|none), domain (домен или имя хоста),
+                                       host_id (числа), limit≤500 (200), offset
+                                       → {total, items, facets|null}
+                                       items: [{id, name, domain_label, host_asset_id|null, local, sid,
+                                       description, sources: [ad|vm], members_direct, in_ad, gone}]
+                                       facets: {kind, source, state, members} — только при offset=0
+                                       неизвестное значение фильтра — 422
+GET   /groups/{id}                     поля списка + host_name ('' у доменной),
+                                       members: [{kind: group|user|computer|well_known|unknown, id|null, name,
+                                       domain, sid, primary, source: ad|vm, text}] — не больше 1000,
+                                       members_total — всего,
+                                       member_of: [{id, name, domain, direct}],
+                                       local_member_of: [{group_id, name, host_asset_id, host_name,
+                                       via: [{id, name}]}],
+                                       rights: {fact: [как local_member_of],
+                                       policy: [{local_group, via: restricted_groups|gpp, action, gpo_name,
+                                       filtered, hosts_total, hosts: [{name, asset_id|null}],
+                                       through: {id, name}|null}],
+                                       notes: [{domain, links_known, files_known, notes: [текст]}]}
+                                       404 — нет
+GET   /groups/{id}/expanded            limit≤500 (200), offset
+                                       → {total, items: [{kind: user|computer, id|null, name, domain, sid,
+                                       via: [{id, name}], paths}],
+                                       well_known: [{sid, name, text, via, paths}],
+                                       dead_ends: [{kind: group|unknown, id|null, name, domain, sid, via, paths,
+                                       reason}] — не больше 500, dead_ends_total — всего,
+                                       notes: [текст]}
+                                       404 — нет
+GET   /groups/export                   format=csv|xlsx (csv) и те же фильтры, без limit/offset → файл
+```
+
+Группа — отдельный вид актива (спека «Группы как активы»): доменные из AD
+(и доменные, которые VM видит участниками локальных групп, — `in_ad: false`,
+если в выгрузках AD их нет), локальные — группы хостов из MaxPatrol VM.
+Данные — из последней синхронизации, ни AD, ни VM при просмотре не
+спрашиваются.
+
+`q` (до 200 символов) ищет подстроку в имени и SID без учёта регистра;
+`%` и `_` — буквально. `domain` — DNS-домен доменной группы или имя
+хоста (короткое или FQDN) локальной; `host_id` — локальные группы этих
+активов. `members`: `some` — есть прямые участники, `none` — нет.
+Многозначные — повтором ключа, внутри оси «или», между осями «и»; фасет
+оси считается по группам под всеми фильтрами, кроме фильтра этой оси
+(`q`, `domain`, `host_id` сужают и фасеты). `domain_label` — домен у
+доменной, имя хоста у локальной. Порядок — по имени, затем по
+`domain_label`.
+
+Карточка. `members.id` — по виду: пользователь (`user_id`), группа
+(`group_id`), компьютер (актив-хост); `text` — пояснение встроенного
+субъекта («все прошедшие проверку пользователи и компьютеры»), у прочих
+пусто. `member_of` — доменные группы, куда группа входит, `direct: false`
+— через вложенность. `local_member_of` — локальные группы хостов, где
+участник — сама группа или её предок; `via` — группы цепочки от группы до
+участника (без самой группы, кратчайшая), `[]` — прямо. `rights.fact` —
+то же самое («по факту», VM). `rights.policy` («по политике», GPO): у
+доменной — записи прав GPO с SID группы или её доменного предка (`through`
+— предок, `null` — сама группа; SID `S-1-5-21-*` сравнивается сам по себе,
+прочие — ещё и с доменом GPO); у локальной — записи, которые назначают
+участников этой локальной группе (по SID; у записи без SID цели — по
+имени), где её хост есть среди хостов GPO. `hosts` — как записала
+синхронизация (не больше 1000, полное число — `hosts_total`), `asset_id` —
+живой актив по FQDN или короткому имени, только однозначный. `notes` —
+оговорки разбора GPO домена группы, её предков и найденных записей
+(`links_known: false` — ссылки GPO не известны, `files_known: false` —
+файлы GPO не прочитаны) — показываются как есть.
+
+Полный состав — обход вниз от группы по прямому составу, каждая группа
+раскрывается один раз (циклы и ромбы конечны). `items` — пользователи и
+компьютеры постранично (`total` — их число), у каждого кратчайший путь
+`via` (группы между корнем и участником) и число путей `paths`.
+`well_known` — встроенные субъекты целиком, в `total` не входят.
+`dead_ends` — тупики: `unknown` («неизвестный участник»), участник-группа
+без записи («группа без записи»), группа без участников («нет в AD» у
+доменной с `in_ad: false`, иначе «пустая»). `notes` — оговорки AD
+«список участников мог быть обрезан» доменов пройденных групп.
+
+Выгрузка `/groups/export` — все группы под фильтрами списка в его порядке,
+любой роли; колонки «Имя, Домен / компьютер, Вид, Участников, Источники,
+SID, Описание» (вид — локальная | доменная).
+
+В карточке пользователя `groups[].group_id` — доменная группа с тем же
+SID в домене пользователя; SID `S-1-5-21-*` уникален между доменами и
+ищется сам по себе; не нашлась — `null` (встроенная `S-1-5-32-*` чужого
+домена — тоже `null`).
 
 ## Синхронизация с модулями
 

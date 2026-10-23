@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session
 
+from api.modules.assets.core.groups import normalize_sid
 from api.modules.assets.core.users import (
     USER_CODES,
     UserCard,
@@ -43,6 +44,7 @@ from api.modules.assets.models import (
     AssetUserObservation,
 )
 from api.modules.assets.services.assets import ANY_CODE, load_settings
+from api.modules.assets.services.group_views import user_group_ids
 from api.modules.assets.services.users import ad_domains, ad_group_notes
 from api.timeutil import utcnow
 
@@ -295,6 +297,7 @@ def user_detail(db: Session, user_id: int, now: dt.datetime | None = None) -> di
         db.execute(select(AssetUserGroup).where(AssetUserGroup.user_id == user.id)).scalars(),
         key=lambda g: (not g.direct, g.group_name.lower(), g.group_sid),
     )
+    group_ids = user_group_ids(db, user.domain, [g.group_sid for g in groups])
     live_ad = [r for r in rows if r.source == "ad" and r.gone_at is None]
     notes_of = ad_group_notes(db)
     domain_ids = dict.fromkeys(int(r.data["domain_id"]) for r in live_ad if (r.data or {}).get("domain_id") is not None)
@@ -324,7 +327,8 @@ def user_detail(db: Session, user_id: int, now: dt.datetime | None = None) -> di
              "data": dict(r.data or {})}
             for r in rows
         ],
-        "groups": [{"sid": g.group_sid, "name": g.group_name, "direct": g.direct, "source": g.source} for g in groups],
+        "groups": [{"sid": g.group_sid, "name": g.group_name, "direct": g.direct, "source": g.source,
+                    "group_id": group_ids.get(normalize_sid(g.group_sid))} for g in groups],
         "group_notes": notes,
         "devices": [
             {"asset_id": aid, "name": name, "ip": ip, "os": os, "kind": kind, "active": active,
