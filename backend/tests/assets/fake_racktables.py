@@ -1,7 +1,7 @@
 """Поддельный JSON API RackTables на 127.0.0.1: HTTP Basic, POST с JSON, метод в `func`.
 
 Отвечает как настоящий: 200 и JSON на успех, 400 и текст на ошибку, 401 без правильной учётки.
-Сети — словарь id → ячейка (как `listCells`), адреса — список по диапазону.
+Сети — словарь id → ячейка (как `listCells`), теги ячейки — словарь id тега → тег, адреса — список по диапазону.
 """
 from __future__ import annotations
 
@@ -9,18 +9,30 @@ import base64
 import ipaddress
 import json
 import threading
+from collections.abc import Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Self
 
 VERSION = "1.3.3"
 
 
-def network_cell(rt_id: str, cidr: str, name: str = "", *, comment: str | None = None, vlan: str | None = None, tags: list[str] = (), kidc: int = 0) -> dict[str, Any]:
+def tag_dict(names: Iterable[str], first_id: int = 100) -> dict[str, dict[str, Any]]:
+    """Теги как в `listCells`: словарь id тега → {id, tag, parent_id, user, time}; пустой — `[]` (пустой массив PHP)."""
+    return {
+        str(i): {"id": str(i), "tag": name, "parent_id": None, "user": "admin", "time": "2026-01-01 00:00:00"}
+        for i, name in enumerate(names, first_id)
+    }
+
+
+def network_cell(
+    rt_id: str, cidr: str, name: str = "", *, comment: str | None = None, vlan: str | None = None, tags: Iterable[str] = (),
+    itags: Iterable[str] = (), kidc: int = 0,
+) -> dict[str, Any]:
     net = ipaddress.ip_network(cidr)
     return {
         "realm": "ipv4net", "id": rt_id, "ip": str(net.network_address), "mask": str(net.prefixlen), "name": name, "comment": comment,
-        "8021q": [{"domain_id": "1", "vlan_id": vlan}] if vlan else [], "etags": [{"tag": t} for t in tags], "itags": [],
-        "atags": [{"tag": "$any_net"}], "kidc": kidc, "spare_ranges": [], "ip_bin": "", "mask_bin": None, "vlanc": 1 if vlan else 0,
+        "8021q": [{"domain_id": "1", "vlan_id": vlan}] if vlan else [], "etags": tag_dict(tags) or [], "itags": tag_dict(itags, 200) or [],
+        "atags": tag_dict(["$any_net"], 900), "kidc": kidc, "spare_ranges": [], "ip_bin": "", "mask_bin": None, "vlanc": 1 if vlan else 0,
     }
 
 

@@ -62,7 +62,10 @@ class Network(Base):
     site: Mapped[str] = mapped_column(String(255), default="")
     owner: Mapped[str] = mapped_column(String(255), default="")
     vlan: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Явные теги: у сети RackTables — `etags` (перезаписываются импортом), у описанной вручную — правит человек.
     tags: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    #: Унаследованные теги RackTables (`itags`); у сетей, описанных вручную, пусто.
+    implicit_tags: Mapped[list[str]] = mapped_column(JSONType, default=list, server_default="[]")
     scan_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     ports: Mapped[list[int]] = mapped_column(JSONType, default=lambda: list(DEFAULT_PORTS))
     exclude: Mapped[list[str]] = mapped_column(JSONType, default=list)
@@ -81,6 +84,8 @@ class Network(Base):
     #: Откуда сеть: пусто — описана вручную, racktables — создана задачей RackTables (origin_key — id сети там).
     origin: Mapped[str] = mapped_column(String(32), default="", server_default="")
     origin_key: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    #: Начало последнего импорта, давшего сеть; NULL — описана вручную или ещё не импортировалась.
+    origin_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 

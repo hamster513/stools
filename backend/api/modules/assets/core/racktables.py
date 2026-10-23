@@ -34,7 +34,9 @@ class RtNetwork:
     name: str = ""
     comment: str = ""
     vlan: int | None = None
-    tags: list[str] = field(default_factory=list)
+    #: Явные теги сети (`etags`) и унаследованные (`itags`: предки тегов и теги объемлющих сетей).
+    explicit_tags: list[str] = field(default_factory=list)
+    implicit_tags: list[str] = field(default_factory=list)
     #: Есть дочерние сети (иерархия RT; в Assets пока не переносится).
     children: bool = False
 
@@ -126,14 +128,21 @@ def _items(data: Any) -> list[dict[str, Any]]:
     raise RtError("ответ не список и не словарь")
 
 
-def _tags(cell: dict[str, Any]) -> list[str]:
-    """Явные и унаследованные теги; `atags` — служебные ($typeid_…), не переносятся."""
+def _tag_names(value: Any) -> list[str]:
+    """Имена тегов из `etags`/`itags`: словарь id тега → {id, tag, …} (как отдаёт `listCells`; пустой —
+    `[]`) или список строк/словарей. Без дублей и пустых. `atags` — служебные ($typeid_…), не переносятся."""
+    if isinstance(value, dict):
+        # В словаре значение — описание тега; строка там не имя, а мусор.
+        items = [v for v in value.values() if isinstance(v, dict)]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return []
     out: list[str] = []
-    for key in ("etags", "itags"):
-        for t in cell.get(key) or []:
-            name = t.get("tag") if isinstance(t, dict) else t
-            if isinstance(name, str) and name.strip():
-                out.append(name.strip())
+    for t in items:
+        name = t.get("tag") if isinstance(t, dict) else t
+        if isinstance(name, str) and name.strip():
+            out.append(name.strip())
     return list(dict.fromkeys(out))
 
 
@@ -157,8 +166,8 @@ def parse_networks(data: Any) -> list[RtNetwork]:
             continue
         out.append(RtNetwork(
             rt_id=str(cell.get("id") or ""), cidr=str(net), name=str(cell.get("name") or "").strip(),
-            comment=str(cell.get("comment") or "").strip(), vlan=_vlan(cell), tags=_tags(cell),
-            children=bool(cell.get("kidc")),
+            comment=str(cell.get("comment") or "").strip(), vlan=_vlan(cell),
+            explicit_tags=_tag_names(cell.get("etags")), implicit_tags=_tag_names(cell.get("itags")), children=bool(cell.get("kidc")),
         ))
     return out
 

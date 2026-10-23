@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.modules.assets.core.racktables import (
+    _tag_names,
     address_range,
     narrowest,
     parse_addresses,
@@ -37,7 +38,7 @@ def inline_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def rt() -> Iterator[FakeRacktables]:
     with FakeRacktables() as fake:
-        fake.add_network("10", "10.10.0.0/24", "MSK1: VM Servers (vlan294)", vlan="294", tags=["prod"], comment="серверы")
+        fake.add_network("10", "10.10.0.0/24", "MSK1: VM Servers (vlan294)", vlan="294", tags=["prod"], itags=["dmz"], comment="серверы")
         fake.add_network("11", "10.10.0.0/16", "MSK1: all", kidc=1)
         fake.add_network("12", "10.0.0.0/8", "RFC1918")
         fake.add_network("13", "8.8.4.0/29", "ISP: public block")
@@ -74,15 +75,36 @@ def run(c: TestClient, rt_id: int) -> dict[str, Any]:
 
 def test_parse_networks_and_addresses() -> None:
     nets = parse_networks({
-        "1": network_cell("1", "10.10.0.0/24", "a", vlan="294", tags=["x", "y"]),
+        "1": network_cell("1", "10.10.0.0/24", "a", vlan="294", tags=["x", "y"], itags=["dmz"]),
         "2": {"id": "2", "ip": "мусор", "mask": "24"},
         "3": network_cell("3", "10.0.0.0/8", "wide"),
     })
-    assert [(n.rt_id, n.cidr, n.vlan, n.tags, n.too_wide) for n in nets] == [("1", "10.10.0.0/24", 294, ["x", "y"], False), ("3", "10.0.0.0/8", None, [], True)]
+    assert [(n.rt_id, n.cidr, n.vlan, n.explicit_tags, n.implicit_tags, n.too_wide) for n in nets] == [
+        ("1", "10.10.0.0/24", 294, ["x", "y"], ["dmz"], False), ("3", "10.0.0.0/8", None, [], [], True),
+    ]
     assert [n.cidr for n in narrowest(nets)] == ["10.10.0.0/24", "10.0.0.0/8"]
     assert address_range("10.10.0.0/24") == ("10.10.0.0", "10.10.0.255")
     addrs = parse_addresses([address_cell("10.10.0.1", "gw"), address_cell("10.10.0.2"), address_cell("10.10.0.3", " ", reserved=True), {"ip_address": "x", "name": "n"}])
     assert [(a.ip, a.name) for a in addrs] == [("10.10.0.1", "gw")]
+
+
+def test_tag_names_from_dict_and_list() -> None:
+    # listCells отдаёт теги словарём id тега → тег: берутся имена, а не номера.
+    assert _tag_names({"12": {"id": "12", "tag": "prod", "parent_id": None}}) == ["prod"]
+    assert _tag_names(["dmz"]) == ["dmz"]
+    assert _tag_names([{"tag": "dmz"}, "prod"]) == ["dmz", "prod"]
+    # Без дублей и пустых; пустой массив PHP и отсутствие поля — пустой список.
+    assert _tag_names({"1": {"tag": " prod "}, "2": {"tag": "prod"}, "3": {"tag": ""}, "4": {"id": "4"}, "5": "мусор"}) == ["prod"]
+    assert _tag_names(["dmz", "dmz", " ", None]) == ["dmz"]
+    assert _tag_names([]) == [] and _tag_names(None) == [] and _tag_names("prod") == []
+
+
+def test_parse_networks_keeps_explicit_and_implicit_apart() -> None:
+    cell = network_cell("1", "10.10.0.0/24", tags=["prod"], itags=["dmz", "prod"])
+    [net] = parse_networks({"1": cell})
+    assert (net.explicit_tags, net.implicit_tags) == (["prod"], ["dmz", "prod"])
+    # Служебные atags ($any_net и т. п.) не переносятся.
+    assert "$any_net" not in net.explicit_tags + net.implicit_tags
 
 
 # ---- Задача ---------------------------------------------------------------
@@ -106,6 +128,9 @@ def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeR
     assert nets["8.8.4.0/29"].zone == "External" and nets["10.10.0.0/24"].zone is None
     n24 = nets["10.10.0.0/24"]
     assert (n24.title, n24.vlan, n24.tags, n24.description, n24.origin, n24.origin_key, n24.scan_enabled) == ("MSK1: VM Servers (vlan294)", 294, ["prod"], "серверы", "racktables", "10", False)
+    assert n24.implicit_tags == ["dmz"] and nets["8.8.4.0/29"].implicit_tags == []
+    # Дата импорта, давшего сеть, — начало прохода.
+    assert n24.origin_seen_at is not None and n24.origin_seen_at == nets["8.8.4.0/29"].origin_seen_at
     assert [n["origin"] for n in analyst.get("/api/assets/networks").json()] == ["racktables"] * 3
 
     obs = {o.source_key: o for o in db_session.execute(select(AssetObservation).where(AssetObservation.source == "rt")).scalars()}
@@ -131,6 +156,7 @@ def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient,
     assert "описаны вручную 1" in job["message"]
     mine = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/24")).scalar_one()
     assert mine.title == "своя" and mine.origin == "" and mine.site == "МСК"
+    assert (mine.tags, mine.implicit_tags, mine.origin_seen_at) == ([], [], None)
 
     # В RT сеть /16 переименована, адрес ws01 потерял имя, srv01 исчез.
     rt.add_network("11", "10.10.0.0/16", "MSK1: campus", vlan="10")
@@ -144,6 +170,21 @@ def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient,
     gone = {o.source_key: o.gone_at for o in db_session.execute(select(AssetObservation).where(AssetObservation.source == "rt")).scalars()}
     assert gone["10.10.0.11"] is not None and gone["10.10.0.12"] is not None and gone["10.10.5.5"] is None
     assert db_session.execute(select(AssetRacktables)).scalar_one().last_run_at is not None
+
+
+def test_rerun_replaces_tag_ids_with_names(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:
+    # Прежний разбор записывал номера тегов; следующий импорт перезаписывает их именами.
+    conn = connect(analyst, rt)
+    assert run(analyst, conn["id"])["status"] == "done"
+    row = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/24")).scalar_one()
+    first_seen = row.origin_seen_at
+    row.tags, row.implicit_tags, row.origin_seen_at = ["100"], ["200"], None
+    db_session.commit()
+    assert run(analyst, conn["id"])["status"] == "done"
+    db_session.expire_all()
+    row = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/24")).scalar_one()
+    assert (row.tags, row.implicit_tags) == (["prod"], ["dmz"])
+    assert row.origin_seen_at is not None and first_seen is not None and row.origin_seen_at > first_seen
 
 
 def test_wrong_password_and_dead_api(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:

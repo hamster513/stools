@@ -202,8 +202,8 @@ def _collect(run: _Run, api: Client) -> None:
 
 
 def _upsert_networks(db: Session, run: _Run) -> None:
-    """Сети RT → сети Assets: новые создаются, свои обновляются (название, описание, VLAN, теги),
-    описанные вручную с тем же CIDR не трогаются, шире /16 пропускаются."""
+    """Сети RT → сети Assets: новые создаются, свои обновляются (название, описание, VLAN, явные и
+    унаследованные теги, дата импорта), описанные вручную с тем же CIDR не трогаются, шире /16 пропускаются."""
     mine = {n.origin_key: n for n in db.execute(select(Network).where(Network.origin == ORIGIN)).scalars()}
     by_cidr = {n.cidr: n for n in db.execute(select(Network)).scalars()}
     # Сеть с публичными адресами получает зону External при создании (если зону не удалили из справочника).
@@ -227,7 +227,8 @@ def _upsert_networks(db: Session, run: _Run) -> None:
             continue
         else:
             run.counts["networks_updated"] += 1
-        row.cidr, row.title, row.description, row.vlan, row.tags = net.cidr, net.name, net.comment, net.vlan, list(net.tags)
+        row.cidr, row.title, row.description, row.vlan = net.cidr, net.name, net.comment, net.vlan
+        row.tags, row.implicit_tags, row.origin_seen_at = list(net.explicit_tags), list(net.implicit_tags), run.started
     db.flush()
     reassign_assets(db)
 
