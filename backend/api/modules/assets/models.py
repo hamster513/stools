@@ -46,6 +46,29 @@ class AssetZone(Base):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(255), default="")
     description: Mapped[str] = mapped_column(Text, default="")
+    #: Признаки группы сетей (спека §3): расположение internal | dmz | external | "" (не задано),
+    #: доступна ли из интернета, есть ли конфиденциальные данные. В расчёт риска не идут.
+    placement: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    internet_facing: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    confidential: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+
+
+class NetworkZoneRule(Base):
+    """Правило отнесения сети к группе (спека §4): по `position`, срабатывает первое включённое подошедшее."""
+
+    __tablename__ = "network_zone_rule"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: Группу, на которую ссылается правило, удалить нельзя (RESTRICT).
+    zone: Mapped[str] = mapped_column(ForeignKey("asset_zone.name", ondelete="RESTRICT", onupdate="CASCADE"), index=True)
+    #: name_prefix | name_contains | name_regex | tag | cidr
+    match: Mapped[str] = mapped_column(String(16))
+    value: Mapped[str] = mapped_column(String(500))
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
 
 class Network(Base):
@@ -58,6 +81,12 @@ class Network(Base):
     #: Имя из справочника; удалить зону, на которую ссылается сеть, нельзя (RESTRICT).
     zone: Mapped[str | None] = mapped_column(
         ForeignKey("asset_zone.name", ondelete="RESTRICT", onupdate="CASCADE"), nullable=True, index=True,
+    )
+    #: Откуда группа: manual — выбрал человек (правила не трогают), rule — `zone_rule_id`,
+    #: racktables — публичный адрес без подошедшего правила (External), "" — не назначена.
+    zone_source: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    zone_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("network_zone_rule.id", ondelete="SET NULL"), nullable=True, index=True,
     )
     site: Mapped[str] = mapped_column(String(255), default="")
     owner: Mapped[str] = mapped_column(String(255), default="")

@@ -22,6 +22,7 @@ from api.modules.assets.routers import (
     scan,
     settings,
     users,
+    zone_rules,
     zones,
 )
 from api.modules.assets.services.dns import schedule_handler as dns_schedule_handler
@@ -34,8 +35,9 @@ from api.platform import scheduler as scheduler
 from api.platform.findings.adapters import register_adapter
 
 router = APIRouter(prefix="/api/assets", tags=["assets"])
+# zone_rules — до networks: иначе `/networks/{network_id}` перехватит `/networks/zone-rules`.
 for sub in (
-    assets.router, dns.router, groups.router, networks.router, overview.router, racktables.router, scan.router, settings.router, users.router, zones.router,
+    assets.router, dns.router, groups.router, zone_rules.router, networks.router, overview.router, racktables.router, scan.router, settings.router, users.router, zones.router,
     make_jobs_router(AssetJob, "assets"),
 ):
     router.include_router(sub)

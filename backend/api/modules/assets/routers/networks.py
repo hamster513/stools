@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -60,8 +60,10 @@ class NetworkIn(BaseModel):
     cidr: str = Field(max_length=64)
     title: str = Field(default="", max_length=255)
     description: str = Field(default="", max_length=4000)
-    #: Имя из справочника зон; пусто — без зоны.
+    #: Имя из справочника зон; пусто — без зоны. Указанная группа — выбор человека (`manual`).
     zone: str | None = None
+    #: rules — группу назначают правила (сеть возвращается под них); manual — закрепить группу.
+    zone_mode: Literal["manual", "rules"] | None = None
     site: str = Field(default="", max_length=255)
     owner: str = Field(default="", max_length=255)
     vlan: int | None = Field(default=None, ge=1, le=4094)
@@ -119,7 +121,7 @@ class NetworkUpdate(NetworkIn):
 
     def changes(self) -> dict[str, Any]:
         data = self.model_dump(include=self.model_fields_set)
-        nullable = {"zone", "vlan"}
+        nullable = {"zone", "vlan", "zone_mode"}
         for name, value in data.items():
             if value is None and name not in nullable:
                 raise ValueError(f"поле {name} не может быть пустым")
@@ -139,6 +141,9 @@ class NetworkView(BaseModel):
     title: str
     description: str
     zone: str | None
+    #: Откуда группа: manual | rule | racktables | "" (не назначена).
+    zone_source: str
+    zone_rule_id: int | None
     site: str
     owner: str
     vlan: int | None
@@ -175,7 +180,8 @@ def _schedules(db: Session, networks: list[Network]) -> dict[int, PlatformSchedu
 def _view(n: Network, stats: dict[str, Any], schedules: dict[int, PlatformSchedule]) -> NetworkView:
     sched = schedules.get(n.schedule_id) if n.schedule_id is not None else None
     return NetworkView(
-        id=n.id, cidr=n.cidr, title=n.title, description=n.description, zone=n.zone, site=n.site, owner=n.owner, vlan=n.vlan,
+        id=n.id, cidr=n.cidr, title=n.title, description=n.description, zone=n.zone, zone_source=n.zone_source,
+        zone_rule_id=n.zone_rule_id, site=n.site, owner=n.owner, vlan=n.vlan,
         tags=list(n.tags or []), scan_enabled=n.scan_enabled, ports=list(n.ports or []), exclude=list(n.exclude or []),
         concurrency=n.concurrency, icmp_timeout_ms=n.icmp_timeout_ms, tcp_timeout_ms=n.tcp_timeout_ms,
         rate_per_s=n.rate_per_s, estimated_seconds=estimated_seconds(n), schedule_id=n.schedule_id,

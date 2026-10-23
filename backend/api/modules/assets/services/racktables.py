@@ -25,16 +25,14 @@ from api.modules.assets.core.matching import Observed, normalize_name
 from api.modules.assets.core.racktables import Client, RtAddress, RtError, RtNetwork, narrowest
 from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import (
-    EXTERNAL_ZONE,
     Asset,
     AssetJob,
     AssetObservation,
     AssetRacktables,
-    AssetZone,
     Network,
 )
 from api.modules.assets.services.assets import apply_observation, recompute
-from api.modules.assets.services.networks import load_networks, reassign_assets
+from api.modules.assets.services.networks import apply_zone_rules, load_networks, reassign_assets
 from api.modules.assets.services.sync import sync_lock
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
@@ -203,11 +201,11 @@ def _collect(run: _Run, api: Client) -> None:
 
 def _upsert_networks(db: Session, run: _Run) -> None:
     """Сети RT → сети Assets: новые создаются, свои обновляются (название, описание, VLAN, явные и
-    унаследованные теги, дата импорта), описанные вручную с тем же CIDR не трогаются, шире /16 пропускаются."""
+    унаследованные теги, дата импорта), описанные вручную с тем же CIDR не трогаются, шире /16 пропускаются.
+    Группы своих сетей — по правилам (ручную группу правила не трогают); не подошло ни одно — публичная
+    сеть получает External (`zone_source="racktables"`)."""
     mine = {n.origin_key: n for n in db.execute(select(Network).where(Network.origin == ORIGIN)).scalars()}
     by_cidr = {n.cidr: n for n in db.execute(select(Network)).scalars()}
-    # Сеть с публичными адресами получает зону External при создании (если зону не удалили из справочника).
-    external_zone = EXTERNAL_ZONE if db.get(AssetZone, EXTERNAL_ZONE) is not None else None
     for net in run.networks:
         if net.too_wide:
             run.counts["networks_wide"] += 1
@@ -217,7 +215,7 @@ def _upsert_networks(db: Session, run: _Run) -> None:
             run.counts["networks_manual"] += 1
             continue
         if row is None:
-            row = Network(cidr=net.cidr, origin=ORIGIN, origin_key=net.rt_id, scan_enabled=False, zone=external_zone if net.external else None)
+            row = Network(cidr=net.cidr, origin=ORIGIN, origin_key=net.rt_id, scan_enabled=False)
             db.add(row)
             by_cidr[net.cidr] = row
             run.counts["networks_new"] += 1
@@ -230,6 +228,7 @@ def _upsert_networks(db: Session, run: _Run) -> None:
         row.cidr, row.title, row.description, row.vlan = net.cidr, net.name, net.comment, net.vlan
         row.tags, row.implicit_tags, row.origin_seen_at = list(net.explicit_tags), list(net.implicit_tags), run.started
     db.flush()
+    apply_zone_rules(db, db.execute(select(Network.id).where(Network.origin == ORIGIN)).scalars())
     reassign_assets(db)
 
 

@@ -57,6 +57,8 @@ def detail(r: Any) -> str:
 def test_crud(analyst: TestClient) -> None:
     net = add_network(analyst, "10.10.0.7/24", title="Офис", zone="Internal", site="msk1", owner="ИТ", vlan=10, tags=["офис"])
     assert net["cidr"] == "10.10.0.0/24" and net["zone"] == "Internal" and net["vlan"] == 10 and net["tags"] == ["офис"]
+    # Группа, указанная при создании, — выбор человека: правила её не трогают.
+    assert (net["zone_source"], net["zone_rule_id"]) == ("manual", None)
     assert net["ports"] == DEFAULT_PORTS and net["concurrency"] == 64 and net["scan_enabled"] is False
     assert net["icmp_timeout_ms"] == 1000 and net["tcp_timeout_ms"] == 2000 and net["exclude"] == []
     assert net["stats"] == {"assets": 0, "alive_last_scan": None, "unknown_hosts": 0}
@@ -215,7 +217,10 @@ def test_zones(analyst: TestClient) -> None:
     listed = {z["name"]: z for z in analyst.get("/api/assets/zones").json()}
     assert set(listed) == set(DEFAULT_ZONES) and listed["DMZ"]["networks"] == 0
     r = analyst.post("/api/assets/zones", json={"name": " Lab ", "title": "Стенд", "description": "испытания"})
-    assert r.status_code == 201 and r.json() == {"name": "Lab", "title": "Стенд", "description": "испытания", "networks": 0}
+    assert r.status_code == 201 and r.json() == {
+        "name": "Lab", "title": "Стенд", "description": "испытания", "placement": "", "internet_facing": False, "confidential": False,
+        "networks": 0,
+    }
     assert analyst.post("/api/assets/zones", json={"name": "Lab"}).status_code == 409
     assert analyst.post("/api/assets/zones", json={"name": "  "}).status_code == 422
     assert analyst.delete("/api/assets/zones/Lab").status_code == 204
