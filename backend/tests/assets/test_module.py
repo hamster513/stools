@@ -55,6 +55,22 @@ def test_group_tables_match_models(db_session: Session) -> None:
     assert [d for d in compare_metadata(ctx, Base.metadata) if "asset_group" in repr(d)] == []
 
 
+def test_group_member_indexes(db_session: Session) -> None:
+    """Ссылки `SET NULL` (пользователь, актив) — с индексами; отдельного по `group_id` нет: его ведёт уникальный."""
+    from sqlalchemy import inspect
+
+    insp = inspect(db_session.connection())
+    indexes = {ix["name"]: ix["column_names"] for ix in insp.get_indexes("asset_group_member")}
+    assert indexes.pop("uq_asset_group_member")[0] == "group_id"
+    assert indexes == {
+        "ix_asset_group_member_member_group_id": ["member_group_id"],
+        "ix_asset_group_member_user_id": ["user_id"],
+        "ix_asset_group_member_asset_id": ["asset_id"],
+    }
+    columns = {c["name"]: c for c in insp.get_columns("asset_group")}
+    assert columns["group_key"]["type"].length == 800 and columns["os_family"]["type"].length == 8
+
+
 def test_group_cascades(db_session: Session) -> None:
     """Удаление хоста уносит его локальные группы с составом; удаление участника лишь рвёт ссылку."""
     host, member_host = Asset(name="WS01"), Asset(name="SRV01")

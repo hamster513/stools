@@ -230,12 +230,14 @@ class AssetGroup(Base):
     __table_args__ = (UniqueConstraint("group_key", name="uq_asset_group_group_key"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    group_key: Mapped[str] = mapped_column(String(600))
+    group_key: Mapped[str] = mapped_column(String(800))
     sid: Mapped[str] = mapped_column(String(255), default="", index=True)
     name: Mapped[str] = mapped_column(String(512), default="")
     #: DNS-домен (`corp.local`); у локальной пусто.
     domain: Mapped[str] = mapped_column(String(255), default="")
     local: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Семейство ОС локальной группы (windows | linux, по снимку VM); у доменной пусто.
+    os_family: Mapped[str] = mapped_column(String(8), default="")
     host_asset_id: Mapped[int | None] = mapped_column(
         ForeignKey("asset.id", ondelete="CASCADE"), nullable=True, index=True
     )
@@ -251,7 +253,10 @@ class AssetGroup(Base):
 
 
 class AssetGroupMember(Base):
-    """Прямой участник группы и то, с чем его удалось связать: пользователь, группа или актив-хост."""
+    """Прямой участник группы и то, с чем его удалось связать: пользователь, группа или актив-хост.
+
+    Отдельного индекса по `group_id` нет: уникальный индекс начинается с него. `user_id` и `asset_id` —
+    с индексами: удаление пользователя или актива (`SET NULL`) ищет ссылки по ним."""
 
     __tablename__ = "asset_group_member"
     __table_args__ = (
@@ -259,14 +264,14 @@ class AssetGroupMember(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    group_id: Mapped[int] = mapped_column(ForeignKey("asset_group.id", ondelete="CASCADE"), index=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("asset_group.id", ondelete="CASCADE"))
     #: user | group | computer | well_known | unknown
     member_kind: Mapped[str] = mapped_column(String(16))
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("asset_user.id", ondelete="SET NULL"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("asset_user.id", ondelete="SET NULL"), nullable=True, index=True)
     member_group_id: Mapped[int | None] = mapped_column(
         ForeignKey("asset_group.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    asset_id: Mapped[int | None] = mapped_column(ForeignKey("asset.id", ondelete="SET NULL"), nullable=True)
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("asset.id", ondelete="SET NULL"), nullable=True, index=True)
     member_sid: Mapped[str] = mapped_column(String(255), default="")
     member_name: Mapped[str] = mapped_column(String(512), default="")
     member_domain: Mapped[str] = mapped_column(String(255), default="")

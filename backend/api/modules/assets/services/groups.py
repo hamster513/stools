@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle
 from api.modules.assets.core.groups import group_key, is_well_known, normalize_sid
-from api.modules.assets.core.matching import Observed, match, normalize_fqdn
+from api.modules.assets.core.matching import Observed, is_ip, match, normalize_fqdn
 from api.modules.assets.models import (
     Asset,
     AssetGroup,
@@ -59,7 +59,7 @@ USER_CLASSES = frozenset({"user", "inetOrgPerson", "msDS-GroupManagedServiceAcco
 MEMBER_BATCH_GROUPS = 2000
 FIELD_LEN = 255
 NAME_LEN = 512
-KEY_LEN = 600
+KEY_LEN = 800
 DN_LEN = 1024
 
 
@@ -409,10 +409,11 @@ _VM_GROUPS_PROBE = "vm_groups"
 
 def _match_vm_hosts(db: Session, hosts: list[VmHostKey]) -> tuple[dict[VmHostKey, int], int]:
     """Хост VM → актив. Сначала живое наблюдение `vm` с ключом `hostname|ip` (без учёта регистра), где
-    `hostname` — FQDN или имя строки групп, либо адрес (`ip|ip`, `ip|` — у хоста VM без DNS-имени `@Host`
-    — адрес); иначе правила 2–5 общего сопоставителя (`core.matching.match`) по живым активам: FQDN, имя с тем
-    же доменом, короткое имя — только если у одной стороны нет домена, адрес — только если у одной стороны нет
-    имени. Неоднозначно или нигде — хост без актива (второе в ответе — их число). Контроллеры домена (признак
+    `hostname` — FQDN или имя строки групп; адрес (`ip|ip`, `ip|` — у хоста VM без DNS-имени `@Host` — адрес)
+    — только у строки групп без FQDN и имени (имя-адрес именем не считается): адрес именованного хоста мог
+    достаться другому. Иначе правила 2–5 общего сопоставителя (`core.matching.match`) по живым активам: FQDN,
+    имя с тем же доменом, короткое имя — только если у одной стороны нет домена, адрес — только если у одной
+    стороны нет имени. Неоднозначно или нигде — хост без актива (второе в ответе — их число). Контроллеры домена (признак
     `dc` наблюдения AD) в ответ не входят: локальных групп у них нет."""
     alive = _alive(db)
     by_vm: dict[str, int | None] = {}
@@ -427,7 +428,11 @@ def _match_vm_hosts(db: Session, hosts: list[VmHostKey]) -> tuple[dict[VmHostKey
     index = MatchIndex.load(db)
 
     def match_host(fqdn: str, hostname: str, ip: str) -> int | None:
-        keys = {f"{h}|{ip}".lower() for h in (fqdn, hostname, ip) if h} | ({f"{ip}|"} if ip else set())
+        if fqdn or (hostname and not is_ip(hostname)):
+            keys = {f"{h}|{ip}".lower() for h in (fqdn, hostname) if h}
+        else:
+            addr = ip or hostname
+            keys = {f"{addr}|{addr}".lower(), f"{addr}|".lower()} if addr else set()
         hits = {by_vm[k] for k in keys if k in by_vm}
         if hits:
             return hits.pop() if len(hits) == 1 else None
@@ -495,16 +500,16 @@ def _vm_lookup(db: Session, seen_at: dt.datetime) -> _VmLookup:
 def _upsert_local_groups(db: Session, assets: list[int], groups: dict[str, dict[str, Any]]) -> dict[str, int]:
     """Локальные группы пачки хостов: новые вставляются, изменённые правятся, вернувшиеся снимают `gone_at`.
     Ключ группы → id."""
-    cols = (AssetGroup.id, AssetGroup.group_key, AssetGroup.sid, AssetGroup.name, AssetGroup.description, AssetGroup.sources,
-            AssetGroup.first_seen, AssetGroup.last_seen, AssetGroup.gone_at)
+    cols = (AssetGroup.id, AssetGroup.group_key, AssetGroup.sid, AssetGroup.name, AssetGroup.os_family, AssetGroup.description,
+            AssetGroup.sources, AssetGroup.first_seen, AssetGroup.last_seen, AssetGroup.gone_at)
     old = {r["group_key"]: r for r in db.execute(
         select(*cols).where(AssetGroup.local.is_(True), AssetGroup.host_asset_id.in_(assets))).mappings()}
     ids: dict[str, int] = {}
     inserts: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     for key, g in groups.items():
-        values = {"sid": g["sid"], "name": g["name"], "description": g["description"], "sources": ["vm"],
-                  "last_seen": g["last_seen"], "gone_at": None}
+        values = {"sid": g["sid"], "name": g["name"], "os_family": g["os_family"], "description": g["description"],
+                  "sources": ["vm"], "last_seen": g["last_seen"], "gone_at": None}
         got = old.get(key)
         if got is None:
             inserts.append({"group_key": key, "local": True, "host_asset_id": g["asset_id"], "domain": "", "in_ad": False,
@@ -577,7 +582,7 @@ def _sync_vm_batch(db: Session, assets: list[int], hosts: dict[VmHostKey, int], 
         if key not in groups:
             linux = r["os_family"] == "linux"
             groups[key] = {
-                "asset_id": aid, "sid": _cut(normalize_sid(r["group_sid"])), "name": name,
+                "asset_id": aid, "sid": _cut(normalize_sid(r["group_sid"])), "name": name, "os_family": r["os_family"],
                 "description": (f"GID {r['group_gid']}" if r["group_gid"] else "") if linux else r["group_description"],
                 "last_seen": seen_at[r["os_family"]],
             }
@@ -619,9 +624,8 @@ def _sync_vm_domain_refs(db: Session, look: _VmLookup, now: dt.datetime) -> None
 
 def _sync_vm(db: Session, handle: JobHandle, now: dt.datetime) -> int:
     """Локальные группы хостов из последнего снимка групп VM (спека §3). Без снимка — ничего не трогается.
-    Пропавшие — локальные группы семейства, чей запрос прошёл в последнем снимке, не встреченные в нём
-    (`last_seen` раньше снимка семейства); семейство — по SID (у Linux его нет). Возвращает число хостов
-    VM без актива."""
+    Пропавшие — локальные группы семейства (`os_family`), чей полный снимок записан последним снимком, не
+    встреченные в нём (`last_seen` раньше снимка семейства). Возвращает число хостов VM без актива."""
     from api.modules.vm.models import VmGroupImport, VmHostGroup
 
     snap = db.execute(select(VmGroupImport).order_by(VmGroupImport.finished_at.desc(), VmGroupImport.id.desc()).limit(1)).scalar()
@@ -646,10 +650,10 @@ def _sync_vm(db: Session, handle: JobHandle, now: dt.datetime) -> int:
         _sync_vm_batch(db, chunk, {h: a for a in chunk for h in by_asset[a]}, look, seen_at)
         handle.tick(i + len(chunk))
     _sync_vm_domain_refs(db, look, now)
-    for family, has_sid, ok in (("windows", AssetGroup.sid != "", snap.windows_ok), ("linux", AssetGroup.sid == "", snap.linux_ok)):
+    for family, ok in (("windows", snap.windows_ok), ("linux", snap.linux_ok)):
         if ok:
             db.execute(update(AssetGroup).where(
-                AssetGroup.local.is_(True), AssetGroup.gone_at.is_(None), has_sid,
+                AssetGroup.local.is_(True), AssetGroup.gone_at.is_(None), AssetGroup.os_family == family,
                 or_(AssetGroup.last_seen.is_(None), AssetGroup.last_seen < seen_at[family]),
             ).values(gone_at=now).execution_options(synchronize_session=False))
     gone = select(AssetGroup.id).where(AssetGroup.local.is_(True), AssetGroup.gone_at.is_not(None))

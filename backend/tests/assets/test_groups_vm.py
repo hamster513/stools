@@ -21,9 +21,12 @@ from api.modules.assets.models import (
     AssetUser,
     AssetUserHost,
 )
+from api.modules.assets.services import groups as groups_service
+from api.modules.assets.services.groups import _match_vm_hosts
 from api.modules.assets.services.sync import run_sync
 from api.modules.vm.models import VmGroupImport, VmHostGroup
 from tests.assets.synthetic import load_vm
+from tests.assets.test_groups_sync import normalized_members
 from tests.assets.test_users_sync import account, ad_raw, computer, csid, dn, group, load_ad, sync
 
 MACHINE = "S-1-5-21-4444444444-5555555555-6666666666"
@@ -160,8 +163,8 @@ def test_windows_local_groups(loaded: Session, now: dt.datetime) -> None:
     assert "groups_failed" not in got and got["vm_hosts_unmatched"] == 1
     srv01 = asset_id(loaded, "srv01")
     adm = local_group(loaded, "srv01", "administrators")
-    assert (adm.local, adm.sid, adm.domain, adm.sources, adm.in_ad, adm.description, adm.gone_at, adm.group_key) == (
-        True, ADMINS, "", ["vm"], False, "администраторы", None, f"l:{srv01}:{ADMINS}")
+    assert (adm.local, adm.sid, adm.domain, adm.sources, adm.in_ad, adm.description, adm.gone_at, adm.group_key, adm.os_family) == (
+        True, ADMINS, "", ["vm"], False, "администраторы", None, f"l:{srv01}:{ADMINS}", "windows")
     assert adm.last_seen == now - dt.timedelta(hours=2) and adm.first_seen == adm.last_seen
     got_m = members(loaded, adm.id)
     assert set(got_m) == {"desktop admins", "pcadmin", "authenticated users", "trustedinstaller", "helpers", "administrator",
@@ -170,7 +173,7 @@ def test_windows_local_groups(loaded: Session, now: dt.datetime) -> None:
     da = domain_group(loaded, csid(1302))
     assert (got_m["desktop admins"].member_kind, got_m["desktop admins"].member_group_id, got_m["desktop admins"].member_domain) == (
         "group", da.id, "corp.local")
-    assert da.sources == ["ad", "vm"] and da.in_ad is True
+    assert da.sources == ["ad", "vm"] and da.in_ad is True and da.os_family == ""
     # Состав AD доменной группы строками VM не тронут.
     assert {m.member_name: m.source for m in members(loaded, da.id).values()} == {"user01": "ad"}
     assert (got_m["pcadmin"].member_kind, got_m["pcadmin"].user_id, got_m["pcadmin"].member_sid) == ("user", None, msid(1001))
@@ -181,7 +184,8 @@ def test_windows_local_groups(loaded: Session, now: dt.datetime) -> None:
     assert (got_m["helpers"].member_kind, got_m["helpers"].member_group_id) == ("group", helpers.id)
     assert (got_m["administrator"].member_kind, got_m["administrator"].user_id, got_m["administrator"].member_sid) == ("user", None, msid(500))
     rh = domain_group(loaded, csid(1400))
-    assert (rh.in_ad, rh.sources, rh.domain, rh.name, rh.group_key) == (False, ["vm"], "corp.local", "remote helpers", f"d:corp.local:{csid(1400)}")
+    assert (rh.in_ad, rh.sources, rh.domain, rh.name, rh.group_key, rh.os_family) == (
+        False, ["vm"], "corp.local", "remote helpers", f"d:corp.local:{csid(1400)}", "")
     assert got_m["remote helpers"].member_group_id == rh.id
     fa = domain_group(loaded, FOREIGN)
     assert (fa.in_ad, fa.domain) == (False, "other")
@@ -218,7 +222,7 @@ def test_linux_groups(loaded: Session, now: dt.datetime) -> None:
     sync(loaded)
     lin01 = asset_id(loaded, "lin01")
     wheel = local_group(loaded, "lin01", "wheel")
-    assert (wheel.sid, wheel.description, wheel.group_key, wheel.sources) == ("", "GID 10", f"l:{lin01}:n:wheel", ["vm"])
+    assert (wheel.sid, wheel.description, wheel.group_key, wheel.sources, wheel.os_family) == ("", "GID 10", f"l:{lin01}:n:wheel", ["vm"], "linux")
     m = members(loaded, wheel.id)["user01"]
     assert (m.member_kind, m.user_id, m.member_sid, m.source) == ("user", None, "", "vm")
     daemon = local_group(loaded, "lin01", "daemon")
@@ -266,6 +270,47 @@ def test_family_not_refreshed_is_not_judged(loaded: Session, now: dt.datetime) -
     wheel = local_group(loaded, "lin01", "wheel")
     assert wheel.last_seen == now - dt.timedelta(hours=2) and wheel.gone_at is None
     assert local_group(loaded, "srv01", "administrators").last_seen == now - dt.timedelta(hours=1)
+
+
+def test_gone_judged_by_family_not_by_sid(loaded: Session, now: dt.datetime) -> None:
+    """Группа Windows без SID судится по семейству Windows: снимок, где прошла только Windows, видит её пропажу;
+    Linux этого снимка не судится."""
+    put_groups(loaded, [*snapshot(), win(SRV01, "nosid", "")], now - dt.timedelta(hours=1))
+    sync(loaded)
+    nosid = local_group(loaded, "srv01", "nosid")
+    assert (nosid.sid, nosid.os_family, nosid.gone_at) == ("", "windows", None)
+    loaded.execute(delete(VmHostGroup).where(VmHostGroup.group_name == "daemon"))
+    put_groups(loaded, snapshot(), now - dt.timedelta(minutes=30), linux_ok=False)
+    sync(loaded)
+    loaded.refresh(nosid)
+    assert nosid.gone_at is not None
+    assert local_group(loaded, "lin01", "daemon").gone_at is None
+
+
+def test_vm_host_batches_of_one_give_same_result(loaded: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Состав VM пачками по одному активу-хосту (`VM_HOSTS_BATCH=1`) — тот же, что одной пачкой; повтор не переписывает строки."""
+    sync(loaded)
+    single = normalized_members(loaded)
+    assert sum(1 for m in single if m[1] == "vm") >= 10
+    loaded.execute(delete(AssetGroup))
+    loaded.commit()
+    calls: list[int] = []
+    apply = groups_service._apply_members
+
+    def spy(db: Session, batch: dict[int, Any], source: str = "ad") -> None:
+        if source == "vm":
+            calls.append(len(batch))
+        apply(db, batch, source)
+
+    monkeypatch.setattr(groups_service, "VM_HOSTS_BATCH", 1)
+    monkeypatch.setattr(groups_service, "MEMBER_BATCH_GROUPS", 1)
+    monkeypatch.setattr(groups_service, "_apply_members", spy)
+    sync(loaded)
+    assert len(calls) == 3  # srv01, srv02, lin01
+    assert normalized_members(loaded) == single
+    ids = {m.id for m in loaded.execute(select(AssetGroupMember)).scalars()}
+    sync(loaded)
+    assert {m.id for m in loaded.execute(select(AssetGroupMember)).scalars()} == ids
 
 
 def test_without_snapshot_vm_part_does_nothing(db_session: Session, app_settings: Any, now: dt.datetime) -> None:
@@ -396,3 +441,23 @@ def test_host_without_dns_name_matched_by_observation_key(db_session: Session, a
     assert "vm_hosts_unmatched" not in got
     keys = dict(db_session.execute(select(AssetObservation.source_key, AssetObservation.asset_id).where(AssetObservation.source == "vm")).tuples().all())
     assert set(matched_hosts(db_session)) == {keys["10.0.0.51|10.0.0.51"], keys["10.0.0.52|"]}
+
+
+def test_address_key_only_for_row_without_name(db_session: Session, now: dt.datetime) -> None:
+    """Ключ наблюдения-адрес (`ip|ip`, `ip|`) — только у строки групп без FQDN и имени (имя-адрес — не имя): адрес
+    именованного хоста мог достаться другому."""
+    ws51 = Asset(name="ws51", name_key="ws51", fqdn="ws51.corp.local", domain="corp.local", ip="10.0.0.51")
+    ws52 = Asset(name="ws52", name_key="ws52", fqdn="ws52.corp.local", domain="corp.local", ip="10.0.0.52")
+    db_session.add_all([ws51, ws52])
+    db_session.flush()
+    db_session.add_all([
+        AssetObservation(asset_id=ws51.id, source="vm", source_key="10.0.0.51|10.0.0.51", name="ws51", fqdn="ws51.corp.local",
+                         ip="10.0.0.51", ips=["10.0.0.51"], seen_at=now),
+        AssetObservation(asset_id=ws52.id, source="vm", source_key="10.0.0.52|", name="ws52", fqdn="ws52.corp.local",
+                         ip="10.0.0.52", ips=["10.0.0.52"], seen_at=now),
+    ])
+    db_session.commit()
+    named = [("windows", "srv77.corp.local", "srv77", "10.0.0.51"), ("windows", "", "srv78", "10.0.0.52")]
+    bare = [("windows", "", "", "10.0.0.51"), ("windows", "", "10.0.0.52", "10.0.0.52"), ("windows", "", "10.0.0.51", "")]
+    matched, unmatched = _match_vm_hosts(db_session, [*named, *bare])
+    assert matched == {bare[0]: ws51.id, bare[1]: ws52.id, bare[2]: ws51.id} and unmatched == 2

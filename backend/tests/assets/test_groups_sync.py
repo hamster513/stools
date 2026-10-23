@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from api.modules.ad.services.snapshots import snapshot_path as ad_snapshot_path
@@ -19,6 +19,7 @@ from api.modules.assets.models import (
     AssetSettings,
     AssetUser,
 )
+from api.modules.assets.services import groups as groups_service
 from api.modules.assets.services import sync as sync_service
 from api.modules.assets.services.groups import gpo_notes
 from tests.assets.test_users_sync import (
@@ -254,3 +255,36 @@ def test_members_diffed_not_rewritten(loaded: Session, data_dir: Path, now: dt.d
     hd = members(loaded, hd_id)
     assert {m.id for m in hd.values()} == {v[0] for k, v in before.items() if k[0] == hd_id}
     assert hd["desktop admins 2"].id == before[(hd_id, csid(1302), "desktop admins")][0]
+
+
+def normalized_members(db: Session) -> set[tuple[Any, ...]]:
+    """Состав без id строк и групп: группа и группа-участник — по ключу личности."""
+    keys = dict(db.execute(select(AssetGroup.id, AssetGroup.group_key)).tuples().all())
+    return {(keys[m.group_id], m.source, m.member_kind, m.member_sid, m.member_name, m.member_domain, m.primary, m.user_id,
+             m.asset_id, keys.get(m.member_group_id) if m.member_group_id else None)
+            for m in db.execute(select(AssetGroupMember)).scalars()}
+
+
+def test_member_batches_of_one_group_give_same_result(loaded: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Сверка состава AD пачками по одной группе (`MEMBER_BATCH_GROUPS=1`) — тот же состав, что одной пачкой;
+    повтор пачками не переписывает строки."""
+    sync(loaded)
+    single = normalized_members(loaded)
+    assert len(single) >= 10
+    loaded.execute(delete(AssetGroup))
+    loaded.commit()
+    calls: list[int] = []
+    apply = groups_service._apply_members
+
+    def spy(db: Session, batch: dict[int, Any], source: str = "ad") -> None:
+        calls.append(len(batch))
+        apply(db, batch, source)
+
+    monkeypatch.setattr(groups_service, "MEMBER_BATCH_GROUPS", 1)
+    monkeypatch.setattr(groups_service, "_apply_members", spy)
+    sync(loaded)
+    assert len(calls) == 5 and set(calls) == {1}
+    assert normalized_members(loaded) == single
+    ids = {m.id for m in loaded.execute(select(AssetGroupMember)).scalars()}
+    sync(loaded)
+    assert {m.id for m in loaded.execute(select(AssetGroupMember)).scalars()} == ids

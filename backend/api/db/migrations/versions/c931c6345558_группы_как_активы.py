@@ -27,11 +27,12 @@ def upgrade() -> None:
     op.create_table(
         "asset_group",
         sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("group_key", sa.String(600), nullable=False),
+        sa.Column("group_key", sa.String(800), nullable=False),
         sa.Column("sid", sa.String(255), nullable=False),
         sa.Column("name", sa.String(512), nullable=False),
         sa.Column("domain", sa.String(255), nullable=False),
         sa.Column("local", sa.Boolean(), nullable=False),
+        sa.Column("os_family", sa.String(8), nullable=False),
         sa.Column("host_asset_id", sa.Integer(), sa.ForeignKey("asset.id", ondelete="CASCADE"), nullable=True),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("sources", JSON, nullable=False),
@@ -62,7 +63,8 @@ def upgrade() -> None:
         sa.Column("source", sa.String(8), nullable=False),
         sa.UniqueConstraint("group_id", "source", "member_sid", "member_name", name="uq_asset_group_member"),
     )
-    for column in ("group_id", "member_group_id"):
+    # По `group_id` — уникальный индекс (он ведущий); `user_id` и `asset_id` — для `SET NULL` при удалении.
+    for column in ("member_group_id", "user_id", "asset_id"):
         op.create_index(f"ix_asset_group_member_{column}", "asset_group_member", [column])
 
     op.create_table(
@@ -90,7 +92,7 @@ def downgrade() -> None:
     for column in ("domain", "group_sid"):
         op.drop_index(f"ix_asset_group_gpo_{column}", table_name="asset_group_gpo")
     op.drop_table("asset_group_gpo")
-    for column in ("group_id", "member_group_id"):
+    for column in ("member_group_id", "user_id", "asset_id"):
         op.drop_index(f"ix_asset_group_member_{column}", table_name="asset_group_member")
     op.drop_table("asset_group_member")
     for column in ("sid", "host_asset_id"):
