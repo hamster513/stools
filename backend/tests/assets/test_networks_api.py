@@ -83,7 +83,7 @@ def test_validation(analyst: TestClient) -> None:
     # Ограничения «не шире /16» больше нет (оно было ради сканера): сеть-контейнер служит объемлющей.
     assert add_network(analyst, "10.0.0.0/8")["cidr"] == "10.0.0.0/8"
     add_network(analyst, "10.30.0.0/16")
-    add_network(analyst, "fd00:10::/48")  # для IPv6 ограничения нет
+    add_network(analyst, "fd00:10::/48")
     bad: list[dict[str, Any]] = [
         {"cidr": "не сеть"},
         {"cidr": "10.40.0.0/24", "zone": "Nope"},

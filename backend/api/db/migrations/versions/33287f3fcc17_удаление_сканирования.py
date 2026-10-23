@@ -8,7 +8,8 @@ Create Date: 2026-10-24 18:00:00.000000
 нет ни одного наблюдения, кроме `scan` (живого или пропавшего), — тем же путём, что удаление актива из
 интерфейса (`services.assets.delete_assets` удаляет строку `asset`, остальное делают внешние ключи:
 наблюдения, связи с пользователями и локальные группы хоста — CASCADE; ссылки участников групп и
-`merged_into` — SET NULL). Слитые активы (без наблюдений: они переехали к оставшемуся) не трогаются.
+`merged_into` — SET NULL). Активы, слитые в удаляемый (по цепочке тоже), без своих живых наблюдений
+удаляются вместе с ним: иначе остались бы без наблюдений и без ссылки. Прочие слитые активы не трогаются.
 Затем — наблюдения `scan` у оставшихся активов, расписания `assets/scan` в `platform_schedule`, задачи
 `scan` в `asset_job` и столбцы скана у `network`. Откат возвращает столбцы с умолчаниями прежней модели;
 данные не восстанавливаются — их и не было.
@@ -48,8 +49,13 @@ NULLABLE: tuple[tuple[str, sa.types.TypeEngine[Any]], ...] = (
 
 def upgrade() -> None:
     op.execute(sa.text(
-        "DELETE FROM asset WHERE id IN (SELECT asset_id FROM asset_observation WHERE source = 'scan') "
-        "AND NOT EXISTS (SELECT 1 FROM asset_observation o WHERE o.asset_id = asset.id AND o.source <> 'scan')"
+        "WITH RECURSIVE doomed(id) AS ("
+        " SELECT a.id FROM asset a WHERE a.id IN (SELECT asset_id FROM asset_observation WHERE source = 'scan')"
+        " AND NOT EXISTS (SELECT 1 FROM asset_observation o WHERE o.asset_id = a.id AND o.source <> 'scan')"
+        " UNION"
+        " SELECT a.id FROM asset a JOIN doomed d ON a.merged_into = d.id"
+        " WHERE NOT EXISTS (SELECT 1 FROM asset_observation o WHERE o.asset_id = a.id AND o.source <> 'scan' AND o.gone_at IS NULL)"
+        ") DELETE FROM asset WHERE id IN (SELECT id FROM doomed)"
     ))
     op.execute(sa.text("DELETE FROM asset_observation WHERE source = 'scan'"))
     op.execute(sa.text("DELETE FROM platform_schedule WHERE module = 'assets' AND kind = 'scan'"))

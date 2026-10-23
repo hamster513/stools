@@ -400,12 +400,15 @@ GET    /networks/export?format=csv|xlsx   все сети в порядке та
 ## Расписания задач
 
 ```
-GET    /dns/{id}/schedule  /racktables/{id}/schedule  /sync/schedule
-                                       {id, interval_hours, window_from, window_to, enabled, next_run_at,
+GET    /sync/schedule                  {id, interval_hours, window_from, window_to, enabled, next_run_at,
                                         last_run_at, last_job_id, tz} | null
-PUT    …/schedule  {interval_hours 1–720, window_from?, window_to?, enabled}   422 — окно не HH:MM
-DELETE …/schedule                      204
+PUT    /dns/{id}/schedule  /racktables/{id}/schedule  /sync/schedule
+               {interval_hours 1–720, window_from?, window_to?, enabled}   → то же; 422 — окно не HH:MM
+DELETE /dns/{id}/schedule  /racktables/{id}/schedule  /sync/schedule   204
 ```
+
+Расписание DNS-сервера и подключения RackTables отдельной ручкой не читается: оно приходит полем
+`schedule` в `GET /dns` и `GET /racktables`.
 
 Окно расписания — в поясе `STOOLS_TZ`, конец окна не включается; окно через
 полночь допускается.

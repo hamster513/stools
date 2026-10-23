@@ -82,15 +82,22 @@ def _seed(engine: Engine) -> dict[str, int]:
         db.flush()
         # Слитый актив: наблюдений у него нет (переехали к ws01) — миграция его не трогает.
         merged = Asset(name="ws01-old", name_key="ws01", merged_into=ksc_only.id)
-        # Слит в актив «только скан»: ссылка обнуляется, как при удалении актива.
+        # Слит в актив «только скан» (и цепочкой — в него): без своих живых наблюдений удаляется вместе с ним.
         merged_into_scan = Asset(name="x", name_key="x", merged_into=only_scan.id)
         db.add_all([merged, merged_into_scan])
+        db.flush()
+        chained = Asset(name="y", name_key="y", merged_into=merged_into_scan.id)
+        # Слит в актив «только скан», но со своим живым наблюдением: остаётся, ссылка обнуляется (SET NULL).
+        merged_alive = Asset(name="z", name_key="z", ip="10.20.0.9", merged_into=only_scan.id)
+        db.add_all([chained, merged_alive])
+        db.flush()
         db.add_all([
             _obs(only_scan, "scan", "10.10.0.9", "10.10.0.9"),
             _obs(gone_scan, "scan", "10.10.0.8", "10.10.0.8", gone=True),
             _obs(scan_and_ksc, "scan", "10.10.0.5", "10.10.0.5"),
             _obs(scan_and_ksc, "ksc", "1:srv01", "10.10.0.5"),
             _obs(ksc_only, "ksc", "1:ws01", "10.20.0.5"),
+            _obs(merged_alive, "ksc", "1:z", "10.20.0.9"),
         ])
         user = AssetUser(name_key="corp.local\\user1", sam="user1")
         db.add(user)
@@ -108,7 +115,7 @@ def _seed(engine: Engine) -> dict[str, int]:
         db.commit()
         return {
             "only_scan": only_scan.id, "gone_scan": gone_scan.id, "scan_and_ksc": scan_and_ksc.id, "ksc_only": ksc_only.id,
-            "merged": merged.id, "merged_into_scan": merged_into_scan.id, "domain": domain.id, "dns_sched": dns_sched.id,
+            "merged": merged.id, "merged_alive": merged_alive.id, "domain": domain.id, "dns_sched": dns_sched.id,
         }
 
 
@@ -121,11 +128,12 @@ def test_migration_removes_scan_data_and_columns(scratch: tuple[Engine, Config])
     with Session(engine) as db:
         assert db.execute(select(AssetObservation).where(AssetObservation.source == "scan")).scalars().all() == []
         assets = {a.id: a for a in db.execute(select(Asset)).scalars()}
-        # Только скан (живой или пропавший) — актив удалён; скан и KSC — остался с KSC; слитые без наблюдений — на месте.
-        assert set(assets) == {ids["scan_and_ksc"], ids["ksc_only"], ids["merged"], ids["merged_into_scan"]}
+        # Только скан (живой или пропавший) — актив удалён вместе со слитыми в него (и по цепочке) без живых наблюдений;
+        # скан и KSC — остался с KSC; слитый в живой актив и слитый со своим живым наблюдением — на месте.
+        assert set(assets) == {ids["scan_and_ksc"], ids["ksc_only"], ids["merged"], ids["merged_alive"]}
         assert [o.source for o in db.execute(select(AssetObservation).where(AssetObservation.asset_id == ids["scan_and_ksc"])).scalars()] == ["ksc"]
         assert assets[ids["merged"]].merged_into == ids["ksc_only"]
-        assert assets[ids["merged_into_scan"]].merged_into is None
+        assert assets[ids["merged_alive"]].merged_into is None
         # Каскады удаления актива: связи с пользователями и локальные группы хоста — удалены, участник группы — без актива.
         assert [h.asset_id for h in db.execute(select(AssetUserHost)).scalars()] == [ids["ksc_only"]]
         assert [g.id for g in db.execute(select(AssetGroup)).scalars()] == [ids["domain"]]
