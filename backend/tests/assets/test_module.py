@@ -69,15 +69,17 @@ def test_group_member_indexes(db_session: Session) -> None:
     }
     columns = {c["name"]: c for c in insp.get_columns("asset_group")}
     assert columns["group_key"]["type"].length == 800 and columns["os_family"]["type"].length == 8
+    assert columns["members_direct"]["nullable"] is False
 
 
 def test_list_and_delete_indexes(db_session: Session) -> None:
-    """Удаление пользователя — индекс самоссылки `merged_into`."""
+    """Страница групп — индекс по `lower(name)`; удаление пользователя — индекс самоссылки `merged_into`."""
     from sqlalchemy import text
 
     defs = dict(db_session.execute(text(
-        "SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN ('ix_asset_user_merged_into')"
+        "SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN ('ix_asset_group_name_lower', 'ix_asset_user_merged_into')"
     )).tuples().all())
+    assert "lower((name)::text)" in defs["ix_asset_group_name_lower"]
     assert defs["ix_asset_user_merged_into"].endswith("(merged_into)")
 
 

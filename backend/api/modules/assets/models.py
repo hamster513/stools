@@ -228,7 +228,11 @@ class AssetGroup(Base):
     без SID — имя. `in_ad=False` — доменная группа, которую VM видит участником, а выгрузки AD — нет."""
 
     __tablename__ = "asset_group"
-    __table_args__ = (UniqueConstraint("group_key", name="uq_asset_group_group_key"),)
+    #: Страница списка идёт по `lower(name)`: индекс отдаёт её без сортировки всей таблицы.
+    __table_args__ = (
+        UniqueConstraint("group_key", name="uq_asset_group_group_key"),
+        Index("ix_asset_group_name_lower", text("lower(name)")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     group_key: Mapped[str] = mapped_column(String(800))
@@ -246,6 +250,9 @@ class AssetGroup(Base):
     #: ad | vm
     sources: Mapped[list[str]] = mapped_column(JSONType, default=list)
     in_ad: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Строк прямого состава (все источники); ведёт синхронизация после каждой записи состава — список,
+    #: фасет и фильтр «участники» читают столбец, а не считают строки.
+    members_direct: Mapped[int] = mapped_column(Integer, default=0)
     first_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     gone_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

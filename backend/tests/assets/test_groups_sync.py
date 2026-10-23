@@ -288,3 +288,33 @@ def test_member_batches_of_one_group_give_same_result(loaded: Session, monkeypat
     ids = {m.id for m in loaded.execute(select(AssetGroupMember)).scalars()}
     sync(loaded)
     assert {m.id for m in loaded.execute(select(AssetGroupMember)).scalars()} == ids
+
+
+def members_direct_drift(db: Session) -> dict[int, tuple[int, int]]:
+    """Группы, у которых `members_direct` разошёлся с числом строк состава: id → (столбец, строки)."""
+    actual = dict(db.execute(select(AssetGroupMember.group_id, func.count()).group_by(AssetGroupMember.group_id)).tuples().all())
+    return {gid: (n, actual.get(gid, 0)) for gid, n in db.execute(select(AssetGroup.id, AssetGroup.members_direct)).tuples()
+            if n != actual.get(gid, 0)}
+
+
+def test_members_direct_follows_ad_sync(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    """`members_direct` после синхронизации AD — число строк состава; повтор без изменений строки групп не трогает;
+    убранный участник уменьшает счёт, пропавшая группа — 0, вернувшаяся — снова её состав."""
+    sync(loaded)
+    assert members_direct_drift(loaded) == {}
+    hd, du, da = group(loaded, csid(1301)), group(loaded, csid(513)), group(loaded, csid(1302))
+    assert (hd.members_direct, du.members_direct, da.members_direct) == (7, 2, 1)
+    stamps = dict(loaded.execute(select(AssetGroup.id, AssetGroup.updated_at)).tuples().all())
+    sync(loaded)
+    assert dict(loaded.execute(select(AssetGroup.id, AssetGroup.updated_at)).tuples().all()) == stamps
+    assert members_direct_drift(loaded) == {}
+    load_ad(loaded, data_dir, ad_raw(corp(without=("desktop admins",)), now - dt.timedelta(hours=2)))
+    sync(loaded)
+    loaded.expire_all()
+    assert members_direct_drift(loaded) == {}
+    assert (group(loaded, csid(1302)).members_direct, group(loaded, csid(1301)).members_direct) == (0, 6)
+    load_ad(loaded, data_dir, ad_raw(corp(), now - dt.timedelta(hours=1)))
+    sync(loaded)
+    loaded.expire_all()
+    assert members_direct_drift(loaded) == {}
+    assert (group(loaded, csid(1302)).members_direct, group(loaded, csid(1301)).members_direct) == (1, 7)

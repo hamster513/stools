@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import delete, func, insert, or_, select, tuple_, update
+from sqlalchemy import Select, delete, func, insert, or_, select, tuple_, update
 from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle
@@ -262,6 +262,19 @@ def _primary_members(idx: ExportIndex) -> dict[str, list[AdObject]]:
     return out
 
 
+def recount_members(db: Session, group_ids: Any, *, shrink_only: bool = False) -> None:
+    """`members_direct` групп `group_ids` (список id или подзапрос) — число их строк состава, все источники; правятся
+    только разошедшиеся. `shrink_only` — после одного лишь удаления строк: группу со счётом 0 не пересчитывать."""
+    g, m = AssetGroup, AssetGroupMember
+    if isinstance(group_ids, Select):
+        group_ids = group_ids.correlate(None)  # подзапрос по той же таблице — свой, не ссылка на внешнюю строку
+    pick = [g.id.in_(group_ids), *([g.members_direct != 0] if shrink_only else [])]
+    counts = (select(g.id.label("gid"), func.count(m.id).label("n")).select_from(g)
+              .outerjoin(m, m.group_id == g.id).where(*pick).group_by(g.id).subquery())
+    db.execute(update(g).where(g.id == counts.c.gid, g.members_direct != counts.c.n)
+               .values(members_direct=counts.c.n).execution_options(synchronize_session=False))
+
+
 #: Поля строки участника, которые сверяются с прежней (ключ — группа и `_member_key`).
 _MEMBER_FIELDS = ("member_kind", "user_id", "member_group_id", "asset_id", "member_sid", "member_name", "member_domain", "primary")
 
@@ -269,9 +282,11 @@ _MEMBER_FIELDS = ("member_kind", "user_id", "member_group_id", "asset_id", "memb
 def _apply_members(db: Session, batch: dict[int, dict[tuple[str, str], dict[str, Any]]], source: str = "ad") -> None:
     """Сверка состава пачки групп с прежними строками источника `source` (ad | vm): новые вставляются,
     пропавшие удаляются, изменённые правятся, неизменные не трогаются; строки другого источника не видны.
-    Удаление — первым: строка-дубль прежнего SID освобождает пару (SID, имя) для правки имени."""
+    Удаление — первым: строка-дубль прежнего SID освобождает пару (SID, имя) для правки имени. У групп, где
+    строки добавились или ушли, пересчитывается `members_direct`."""
     old: dict[int, dict[tuple[str, str], dict[str, Any]]] = {}
     drop: list[int] = []
+    touched: set[int] = set()
     cols = [getattr(AssetGroupMember, f) for f in _MEMBER_FIELDS]
     for row in db.execute(
         select(AssetGroupMember.id, AssetGroupMember.group_id, *cols)
@@ -282,6 +297,7 @@ def _apply_members(db: Session, batch: dict[int, dict[tuple[str, str], dict[str,
         k = _member_key(row["member_sid"], row["member_name"])
         if k in per:
             drop.append(row["id"])
+            touched.add(row["group_id"])
         else:
             per[k] = dict(row)
     inserts: list[dict[str, Any]] = []
@@ -292,14 +308,22 @@ def _apply_members(db: Session, batch: dict[int, dict[tuple[str, str], dict[str,
             got = have.get(k)
             if got is None:
                 inserts.append({**new, "group_id": gid, "source": source})
+                touched.add(gid)
             elif any(got[f] != new[f] for f in _MEMBER_FIELDS):
                 updates.append({"id": got["id"], **new})
-        drop.extend(got["id"] for k, got in have.items() if k not in rows)
+        missing = [got["id"] for k, got in have.items() if k not in rows]
+        if missing:
+            drop.extend(missing)
+            touched.add(gid)
     for i in range(0, len(drop), CHUNK):
         db.execute(delete(AssetGroupMember).where(AssetGroupMember.id.in_(drop[i : i + CHUNK])))
-    for rows_, stmt in ((updates, update(AssetGroupMember)), (inserts, insert(AssetGroupMember))):
-        for i in range(0, len(rows_), CHUNK):
-            db.execute(stmt, rows_[i : i + CHUNK])
+    for i in range(0, len(updates), CHUNK):
+        db.execute(update(AssetGroupMember), updates[i : i + CHUNK])
+    for i in range(0, len(inserts), CHUNK):
+        db.execute(insert(AssetGroupMember), inserts[i : i + CHUNK])
+    ids = sorted(touched)
+    for i in range(0, len(ids), CHUNK):
+        recount_members(db, ids[i : i + CHUNK])
 
 
 def _sync_ad_members(db: Session, handle: JobHandle, ad: _AdRead, keys: dict[str, int]) -> int:
@@ -324,6 +348,7 @@ def _sync_ad_members(db: Session, handle: JobHandle, ad: _AdRead, keys: dict[str
         AssetGroup.domain.not_in(sorted(ad.failed)),
     )
     db.execute(delete(AssetGroupMember).where(AssetGroupMember.source == "ad", AssetGroupMember.group_id.in_(gone)))
+    recount_members(db, gone, shrink_only=True)
     total = sum(len(d.idx.objects("group")) for d in ad.domains)
     handle.stage("group_members", total=total, message=f"состав групп AD: {total}")
     done = 0
@@ -658,6 +683,7 @@ def _sync_vm(db: Session, handle: JobHandle, now: dt.datetime) -> int:
             ).values(gone_at=now).execution_options(synchronize_session=False))
     gone = select(AssetGroup.id).where(AssetGroup.local.is_(True), AssetGroup.gone_at.is_not(None))
     db.execute(delete(AssetGroupMember).where(AssetGroupMember.source == "vm", AssetGroupMember.group_id.in_(gone)))
+    recount_members(db, gone, shrink_only=True)
     db.flush()
     return unmatched
 

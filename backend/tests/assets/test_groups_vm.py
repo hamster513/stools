@@ -26,7 +26,7 @@ from api.modules.assets.services.groups import _match_vm_hosts
 from api.modules.assets.services.sync import run_sync
 from api.modules.vm.models import VmGroupImport, VmHostGroup
 from tests.assets.synthetic import load_vm
-from tests.assets.test_groups_sync import normalized_members
+from tests.assets.test_groups_sync import members_direct_drift, normalized_members
 from tests.assets.test_users_sync import account, ad_raw, computer, csid, dn, group, load_ad, sync
 
 MACHINE = "S-1-5-21-4444444444-5555555555-6666666666"
@@ -256,6 +256,27 @@ def test_gone_by_new_snapshot_and_back(loaded: Session, now: dt.datetime) -> Non
     sync(loaded)
     loaded.refresh(adm)
     assert adm.gone_at is None and set(members(loaded, adm.id)) == {"desktop admins"}
+
+
+def test_members_direct_follows_vm_sync(loaded: Session, now: dt.datetime) -> None:
+    """`members_direct` локальных групп — число строк VM; доменной — только её строки AD; повтор не меняет;
+    убранный участник уменьшает счёт, пропавшая по снимку группа — 0."""
+    sync(loaded)
+    assert members_direct_drift(loaded) == {}
+    counts = {(g.host_asset_id, g.name): g.members_direct for g in loaded.execute(select(AssetGroup)).scalars()}
+    assert counts[(asset_id(loaded, "srv01"), "administrators")] == 8
+    assert counts[(asset_id(loaded, "srv01"), "helpers")] == 0
+    assert counts[(asset_id(loaded, "srv02"), "administrators")] == 1
+    assert counts[(asset_id(loaded, "lin01"), "wheel")] == 1
+    assert domain_group(loaded, csid(1302)).members_direct == 1
+    sync(loaded)
+    assert {(g.host_asset_id, g.name): g.members_direct for g in loaded.execute(select(AssetGroup)).scalars()} == counts
+    put_groups(loaded, snapshot(without=("srv02", "helpers")), now - dt.timedelta(hours=1))
+    sync(loaded)
+    loaded.expire_all()
+    assert members_direct_drift(loaded) == {}
+    assert local_group(loaded, "srv02", "administrators").members_direct == 0
+    assert local_group(loaded, "srv01", "administrators").members_direct == 7
 
 
 def test_family_not_refreshed_is_not_judged(loaded: Session, now: dt.datetime) -> None:

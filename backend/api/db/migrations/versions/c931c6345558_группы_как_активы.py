@@ -37,6 +37,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("sources", JSON, nullable=False),
         sa.Column("in_ad", sa.Boolean(), nullable=False),
+        sa.Column("members_direct", sa.Integer(), nullable=False),
         sa.Column("first_seen", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_seen", sa.DateTime(timezone=True), nullable=True),
         sa.Column("gone_at", sa.DateTime(timezone=True), nullable=True),
@@ -46,6 +47,8 @@ def upgrade() -> None:
     )
     for column in ("sid", "host_asset_id"):
         op.create_index(f"ix_asset_group_{column}", "asset_group", [column])
+    # Страница списка — по `lower(name)`.
+    op.create_index("ix_asset_group_name_lower", "asset_group", [sa.text("lower(name)")])
 
     op.create_table(
         "asset_group_member",
@@ -95,6 +98,7 @@ def downgrade() -> None:
     for column in ("member_group_id", "user_id", "asset_id"):
         op.drop_index(f"ix_asset_group_member_{column}", table_name="asset_group_member")
     op.drop_table("asset_group_member")
+    op.drop_index("ix_asset_group_name_lower", table_name="asset_group")
     for column in ("sid", "host_asset_id"):
         op.drop_index(f"ix_asset_group_{column}", table_name="asset_group")
     op.drop_table("asset_group")

@@ -3,7 +3,9 @@
 Читаются только таблицы `asset_group*` и активы: ни AD, ни VM при просмотре не спрашиваются.
 
 - Список: все оси — столбцы группы, поэтому отбор, фасеты и страница считаются в базе. Фасет оси — по группам
-  под всеми фильтрами, кроме фильтра этой оси; `q`, `domain` и `host_id` сужают и фасеты.
+  под всеми фильтрами, кроме фильтра этой оси; `q`, `domain` и `host_id` сужают и фасеты. «Участники» — столбец
+  `members_direct` (его ведёт синхронизация), строки состава при этом не считаются. Выгрузка — та же выборка без
+  фасетов и `total`.
 - Карточка: прямой состав (до `MEMBERS_MAX` строк), предки — подъёмом по `member_group_id` (родители фронта
   одним запросом на шаг) только через доменные группы: доменные предки — «Куда входит», локальные группы, где
   прямо состоит сама группа или её доменный предок, — «права по факту» (спека §5). Выше локальной группы подъём
@@ -21,7 +23,7 @@ from collections import defaultdict
 from collections.abc import Collection, Iterable
 from typing import Any
 
-from sqlalchemy import and_, case, exists, func, literal, or_, select, type_coerce
+from sqlalchemy import and_, case, func, literal, or_, select, type_coerce
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
@@ -68,10 +70,6 @@ def _chunks(ids: Collection[int]) -> Iterable[list[int]]:
         yield items[i : i + IN_CHUNK]
 
 
-def _members_exist() -> Any:
-    return exists().where(AssetGroupMember.group_id == AssetGroup.id)
-
-
 def _axis_condition(axis: str, value: str) -> Any:
     if axis == "kind":
         return AssetGroup.local.is_(value == "local")
@@ -79,7 +77,7 @@ def _axis_condition(axis: str, value: str) -> Any:
         return type_coerce(AssetGroup.sources, JSONB).contains([value])
     if axis == "state":
         return AssetGroup.gone_at.is_(None) if value == "live" else AssetGroup.gone_at.is_not(None)
-    return _members_exist() if value == "some" else ~_members_exist()
+    return AssetGroup.members_direct > 0 if value == "some" else AssetGroup.members_direct == 0
 
 
 def _base_conditions(q: str | None, domain: frozenset[str] | None, host_id: frozenset[int] | None) -> list[Any]:
@@ -111,10 +109,6 @@ def _sources(value: Any) -> list[str]:
     return [s for s in GROUP_SOURCES if s in got] + sorted(got - set(GROUP_SOURCES))
 
 
-def _members_count() -> Any:
-    return select(func.count()).where(AssetGroupMember.group_id == AssetGroup.id).correlate(AssetGroup).scalar_subquery()
-
-
 def _item(row: Any) -> dict[str, Any]:
     gid, name, domain, local, host_id, sid, description, sources, in_ad, gone_at, host_name, members, os_family = row
     return {"id": gid, "name": name, "domain_label": (host_name or "") if local else domain, "host_asset_id": host_id,
@@ -125,7 +119,7 @@ def _item(row: Any) -> dict[str, Any]:
 def _item_columns() -> tuple[Any, ...]:
     g = AssetGroup
     return (g.id, g.name, g.domain, g.local, g.host_asset_id, g.sid, g.description, g.sources, g.in_ad, g.gone_at, Asset.name,
-            _members_count(), g.os_family)
+            g.members_direct, g.os_family)
 
 
 def _iso(value: Any) -> str | None:
@@ -143,6 +137,19 @@ def _dates(conn: Connection, group_id: int, os_family: str) -> dict[str, str | N
     flag = {"windows": VmGroupImport.windows_ok, "linux": VmGroupImport.linux_ok}.get(os_family)
     snapshot = conn.execute(select(func.max(VmGroupImport.finished_at)).where(flag.is_(True))).scalar() if flag is not None else None
     return {"first_seen": _iso(first), "last_seen": _iso(last), "gone_at": _iso(gone), "vm_snapshot_at": _iso(snapshot)}
+
+
+def _page(conn: Connection, where: list[Any], limit: int, offset: int) -> list[dict[str, Any]]:
+    """Строки списка по имени, затем по домену или хосту, затем по id."""
+    label = func.lower(func.coalesce(func.nullif(AssetGroup.domain, ""), Asset.name, literal("")))
+    rows = conn.execute(
+        select(*_item_columns())
+        .select_from(AssetGroup).outerjoin(Asset, Asset.id == AssetGroup.host_asset_id)
+        .where(*where)
+        .order_by(func.lower(AssetGroup.name), label, AssetGroup.id)
+        .offset(offset).limit(limit)
+    ).tuples().all()
+    return [_item(r) for r in rows]
 
 
 def list_groups(
@@ -172,15 +179,25 @@ def list_groups(
         facets[axis] = {v: int(n) for v, n in zip(values[axis], counts, strict=True)}
     where = [*base, *_chosen_conditions(chosen)]
     total = int(conn.execute(select(func.count()).select_from(AssetGroup).where(*where)).scalar_one())
-    label = func.lower(func.coalesce(func.nullif(AssetGroup.domain, ""), Asset.name, literal("")))
-    rows = conn.execute(
-        select(*_item_columns())
-        .select_from(AssetGroup).outerjoin(Asset, Asset.id == AssetGroup.host_asset_id)
-        .where(*where)
-        .order_by(func.lower(AssetGroup.name), label, AssetGroup.id)
-        .offset(offset).limit(limit)
-    ).tuples().all()
-    return [_item(r) for r in rows], total, facets
+    return _page(conn, where, limit, offset), total, facets
+
+
+def groups_for_export(
+    db: Session,
+    *,
+    q: str | None = None,
+    kind: frozenset[str] | None = None,
+    source: frozenset[str] | None = None,
+    state: frozenset[str] | None = None,
+    members: frozenset[str] | None = None,
+    domain: frozenset[str] | None = None,
+    host_id: frozenset[int] | None = None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Строки выгрузки: отбор и порядок списка, без фасетов и `total`."""
+    where = [*_base_conditions(q, domain, host_id),
+             *_chosen_conditions({"kind": kind, "source": source, "state": state, "members": members})]
+    return _page(db.connection(), where, limit, 0)
 
 
 # ---- карточка ------------------------------------------------------------------------------------------

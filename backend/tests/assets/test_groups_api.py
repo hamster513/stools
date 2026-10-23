@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import insert
+from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
 from api.modules.ad.models import AdDomain
@@ -23,6 +23,7 @@ from api.modules.assets.models import (
     AssetUser,
     AssetUserGroup,
 )
+from api.modules.assets.services.groups import recount_members
 from api.modules.vm.models import VmGroupImport
 from tests.export_check import check_export, csv_rows
 
@@ -148,6 +149,8 @@ def state(db_session: Session) -> dict[str, Any]:
         AssetUserGroup(user_id=u1.id, group_sid=dsid(2777), group_name="CORP\\Nowhere", direct=True),
         AssetUserGroup(user_id=u2.id, group_sid=ext.sid, group_name="PARTNER\\Ext", direct=True),
     ])
+    db.flush()
+    recount_members(db, select(AssetGroup.id))  # `members_direct` ведёт синхронизация; здесь строки — напрямую
     db.commit()
     return {"dom": dom, "ws01": ws01, "srv01": srv01, "u1": u1, "u2": u2, "admin": admin, "helpdesk": helpdesk, "it": it,
             "allstaff": allstaff, "builtin": builtin, "ext": ext, "old": old, "adm_ws01": adm_ws01, "rdu": rdu,
@@ -201,6 +204,16 @@ def test_facets(analyst: TestClient) -> None:
     assert narrowed["facets"]["kind"] == {"local": 3, "domain": 5}
     assert narrowed["facets"]["members"] == {"some": 2, "none": 1}
     assert narrowed["facets"]["state"] == {"live": 3, "gone": 0}
+
+
+def test_members_filter_and_facet_read_column(analyst: TestClient, state: dict[str, Any], db_session: Session) -> None:
+    """Фильтр и фасет «участники» и поле `members_direct` — по столбцу группы, строки состава не считаются."""
+    db_session.execute(update(AssetGroup).where(AssetGroup.id == state["wheel"].id).values(members_direct=3))
+    db_session.commit()
+    body = listed(analyst, members="some")
+    assert "wheel@SRV01" in names(body) and body["facets"]["members"] == {"some": 6, "none": 2}
+    assert next(i for i in body["items"] if i["name"] == "wheel")["members_direct"] == 3
+    assert "wheel@SRV01" not in names(listed(analyst, members="none"))
 
 
 @pytest.mark.parametrize(("params", "expected"), [

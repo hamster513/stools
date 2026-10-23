@@ -19,6 +19,7 @@ from api.modules.assets.services.group_views import (
     GroupNotFound,
     group_detail,
     group_expanded,
+    groups_for_export,
     list_groups,
 )
 from api.platform.export import Column, export_response
@@ -79,7 +80,7 @@ def export_groups(
     _user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Группы под фильтрами списка, в его порядке; колонки — как в таблице."""
-    items, _total, _facets = list_groups(db, **filters, limit=EXPORT_ALL, offset=0)
+    items = groups_for_export(db, **filters, limit=EXPORT_ALL)
     rows = [
         {"name": g["name"], "domain_label": g["domain_label"], "kind": "локальная" if g["local"] else "доменная",
          "members_direct": g["members_direct"], "sources": ", ".join(SOURCE_TITLES.get(s, s) for s in g["sources"]),
