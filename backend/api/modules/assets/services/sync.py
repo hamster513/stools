@@ -33,6 +33,7 @@ from api.modules.assets.services.assets import (
     recompute,
     settings_row,
 )
+from api.modules.assets.services.groups import sync_groups
 from api.modules.assets.services.networks import load_networks
 from api.modules.assets.services.users import (
     AdExportCache,
@@ -49,10 +50,14 @@ log = logging.getLogger("stools.assets")
 
 SYNC_SOURCES = ("vm", "ksc", "ad")
 SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD"}
-#: Итог задачи: после источников — пользователи (`services.users`); `users_failed` — шаг пользователей не удался.
-COUNT_TITLES = {**SOURCE_TITLES, "users": "пользователи"}
+#: Итог задачи: после источников — пользователи (`services.users`) и группы (`services.groups`);
+#: `users_failed` / `groups_failed` — шаг не удался.
+COUNT_TITLES = {**SOURCE_TITLES, "users": "пользователи", "groups": "группы"}
 USERS_FAILED = "users_failed"
 USERS_FAILED_TEXT = "пользователи: сбой, см. журнал"
+GROUPS_FAILED = "groups_failed"
+GROUPS_FAILED_TEXT = "группы: сбой, см. журнал"
+FAILED_TEXTS = {USERS_FAILED: USERS_FAILED_TEXT, GROUPS_FAILED: GROUPS_FAILED_TEXT}
 #: Кто запустил задачу после импорта модуля: человека у неё нет.
 AUTO_STARTED_BY = "после импорта"
 #: Прогресс и проверка отмены — раз в столько наблюдений.
@@ -103,7 +108,7 @@ def sync_job(db: Session, handle: JobHandle, trigger: str) -> None:
     counts = run_sync(db, handle)
     if counts is None:
         return
-    parts = [USERS_FAILED_TEXT if s == USERS_FAILED else f"{COUNT_TITLES[s]} {n}" for s, n in counts.items()]
+    parts = [FAILED_TEXTS.get(s) or f"{COUNT_TITLES[s]} {n}" for s, n in counts.items()]
     handle.stage("done", message=f"{trigger}: " + " · ".join(parts))
 
 
@@ -317,7 +322,7 @@ def _locked_sync(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> di
 def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict[str, int]:
     """Читает источники, для каждого наблюдения — match → upsert asset_observation → пересчёт
     актива; пропавшим ставит gone_at. Возвращает число наблюдений по источникам и, если среди
-    источников AD или KSC, — число пользователей (`users`)."""
+    источников AD или KSC, — число пользователей (`users`), если среди них AD, — число групп (`groups`)."""
     from api.settings import get_settings
 
     data_dir = get_settings().data_dir
@@ -374,6 +379,17 @@ def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict
             db.rollback()
             log.exception("синхронизация пользователей не удалась, хосты синхронизированы")
             counts[USERS_FAILED] = 1
+    # Группы — после пользователей: участникам нужны пользователи и хосты. Сбой шага прохода не ломает.
+    if "ad" in sources:
+        try:
+            counts["groups"] = sync_groups(db, handle, data_dir, now, ad_cache)["groups"]
+            db.commit()
+        except JobCancelled:
+            raise
+        except Exception:
+            db.rollback()
+            log.exception("синхронизация групп не удалась, хосты и пользователи синхронизированы")
+            counts[GROUPS_FAILED] = 1
     return counts
 
 
