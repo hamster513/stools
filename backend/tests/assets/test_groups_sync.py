@@ -222,3 +222,35 @@ def test_failed_groups_step_keeps_hosts_and_users(loaded: Session, monkeypatch: 
     assert got["ad"] == 2 and got["users"] >= 2
     assert loaded.execute(select(func.count()).select_from(AssetUser)).scalar_one() >= 2
     assert counts(loaded) == (0, 0, 0)
+
+
+def test_members_diffed_not_rewritten(loaded: Session, data_dir: Path, now: dt.datetime) -> None:
+    """Повтор без изменений не трогает строки (id те же); убранный участник удаляется, новый добавляется,
+    переименование вложенной группы (тот же SID) правит строку на месте."""
+    sync(loaded)
+    before = {(m.group_id, m.member_sid, m.member_name): (m.id, m.primary)
+              for m in loaded.execute(select(AssetGroupMember)).scalars()}
+    sync(loaded)
+    after = {(m.group_id, m.member_sid, m.member_name): (m.id, m.primary)
+             for m in loaded.execute(select(AssetGroupMember)).scalars()}
+    assert after == before
+    objs = corp()
+    for o in objs:
+        if o.get("sam") == "desktop admins":
+            o["member"] = [dn("user01")]  # user02 убран, user01 добавлен
+            o["sam"] = o["name"] = "desktop admins 2"
+        if o.get("sam") == "Domain Users":
+            o["member"] = []  # user01 остаётся только по primaryGroupID
+    load_ad(loaded, data_dir, ad_raw(objs, now - dt.timedelta(hours=1)))
+    sync(loaded)
+    da = members(loaded, group(loaded, csid(1302)).id)
+    assert set(da) == {"user01"} and da["user01"].primary is False
+    du_id = group(loaded, csid(513)).id
+    du = members(loaded, du_id)
+    assert set(du) == {"user01", "user02"} and du["user01"].primary is True
+    assert du["user01"].id == before[(du_id, csid(1101), "user01")][0]
+    # Остальные строки не переписаны; строка переименованной группы — та же, с новым именем.
+    hd_id = group(loaded, csid(1301)).id
+    hd = members(loaded, hd_id)
+    assert {m.id for m in hd.values()} == {v[0] for k, v in before.items() if k[0] == hd_id}
+    assert hd["desktop admins 2"].id == before[(hd_id, csid(1302), "desktop admins")][0]

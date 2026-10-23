@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle
@@ -49,6 +49,8 @@ GPO_NOTES_KEY = "groups_gpo_notes"
 GPO_HOSTS_MAX = 1000
 #: Классы учёток AD, участники-«пользователи» (связь — только если учётка стала пользователем-активом).
 USER_CLASSES = frozenset({"user", "inetOrgPerson", "msDS-GroupManagedServiceAccount", "msDS-ManagedServiceAccount"})
+#: Состав сверяется пачками: не больше стольких групп за раз (и примерно `CHUNK` строк).
+MEMBER_BATCH_GROUPS = 2000
 FIELD_LEN = 255
 NAME_LEN = 512
 KEY_LEN = 600
@@ -169,21 +171,27 @@ class _Lookup:
     keys: dict[str, int]
 
 
-def _member_rows(d: _AdDomainRead, o: AdObject, look: _Lookup) -> list[dict[str, Any]]:
-    """Прямой состав группы `o`: одна строка на (SID, имя); основная группа — `primary` на той же строке."""
+def _member_key(sid: str, name: str) -> tuple[str, str]:
+    """Личность участника в группе: SID, без SID — имя (DN); смена имени при том же SID — правка строки."""
+    return (sid, "") if sid else ("", name)
+
+
+def _member_rows(d: _AdDomainRead, o: AdObject, look: _Lookup) -> dict[tuple[str, str], dict[str, Any]]:
+    """Прямой состав группы `o` по `_member_key`; основная группа — `primary` на той же строке."""
     from api.modules.ad.core.export import fsp_sid
 
     rows: dict[tuple[str, str], dict[str, Any]] = {}
 
     def put(kind: str, sid: str, name: str, domain: str = "", *, user_id: int | None = None, group_id: int | None = None,
             asset_id: int | None = None, primary: bool = False) -> None:
-        k = (_cut(sid), _cut(name, NAME_LEN))
+        sid, name = _cut(sid), _cut(name, NAME_LEN)
+        k = _member_key(sid, name)
         row = rows.get(k)
         if row is not None:
             row["primary"] = row["primary"] or primary
             return
         rows[k] = {"member_kind": kind, "user_id": user_id, "member_group_id": group_id, "asset_id": asset_id,
-                   "member_sid": k[0], "member_name": k[1], "member_domain": _cut(domain), "primary": primary, "source": "ad"}
+                   "member_sid": sid, "member_name": name, "member_domain": _cut(domain), "primary": primary}
 
     def put_object(m: AdObject, primary: bool = False) -> None:
         sid = normalize_sid(m.sid or "")
@@ -219,7 +227,7 @@ def _member_rows(d: _AdDomainRead, o: AdObject, look: _Lookup) -> list[dict[str,
             put("unknown", sid, name)
     for m in _primary_members(d.idx).get(normalize_sid(o.sid or ""), []):
         put_object(m, primary=True)
-    return list(rows.values())
+    return rows
 
 
 def _primary_members(idx: ExportIndex) -> dict[str, list[AdObject]]:
@@ -236,9 +244,50 @@ def _primary_members(idx: ExportIndex) -> dict[str, list[AdObject]]:
     return out
 
 
-def _sync_ad_members(db: Session, ad: _AdRead, keys: dict[str, int]) -> int:
-    """Состав AD групп заменой: удаляются строки AD всех доменных групп, кроме доменов с непрочитанным файлом
-    (пропавшие группы и домены, которых больше нет, — тоже), затем вставляется состав прочитанных."""
+#: Поля строки участника, которые сверяются с прежней (ключ — группа и `_member_key`).
+_MEMBER_FIELDS = ("member_kind", "user_id", "member_group_id", "asset_id", "member_sid", "member_name", "member_domain", "primary")
+
+
+def _apply_members(db: Session, batch: dict[int, dict[tuple[str, str], dict[str, Any]]]) -> None:
+    """Сверка состава пачки групп с прежними строками AD: новые вставляются, пропавшие удаляются,
+    изменённые правятся, неизменные не трогаются. Удаление — первым: строка-дубль прежнего SID
+    освобождает пару (SID, имя) для правки имени."""
+    old: dict[int, dict[tuple[str, str], dict[str, Any]]] = {}
+    drop: list[int] = []
+    cols = [getattr(AssetGroupMember, f) for f in _MEMBER_FIELDS]
+    for row in db.execute(
+        select(AssetGroupMember.id, AssetGroupMember.group_id, *cols)
+        .where(AssetGroupMember.source == "ad", AssetGroupMember.group_id.in_(sorted(batch)))
+        .order_by(AssetGroupMember.id)
+    ).mappings():
+        per = old.setdefault(row["group_id"], {})
+        k = _member_key(row["member_sid"], row["member_name"])
+        if k in per:
+            drop.append(row["id"])
+        else:
+            per[k] = dict(row)
+    inserts: list[dict[str, Any]] = []
+    updates: list[dict[str, Any]] = []
+    for gid, rows in batch.items():
+        have = old.get(gid, {})
+        for k, new in rows.items():
+            got = have.get(k)
+            if got is None:
+                inserts.append({**new, "group_id": gid, "source": "ad"})
+            elif any(got[f] != new[f] for f in _MEMBER_FIELDS):
+                updates.append({"id": got["id"], **new})
+        drop.extend(got["id"] for k, got in have.items() if k not in rows)
+    for i in range(0, len(drop), CHUNK):
+        db.execute(delete(AssetGroupMember).where(AssetGroupMember.id.in_(drop[i : i + CHUNK])))
+    for rows_, stmt in ((updates, update(AssetGroupMember)), (inserts, insert(AssetGroupMember))):
+        for i in range(0, len(rows_), CHUNK):
+            db.execute(stmt, rows_[i : i + CHUNK])
+
+
+def _sync_ad_members(db: Session, handle: JobHandle, ad: _AdRead, keys: dict[str, int]) -> int:
+    """Состав AD групп сверкой по пачкам групп (не больше `MEMBER_BATCH_GROUPS` групп или примерно `CHUNK`
+    строк за раз). Строки AD пропавших групп (и доменов, которых больше нет) удаляются; домен с непрочитанным
+    файлом не трогается. Возвращает число строк AD после записи."""
     look = _Lookup(
         users=dict(db.execute(
             select(AssetUser.sid, AssetUser.id).where(AssetUser.merged_into.is_(None), AssetUser.local.is_(False), AssetUser.sid != "")
@@ -252,33 +301,50 @@ def _sync_ad_members(db: Session, ad: _AdRead, keys: dict[str, int]) -> int:
         ).tuples().all()),
         keys=keys,
     )
-    stale = select(AssetGroup.id).where(AssetGroup.local.is_(False), AssetGroup.domain.not_in(sorted(ad.failed)))
-    db.execute(delete(AssetGroupMember).where(AssetGroupMember.source == "ad", AssetGroupMember.group_id.in_(stale)))
-    rows: list[dict[str, Any]] = []
+    gone = select(AssetGroup.id).where(
+        AssetGroup.local.is_(False), AssetGroup.gone_at.is_not(None), AssetGroup.domain.not_in(sorted(ad.failed)),
+    )
+    db.execute(delete(AssetGroupMember).where(AssetGroupMember.source == "ad", AssetGroupMember.group_id.in_(gone)))
+    total = sum(len(d.idx.objects("group")) for d in ad.domains)
+    handle.stage("group_members", total=total, message=f"состав групп AD: {total}")
+    done = 0
+    done_gids: set[int] = set()
+    batch: dict[int, dict[tuple[str, str], dict[str, Any]]] = {}
+    pending = 0
     for d in ad.domains:
         for o in d.idx.objects("group"):
+            done += 1
             if not o.sid:
                 continue
             gid = keys.get(_cut(group_key(local=False, domain=d.dns, host_asset_id=None, sid=o.sid, name=_cut(o.sam or o.name, NAME_LEN)), KEY_LEN))
-            if gid is None:
+            # Одна группа дважды в выгрузке (тот же ключ) — её состав по первой записи.
+            if gid is None or gid in done_gids:
                 continue
-            rows.extend({**r, "group_id": gid} for r in _member_rows(d, o, look))
-    # Одна группа дважды в выгрузке (тот же ключ) — строки её состава один раз.
-    unique = list({(r["group_id"], r["member_sid"], r["member_name"]): r for r in rows}.values())
-    for i in range(0, len(unique), CHUNK):
-        db.execute(insert(AssetGroupMember), unique[i : i + CHUNK])
-    return len(unique)
+            done_gids.add(gid)
+            batch[gid] = _member_rows(d, o, look)
+            pending += len(batch[gid])
+            if len(batch) >= MEMBER_BATCH_GROUPS or pending >= CHUNK:
+                _apply_members(db, batch)
+                batch, pending = {}, 0
+                handle.tick(done)
+    if batch:
+        _apply_members(db, batch)
+    handle.tick(done)
+    return int(db.execute(select(func.count()).select_from(AssetGroupMember).where(AssetGroupMember.source == "ad")).scalar_one())
 
 
-def _sync_gpo(db: Session, ad: _AdRead) -> int:
-    """Права по GPO заменой по домену; домен с непрочитанным файлом сохраняет строки и заметки."""
+def _sync_gpo(db: Session, handle: JobHandle, ad: _AdRead) -> int:
+    """Права по GPO заменой по домену; домен с непрочитанным файлом сохраняет строки и заметки,
+    строки доменов, которых больше нет, удаляются."""
     from api.modules.ad.core.gpo_rights import gpo_rights
 
-    db.execute(delete(AssetGroupGpo).where(AssetGroupGpo.domain.not_in(sorted(ad.failed))))
-    rows: list[dict[str, Any]] = []
+    db.execute(delete(AssetGroupGpo).where(AssetGroupGpo.domain.not_in(sorted(ad.failed | {d.dns for d in ad.domains}))))
+    handle.stage("group_gpo", total=len(ad.domains), message=f"права групп по GPO: доменов {len(ad.domains)}")
+    count = 0
     notes: dict[str, dict[str, Any]] = {}
-    for d in ad.domains:
+    for n, d in enumerate(ad.domains, start=1):
         got = gpo_rights(d.idx)
+        rows: list[dict[str, Any]] = []
         notes[d.dns] = {"links_known": bool(got["links_known"]), "files_known": bool(got["files_known"]), "notes": list(got["notes"])}
         for r in got["rights"]:
             rows.append({
@@ -289,8 +355,11 @@ def _sync_gpo(db: Session, ad: _AdRead) -> int:
                 "filtered": r["filtered"], "hosts": list(r["hosts"][:GPO_HOSTS_MAX]), "hosts_total": int(r["hosts_total"]),
                 "seen_at": d.seen_at,
             })
-    for i in range(0, len(rows), CHUNK):
-        db.execute(insert(AssetGroupGpo), rows[i : i + CHUNK])
+        db.execute(delete(AssetGroupGpo).where(AssetGroupGpo.domain == d.dns))
+        for i in range(0, len(rows), CHUNK):
+            db.execute(insert(AssetGroupGpo), rows[i : i + CHUNK])
+        count += len(rows)
+        handle.tick(n)
     row = settings_row(db)
     data = dict(row.data or {})
     old = data.get(GPO_NOTES_KEY) or {}
@@ -298,7 +367,7 @@ def _sync_gpo(db: Session, ad: _AdRead) -> int:
     if data.get(GPO_NOTES_KEY) != notes:
         row.data = {**data, GPO_NOTES_KEY: notes}
     db.flush()
-    return len(rows)
+    return count
 
 
 def sync_groups(db: Session, handle: JobHandle, data_dir: Path, now: dt.datetime, ad_cache: AdExportCache | None = None) -> dict[str, int]:
@@ -306,8 +375,8 @@ def sync_groups(db: Session, handle: JobHandle, data_dir: Path, now: dt.datetime
     `groups` — сколько групп AD видели выгрузки этого прохода."""
     ad = _read_ad(db, data_dir, ad_cache)
     keys, skipped = _upsert_ad_groups(db, handle, ad, now)
-    members = _sync_ad_members(db, ad, keys)
-    gpo = _sync_gpo(db, ad)
+    members = _sync_ad_members(db, handle, ad, keys)
+    gpo = _sync_gpo(db, handle, ad)
     db.flush()
     # Локальные группы из VM (задача 4) — следующим шагом здесь же; их счётчик — `vm_hosts_unmatched`.
     return {"groups": len(keys), "members": members, "gpo": gpo, "vm_hosts_unmatched": 0, "skipped": skipped}
