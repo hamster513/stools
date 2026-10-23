@@ -26,9 +26,9 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import Select, delete, func, insert, or_, select, tuple_, update
+from sqlalchemy import Select, Table, delete, func, insert, or_, select, tuple_, update
 from sqlalchemy.orm import Session
 
 from api.jobs import JobHandle
@@ -61,6 +61,9 @@ FIELD_LEN = 255
 NAME_LEN = 512
 KEY_LEN = 800
 DN_LEN = 1024
+#: Вставка состава — Core по таблице: ORM-вставка выкидывает ключи со значением None и режет пачку на каждой
+#: смене набора столбцов (строки с `user_id`, с `member_group_id`, без обоих) — сотни тысяч INSERT вместо пачек.
+MEMBER_T = cast(Table, AssetGroupMember.__table__)
 
 
 def _cut(value: Any, size: int = FIELD_LEN) -> str:
@@ -320,7 +323,7 @@ def _apply_members(db: Session, batch: dict[int, dict[tuple[str, str], dict[str,
     for i in range(0, len(updates), CHUNK):
         db.execute(update(AssetGroupMember), updates[i : i + CHUNK])
     for i in range(0, len(inserts), CHUNK):
-        db.execute(insert(AssetGroupMember), inserts[i : i + CHUNK])
+        db.execute(insert(MEMBER_T), inserts[i : i + CHUNK])
     ids = sorted(touched)
     for i in range(0, len(ids), CHUNK):
         recount_members(db, ids[i : i + CHUNK])
