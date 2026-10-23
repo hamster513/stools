@@ -61,6 +61,8 @@ class _Entry:
 #: с другими настройками или номер, занятый заново, не отдадут старые составы.
 _cache: OrderedDict[tuple[int, str, str], _Entry] = OrderedDict()
 _lock = threading.Lock()
+#: Одно построение за раз (и одна выгрузка в памяти); `_lock` держится только на доступ к словарю.
+_build_lock = threading.Lock()
 
 
 def clear_cache() -> None:
@@ -90,21 +92,31 @@ def _build(data_dir: Path, snapshot_id: int, cfg: AdConfig) -> _Entry:
     return _Entry(idx.export.domain.dns_root, summary_cells(idx, cfg), MappingProxyType(sams))
 
 
-def _entry(data_dir: Path, snap: AdSnapshot, cfg: AdConfig) -> _Entry:
-    key = (snap.id, snap.sha256, cfg.model_dump_json())
+def _cached(key: tuple[int, str, str]) -> _Entry | None:
     with _lock:
         entry = _cache.get(key)
         if entry is not None:
             _cache.move_to_end(key)
+        return entry
+
+
+def _entry(data_dir: Path, snap: AdSnapshot, cfg: AdConfig) -> _Entry:
+    key = (snap.id, snap.sha256, cfg.model_dump_json())
+    entry = _cached(key)
+    if entry is not None:
+        return entry
+    # Построения идут по одному: список и фасеты «Активов» приходят разом при первом открытии,
+    # и второй запрос дожидается составов первого, а не разбирает выгрузку заново. Попадания в
+    # кэш `_build_lock` не ждут — уже построенные снапшоты отдаются, пока строится другой.
+    with _build_lock:
+        entry = _cached(key)
+        if entry is not None:
             return entry
-    # Разбор выгрузки — без блокировки: другие снапшоты из кэша отдаются, пока этот строится.
-    # Два одновременных промаха по одному снапшоту построят его дважды — итог тот же.
-    entry = _build(data_dir, snap.id, cfg)
-    with _lock:
-        _cache[key] = entry
-        _cache.move_to_end(key)
-        while len(_cache) > CACHE_SIZE:
-            _cache.popitem(last=False)
+        entry = _build(data_dir, snap.id, cfg)
+        with _lock:
+            _cache[key] = entry
+            while len(_cache) > CACHE_SIZE:
+                _cache.popitem(last=False)
     return entry
 
 

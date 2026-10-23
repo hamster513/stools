@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -10,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+import api.db.base as db_base
 from api.modules.ad.core.config import AdConfig
 from api.modules.ad.core.export import ExportIndex, load_export_path
 from api.modules.ad.core.summary_cells import cell_count, summary_cells
@@ -190,3 +193,50 @@ def test_cell_info_lru_keeps_four_snapshots(auth_client: TestClient, app_setting
     assert len(reads) == 5  # последние четыре в кэше
     svc.cell_info(db_session, app_settings.data_dir, ids[0], INACTIVE)
     assert len(reads) == 6  # первый вытеснен
+
+
+def test_cell_info_concurrent_cold_cache_reads_once(auth_client: TestClient, app_settings: Any,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    """Список и фасеты «Активов» уходят разом при первом открытии — выгрузка разбирается один раз."""
+    snap_id = _snapshot(auth_client)
+    reads: list[Path] = []
+
+    def slow(path: Path) -> Any:
+        reads.append(path)
+        time.sleep(0.3)  # второй поток успевает промахнуться по кэшу, пока первый разбирает
+        return load_export_path(path)
+
+    monkeypatch.setattr(svc, "load_export_path", slow)
+    results: list[svc.CellInfo] = []
+    start = threading.Barrier(2)
+
+    def worker() -> None:
+        with db_base.get_sessionmaker()() as db:
+            start.wait()
+            results.append(svc.cell_info(db, app_settings.data_dir, snap_id, INACTIVE))
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert len(results) == 2 and results[0] == results[1]
+    assert len(reads) == 1
+
+
+def test_cell_info_cache_hit_does_not_wait_for_build(auth_client: TestClient, app_settings: Any,
+                                                     db_session: Session) -> None:
+    """Пока строится другой снапшот, уже построенный отдаётся без ожидания."""
+    snap_id = _snapshot(auth_client)
+    svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE)
+    results: list[svc.CellInfo] = []
+
+    def worker() -> None:
+        with db_base.get_sessionmaker()() as db:
+            results.append(svc.cell_info(db, app_settings.data_dir, snap_id, INACTIVE))
+
+    with svc._build_lock:  # «идёт построение другого снапшота»
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join(timeout=5)
+        assert not t.is_alive() and len(results) == 1
