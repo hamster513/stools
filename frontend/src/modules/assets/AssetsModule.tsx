@@ -3,6 +3,7 @@ import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { AssetsSidebar } from './AssetsSidebar'
 import { AssetsPage } from './pages/AssetsPage'
+import { GroupsPage } from './pages/GroupsPage'
 import { JobsPage } from './pages/JobsPage'
 import { NetworksPage } from './pages/NetworksPage'
 import { OverviewPage } from './pages/OverviewPage'
@@ -17,6 +18,7 @@ export function AssetsModule() {
   if (path === '/assets') page = <OverviewPage />
   else if (path === '/assets/list') page = <AssetsPage />
   else if (path === '/assets/users') page = <UsersPage />
+  else if (path === '/assets/groups') page = <GroupsPage />
   else if (path === '/assets/networks') page = <NetworksPage />
   else if (path === '/assets/settings') page = <SettingsPage />
   else if (path === '/assets/jobs') page = <JobsPage />

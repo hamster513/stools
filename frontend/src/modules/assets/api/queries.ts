@@ -5,7 +5,8 @@ import { nextPageOffset } from '@/platform/collector/paging'
 import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/queries'
 import type { FindingSummary } from '@/platform/findings/types'
 import type {
-  AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, Job, Network, NetworkIn,
+  AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, GroupDetail, GroupExpanded,
+  GroupsQuery, GroupsResponse, Job, Network, NetworkIn,
   NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScanStarted, ScheduleIn, SyncStatus, UserDetail, UserPatch, UsersQuery, UsersResponse, Zone, ZoneIn,
 } from './types'
 
@@ -99,6 +100,35 @@ export function usePatchUser(id: number) {
   return useMutation<UserDetail, ApiRequestError, UserPatch>({
     mutationFn: (body) => api.patch(`/api/assets/users/${id}`, body),
     onSuccess: (detail) => qc.setQueryData(['assets-user', detail.id], detail),
+  })
+}
+
+export function useGroups(query: GroupsQuery) {
+  return useInfiniteQuery<GroupsResponse, ApiRequestError>({
+    queryKey: ['assets-groups', query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get(`/api/assets/groups${buildQuery({ ...query, limit: ASSETS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useGroup(id: number | null) {
+  return useQuery<GroupDetail, ApiRequestError>({
+    queryKey: ['assets-group', id],
+    queryFn: () => api.get(`/api/assets/groups/${id}`),
+    enabled: id !== null,
+  })
+}
+
+/** Полный состав группы постранично; запрашивается, только когда блок раскрыт (`enabled`). */
+export function useGroupExpanded(id: number | null, enabled: boolean) {
+  return useInfiniteQuery<GroupExpanded, ApiRequestError>({
+    queryKey: ['assets-group-expanded', id],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get(`/api/assets/groups/${id}/expanded${buildQuery({ limit: ASSETS_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextPageOffset,
+    enabled: id !== null && enabled,
   })
 }
 

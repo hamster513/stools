@@ -508,6 +508,8 @@ export interface UserGroup {
   /** true — прямое членство (и основная группа), false — через вложенную группу. */
   direct: boolean
   source: string
+  /** Доменная группа в разделе «Группы»; null — записи нет (ссылки нет). */
+  group_id: number | null
 }
 
 export interface UserDevice {
@@ -553,4 +555,168 @@ export interface UserDetail extends UserItem {
 export interface UserPatch {
   note?: string
   tags?: string[]
+}
+
+// ---- Группы как активы ----
+
+/** Число с разрядами, как на обзоре модуля: 1 200. */
+export function num(n: number): string {
+  return n.toLocaleString('ru-RU')
+}
+
+export type GroupKind = 'local' | 'domain'
+export const GROUP_KINDS: GroupKind[] = ['local', 'domain']
+export const GROUP_KIND_LABELS: Record<GroupKind, string> = { local: 'локальная', domain: 'доменная' }
+
+export type GroupSource = 'ad' | 'vm'
+export const GROUP_SOURCES: GroupSource[] = ['ad', 'vm']
+export const GROUP_SOURCE_LABELS: Record<GroupSource, string> = { ad: 'AD', vm: 'VM' }
+
+/** Не выбрано — сервер отдаёт только живые (`gone` — группа пропала из последней синхронизации). */
+export type GroupState = 'live' | 'gone'
+export const GROUP_STATES: GroupState[] = ['live', 'gone']
+export const GROUP_STATE_LABELS: Record<GroupState, string> = { live: 'живые', gone: 'пропавшие' }
+
+export type GroupMembers = 'some' | 'none'
+export const GROUP_MEMBERS: GroupMembers[] = ['some', 'none']
+export const GROUP_MEMBERS_LABELS: Record<GroupMembers, string> = { some: 'есть прямые участники', none: 'без участников' }
+
+export interface GroupItem {
+  id: number
+  name: string
+  /** Домен у доменной, имя хоста у локальной. */
+  domain_label: string
+  host_asset_id: number | null
+  local: boolean
+  sid: string
+  description: string
+  sources: GroupSource[]
+  members_direct: number
+  /** false — доменная группа, которую видит только VM (в выгрузках AD её нет). */
+  in_ad: boolean
+  gone: boolean
+}
+
+export interface GroupsFacets {
+  kind: Record<GroupKind, number>
+  source: Record<GroupSource, number>
+  state: Record<GroupState, number>
+  members: Record<GroupMembers, number>
+}
+
+export interface GroupsResponse {
+  total: number
+  items: GroupItem[]
+  facets: GroupsFacets | null
+}
+
+/** Многозначные — повторением ключа: внутри оси «или», между осями «и». */
+export interface GroupsQuery {
+  q?: string
+  kind?: GroupKind[]
+  source?: GroupSource[]
+  state?: GroupState[]
+  members?: GroupMembers[]
+  /** Локальные группы этих активов-хостов. */
+  host_id?: number[]
+}
+
+export type GroupMemberKind = 'group' | 'user' | 'computer' | 'well_known' | 'unknown'
+
+export interface GroupMember {
+  kind: GroupMemberKind
+  /** По виду: user_id, group_id или актив-хост; null — без записи. */
+  id: number | null
+  name: string
+  domain: string
+  sid: string
+  /** Участник через primaryGroupID (основная группа). */
+  primary: boolean
+  source: GroupSource
+  /** Пояснение встроенного субъекта, у прочих пусто. */
+  text: string
+}
+
+export interface GroupRef {
+  id: number
+  name: string
+}
+
+export interface GroupMemberOf extends GroupRef {
+  domain: string
+  direct: boolean
+}
+
+export interface GroupLocalOf {
+  group_id: number
+  name: string
+  host_asset_id: number | null
+  host_name: string
+  /** Группы цепочки между этой группой и локальной (кратчайшая), [] — прямо. */
+  via: GroupRef[]
+}
+
+export interface GroupFact {
+  local_group: string
+  local_group_sid: string
+  via: GroupRef[]
+  hosts_total: number
+  /** Первые 50 по имени хоста. */
+  hosts: { group_id: number; host_asset_id: number | null; host_name: string }[]
+}
+
+export type GpoVia = 'restricted_groups' | 'gpp'
+export const GPO_VIA_LABELS: Record<GpoVia, string> = { restricted_groups: 'Restricted Groups', gpp: 'GPP' }
+
+export interface GroupPolicy {
+  local_group: string
+  via: GpoVia
+  action: string
+  gpo_name: string
+  /** У GPO есть фильтр безопасности: список хостов может быть шире действующего. */
+  filtered: boolean
+  hosts_total: number
+  hosts: { name: string; asset_id: number | null }[]
+  /** Доменный предок, через которого запись касается группы; null — сама группа. */
+  through: GroupRef | null
+}
+
+export interface GroupGpoNotes {
+  domain: string
+  links_known: boolean
+  files_known: boolean
+  notes: string[]
+}
+
+export interface GroupDetail extends GroupItem {
+  host_name: string
+  /** Не больше 1000; всего — members_total. */
+  members: GroupMember[]
+  members_total: number
+  member_of: GroupMemberOf[]
+  /** Не больше 1000; всего — local_member_of_total. */
+  local_member_of: GroupLocalOf[]
+  local_member_of_total: number
+  rights: { fact: GroupFact[]; policy: GroupPolicy[]; notes: GroupGpoNotes[] }
+}
+
+export interface GroupExpandedItem {
+  kind: 'user' | 'computer'
+  id: number | null
+  name: string
+  domain: string
+  sid: string
+  via: GroupRef[]
+  paths: number
+}
+
+export interface GroupExpanded {
+  /** Пользователей и компьютеров (встроенные и тупики не входят). */
+  total: number
+  items: GroupExpandedItem[]
+  well_known: { sid: string; name: string; text: string; via: GroupRef[]; paths: number }[]
+  /** Не больше 500; всего — dead_ends_total. */
+  dead_ends: { kind: 'group' | 'unknown'; id: number | null; name: string; domain: string; sid: string; via: GroupRef[]; paths: number; reason: string }[]
+  dead_ends_total: number
+  notes: string[]
 }

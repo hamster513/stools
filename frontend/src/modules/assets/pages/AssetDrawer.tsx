@@ -345,6 +345,8 @@ function UsersBlock({ a }: { a: AssetDetail }) {
       )}
       {/* Фильтр списка по хосту ловит и устаревшие и пропавшие связи — ссылка нужна и когда пользователи не собраны. */}
       {(a.users === null || a.users.length > 0) && <Link to={`/assets/users?host_id=${a.id}`} className="mt-1 inline-block text-primary hover:underline">все пользователи хоста</Link>}
+      {/* Локальные группы хоста — из VM, не из KSC: ссылка не зависит от того, собраны ли пользователи. */}
+      <Link to={`/assets/groups?host_id=${a.id}`} className="mt-1 ml-3 inline-block text-primary hover:underline">локальные группы хоста</Link>
     </>
   )
 }

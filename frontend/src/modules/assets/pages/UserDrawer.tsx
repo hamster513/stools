@@ -123,7 +123,12 @@ function GroupList({ groups }: { groups: UserGroup[] }) {
     <ul className="flex flex-col gap-0.5">
       {groups.map((g) => (
         <li key={g.sid || g.name} className="flex items-baseline justify-between gap-3">
-          <span className="min-w-0 break-all text-text">{g.name || g.sid}</span>
+          {/* Ссылка — только на группу с записью в разделе «Группы»; без неё (встроенная чужого домена и т. п.) — текстом. */}
+          {g.group_id !== null ? (
+            <Link to={`/assets/groups?id=${g.group_id}`} className="min-w-0 break-all text-text hover:text-primary hover:underline">{g.name || g.sid}</Link>
+          ) : (
+            <span className="min-w-0 break-all text-text">{g.name || g.sid}</span>
+          )}
           {g.sid && g.name && <span className="shrink-0 font-mono text-[10px] text-text-secondary">{g.sid}</span>}
         </li>
       ))}
