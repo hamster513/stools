@@ -228,7 +228,7 @@ def _upsert_networks(db: Session, run: _Run) -> None:
         row.cidr, row.title, row.description, row.vlan = net.cidr, net.name, net.comment, net.vlan
         row.tags, row.implicit_tags, row.origin_seen_at = list(net.explicit_tags), list(net.implicit_tags), run.started
     db.flush()
-    apply_zone_rules(db, db.execute(select(Network.id).where(Network.origin == ORIGIN)).scalars())
+    apply_zone_rules(db, origin=ORIGIN)
     reassign_assets(db)
 
 

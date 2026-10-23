@@ -8,12 +8,19 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import re._parser as sre_parse  # type: ignore[import-untyped]  # разбор шаблона без компиляции; заглушек нет
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
 MATCHES = ("name_prefix", "name_contains", "name_regex", "tag", "cidr")
 MAX_VALUE = 500
+#: Регулярное выражение короче прочих значений, а сравнивается с именем не длиннее `MAX_TITLE`:
+#: так худший случай перебора остаётся ограниченным.
+MAX_REGEX = 200
+MAX_TITLE = 255
+NESTED_REPEAT = "шаблон с вложенными повторами (например, (\\w+)+) не принимается — упростите"
+_REPEATS = (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT, sre_parse.POSSESSIVE_REPEAT)
 #: То же имя, что `models.EXTERNAL_ZONE`; ядро не тянет модели.
 EXTERNAL_ZONE = "External"
 SOURCE_MANUAL = "manual"
@@ -40,15 +47,55 @@ def validate_rule(match: str, value: str) -> None:
     if len(value) > MAX_VALUE:
         raise ValueError(f"значение правила длиннее {MAX_VALUE} символов")
     if match == "name_regex":
+        if len(value) > MAX_REGEX:
+            raise ValueError(f"регулярное выражение длиннее {MAX_REGEX} символов")
         try:
-            re.compile(value)
+            parsed = sre_parse.parse(value)
         except re.error as exc:
             raise ValueError(f"«{value}» — неверное регулярное выражение: {exc}") from None
+        if _nested_repeat(parsed, inside=False):
+            raise ValueError(NESTED_REPEAT)
     if match == "cidr":
         try:
             ipaddress.ip_network(value.strip(), strict=False)
         except ValueError:
             raise ValueError(f"«{value}» — не адрес сети CIDR, например 10.10.0.0/16") from None
+
+
+def _children(av: object) -> Iterable[sre_parse.SubPattern]:
+    """Вложенные подшаблоны аргумента узла разбора (группы, ветви, проверки)."""
+    if isinstance(av, sre_parse.SubPattern):
+        yield av
+    elif isinstance(av, (tuple, list)):
+        for item in av:
+            yield from _children(item)
+
+
+def _nested_repeat(items: sre_parse.SubPattern, *, inside: bool) -> bool:
+    """Есть ли повтор (верхняя граница больше 1) внутри другого такого повтора — источник
+    катастрофического перебора вроде `(\\w+)+$`. Проверка с запасом: отвергает и безобидные случаи."""
+    for op, av in items:
+        if op in _REPEATS:
+            _low, high, sub = av
+            many = high > 1
+            if many and inside:
+                return True
+            if _nested_repeat(sub, inside=inside or many):
+                return True
+        elif any(_nested_repeat(child, inside=inside) for child in _children(av)):
+            return True
+    return False
+
+
+def broken_regex(rule: Rule) -> bool:
+    """Правило name_regex, чей шаблон не компилируется (записан в обход проверки): оно не срабатывает."""
+    if rule.match != "name_regex":
+        return False
+    try:
+        _regex(rule.value)
+    except re.error:
+        return True
+    return False
 
 
 def normalize_value(match: str, value: str) -> str:
@@ -75,7 +122,10 @@ def rule_matches(rule: Rule, *, title: str, tags: Iterable[str], cidr: str) -> b
     if rule.match == "name_contains":
         return value.casefold() in title.casefold()
     if rule.match == "name_regex":
-        return _regex(value).search(title) is not None
+        try:
+            return _regex(value).search(title[:MAX_TITLE]) is not None
+        except re.error:
+            return False
     if rule.match == "tag":
         wanted = value.strip().casefold()
         return any(t.strip().casefold() == wanted for t in tags)

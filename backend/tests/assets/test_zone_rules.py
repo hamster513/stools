@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from api.db.models import Base
 from api.modules.assets.core.zone_rules import Rule, pick_zone, rule_matches, validate_rule
-from api.modules.assets.models import DEFAULT_ZONES, AssetZone, Network
+from api.modules.assets.models import DEFAULT_ZONES, AssetZone, Network, NetworkZoneRule
 from api.modules.assets.services import racktables as rt_service
 from tests.assets.fake_racktables import FakeRacktables
 from tests.conftest import BACKEND_DIR
@@ -40,6 +40,11 @@ def matches(r: Rule, title: str = "", tags: tuple[str, ...] = (), cidr: str = "1
     ("name_regex", "APP_(DMZ", "регулярн"),
     ("cidr", "10.10.0.0/33", "CIDR"),
     ("cidr", "сеть", "CIDR"),
+    # Вложенные повторы — катастрофический перебор: отвергаются.
+    ("name_regex", r"(\w+)+$", "вложенными повторами"),
+    ("name_regex", "(a*)*", "вложенными повторами"),
+    ("name_regex", "(x+){2,}", "вложенными повторами"),
+    ("name_regex", "a" * 201, "длиннее 200"),
 ])
 def test_validate_rule_rejects(match: str, value: str, fragment: str) -> None:
     with pytest.raises(ValueError, match=fragment):
@@ -48,8 +53,17 @@ def test_validate_rule_rejects(match: str, value: str, fragment: str) -> None:
 
 def test_validate_rule_accepts_every_match() -> None:
     for match, value in [("name_prefix", "APP_DMZ_"), ("name_contains", "dmz"), ("name_regex", r"dmz_\d+"),
+                         ("name_regex", r"^APP_(DMZ|WEB)_\d+"), ("name_regex", "(ab)+"),
                          ("tag", "prod"), ("cidr", "10.10.0.0/16"), ("cidr", "203.0.113.7/24")]:
         validate_rule(match, value)
+
+
+def test_regex_is_safe_on_bad_input() -> None:
+    # Шаблон, записанный в обход проверки, не срабатывает и не роняет пересчёт.
+    assert not matches(rule("name_regex", "APP_(DMZ"), "APP_(DMZ")
+    # Имя сравнивается не дальше 255 символов.
+    assert not matches(rule("name_regex", "z$"), "a" * 300 + "z")
+    assert matches(rule("name_regex", "z$"), "a" * 254 + "z")
 
 
 def test_name_matches_ignore_case() -> None:
@@ -163,15 +177,31 @@ def test_rule_assigns_group_and_manual_wins(analyst: TestClient) -> None:
     assert group(analyst, other["id"]) == (None, "", None)
 
 
-def test_public_network_falls_back_to_external(analyst: TestClient) -> None:
+def test_hand_made_public_network_gets_no_external(analyst: TestClient) -> None:
+    # Запасной External — только у сетей RackTables (спека §4; см. test_racktables_import_applies_rules).
     pub = add_network(analyst, "8.8.4.0/29", title="ISP")
-    assert (pub["zone"], pub["zone_source"]) == ("External", "racktables")
-    # Документационный диапазон — не публичный адрес.
-    doc = add_network(analyst, "203.0.113.0/24", title="TEST-NET-3")
-    assert (doc["zone"], doc["zone_source"]) == (None, "")
-    # Правило главнее запасного External.
+    assert (pub["zone"], pub["zone_source"]) == (None, "")
+    assert analyst.post(f"{RULES}/apply").json() == {"changed": 0}
+    # Правило на описанную вручную публичную сеть действует.
     r = add_rule(analyst, "cidr", "8.8.4.0/24", "DMZ")
     assert group(analyst, pub["id"]) == ("DMZ", "rule", r["id"])
+
+
+def test_stored_broken_regex_is_skipped(analyst: TestClient, db_session: Session, caplog: pytest.LogCaptureFixture) -> None:
+    web = add_network(analyst, "10.10.0.0/24", title="APP_DMZ_WEB")
+    good = add_rule(analyst, "name_prefix", "APP_DMZ_", "DMZ")
+    # Неверный regex первым по порядку — записан в обход проверки.
+    db_session.add(NetworkZoneRule(position=0, enabled=True, zone="Guest", match="name_regex", value="APP_(DMZ", note=""))
+    db_session.commit()
+    analyst.put(f"/api/assets/networks/{web['id']}", json={"zone": "Internal"})
+    analyst.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "rules"})
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="stools.assets"):
+        r = analyst.post(f"{RULES}/apply")
+    assert r.status_code == 200
+    # Пересчёт дошёл до конца, остальные правила действуют, предупреждение — одно на пересчёт.
+    assert group(analyst, web["id"]) == ("DMZ", "rule", good["id"])
+    assert [m for m in caplog.messages if "неверным regex" in m] == ["правила групп сетей с неверным regex пропущены: №0 (id 2)"]
 
 
 def test_rule_edit_delete_and_order_recompute(analyst: TestClient, db_session: Session) -> None:
@@ -219,6 +249,7 @@ def test_rule_edit_delete_and_order_recompute(analyst: TestClient, db_session: S
 def test_rule_validation(analyst: TestClient) -> None:
     for body in [
         {"match": "name_regex", "value": "APP_(DMZ", "zone": "DMZ"},
+        {"match": "name_regex", "value": r"(\w+)+$", "zone": "DMZ"},
         {"match": "cidr", "value": "10.10.0.0/33", "zone": "DMZ"},
         {"match": "glob", "value": "APP*", "zone": "DMZ"},
         {"match": "tag", "value": " ", "zone": "DMZ"},

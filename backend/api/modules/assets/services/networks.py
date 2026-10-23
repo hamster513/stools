@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
@@ -18,6 +19,7 @@ from api.modules.assets.core import scanner
 from api.modules.assets.core.zone_rules import (
     SOURCE_MANUAL,
     Rule,
+    broken_regex,
     normalize_value,
     pick_zone,
     validate_rule,
@@ -31,6 +33,8 @@ from api.modules.assets.models import (
     NetworkZoneRule,
 )
 from api.platform.scheduler import PlatformSchedule, delete_schedule
+
+log = logging.getLogger("stools.assets")
 
 NetworkList = list[tuple[int, ipaddress.IPv4Network | ipaddress.IPv6Network]]
 
@@ -336,15 +340,25 @@ class RuleNotFound(NetworkNotFound):
     """Правила нет — ручки отвечают 404, как на пропавшую сеть."""
 
 
+#: То же, что `services.racktables.ORIGIN` (тот модуль импортирует этот).
+RT_ORIGIN = "racktables"
+
+
 def _rules(db: Session) -> list[Rule]:
-    return [
+    """Правила по порядку без тех, чей regex не компилируется (записан в обход проверки): такое правило
+    не срабатывает, предупреждение — одно на пересчёт."""
+    rules = [
         Rule(id=r.id, position=r.position, enabled=r.enabled, zone=r.zone, match=r.match, value=r.value)
         for r in db.execute(select(NetworkZoneRule).order_by(NetworkZoneRule.position, NetworkZoneRule.id)).scalars()
     ]
+    broken = [r for r in rules if broken_regex(r)]
+    if broken:
+        log.warning("правила групп сетей с неверным regex пропущены: %s", ", ".join(f"№{r.position} (id {r.id})" for r in broken))
+    return [r for r in rules if r not in broken]
 
 
 def _is_public(cidr: str) -> bool:
-    """Публичный адрес — как `RtNetwork.external` у RackTables; у описанных вручную — тот же признак CIDR."""
+    """Публичный адрес — как `RtNetwork.external`."""
     try:
         return ipaddress.ip_network(cidr, strict=False).is_global
     except ValueError:
@@ -352,16 +366,19 @@ def _is_public(cidr: str) -> bool:
 
 
 def _decide(rules: list[Rule], network: Network, external: bool) -> tuple[str | None, str, int | None]:
+    """Запасной External — только у сетей RackTables (спека §4); описанная вручную без правила — без группы."""
     return pick_zone(
         rules, title=network.title or "", tags=[*(network.tags or []), *(network.implicit_tags or [])], cidr=network.cidr,
-        public=external and _is_public(network.cidr),
+        public=external and network.origin == RT_ORIGIN and _is_public(network.cidr),
     )
 
 
-def apply_zone_rules(db: Session, network_ids: Iterable[int] | None = None) -> int:
-    """Группы не ручных сетей (всех или указанных) по правилам; пишет только изменения, возвращает их число.
-    External — запасная группа публичных сетей, пока зона есть в справочнике."""
+def apply_zone_rules(db: Session, network_ids: Iterable[int] | None = None, *, origin: str | None = None) -> int:
+    """Группы не ручных сетей (всех, указанных или с данным `origin`) по правилам; пишет только изменения,
+    возвращает их число. External — запасная группа публичных сетей RackTables, пока зона есть в справочнике."""
     stmt = select(Network).where(Network.zone_source != SOURCE_MANUAL)
+    if origin is not None:
+        stmt = stmt.where(Network.origin == origin)
     if network_ids is not None:
         ids = list(network_ids)
         if not ids:
