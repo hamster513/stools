@@ -287,15 +287,57 @@ export interface NetworkIn {
 /** Расписание задачи модуля (DNS, RackTables, синхронизация) — общее расписание планировщика (platform/collector). */
 export type NetworkSchedule = ScheduleView
 
-export interface Network extends NetworkIn {
+/** Строка списка сетей (`GET /networks`, по страницам). */
+export interface NetworkItem {
   id: number
+  cidr: string
+  title: string
+  zone: string | null
+  zone_title: string | null
+  /** Расположение группы: internal | dmz | external | '' (не задано или сеть без группы). */
+  placement: string
+  internet_facing: boolean
+  /** Откуда группа: manual | rule | racktables | '' (не назначена). */
+  zone_source: string
+  vlan: number | null
+  site: string
+  tags: string[]
+  implicit_tags: string[]
   /** Пусто — описана вручную; racktables — создана проходом RackTables, который обновляет её название, описание, VLAN и теги. */
   origin: string
+  /** Активов в сети (без слитых). */
+  assets: number
+}
+
+export interface NetworkList {
+  total: number
+  items: NetworkItem[]
+  /** Только на первой странице (offset = 0); '' — не задано. */
+  facets: Record<'zone' | 'placement' | 'zone_source' | 'origin', Record<string, number>> | null
+}
+
+export interface NetworkRef {
+  id: number
+  cidr: string
+  title: string
+}
+
+/** Карточка сети (`GET /networks/{id}`; её же возвращают POST и PUT). */
+export interface Network extends NetworkItem {
+  description: string
+  owner: string
+  confidential: boolean
+  zone_rule_id: number | null
+  zone_rule: { id: number; match: string; value: string; position: number } | null
+  origin_key: string
+  origin_seen_at: string | null
+  /** Объемлющие — от узкой к широкой. */
+  parents: NetworkRef[]
+  children_count: number
+  /** Вложенные — по адресу, не больше 100. */
+  children: NetworkRef[]
   created_at: string
   updated_at: string
-  stats: {
-    assets: number
-  }
 }
 
 export interface Zone {

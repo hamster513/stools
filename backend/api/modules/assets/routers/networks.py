@@ -1,31 +1,35 @@
-"""Сети: CIDR, зона из справочника, площадка, владелец, VLAN, теги; привязка активов."""
+"""Сети: CIDR, зона из справочника, площадка, владелец, VLAN, теги; привязка активов. Список — по страницам
+с поиском и фасетами, выгрузка — по тем же фильтрам, карточка — с правилом группы и объемлющими сетями."""
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
-from api.modules.assets.models import Network
+from api.modules.assets.routers.assets import EXPORT_ALL, MAX_LIMIT, _check
 from api.modules.assets.services.networks import (
+    ORIGINS,
+    PLACEMENTS,
+    ZONE_SOURCES,
     NetworkConflict,
     NetworkNotFound,
-    all_network_stats,
     create_network,
     delete_network,
     get_network,
-    network_stats,
+    list_networks,
+    network_detail,
+    networks_for_export,
     normalize_cidr,
     update_network,
 )
 from api.platform.export import Column, export_response
+from api.platform.filters import QueryList, multi
 
 router = APIRouter(prefix="/networks", tags=["assets"])
 
@@ -81,42 +85,6 @@ class NetworkUpdate(NetworkIn):
         return data
 
 
-class NetworkStats(BaseModel):
-    assets: int
-
-
-class NetworkView(BaseModel):
-    id: int
-    cidr: str
-    title: str
-    description: str
-    zone: str | None
-    #: Откуда группа: manual | rule | racktables | "" (не назначена).
-    zone_source: str
-    zone_rule_id: int | None
-    site: str
-    owner: str
-    vlan: int | None
-    tags: list[str]
-    #: Пусто — описана вручную; racktables — создана задачей RackTables (название, описание, VLAN и теги обновляет она).
-    origin: str
-    created_at: dt.datetime
-    updated_at: dt.datetime
-    stats: NetworkStats
-
-
-def _view(n: Network, stats: dict[str, Any]) -> NetworkView:
-    return NetworkView(
-        id=n.id, cidr=n.cidr, title=n.title, description=n.description, zone=n.zone, zone_source=n.zone_source,
-        zone_rule_id=n.zone_rule_id, site=n.site, owner=n.owner, vlan=n.vlan, tags=list(n.tags or []),
-        origin=n.origin, created_at=n.created_at, updated_at=n.updated_at, stats=NetworkStats(**stats),
-    )
-
-
-def _one(db: Session, n: Network) -> NetworkView:
-    return _view(n, network_stats(db, n))
-
-
 def _errors(fn: Any, *args: Any) -> Any:
     try:
         return fn(*args)
@@ -128,51 +96,77 @@ def _errors(fn: Any, *args: Any) -> Any:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
 
 
-@router.get("", response_model=list[NetworkView])
-def list_networks(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[NetworkView]:
-    networks = list(db.execute(select(Network).order_by(Network.cidr)).scalars())
-    stats = all_network_stats(db, networks)
-    return [_view(n, stats[n.id]) for n in networks]
+def _filters(
+    q: str | None = Query(default=None, max_length=200),
+    zone: QueryList = None,
+    placement: QueryList = None,
+    zone_source: QueryList = None,
+    origin: QueryList = None,
+) -> dict[str, Any]:
+    """Фильтры списка и выгрузки; многозначные — повтором ключа, `-` — не задано."""
+    picked = {"zone": multi(zone), "placement": multi(placement), "zone_source": multi(zone_source), "origin": multi(origin)}
+    _check(picked["placement"], PLACEMENTS)
+    _check(picked["zone_source"], ZONE_SOURCES)
+    _check(picked["origin"], ORIGINS)
+    return {"q": q, **picked}
 
 
-@router.post("", response_model=NetworkView, status_code=status.HTTP_201_CREATED)
-def post_network(payload: NetworkIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> NetworkView:
+@router.get("")
+def get_networks(
+    filters: dict[str, Any] = Depends(_filters),
+    limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    body = list_networks(db, **filters, limit=limit, offset=offset)
+    return {**body, "facets": body["facets"] if offset == 0 else None}
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+def post_network(payload: NetworkIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     network = _errors(create_network, db, payload.model_dump())
     db.commit()
-    return _one(db, network)
+    return network_detail(db, network.id)
 
+
+#: Подписи расположения — как на экране.
+PLACEMENT_TITLES = {"internal": "внутренняя", "dmz": "DMZ", "external": "внешняя"}
 
 EXPORT_COLUMNS = [
-    Column("cidr", "CIDR"), Column("title", "Название"), Column("zone", "Зона"), Column("site", "Площадка"),
-    Column("assets", "Активов"),
+    Column("cidr", "CIDR"), Column("title", "Название"), Column("zone", "Группа"), Column("placement", "Расположение"),
+    Column("vlan", "VLAN"), Column("site", "Площадка"), Column("tags", "Теги"), Column("assets", "Активов"),
 ]
 
 
 @router.get("/export")
 def export_networks(
-    fmt: str = Query(default="csv", alias="format"), db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+    filters: dict[str, Any] = Depends(_filters),
+    fmt: str = Query(default="csv", alias="format"),
+    db: Session = Depends(get_db),
+    _user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    """Все сети в порядке таблицы (у списка фильтров нет); объявлена до `/{network_id}`."""
+    """Сети под фильтрами списка, в его порядке; объявлена до `/{network_id}`. Теги — явные и унаследованные."""
     rows = [
-        {"cidr": v.cidr, "title": (v.title or "—") + (f" · VLAN {v.vlan}" if v.vlan is not None else ""), "zone": v.zone,
-         "site": v.site or None, "assets": v.stats.assets}
-        for v in list_networks(db=db, _user=user)
+        {"cidr": n["cidr"], "title": n["title"] or None, "zone": n["zone"], "placement": PLACEMENT_TITLES.get(n["placement"]),
+         "vlan": n["vlan"], "site": n["site"] or None, "tags": ", ".join(dict.fromkeys([*n["tags"], *n["implicit_tags"]])) or None,
+         "assets": n["assets"]}
+        for n in networks_for_export(db, **filters, limit=EXPORT_ALL)
     ]
     return export_response(fmt, EXPORT_COLUMNS, rows, module="assets", name="networks")
 
 
-@router.get("/{network_id}", response_model=NetworkView)
-def get_one(network_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> NetworkView:
-    network = _errors(get_network, db, network_id)
-    return _one(db, network)
+@router.get("/{network_id}")
+def get_one(network_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+    return dict(_errors(network_detail, db, network_id))
 
 
-@router.put("/{network_id}", response_model=NetworkView)
-def put_network(network_id: int, payload: NetworkUpdate, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> NetworkView:
+@router.put("/{network_id}")
+def put_network(network_id: int, payload: NetworkUpdate, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     network = _errors(get_network, db, network_id)
     _errors(update_network, db, network, _errors(payload.changes))
     db.commit()
-    return _one(db, network)
+    return network_detail(db, network.id)
 
 
 @router.delete("/{network_id}", status_code=status.HTTP_204_NO_CONTENT)

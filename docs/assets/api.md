@@ -383,12 +383,37 @@ RackTables: если блокировку держит такая запись, 
 ## Сети
 
 ```
-GET    /networks                       [{id, cidr, title, description, zone, zone_source, zone_rule_id, site,
-                                        owner, vlan, tags, origin, created_at, updated_at, stats: {assets}}]
-POST   /networks                       201 | 409 такой CIDR уже есть | 422
-GET    /networks/{id}  PUT /networks/{id}  DELETE /networks/{id}   204
-GET    /networks/export?format=csv|xlsx   все сети в порядке таблицы (фильтров у списка нет), любой роли
+GET    /networks                       q (≤ 200), zone, placement (internal|dmz|external), zone_source
+                                       (manual|rule|racktables), origin (racktables; пусто — описана вручную),
+                                       limit≤500 (200), offset
+                                       → {total, items, facets|null}
+                                       items: [{id, cidr, title, zone|null, zone_title|null, placement,
+                                       internet_facing, zone_source, vlan|null, site, tags, implicit_tags,
+                                       origin, assets}]
+                                       facets: {zone, placement, zone_source, origin} — только при offset=0
+                                       неизвестное значение placement, zone_source, origin — 422
+POST   /networks                       → карточка, 201 | 409 такой CIDR уже есть | 422
+GET    /networks/{id}                  поля списка + description, owner, confidential, zone_rule_id|null,
+                                       zone_rule: {id, match, value, position}|null, origin_key,
+                                       origin_seen_at|null, parents: [{id, cidr, title}],
+                                       children_count, children: [{id, cidr, title}] (до 100),
+                                       created_at, updated_at;  404 — нет
+PUT    /networks/{id}                  → карточка
+DELETE /networks/{id}                  204
+GET    /networks/export?format=csv|xlsx   фильтры списка (без limit/offset), его порядок; любой роли
 ```
+
+Список — по адресу (`cidr` как `inet`: 10.9.0.0/24 раньше 10.10.0.0/16, IPv4 раньше IPv6).
+`q` — IP-адрес: сети, его содержащие, от узкой к широкой; иначе подстрока (без учёта регистра,
+`%` и `_` — буквально) CIDR, названия, описания, явного или унаследованного тега; число — ещё и
+VLAN равенством. Многозначные фильтры — повтором ключа, `-` — не задано (сеть без группы,
+группа без расположения, группа не назначена, сеть описана вручную). Фасет считается под всеми
+фильтрами, кроме своего; у `zone` — только встречающиеся группы и `""`, у остальных — все
+значения, в том числе нулевые. `placement`, `internet_facing`, `zone_title`, `confidential` —
+признаки группы сети (без группы — `""`, false, null, false). `assets` — активов в сети без
+слитых. `parents` — объемлющие сети от узкой к широкой, `children` — вложенные (любой глубины)
+по адресу. Выгрузка: CIDR, Название, Группа, Расположение (внутренняя | DMZ | внешняя), VLAN,
+Площадка, Теги (явные и унаследованные через запятую), Активов.
 
 `cidr` нормализуется (`10.10.0.7/24` → `10.10.0.0/24`); ширина не ограничена —
 сеть-контейнер служит объемлющей. Пересечения разрешены: актив привязывается к

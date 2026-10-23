@@ -205,13 +205,13 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, tag
       <FacetSection title="Сеть, открытый порт и тег">
         {/* Сетей сотни — выбранные показаны строками-переключателями, новая добавляется из списка. */}
         {(filters.network_id ?? []).map((id) => {
-          const n = networks.data?.find((x) => x.id === id)
+          const n = networks.data?.items.find((x) => x.id === id)
           return <FacetRow key={id} active count={undefined} noCount onClick={() => pick('network_id', id)}>{n ? `${n.cidr}${n.title ? ` — ${n.title}` : ''}` : `#${id}`}</FacetRow>
         })}
         <div className="flex flex-col gap-1.5 px-2">
           <select value="" onChange={(e) => { if (e.target.value) pick('network_id', Number(e.target.value)) }} aria-label="Сеть" className={INPUT}>
             <option value="">{filters.network_id ? 'добавить сеть…' : 'все сети'}</option>
-            {(networks.data ?? []).filter((n) => !has(filters.network_id, n.id)).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}</option>)}
+            {(networks.data?.items ?? []).filter((n) => !has(filters.network_id, n.id)).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}</option>)}
           </select>
           <input value={tag} onChange={(e) => onTag(e.target.value)} placeholder="тег" aria-label="Тег" className={INPUT} />
         </div>
@@ -499,7 +499,7 @@ export function AssetsPage() {
     ...valueChips('LAPS', filters.laps, (v) => LAPS_LABELS[v], (v) => toggle('laps', v)),
     ...valueChips('Кластер', filters.cluster, (v) => CLUSTER_LABELS[v], (v) => toggle('cluster', v)),
     ...valueChips('Зона', filters.zone, (z) => z, (v) => toggle('zone', v)),
-    ...valueChips('Сеть', filters.network_id, (id) => networks.data?.find((n) => n.id === id)?.cidr ?? `#${id}`, (v) => toggle('network_id', v)),
+    ...valueChips('Сеть', filters.network_id, (id) => networks.data?.items.find((n) => n.id === id)?.cidr ?? `#${id}`, (v) => toggle('network_id', v)),
   ]
   if (tagInput.trim()) chips.push({ label: `тег ${tagInput.trim()}`, clear: () => setTagInput('') })
   chips.push(...findingFacetChips(disc, setDisc).map((c) => ({ ...c, label: `расхождения · ${c.label.toLowerCase()}` })))

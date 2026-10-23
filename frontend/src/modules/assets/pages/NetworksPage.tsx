@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Network as NetworkIcon, Plus, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useDeleteNetwork, useNetworks } from '@/modules/assets/api/queries'
-import type { Network } from '@/modules/assets/api/types'
+import { useDeleteNetwork, useNetwork, useNetworks } from '@/modules/assets/api/queries'
+import type { NetworkItem } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -27,14 +27,14 @@ const HEADER = {
   actions: <span className="sr-only">Действие</span>,
 }
 
-function ConfirmDelete({ network, onDone }: { network: Network; onDone: () => void }) {
+function ConfirmDelete({ network, onDone }: { network: NetworkItem; onDone: () => void }) {
   const remove = useDeleteNetwork()
   return (
     <div role="dialog" aria-label="Удалить сеть" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-md rounded border border-grid bg-surface p-4">
         <div className="mb-2 text-sm font-semibold text-text">Удалить сеть {network.cidr}?</div>
         <p className="mb-4 text-xs text-text-secondary">
-          Активы сети ({network.stats.assets}) перейдут в самую узкую из оставшихся сетей, содержащую их адрес, или останутся без сети;
+          Активы сети ({network.assets}) перейдут в самую узкую из оставшихся сетей, содержащую их адрес, или останутся без сети;
           привязка вручную к этой сети сбрасывается.
         </p>
         {remove.error && <p className="mb-2 text-xs text-kind-1">{remove.error instanceof ApiRequestError ? remove.error.message : 'Не удалось удалить'}</p>}
@@ -47,6 +47,14 @@ function ConfirmDelete({ network, onDone }: { network: Network; onDone: () => vo
   )
 }
 
+/** Правка сети: поля формы — из карточки (в строке списка нет описания и владельца). */
+function EditNetwork({ id, onDone }: { id: number; onDone: () => void }) {
+  const card = useNetwork(id)
+  if (card.isError) return <ErrorState message={card.error instanceof ApiRequestError ? card.error.message : 'Не удалось загрузить сеть'} onRetry={() => card.refetch()} />
+  if (!card.data) return <FullPageSpinner />
+  return <NetworkForm network={card.data} onDone={onDone} onCancel={onDone} />
+}
+
 /** Сети: CIDR, зона, площадка, сколько активов. Строка — правка сети. */
 export function NetworksPage() {
   const { write } = useCan()
@@ -55,12 +63,12 @@ export function NetworksPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
   const [newCidr, setNewCidr] = useState(() => params.get('new') ?? '')
-  // undefined — форма закрыта, null — новая сеть.
-  const [editing, setEditing] = useState<Network | null | undefined>(() => (newCidr ? null : undefined))
+  // undefined — форма закрыта, null — новая сеть, число — id изменяемой сети.
+  const [editing, setEditing] = useState<number | null | undefined>(() => (newCidr ? null : undefined))
   // Параметр снимается: закрытая форма не откроется снова при обновлении страницы.
   useEffect(() => { if (params.has('new')) navigate('/assets/networks', { replace: true }) }, [params, navigate])
   function closeForm() { setEditing(undefined); setNewCidr('') }
-  const [deleting, setDeleting] = useState<Network | null>(null)
+  const [deleting, setDeleting] = useState<NetworkItem | null>(null)
   const cols = useColumnWidths('assets-networks-columns', write ? WRITE_COLUMNS : COLUMNS)
 
   if (networks.isLoading) return <FullPageSpinner />
@@ -68,7 +76,7 @@ export function NetworksPage() {
     const msg = networks.error instanceof ApiRequestError ? networks.error.message : 'Не удалось загрузить сети'
     return <div className="p-6"><ErrorState message={msg} onRetry={() => networks.refetch()} /></div>
   }
-  const list = networks.data
+  const list = networks.data.items
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -76,7 +84,7 @@ export function NetworksPage() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-base font-semibold text-text">Сети</h1>
-            <ExportButton href={(fmt) => `/api/assets/networks/export?format=${fmt}`} total={list.length} />
+            <ExportButton href={(fmt) => `/api/assets/networks/export?format=${fmt}`} total={networks.data.total} />
           </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Актив привязывается к самой узкой сети, содержащей его адрес; в карточке актива сеть можно задать вручную. Пересечение сетей допустимо.
@@ -87,7 +95,9 @@ export function NetworksPage() {
 
       {editing !== undefined && (
         <div className="mb-4">
-          <NetworkForm key={editing?.id ?? 'new'} network={editing} initialCidr={newCidr} onDone={closeForm} onCancel={closeForm} />
+          {editing === null
+            ? <NetworkForm key="new" network={null} initialCidr={newCidr} onDone={closeForm} onCancel={closeForm} />
+            : <EditNetwork key={editing} id={editing} onDone={closeForm} />}
         </div>
       )}
 
@@ -113,12 +123,12 @@ export function NetworksPage() {
                   <td className="truncate px-3 py-2 text-text-secondary" title={n.zone ?? undefined}>{n.zone ?? '—'}</td>
                   <td className="truncate px-3 py-2 text-text-secondary" title={n.site || undefined}>{n.site || '—'}</td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums">
-                    <Link to={`/assets/list?network_id=${n.id}`} className="text-text hover:underline">{n.stats.assets}</Link>
+                    <Link to={`/assets/list?network_id=${n.id}`} className="text-text hover:underline">{n.assets}</Link>
                   </td>
                   {write && (
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap items-start justify-end gap-1 whitespace-nowrap">
-                        <Button variant="ghost" onClick={() => setEditing(n)}>изменить</Button>
+                        <Button variant="ghost" onClick={() => setEditing(n.id)}>изменить</Button>
                         <Button variant="ghost" onClick={() => setDeleting(n)} aria-label={`Удалить сеть ${n.cidr}`}><Trash2 size={13} aria-hidden /></Button>
                       </div>
                     </td>

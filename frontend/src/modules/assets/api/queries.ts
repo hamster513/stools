@@ -6,7 +6,7 @@ import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/quer
 import type { FindingSummary } from '@/platform/findings/types'
 import type {
   AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, GroupDetail, GroupExpanded,
-  GroupsQuery, GroupsResponse, Job, Network, NetworkIn,
+  GroupsQuery, GroupsResponse, Job, Network, NetworkIn, NetworkList,
   NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScheduleIn, SyncStatus, UserDetail, UserPatch, UsersQuery, UsersResponse, Zone, ZoneIn,
 } from './types'
 
@@ -273,8 +273,14 @@ export function useJob(id: number | null) {
   })
 }
 
+/** Первые 500 сетей по адресу (больше сервер за раз не отдаёт) — для выбора сети и страницы «Сети». */
 export function useNetworks() {
-  return useQuery<Network[], ApiRequestError>({ queryKey: ['assets-networks'], queryFn: () => api.get('/api/assets/networks') })
+  return useQuery<NetworkList, ApiRequestError>({ queryKey: ['assets-networks'], queryFn: () => api.get('/api/assets/networks?limit=500') })
+}
+
+/** Карточка сети: форма правки берёт поля отсюда — в строке списка нет описания и владельца. */
+export function useNetwork(id: number | null) {
+  return useQuery<Network, ApiRequestError>({ queryKey: ['assets-networks', id], queryFn: () => api.get(`/api/assets/networks/${id}`), enabled: id !== null })
 }
 
 /** Сеть изменилась — активы могли переехать в другую сеть: обновить и список, и карточку, и зоны (счётчик сетей). */

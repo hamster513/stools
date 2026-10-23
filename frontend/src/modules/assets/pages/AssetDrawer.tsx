@@ -369,7 +369,7 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
         <span className="mb-1 block text-text-secondary">Сеть</span>
         <select value={network} onChange={(e) => setNetwork(e.target.value)} className={cn(FIELD, 'text-xs')}>
           <option value="">по адресу — самая узкая сеть, содержащая IP</option>
-          {(networks.data ?? []).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}{n.zone ? ` · ${n.zone}` : ''}</option>)}
+          {(networks.data?.items ?? []).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}{n.zone ? ` · ${n.zone}` : ''}</option>)}
         </select>
       </label>
       <label className="block">

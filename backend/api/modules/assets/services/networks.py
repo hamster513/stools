@@ -12,7 +12,8 @@ from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, cast, exists, func, or_, select
+from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Session
 
 from api.modules.assets.core.zone_rules import (
@@ -193,6 +194,155 @@ def all_network_stats(db: Session, networks: Iterable[Network]) -> dict[int, dic
     in_registry = and_(Asset.network_id.in_(ids), Asset.merged_into.is_(None))
     counts = dict(db.execute(select(Asset.network_id, func.count()).where(in_registry).group_by(Asset.network_id)).tuples().all())
     return {n.id: {"assets": counts.get(n.id, 0)} for n in networks}
+
+
+# ---- Список и карточка ----------------------------------------------------
+
+#: Значения фасетов с постоянным набором; '' — «не задано» (в запросе `-`). Группы — из данных.
+PLACEMENTS = ("internal", "dmz", "external", "")
+ZONE_SOURCES = ("manual", "rule", "racktables", "")
+ORIGINS = ("", "racktables")
+NETWORK_AXES = ("zone", "placement", "zone_source", "origin")
+FIXED_VALUES = {"placement": PLACEMENTS, "zone_source": ZONE_SOURCES, "origin": ORIGINS}
+#: Вложенных сетей в карточке — не больше; всего — `children_count`.
+CHILDREN_SHOWN = 100
+
+
+def _inet(value: Any) -> Any:
+    """CIDR хранится строкой; вложенность и порядок — по адресу (`inet`), а не по тексту."""
+    return cast(value, INET)
+
+
+def _axis_column(axis: str) -> Any:
+    return {
+        "zone": func.coalesce(Network.zone, ""), "placement": func.coalesce(AssetZone.placement, ""),
+        "zone_source": Network.zone_source, "origin": Network.origin,
+    }[axis]
+
+
+def _tag_matches(column: Any, needle: str) -> Any:
+    """Подстрока одного из тегов массива (сам синтаксис JSON не ищется)."""
+    tags = func.jsonb_array_elements_text(column).table_valued("value")
+    return exists(select(1).select_from(tags).where(tags.c.value.icontains(needle, autoescape=True)))
+
+
+def _search(q: str | None) -> tuple[list[Any], bool]:
+    """Условие поиска и признак «искали адрес». Адрес — сети, его содержащие; иначе подстрока CIDR, имени,
+    описания, явного или унаследованного тега без учёта регистра (`%` и `_` — буквально), число — ещё и VLAN."""
+    needle = (q or "").strip()
+    if not needle:
+        return [], False
+    try:
+        addr = ipaddress.ip_address(needle)
+    except ValueError:
+        pass
+    else:
+        return [_inet(Network.cidr).op(">>=")(_inet(str(addr)))], True
+    conds = [
+        Network.cidr.icontains(needle, autoescape=True), Network.title.icontains(needle, autoescape=True),
+        Network.description.icontains(needle, autoescape=True), _tag_matches(Network.tags, needle),
+        _tag_matches(Network.implicit_tags, needle),
+    ]
+    if needle.isdigit():
+        conds.append(Network.vlan == int(needle))
+    return [or_(*conds)], False
+
+
+def _chosen(chosen: dict[str, frozenset[str] | None], skip: str | None = None) -> list[Any]:
+    return [_axis_column(axis).in_(sorted(values)) for axis, values in chosen.items() if values is not None and axis != skip]
+
+
+def _joined(*columns: Any) -> Any:
+    return select(*columns).select_from(Network).outerjoin(AssetZone, AssetZone.name == Network.zone)
+
+
+def _items(db: Session, where: list[Any], by_address: bool, limit: int, offset: int) -> list[dict[str, Any]]:
+    """Строки списка: по адресу; при поиске адреса — от узкой сети к широкой."""
+    order = [func.masklen(_inet(Network.cidr)).desc()] if by_address else []
+    rows = db.execute(
+        _joined(Network, AssetZone).where(*where).order_by(*order, _inet(Network.cidr), Network.id).offset(offset).limit(limit)
+    ).tuples().all()
+    counts = all_network_stats(db, [n for n, _ in rows])
+    return [network_item(n, z, counts[n.id]["assets"]) for n, z in rows]
+
+
+def network_item(network: Network, zone: AssetZone | None, assets: int) -> dict[str, Any]:
+    return {
+        "id": network.id, "cidr": network.cidr, "title": network.title, "zone": network.zone,
+        "zone_title": zone.title if zone is not None else None, "placement": zone.placement if zone is not None else "",
+        "internet_facing": zone.internet_facing if zone is not None else False, "zone_source": network.zone_source,
+        "vlan": network.vlan, "site": network.site, "tags": list(network.tags or []), "implicit_tags": list(network.implicit_tags or []),
+        "origin": network.origin, "assets": assets,
+    }
+
+
+def list_networks(
+    db: Session,
+    *,
+    q: str | None = None,
+    zone: frozenset[str] | None = None,
+    placement: frozenset[str] | None = None,
+    zone_source: frozenset[str] | None = None,
+    origin: frozenset[str] | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """{total, items, facets}; фасет — под всеми фильтрами, кроме своего (группы — только встречающиеся)."""
+    search, by_address = _search(q)
+    chosen = {"zone": zone, "placement": placement, "zone_source": zone_source, "origin": origin}
+    facets: dict[str, dict[str, int]] = {}
+    for axis in NETWORK_AXES:
+        column = _axis_column(axis)
+        counts = dict(db.execute(
+            _joined(column, func.count()).where(*search, *_chosen(chosen, skip=axis)).group_by(column)
+        ).tuples().all())
+        facets[axis] = {v: int(counts.get(v, 0)) for v in FIXED_VALUES[axis]} if axis in FIXED_VALUES else {
+            v: int(n) for v, n in sorted(counts.items(), key=lambda kv: (kv[0] == "", kv[0]))}
+    where = [*search, *_chosen(chosen)]
+    total = int(db.execute(_joined(func.count()).where(*where)).scalar_one())
+    return {"total": total, "items": _items(db, where, by_address, limit, offset), "facets": facets}
+
+
+def networks_for_export(
+    db: Session,
+    *,
+    q: str | None = None,
+    zone: frozenset[str] | None = None,
+    placement: frozenset[str] | None = None,
+    zone_source: frozenset[str] | None = None,
+    origin: frozenset[str] | None = None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Строки выгрузки: отбор и порядок списка, без фасетов и `total`."""
+    search, by_address = _search(q)
+    where = [*search, *_chosen({"zone": zone, "placement": placement, "zone_source": zone_source, "origin": origin})]
+    return _items(db, where, by_address, limit, 0)
+
+
+def _refs(db: Session, stmt: Any) -> list[dict[str, Any]]:
+    return [{"id": i, "cidr": c, "title": t} for i, c, t in db.execute(stmt).tuples()]
+
+
+def network_detail(db: Session, network_id: int) -> dict[str, Any]:
+    """Карточка: поля списка, описание, владелец, правило группы, откуда сеть, объемлющие (от узкой к широкой)
+    и вложенные сети (по адресу, не больше `CHILDREN_SHOWN`)."""
+    network = get_network(db, network_id)
+    zone = db.get(AssetZone, network.zone) if network.zone is not None else None
+    rule = db.get(NetworkZoneRule, network.zone_rule_id) if network.zone_rule_id is not None else None
+    me = _inet(network.cidr)
+    refs = select(Network.id, Network.cidr, Network.title)
+    inside = _inet(Network.cidr).op("<<")(me)
+    return {
+        **network_item(network, zone, network_stats(db, network)["assets"]),
+        "confidential": zone.confidential if zone is not None else False,
+        "description": network.description, "owner": network.owner, "zone_rule_id": network.zone_rule_id,
+        "zone_rule": None if rule is None else {"id": rule.id, "match": rule.match, "value": rule.value, "position": rule.position},
+        "origin_key": network.origin_key, "origin_seen_at": network.origin_seen_at,
+        "parents": _refs(db, refs.where(_inet(Network.cidr).op(">>")(me)).order_by(func.masklen(_inet(Network.cidr)).desc())),
+        "children_count": int(db.execute(select(func.count()).select_from(Network).where(inside)).scalar_one()),
+        "children": _refs(db, refs.where(inside).order_by(_inet(Network.cidr), Network.id).limit(CHILDREN_SHOWN)),
+        "created_at": network.created_at, "updated_at": network.updated_at,
+    }
 
 
 # ---- Справочник зон -------------------------------------------------------

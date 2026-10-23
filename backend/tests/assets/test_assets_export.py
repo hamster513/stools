@@ -9,7 +9,7 @@ from tests.assets.test_assets_api import analyst  # noqa: F401 — фиксту�
 from tests.export_check import check_export
 
 ASSETS = ["Имя", "IP", "Сеть", "Зона", "ОС", "Источники", "Виден", "Расхождения"]
-NETWORKS = ["CIDR", "Название", "Зона", "Площадка", "Активов"]
+NETWORKS = ["CIDR", "Название", "Группа", "Расположение", "VLAN", "Площадка", "Теги", "Активов"]
 
 
 def test_assets(analyst: TestClient, client_as: Callable[[str], TestClient]) -> None:  # noqa: F811
@@ -22,9 +22,11 @@ def test_assets(analyst: TestClient, client_as: Callable[[str], TestClient]) -> 
 
 
 def test_networks(analyst: TestClient, client_as: Callable[[str], TestClient]) -> None:  # noqa: F811
-    assert analyst.post("/api/assets/networks", json={"cidr": "10.91.0.0/24", "title": "Офис"}).status_code == 201
+    r = analyst.post("/api/assets/networks", json={"cidr": "10.91.0.0/24", "title": "Офис", "vlan": 294, "tags": ["prod", "dmz"]})
+    assert r.status_code == 201
     assert analyst.post("/api/assets/networks", json={"cidr": "10.92.0.0/24"}).status_code == 201
-    rows = check_export(analyst, "/api/assets/networks/export", NETWORKS)
+    # Фильтры — как у списка: поиск сужает выгрузку.
+    rows = check_export(analyst, "/api/assets/networks/export", NETWORKS, narrow={"q": "Офис"})
     assert [r[0] for r in rows[1:]] == ["10.91.0.0/24", "10.92.0.0/24"]
-    assert rows[1][1] == "Офис" and rows[2][4] == "0"
+    assert rows[1][1] == "Офис" and rows[1][4] == "294" and rows[1][6] == "prod, dmz" and rows[2][7] == "0"
     assert client_as("auditor").get("/api/assets/networks/export").status_code == 200

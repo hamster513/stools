@@ -131,7 +131,7 @@ def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeR
     assert n24.implicit_tags == ["dmz"] and nets["8.8.4.0/29"].implicit_tags == []
     # Дата импорта, давшего сеть, — начало прохода.
     assert n24.origin_seen_at is not None and n24.origin_seen_at == nets["8.8.4.0/29"].origin_seen_at
-    assert [n["origin"] for n in analyst.get("/api/assets/networks").json()] == ["racktables"] * 4
+    assert [n["origin"] for n in analyst.get("/api/assets/networks").json()["items"]] == ["racktables"] * 4
 
     obs = {o.source_key: o for o in db_session.execute(select(AssetObservation).where(AssetObservation.source == "rt")).scalars()}
     assert set(obs) == {"10.10.0.11", "10.10.0.12", "10.10.5.5", "8.8.4.2"}
