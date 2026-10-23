@@ -39,8 +39,7 @@ def upgrade() -> None:
         sa.Column("member_local", sa.Boolean(), nullable=True),
         sa.Column("member_system", sa.Boolean(), nullable=True),
     )
-    op.create_index("ix_vm_host_group_os_family", "vm_host_group", ["os_family"])
-    op.create_index("ix_vm_host_group_fqdn", "vm_host_group", ["fqdn"])
+    op.create_index("ix_vm_host_group_host", "vm_host_group", ["os_family", "fqdn", "hostname", "ip"])
     op.create_table(
         "vm_group_import",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -54,6 +53,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("vm_group_import")
-    op.drop_index("ix_vm_host_group_fqdn", table_name="vm_host_group")
-    op.drop_index("ix_vm_host_group_os_family", table_name="vm_host_group")
+    op.drop_index("ix_vm_host_group_host", table_name="vm_host_group")
     op.drop_table("vm_host_group")

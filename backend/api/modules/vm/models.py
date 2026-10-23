@@ -268,11 +268,13 @@ class VmHostGroup(Base):
     """
 
     __tablename__ = "vm_host_group"
+    #: Строки хоста читаются по (семейство, FQDN, имя, IP) — шаг групп Assets; ведущий `os_family` — замена семейства.
+    __table_args__ = (Index("ix_vm_host_group_host", "os_family", "fqdn", "hostname", "ip"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     #: windows | linux
-    os_family: Mapped[str] = mapped_column(String(8), index=True)
-    fqdn: Mapped[str] = mapped_column(String(255), default="", index=True)
+    os_family: Mapped[str] = mapped_column(String(8))
+    fqdn: Mapped[str] = mapped_column(String(255), default="")
     hostname: Mapped[str] = mapped_column(String(255), default="")
     ip: Mapped[str] = mapped_column(String(64), default="")
     group_name: Mapped[str] = mapped_column(String(512), default="")
@@ -293,8 +295,9 @@ class VmHostGroup(Base):
 class VmGroupImport(Base):
     """Снимок локальных групп; последний по `finished_at` описывает `vm_host_group`.
 
-    `windows_ok` / `linux_ok` — запрос семейства прошёл в этом снимке; если нет,
-    его строки остались от прежнего.
+    `windows_ok` / `linux_ok` — в этом снимке записан полный снимок семейства. False — строки
+    семейства остались от прежнего (запрос не прошёл, выгрузка не того формата или пуста при
+    непустом прежнем) либо записаны с лимитом подключения (неполные): по ним пропавшие не судятся.
     """
 
     __tablename__ = "vm_group_import"

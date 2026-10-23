@@ -313,6 +313,7 @@ export const STAGE_LABELS: Record<string, string> = {
   hosts: 'ценность хостов',
   pairs: 'риск пар',
   status: 'смена статусов',
+  groups: 'локальные группы',
   done: 'готово',
 }
 

@@ -68,10 +68,11 @@ GROUPS_PDQL = {
 
 
 def _os_conditions(conn: ConnectionLike, column: str) -> list[str]:
-    """Кавычки в именах ОС экранируются: PDQL строковый литерал в одинарных."""
+    """PDQL строковый литерал в одинарных кавычках: сначала обратная косая (`\\` → `\\\\`), затем кавычка —
+    иначе имя, кончающееся на `\\`, съело бы закрывающую кавычку."""
     conditions = [f"{column} != null"]
     for os_name in conn.os_exclude:
-        name = os_name.strip().replace("'", "\\'")
+        name = os_name.strip().replace("\\", "\\\\").replace("'", "\\'")
         if name:
             conditions.append(f"{column} != '{name}'")
     return conditions

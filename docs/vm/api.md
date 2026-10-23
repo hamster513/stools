@@ -163,4 +163,8 @@ ref_attack | ref_kev | ref_bundle | recalculate | bulk_status`. После об�
 формулы старт API сам ставит `recalculate` (`started_by` — «после обновления»),
 пока полный пересчёт не запишет версию формулы в `app_setting['vm_formula_version']`.
 Стадии импорта: `fetching → parsing → writing → enriching → scoring → done`;
-отмена принимается до `writing`.
+отмена принимается до `writing`. У импорта из VM после `scoring` — `groups`:
+локальные группы Windows и Linux вторым и третьим PDQL, отдельным снимком;
+его сбой импорт не роняет. Сообщение стадии — итог по семействам: «локальные
+группы: Windows — строк N, хостов M; Linux не получены (причина) — прежний
+снимок от ДД.ММ ЧЧ:ММ UTC»; с лимитом подключения — пометка «снимок неполный».

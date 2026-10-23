@@ -3,6 +3,10 @@
 CSV `;`, поля в кавычках, заголовок — имена полей PDQL как в `select`; строка на
 участника, группа без участников — строка с пустыми полями участника. VM отдаёт всё
 в нижнем регистре: SID приводится к верхнему, имена остаются как пришли.
+
+Заголовок проверяется до первой строки: пустой файл или заголовок без обязательных столбцов
+семейства (HTML или JSON с HTTP 200, чужой запрос) — `GroupsFormatError`, а не «ноль строк»:
+пустой разбор заменил бы снимок семейства пустым и все его группы стали бы пропавшими.
 """
 from __future__ import annotations
 
@@ -13,6 +17,16 @@ from typing import IO
 
 #: Корневой тип PDQL по семейству ОС.
 ROOT_TYPE = {"windows": "WindowsHost", "linux": "UnixHost"}
+#: Столбцы (без корневого типа), без которых выгрузка семейства не разбирается.
+REQUIRED = {
+    "windows": ("Fqdn", "Hostname", "Groups.Name", "Groups.SID", "Groups.Members.Name", "Groups.Members.SID",
+                "Groups.Members.Type", "Groups.Members.IsLocal"),
+    "linux": ("Fqdn", "Hostname", "Groups.Name", "Groups.GID", "Groups.Users"),
+}
+
+
+class GroupsFormatError(ValueError):
+    """Выгрузка групп не того формата: пустая или без обязательных столбцов."""
 
 
 @dataclass
@@ -40,13 +54,17 @@ def _bool(value: str) -> bool | None:
 
 def iter_group_rows(fh: IO[str], family: str) -> Iterator[VmGroupRow]:
     """Колонки ищутся по имени из заголовка, порядок не важен. Строка без `Fqdn` и
-    `Hostname` и строка без имени группы (хост без данных о группах) пропускаются."""
+    `Hostname` и строка без имени группы (хост без данных о группах) пропускаются.
+    Пустой файл и заголовок без столбцов `REQUIRED` — `GroupsFormatError`."""
     root = ROOT_TYPE[family]
     reader = csv.reader(fh, delimiter=";")
     header = next(reader, None)
     if header is None:
-        return
+        raise GroupsFormatError("пустая выгрузка, нет даже заголовка")
     columns = [c.strip().lstrip("﻿") for c in header]
+    missing = [f"{root}.{c}" for c in REQUIRED[family] if f"{root}.{c}" not in columns]
+    if missing:
+        raise GroupsFormatError(f"в заголовке нет столбцов: {', '.join(missing)}")
     for values in reader:
         row = dict(zip(columns, values, strict=False))
 

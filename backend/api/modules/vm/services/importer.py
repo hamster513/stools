@@ -18,7 +18,7 @@ from typing import IO, Any, cast
 from sqlalchemy import Table, delete, func, insert, select
 from sqlalchemy.orm import Session
 
-from api.modules.vm.core.groups import ROOT_TYPE, iter_group_rows
+from api.modules.vm.core.groups import ROOT_TYPE, GroupsFormatError, iter_group_rows
 from api.modules.vm.core.mpvm import (
     MpVmClient,
     MpVmError,
@@ -63,6 +63,9 @@ GROUP_COLUMNS = (
     "os_family", "fqdn", "hostname", "ip", "group_name", "group_sid", "group_gid", "group_description",
     "member_name", "member_domain", "member_sid", "member_type", "member_local", "member_system",
 )
+#: Длина строковых столбцов `vm_host_group` (None — без предела): длинное значение обрезается, а не роняет снимок.
+GROUP_LIMITS = tuple(getattr(GROUP_T.c[c].type, "length", None) for c in GROUP_COLUMNS)
+FAMILY_TITLE = {"windows": "Windows", "linux": "Linux"}
 
 
 @dataclass
@@ -193,29 +196,94 @@ def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tupl
     return stats, new_cves
 
 
-def _write_groups(db: Session, family: str, path: Path) -> None:
-    """Строки семейства — заменой, пакетами, без commit: фиксирует вызывающий."""
+def _cut_group_row(values: tuple[Any, ...]) -> tuple[Any, ...]:
+    return tuple(v[:n] if n and isinstance(v, str) else v for v, n in zip(values, GROUP_LIMITS, strict=True))
+
+
+def _write_groups(db: Session, family: str, path: Path) -> int:
+    """Строки семейства — заменой, пакетами, без commit: фиксирует вызывающий. Возвращает число строк.
+    Выгрузка не того формата — `GroupsFormatError` (вызывающий откатывает замену)."""
     db.execute(delete(GROUP_T).where(GROUP_T.c.os_family == family))
     batch: list[tuple[Any, ...]] = []
+    count = 0
     with path.open("r", encoding="utf-8-sig", newline="") as fh:
         for row in iter_group_rows(fh, family):
-            batch.append(tuple(getattr(row, c) for c in GROUP_COLUMNS))
+            batch.append(_cut_group_row(tuple(getattr(row, c) for c in GROUP_COLUMNS)))
+            count += 1
             if len(batch) >= GROUP_BATCH:
                 bulk_insert(db, GROUP_T, GROUP_COLUMNS, batch)
                 batch.clear()
     bulk_insert(db, GROUP_T, GROUP_COLUMNS, batch)
+    return count
 
 
-def import_groups(db: Session, client: MpVmClient, conn: Connection, data_dir: Path) -> VmGroupImport:
+class GroupsImportError(MpVmError):
+    """Ни одно семейство не записано; сообщение — готовый текст этапа задачи."""
+
+
+@dataclass
+class _Family:
+    rows: int = 0
+    hosts: int = 0
+    #: Почему снимок семейства не записан; пусто — записан.
+    error: str = ""
+    #: Выгрузка с лимитом: снимок неполный, пропавшие по нему не судятся.
+    partial: bool = False
+
+
+def _reason(exc: Exception) -> str:
+    """Причина для сообщения задачи: свои ошибки — текстом, прочие — именем класса."""
+    if isinstance(exc, MpVmError | GroupsFormatError):
+        return str(exc)[:200]
+    return exc.__class__.__name__
+
+
+def _num(n: int) -> str:
+    return f"{n:,}".replace(",", " ")
+
+
+def _groups_message(families: dict[str, _Family], previous: dict[str, dt.datetime | None], limit: int) -> str:
+    """«локальные группы: Windows — строк 12 345, хостов 210; Linux не получены (…) — прежний снимок от 22.10 14:05 UTC»."""
+    parts: list[str] = []
+    for family, f in families.items():
+        title = FAMILY_TITLE[family]
+        if f.error:
+            when = previous.get(family)
+            prev = f"прежний снимок от {when.astimezone(dt.UTC):%d.%m %H:%M} UTC" if when else "прежнего снимка нет"
+            parts.append(f"{title} не получены ({f.error}) — {prev}")
+            continue
+        text = f"{title} — строк {_num(f.rows)}, хостов {_num(f.hosts)}"
+        if f.partial:
+            text += f" (лимит {limit} — снимок неполный, пропавшие не определяются)"
+        parts.append(text)
+    return "локальные группы: " + "; ".join(parts)
+
+
+def _previous_snapshots(db: Session) -> dict[str, dt.datetime | None]:
+    """Семейство → время последнего полного снимка (флаг `<семейство>_ok`)."""
+    return {
+        family: db.execute(select(func.max(VmGroupImport.finished_at)).where(flag.is_(True))).scalar()
+        for family, flag in (("windows", VmGroupImport.windows_ok), ("linux", VmGroupImport.linux_ok))
+    }
+
+
+def _family_rows(db: Session, family: str) -> int:
+    return int(db.execute(select(func.count()).select_from(GROUP_T).where(GROUP_T.c.os_family == family)).scalar() or 0)
+
+
+def import_groups(db: Session, client: MpVmClient, conn: Connection, data_dir: Path) -> tuple[VmGroupImport, str]:
     """Снимок локальных групп (спека 2026-10-23 §2): экспорт Windows и Linux во временные
     файлы, затем замена `vm_host_group` и новая `VmGroupImport` одной транзакцией.
-    Семейство, чей экспорт не прошёл, остаётся из прежнего снимка; не прошли оба —
-    исключение, таблица не тронута."""
-    exported: dict[str, Path] = {}
-    errors: dict[str, Exception] = {}
+    Семейство остаётся из прежнего снимка, если его экспорт не прошёл, выгрузка не того
+    формата (`GroupsFormatError`) или пуста, а в прежнем снимке строки были; не записано ни
+    одно — `GroupsImportError`, таблица не тронута. Выгрузка с лимитом пишется, но флаг
+    семейства — False: неполный снимок не судит пропавших. Возвращает снимок и текст этапа."""
+    families = {family: _Family() for family in ROOT_TYPE}
+    limit = conn.limit if conn.limit and conn.limit > 0 else 0
     temps: list[Path] = []
     try:
         (data_dir / "vm").mkdir(parents=True, exist_ok=True)
+        exported: dict[str, Path] = {}
         for family in ROOT_TYPE:
             temp = data_dir / "vm" / f"groups-{family}-{uuid.uuid4().hex}.csv"
             temps.append(temp)
@@ -223,29 +291,51 @@ def import_groups(db: Session, client: MpVmClient, conn: Connection, data_dir: P
                 client.export_csv(build_groups_pdql(conn, family), temp)
             except Exception as exc:  # noqa: BLE001 — любой отказ семейства оставляет его прежний снимок
                 log.warning("локальные группы VM (%s) не получены: %s", family, exc)
-                errors[family] = exc
+                families[family].error = _reason(exc)
             else:
                 exported[family] = temp
-        if not exported:
-            detail = "; ".join(f"{f}: {e}" for f, e in errors.items())
-            raise MpVmError(f"локальные группы не получены — {detail}")
+        previous = _previous_snapshots(db)
         try:
             for family, path in exported.items():
-                _write_groups(db, family, path)
+                f = families[family]
+                before = _family_rows(db, family)
+                savepoint = db.begin_nested()
+                try:
+                    f.rows = _write_groups(db, family, path)
+                except Exception as exc:  # noqa: BLE001 — не тот формат или сбой записи: прежний снимок семейства
+                    savepoint.rollback()
+                    log.warning("локальные группы VM (%s) не записаны: %s", family, exc)
+                    f.error = _reason(exc)
+                    continue
+                if f.rows == 0 and before > 0:
+                    savepoint.rollback()
+                    log.warning("локальные группы VM (%s): выгрузка пуста, в прежнем снимке строк %s — снимок оставлен", family, before)
+                    f.error = f"выгрузка пуста, а в прежнем снимке {_num(before)} строк"
+                    continue
+                savepoint.commit()
+                f.partial = bool(limit)
+            if all(f.error for f in families.values()):
+                db.rollback()
+                raise GroupsImportError(_groups_message(families, previous, limit))
             hosts = select(GROUP_T.c.os_family, GROUP_T.c.fqdn, GROUP_T.c.hostname, GROUP_T.c.ip).distinct().subquery()
+            per_family = dict(db.execute(select(hosts.c.os_family, func.count()).group_by(hosts.c.os_family)).tuples().all())
+            for family, f in families.items():
+                f.hosts = int(per_family.get(family, 0))
             done = VmGroupImport(
                 finished_at=dt.datetime.now(dt.UTC),
-                hosts=int(db.execute(select(func.count()).select_from(hosts)).scalar() or 0),
+                hosts=int(sum(per_family.values())),
                 rows=int(db.execute(select(func.count()).select_from(GROUP_T)).scalar() or 0),
-                windows_ok="windows" in exported,
-                linux_ok="linux" in exported,
+                windows_ok=not families["windows"].error and not families["windows"].partial,
+                linux_ok=not families["linux"].error and not families["linux"].partial,
             )
             db.add(done)
             db.commit()
+        except GroupsImportError:
+            raise
         except Exception:
             db.rollback()
             raise
-        return done
+        return done, _groups_message(families, previous, limit)
     finally:
         for temp in temps:
             if temp.exists():
@@ -318,7 +408,12 @@ def run_import(
             # Группы — отдельный снимок: их сбой не роняет записанный импорт хостов и CVE.
             handle.stage("groups", message="локальные группы")
             try:
-                import_groups(db, client, conn, data_dir)
+                _snap, message = import_groups(db, client, conn, data_dir)
+                handle.stage("groups", message=message)
+            except GroupsImportError as exc:
+                db.rollback()
+                log.warning("%s", exc)
+                handle.stage("groups", message=str(exc))
             except Exception as exc:
                 db.rollback()
                 log.exception("локальные группы VM не получены")
