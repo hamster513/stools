@@ -50,9 +50,9 @@ log = logging.getLogger("stools.assets")
 
 SYNC_SOURCES = ("vm", "ksc", "ad")
 SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD"}
-#: Итог задачи: после источников — пользователи (`services.users`) и группы (`services.groups`);
-#: `users_failed` / `groups_failed` — шаг не удался.
-COUNT_TITLES = {**SOURCE_TITLES, "users": "пользователи", "groups": "группы"}
+#: Итог задачи: после источников — пользователи (`services.users`) и группы (`services.groups`;
+#: `vm_hosts_unmatched` — хостов из снимка групп VM без актива, если есть); `users_failed` / `groups_failed` — шаг не удался.
+COUNT_TITLES = {**SOURCE_TITLES, "users": "пользователи", "groups": "группы", "vm_hosts_unmatched": "хосты групп VM без актива"}
 USERS_FAILED = "users_failed"
 USERS_FAILED_TEXT = "пользователи: сбой, см. журнал"
 GROUPS_FAILED = "groups_failed"
@@ -172,7 +172,7 @@ def _ad_observations(db: Session, data_dir: Path, cache: AdExportCache | None = 
     прочитаны: без файла домена его компьютеры нельзя считать пропавшими. `cache` — разобранные
     выгрузки прохода: их же берёт шаг пользователей."""
     from api.modules.ad.core.checks.clusters import cluster_kind
-    from api.modules.ad.core.export import ExportFormatError, filetime_to_datetime
+    from api.modules.ad.core.export import ExportFormatError, ExportIndex, filetime_to_datetime
     from api.modules.ad.models import AdDomain
     from api.modules.ad.services.snapshots import latest_snapshot
 
@@ -203,6 +203,8 @@ def _ad_observations(db: Session, data_dir: Path, cache: AdExportCache | None = 
                     # cluster | role — виртуальное имя кластера, не хост; node — узел.
                     "cluster": cluster_kind(o.spn),
                     "laps": o.lapsExpiry is not None or o.lapsNewExpiry is not None,
+                    # Контроллер домена: его локальные группы из VM не заводятся (группы — в AD).
+                    "dc": ExportIndex.is_dc(o),
                 },
             ))
     return out, complete
@@ -322,7 +324,8 @@ def _locked_sync(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> di
 def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict[str, int]:
     """Читает источники, для каждого наблюдения — match → upsert asset_observation → пересчёт
     актива; пропавшим ставит gone_at. Возвращает число наблюдений по источникам и, если среди
-    источников AD или KSC, — число пользователей (`users`), если среди них AD, — число групп (`groups`)."""
+    источников AD или KSC, — число пользователей (`users`), если среди них AD или VM, — число групп AD (`groups`)
+    и хостов групп VM без актива (`vm_hosts_unmatched`)."""
     from api.settings import get_settings
 
     data_dir = get_settings().data_dir
@@ -380,10 +383,13 @@ def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict
             log.exception("синхронизация пользователей не удалась, хосты синхронизированы")
             counts[USERS_FAILED] = 1
     # Группы — после пользователей: участникам нужны пользователи и хосты. Сбой шага прохода не ломает.
-    if "ad" in sources:
+    if "ad" in sources or "vm" in sources:
         try:
-            counts["groups"] = sync_groups(db, handle, data_dir, now, ad_cache)["groups"]
+            got = sync_groups(db, handle, data_dir, now, ad_cache)
             db.commit()
+            counts["groups"] = got["groups"]
+            if got["vm_hosts_unmatched"]:
+                counts["vm_hosts_unmatched"] = got["vm_hosts_unmatched"]
         except JobCancelled:
             raise
         except Exception:
