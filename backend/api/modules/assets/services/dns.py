@@ -205,7 +205,7 @@ def known_names(db: Session) -> list[str]:
 
 
 def known_ips(db: Session) -> list[str]:
-    """Канонические IP активов и IP живых наблюдений — среди них и ответившие последнему скану."""
+    """Канонические IP активов и IP живых наблюдений."""
     ips = set(db.execute(select(Asset.ip).where(Asset.merged_into.is_(None), Asset.ip != "")).scalars())
     ips |= set(db.execute(select(AssetObservation.ip).where(AssetObservation.gone_at.is_(None), AssetObservation.ip != "")).scalars())
     return sorted({a for a in (normalize_ip(x) for x in ips) if a}, key=_ip_order)
@@ -307,7 +307,7 @@ def _zones(run: _Run) -> None:
 
 def _write(run: _Run) -> bool:
     """Найденное — наблюдениями, пропавшее — gone_at; под той же блокировкой, что синхронизация и
-    запись скана (все они заводят активы). False — настройку удалили, пока шли запросы."""
+    запись RackTables (все они заводят активы). False — настройку удалили, пока шли запросы."""
     db = run.db
     with sync_lock(db, wait=True):
         row = db.get(AssetDns, run.cfg.id, populate_existing=True)

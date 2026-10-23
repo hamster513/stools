@@ -6,33 +6,28 @@ export { STAGE_LABELS } from '@/platform/collector/types'
 export type { Job, JobStatus, ScheduleIn } from '@/platform/collector/types'
 
 export const JOB_KIND_LABELS: Record<string, string> = {
-  scan: 'Скан сети',
   dns: 'Обновление DNS',
   rt: 'Проход RackTables',
   sync: 'Синхронизация с модулями',
 }
 
-export type AssetSource = 'vm' | 'ksc' | 'ad' | 'scan' | 'dns' | 'rt'
-export const SOURCES: AssetSource[] = ['vm', 'ksc', 'ad', 'scan', 'dns', 'rt']
+export type AssetSource = 'vm' | 'ksc' | 'ad' | 'dns' | 'rt'
+export const SOURCES: AssetSource[] = ['vm', 'ksc', 'ad', 'dns', 'rt']
 export const SOURCE_LABELS: Record<AssetSource, string> = {
   vm: 'VM',
   ksc: 'KSC',
   ad: 'AD',
-  scan: 'Скан',
   dns: 'DNS',
   rt: 'RT',
 }
 
-export type DiscrepancyCode = 'stale' | 'conflict' | 'no_av' | 'ad_inactive' | 'unreachable' | 'unknown_host' | 'dns_orphan' | 'no_network'
-export const CODES: DiscrepancyCode[] = ['stale', 'conflict', 'no_av', 'ad_inactive', 'unreachable', 'unknown_host', 'dns_orphan', 'no_network']
+export type DiscrepancyCode = 'stale' | 'conflict' | 'no_av' | 'ad_inactive' | 'no_network'
+export const CODES: DiscrepancyCode[] = ['stale', 'conflict', 'no_av', 'ad_inactive', 'no_network']
 export const CODE_LABELS: Record<DiscrepancyCode, string> = {
   stale: 'данные устарели',
   conflict: 'источники расходятся',
   no_av: 'нет агента антивируса',
   ad_inactive: 'неактивный компьютер AD',
-  unreachable: 'не отвечает',
-  unknown_host: 'только сканер',
-  dns_orphan: 'запись DNS без хоста',
   no_network: 'сеть не описана',
 }
 /** Фильтр списка: код расхождения или `any` — хоть одно расхождение. */
@@ -155,7 +150,6 @@ export interface AssetsQuery {
   code?: CodeFilter[]
   network_id?: number[]
   zone?: string[]
-  port?: number
   tag?: string
   criticality?: (Criticality | 'none')[]
   laps?: LapsFilter[]
@@ -278,13 +272,6 @@ export function defaultCidr(ip: string): string {
   return v4.length === 4 ? `${v4.slice(0, 3).join('.')}.0/24` : `${ip}/64`
 }
 
-export const DEFAULT_PORTS = [22, 80, 135, 139, 443, 445, 3389]
-
-/** «≈ N мин» из `estimated_seconds` API (минуты вверх, не меньше одной); null — сеть сканеру не по силам. */
-export function scanEstimate(seconds: number | null): string {
-  return seconds === null ? '—' : `≈ ${Math.max(1, Math.ceil(seconds / 60))} мин`
-}
-
 /** Поля сети, которые задаёт человек. */
 export interface NetworkIn {
   cidr: string
@@ -295,44 +282,19 @@ export interface NetworkIn {
   owner: string
   vlan: number | null
   tags: string[]
-  scan_enabled: boolean
-  ports: number[]
-  exclude: string[]
-  concurrency: number
-  icmp_timeout_ms: number
-  tcp_timeout_ms: number
-  /** Новых сокетов (ICMP echo или SYN) в секунду на весь скан, 10–5000. */
-  rate_per_s: number
 }
 
-/** Расписание сканов сети — общее расписание планировщика (platform/collector). */
+/** Расписание задачи модуля (DNS, RackTables, синхронизация) — общее расписание планировщика (platform/collector). */
 export type NetworkSchedule = ScheduleView
-
-export interface ScanStarted {
-  job_id: number
-  /** false — ICMP-сокет не открывается, скан идёт в режиме «только порты». */
-  icmp: boolean
-}
 
 export interface Network extends NetworkIn {
   id: number
   /** Пусто — описана вручную; racktables — создана проходом RackTables, который обновляет её название, описание, VLAN и теги. */
   origin: string
-  schedule_id: number | null
-  schedule: NetworkSchedule | null
-  last_scan_at: string | null
-  last_scan_alive: number | null
-  /** false — последний скан шёл в режиме «только порты»; null — сеть не сканировали. */
-  last_scan_icmp: boolean | null
-  /** Секунд на скан, если никто не ответит; null — сеть сканеру не по силам. */
-  estimated_seconds: number | null
   created_at: string
   updated_at: string
   stats: {
     assets: number
-    /** Живых при последнем скане; null — сеть ещё не сканировали. */
-    alive_last_scan: number | null
-    unknown_hosts: number
   }
 }
 
@@ -424,8 +386,7 @@ export interface AssetsOverview {
   by_zone: Record<string, number>
   by_source: Record<AssetSource, number>
   codes: Record<CodeFilter, number>
-  networks: { total: number; scanned: number; no_network_assets: number }
-  last_scans: { network_id: number; cidr: string; title: string; last_scan_at: string | null; last_scan_alive: number | null }[]
+  networks: { total: number; no_network_assets: number }
   last_dns: { dns_id: number; title: string; last_run_at: string | null }[]
   sync: { last_sync_at: string | null; running_job_id: number | null }
 }

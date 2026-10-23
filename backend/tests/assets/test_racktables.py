@@ -118,20 +118,20 @@ def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeR
     assert analyst.post(f"/api/assets/racktables/{conn['id']}/check").json() == {"version": "1.3.3"}
     job = run(analyst, conn["id"])
     assert job["status"] == "done", job
-    assert "сетей 4 · новых 3" in job["message"] and "имён адресов 4" in job["message"] and "шире /16 пропущено 1" in job["message"]
-    # По одному запросу на сеть; у контейнера /8 адреса не запрашиваются.
+    assert "сетей 4 · новых 4" in job["message"] and "имён адресов 4" in job["message"] and "шире /16 без запроса адресов 1" in job["message"]
+    # По одному запросу на сеть; у контейнера /8 адреса не запрашиваются, но сама сеть заводится (объемлющая).
     assert [c["func"] for c in rt.calls].count("getIPAddressList") == 3
 
     nets = {n.cidr: n for n in db_session.execute(select(Network)).scalars()}
-    assert set(nets) == {"10.10.0.0/24", "10.10.0.0/16", "8.8.4.0/29"}
+    assert set(nets) == {"10.10.0.0/24", "10.10.0.0/16", "10.0.0.0/8", "8.8.4.0/29"}
     # Публичная сеть — в зоне External, частные — без зоны.
     assert nets["8.8.4.0/29"].zone == "External" and nets["10.10.0.0/24"].zone is None
     n24 = nets["10.10.0.0/24"]
-    assert (n24.title, n24.vlan, n24.tags, n24.description, n24.origin, n24.origin_key, n24.scan_enabled) == ("MSK1: VM Servers (vlan294)", 294, ["prod"], "серверы", "racktables", "10", False)
+    assert (n24.title, n24.vlan, n24.tags, n24.description, n24.origin, n24.origin_key) == ("MSK1: VM Servers (vlan294)", 294, ["prod"], "серверы", "racktables", "10")
     assert n24.implicit_tags == ["dmz"] and nets["8.8.4.0/29"].implicit_tags == []
     # Дата импорта, давшего сеть, — начало прохода.
     assert n24.origin_seen_at is not None and n24.origin_seen_at == nets["8.8.4.0/29"].origin_seen_at
-    assert [n["origin"] for n in analyst.get("/api/assets/networks").json()] == ["racktables"] * 3
+    assert [n["origin"] for n in analyst.get("/api/assets/networks").json()] == ["racktables"] * 4
 
     obs = {o.source_key: o for o in db_session.execute(select(AssetObservation).where(AssetObservation.source == "rt")).scalars()}
     assert set(obs) == {"10.10.0.11", "10.10.0.12", "10.10.5.5", "8.8.4.2"}
@@ -142,7 +142,7 @@ def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeR
     # Актив привязан к самой узкой сети, источник rt виден в списке.
     items = analyst.get("/api/assets/assets", params={"q": "srv01"}).json()["items"]
     assert items[0]["network"]["cidr"] == "10.10.0.0/24" and [s["source"] for s in items[0]["sources"]] == ["rt"]
-    assert "no_av" not in items[0]["codes"] and "unknown_host" not in items[0]["codes"]
+    assert "no_av" not in items[0]["codes"]
     # Внешний адрес srv01 сошёлся с тем же активом по имени и не стал расхождением по IP.
     assert items[0]["ip"] == "10.10.0.11" and "conflict" not in items[0]["codes"] and len(items) == 1
 
@@ -163,7 +163,7 @@ def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient,
     rt.add_address("10.10.0.12")
     rt.addresses = [a for a in rt.addresses if a["ip_address"] != "10.10.0.11"]
     job = run(analyst, conn["id"])
-    assert job["status"] == "done" and "обновлено 2" in job["message"] and "пропало 2" in job["message"], job
+    assert job["status"] == "done" and "обновлено 3" in job["message"] and "пропало 2" in job["message"], job
     db_session.expire_all()
     wide = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/16")).scalar_one()
     assert (wide.title, wide.vlan) == ("MSK1: campus", 10)

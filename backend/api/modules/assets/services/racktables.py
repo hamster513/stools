@@ -181,9 +181,10 @@ def _collect(run: _Run, api: Client) -> None:
     run.networks = narrowest(api.networks())
     run.answered += 1
     run.counts["networks"] = len(run.networks)
-    # Контейнеры шире /16 в Assets не создаются, а запрос адресов по ним — самый тяжёлый для базы RackTables
-    # (диапазон на миллионы адресов); их адреса почти всегда лежат в дочерних сетях.
+    # Запрос адресов контейнера шире /16 — самый тяжёлый для базы RackTables (диапазон на миллионы адресов),
+    # а его адреса почти всегда лежат в дочерних сетях: такие сети заводятся, но адреса по ним не запрашиваются.
     asked = [n for n in run.networks if not n.too_wide]
+    run.counts["networks_wide"] = len(run.networks) - len(asked)
     total = len(asked)
     run.phase("addresses", total, f"адреса сетей: {total} · {estimate(total, run.cfg.rate_per_s)}")
     seen: set[str] = set()
@@ -201,21 +202,19 @@ def _collect(run: _Run, api: Client) -> None:
 
 def _upsert_networks(db: Session, run: _Run) -> None:
     """Сети RT → сети Assets: новые создаются, свои обновляются (название, описание, VLAN, явные и
-    унаследованные теги, дата импорта), описанные вручную с тем же CIDR не трогаются, шире /16 пропускаются.
+    унаследованные теги, дата импорта), описанные вручную с тем же CIDR не трогаются; контейнеры шире /16 тоже
+    заводятся — служат объемлющими.
     Группы своих сетей — по правилам (ручную группу правила не трогают); не подошло ни одно — публичная
     сеть получает External (`zone_source="racktables"`)."""
     mine = {n.origin_key: n for n in db.execute(select(Network).where(Network.origin == ORIGIN)).scalars()}
     by_cidr = {n.cidr: n for n in db.execute(select(Network)).scalars()}
     for net in run.networks:
-        if net.too_wide:
-            run.counts["networks_wide"] += 1
-            continue
         row = mine.get(net.rt_id)
         if row is None and net.cidr in by_cidr:
             run.counts["networks_manual"] += 1
             continue
         if row is None:
-            row = Network(cidr=net.cidr, origin=ORIGIN, origin_key=net.rt_id, scan_enabled=False)
+            row = Network(cidr=net.cidr, origin=ORIGIN, origin_key=net.rt_id)
             db.add(row)
             by_cidr[net.cidr] = row
             run.counts["networks_new"] += 1
@@ -233,7 +232,7 @@ def _upsert_networks(db: Session, run: _Run) -> None:
 
 
 def _write(run: _Run) -> bool:
-    """Сети, наблюдения и пропавшие — под той же блокировкой, что синхронизация и запись скана.
+    """Сети, наблюдения и пропавшие — под той же блокировкой, что синхронизация и запись DNS.
     False — подключение удалили, пока шли запросы."""
     db = run.db
     with sync_lock(db, wait=True):
@@ -274,7 +273,7 @@ def summary(cfg: _Settings, counts: dict[str, int]) -> str:
     if counts["networks_manual"]:
         parts.append(f"описаны вручную {counts['networks_manual']}")
     if counts["networks_wide"]:
-        parts.append(f"шире /16 пропущено {counts['networks_wide']}")
+        parts.append(f"шире /16 без запроса адресов {counts['networks_wide']}")
     if counts["gone"]:
         parts.append(f"пропало {counts['gone']}")
     if counts["errors"]:

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from api.modules.assets.models import AssetDns, AssetSettings, AssetZone, Network
+from api.modules.assets.models import AssetDns, AssetSettings, AssetZone
 from api.modules.ksc.models import KscServer
 from tests.assets.synthetic import load_all
 
@@ -44,7 +44,7 @@ def asset_id(c: TestClient, name: str) -> int:
 def test_overview_counts_match_synthetic(analyst: TestClient) -> None:
     body = analyst.get("/api/assets/overview").json()
     assert body["assets_total"] == 4
-    assert body["by_source"] == {"vm": 2, "ksc": 2, "ad": 3, "scan": 0, "dns": 0, "rt": 0}
+    assert body["by_source"] == {"vm": 2, "ksc": 2, "ad": 3, "dns": 0, "rt": 0}
     # ws01 — нет агента; old01 — неактивный AD; msk1 — VM и KSC расходятся по IP.
     assert body["codes"]["no_av"] == 1 and body["codes"]["ad_inactive"] == 1 and body["codes"]["conflict"] == 1
     # Адреса есть у msk1 и srv01, сетей не описано.
@@ -54,8 +54,8 @@ def test_overview_counts_match_synthetic(analyst: TestClient) -> None:
     assert body["codes"]["any"] == listed["total"] == sum(1 for i in listed["items"] if i["discrepancy_count"] > 0)
     assert body["codes"]["any"] >= 3
     assert body["by_zone"] == {"": 4}
-    assert body["networks"] == {"total": 0, "scanned": 0, "no_network_assets": 2}
-    assert body["last_scans"] == [] and body["last_dns"] == []
+    assert body["networks"] == {"total": 0, "no_network_assets": 2}
+    assert body["last_dns"] == [] and "last_scans" not in body
     assert body["sync"]["last_sync_at"] is not None and body["sync"]["running_job_id"] is None
     # Обзор считает теми же фасетами, что и список.
     facets = analyst.get("/api/assets/assets").json()["facets"]
@@ -66,10 +66,6 @@ def test_overview_networks_zones_and_last_runs(analyst: TestClient, db_session: 
     r = analyst.post("/api/assets/networks", json={"cidr": "10.10.0.0/24", "title": "Серверы", "zone": "Internal"})
     assert r.status_code == 201, r.text
     assert analyst.post("/api/assets/networks", json={"cidr": "10.20.0.0/24"}).status_code == 201
-    older, newer = NOW - dt.timedelta(days=2), NOW - dt.timedelta(hours=1)
-    for cidr, when, alive in (("10.20.0.0/24", older, 0), ("10.10.0.0/24", newer, 3)):
-        net = db_session.execute(select(Network).where(Network.cidr == cidr)).scalar_one()
-        net.last_scan_at, net.last_scan_alive = when, alive
     for i in range(12):
         db_session.add(AssetDns(title=f"dns{i:02}", server=f"10.10.0.{i + 1}", last_run_at=NOW - dt.timedelta(hours=i)))
     db_session.add(AssetDns(title="никогда", server="10.10.0.99"))
@@ -77,15 +73,10 @@ def test_overview_networks_zones_and_last_runs(analyst: TestClient, db_session: 
 
     body = analyst.get("/api/assets/overview").json()
     assert body["by_zone"] == {"Internal": 1, "": 3}  # srv01 в 10.10.0.0/24
-    assert body["networks"] == {"total": 2, "scanned": 2, "no_network_assets": 1}  # msk1 вне сетей
-    assert [(s["cidr"], s["title"], s["last_scan_alive"]) for s in body["last_scans"]] == [
-        ("10.10.0.0/24", "Серверы", 3), ("10.20.0.0/24", "", 0),
-    ]
-    assert body["last_scans"][0]["network_id"] and body["last_scans"][0]["last_scan_at"]
+    assert body["networks"] == {"total": 2, "no_network_assets": 1}  # msk1 вне сетей
     assert len(body["last_dns"]) == 10 and body["last_dns"][0]["title"] == "dns00" and body["last_dns"][-1]["title"] == "dns09"
     assert set(body["last_dns"][0]) == {"dns_id", "title", "last_run_at"}
-    # Сеть srv01 отсканирована, а его адреса среди живых нет.
-    assert body["codes"]["unreachable"] == 1
+    assert not {"unreachable", "unknown_host", "dns_orphan"} & set(body["codes"])
 
 
 # ---- Настройки --------------------------------------------------------------

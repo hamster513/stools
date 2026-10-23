@@ -1,5 +1,5 @@
-"""Сети и справочник зон: CIDR, зона, площадка, настройки сканирования; привязка активов
-к самой узкой сети, содержащей их адрес.
+"""Сети и справочник зон: CIDR, зона, площадка; привязка активов к самой узкой сети,
+содержащей их адрес.
 
 Пересечение сетей разрешено (вложенность — потом), поэтому привязка выбирает сеть с
 самым длинным префиксом. Ручная сеть актива (`network_manual`) пересчёт не трогает.
@@ -12,10 +12,9 @@ from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
-from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from api.modules.assets.core import scanner
 from api.modules.assets.core.zone_rules import (
     SOURCE_MANUAL,
     Rule,
@@ -27,23 +26,14 @@ from api.modules.assets.core.zone_rules import (
 from api.modules.assets.models import (
     EXTERNAL_ZONE,
     Asset,
-    AssetObservation,
     AssetZone,
     Network,
     NetworkZoneRule,
 )
-from api.platform.scheduler import PlatformSchedule, delete_schedule
 
 log = logging.getLogger("stools.assets")
 
 NetworkList = list[tuple[int, ipaddress.IPv4Network | ipaddress.IPv6Network]]
-
-#: Шире /16 — 65 тысяч адресов на проход сканера; такую сеть описывают частями.
-MAX_IPV4_PREFIX = 16
-TOO_WIDE = "сеть шире /16 не принимается — разбейте на несколько"
-#: Параллельность × порты — столько соединений проход открыл бы разом; больше не принимается.
-MAX_PARALLEL_SOCKETS = 2048
-SCAN_FIELDS = ("cidr", "scan_enabled", "ports", "concurrency")
 
 
 class NetworkNotFound(LookupError):
@@ -55,57 +45,13 @@ class NetworkConflict(Exception):
 
 
 def normalize_cidr(value: str) -> str:
-    """'10.10.0.7/24' → '10.10.0.0/24'; ValueError с русским текстом на мусор и IPv4 шире /16."""
+    """'10.10.0.7/24' → '10.10.0.0/24'; ValueError с русским текстом на мусор. Ширина не ограничена:
+    сеть-контейнер (например, 10.0.0.0/8) служит объемлющей для более узких."""
     try:
         net = ipaddress.ip_network(value.strip(), strict=False)
     except ValueError:
         raise ValueError(f"«{value}» — не адрес сети CIDR, например 10.10.0.0/24") from None
-    if net.version == 4 and net.prefixlen < MAX_IPV4_PREFIX:
-        raise ValueError(TOO_WIDE)
     return str(net)
-
-
-def normalize_exclude(value: str) -> str:
-    """Исключение — адрес или сеть; адрес остаётся адресом, а не превращается в /32."""
-    text = value.strip()
-    try:
-        return str(ipaddress.ip_network(text, strict=False)) if "/" in text else str(ipaddress.ip_address(text))
-    except ValueError:
-        raise ValueError(f"исключение «{value}» — не адрес и не сеть CIDR") from None
-
-
-def check_scan_settings(cidr: str, scan_enabled: bool, ports: list[int], concurrency: int) -> None:
-    """Итоговые настройки сети (после правки): ValueError с русским текстом, если скан был бы
-    слишком тяжёлым — параллельность × порты больше 2048 или IPv6-сеть больше 2^16 адресов."""
-    if concurrency * len(ports) > MAX_PARALLEL_SOCKETS:
-        raise ValueError(
-            f"параллельность × число портов = {concurrency * len(ports)}, больше {MAX_PARALLEL_SOCKETS} — "
-            "уменьшите параллельность или число портов"
-        )
-    net = ipaddress.ip_network(cidr, strict=False)
-    if scan_enabled and net.version == 6 and net.num_addresses > scanner.MAX_ADDRESSES:
-        raise ValueError(f"IPv6-сеть больше {scanner.MAX_ADDRESSES} адресов не сканируется — опишите её частями (/112 и уже)")
-
-
-def estimated_seconds(network: Network) -> int | None:
-    """Сколько секунд займёт скан, если никто не ответит: каждый адрес ждёт оба таймаута,
-    `concurrency` адресов разом, но не быстрее темпа (echo и SYN на каждый порт). None —
-    сеть сканеру не по силам (широкая IPv6)."""
-    try:
-        count = scanner.count_addresses(scan_target(network))
-    except ValueError:
-        return None
-    by_timeouts = count * (network.icmp_timeout_ms + network.tcp_timeout_ms) / 1000 / max(1, network.concurrency)
-    by_rate = count * (1 + len(network.ports or [])) / max(1, network.rate_per_s)
-    return round(max(by_timeouts, by_rate))
-
-
-def scan_target(network: Network) -> scanner.ScanTarget:
-    return scanner.ScanTarget(
-        cidr=network.cidr, exclude=list(network.exclude or []), ports=list(network.ports or []),
-        concurrency=network.concurrency, icmp_timeout=network.icmp_timeout_ms / 1000,
-        tcp_timeout=network.tcp_timeout_ms / 1000, rate_per_s=network.rate_per_s,
-    )
 
 
 # ---- Привязка активов -----------------------------------------------------
@@ -179,7 +125,6 @@ def create_network(db: Session, data: dict[str, Any]) -> Network:
     zone_mode = data.pop("zone_mode", None)
     _check_unique(db, data["cidr"])
     _check_zone(db, data.get("zone"))
-    check_scan_settings(data["cidr"], data["scan_enabled"], data["ports"], data["concurrency"])
     manual = zone_mode == "manual" or (zone_mode is None and data.get("zone") is not None)
     if zone_mode == "rules":
         data["zone"] = None
@@ -210,7 +155,6 @@ def update_network(db: Session, network: Network, data: dict[str, Any]) -> Netwo
         _check_zone(db, data["zone"])
         if data["zone"] == network.zone and network.zone_source != SOURCE_MANUAL and zone_mode != "manual":
             del data["zone"]
-    check_scan_settings(*(data[f] if f in data else getattr(network, f) for f in SCAN_FIELDS))
     cidr_changed = "cidr" in data and data["cidr"] != network.cidr
     if zone_mode == "rules":
         network.zone_source = ""
@@ -227,55 +171,28 @@ def update_network(db: Session, network: Network, data: dict[str, Any]) -> Netwo
 
 
 def delete_network(db: Session, network: Network) -> None:
-    """Расписание сканов сети уходит вместе с ней. Активы, привязанные к сети руками, теряют
-    выбор и возвращаются к расчёту — как и остальные: самая узкая из оставшихся сетей или никакой."""
-    schedule_ids = set(db.execute(
-        select(PlatformSchedule.id).where(
-            PlatformSchedule.module == "assets", PlatformSchedule.kind == "scan", PlatformSchedule.target_id == network.id,
-        )
-    ).scalars())
-    if network.schedule_id is not None:
-        schedule_ids.add(network.schedule_id)
+    """Активы, привязанные к сети руками, теряют выбор и возвращаются к расчёту — как и остальные:
+    самая узкая из оставшихся сетей или никакой."""
     for asset in db.execute(select(Asset).where(Asset.network_id == network.id)).scalars():
         asset.network_id = None
         asset.network_manual = False
     db.delete(network)
     db.flush()
-    for schedule_id in schedule_ids:
-        delete_schedule(db, schedule_id)
     reassign_assets(db)
 
 
-def _unknown_host_filter() -> Any:
-    """Актив, который видел только сканер (и, возможно, обратная запись DNS) — код `unknown_host`."""
-    live = AssetObservation.gone_at.is_(None)
-    mine = AssetObservation.asset_id == Asset.id
-    scanned = exists().where(mine, live, AssetObservation.source == "scan")
-    described = exists().where(mine, live, or_(
-        AssetObservation.source.in_(("vm", "ksc", "ad")),
-        and_(AssetObservation.source == "dns", func.coalesce(AssetObservation.extra["record_type"].as_string(), "") != "PTR"),
-    ))
-    return and_(scanned, ~described)
-
-
 def network_stats(db: Session, network: Network) -> dict[str, Any]:
-    """Активов в сети, живых при последнем скане, найденных только сканером."""
+    """Активов в сети (без слитых)."""
     return all_network_stats(db, [network])[network.id]
 
 
 def all_network_stats(db: Session, networks: Iterable[Network]) -> dict[int, dict[str, Any]]:
-    """То же для списка сетей — двумя запросами, а не двумя на сеть."""
+    """То же для списка сетей — одним запросом, а не запросом на сеть."""
     networks = list(networks)
     ids = [n.id for n in networks]
     in_registry = and_(Asset.network_id.in_(ids), Asset.merged_into.is_(None))
     counts = dict(db.execute(select(Asset.network_id, func.count()).where(in_registry).group_by(Asset.network_id)).tuples().all())
-    unknown = dict(db.execute(
-        select(Asset.network_id, func.count()).where(in_registry, _unknown_host_filter()).group_by(Asset.network_id)
-    ).tuples().all())
-    return {
-        n.id: {"assets": counts.get(n.id, 0), "alive_last_scan": n.last_scan_alive, "unknown_hosts": unknown.get(n.id, 0)}
-        for n in networks
-    }
+    return {n.id: {"assets": counts.get(n.id, 0)} for n in networks}
 
 
 # ---- Справочник зон -------------------------------------------------------

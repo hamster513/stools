@@ -111,7 +111,7 @@ function SyncSchedule() {
   }
   return (
     <ScheduleBlock key={current?.id ?? 'none'} title="Расписание синхронизации" enableLabel="Синхронизировать по расписанию" current={current}
-      note="Пока идёт другая синхронизация, запуск откладывается; запись результатов скана или DNS синхронизация дожидается."
+      note="Пока идёт другая синхронизация, запуск откладывается; запись результатов DNS или RackTables синхронизация дожидается."
       save={save} remove={remove} />
   )
 }

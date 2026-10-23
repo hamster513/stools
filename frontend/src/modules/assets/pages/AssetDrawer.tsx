@@ -44,9 +44,6 @@ const CODE_TEXT: Record<string, string> = {
   conflict: 'text-kind-2',
   no_av: 'text-risk-high',
   ad_inactive: 'text-risk-medium',
-  unreachable: 'text-risk-high',
-  unknown_host: 'text-risk-high',
-  dns_orphan: 'text-risk-medium',
   no_network: 'text-risk-medium',
 }
 
@@ -221,24 +218,6 @@ function SourcesTable({ a, write, onDetach }: { a: AssetDetail; write: boolean; 
         </tbody>
       </table>
     </div>
-  )
-}
-
-function ScannerBlock({ a }: { a: AssetDetail }) {
-  const scan = a.observations.find((o) => o.source === 'scan' && !o.gone_at) ?? a.observations.find((o) => o.source === 'scan')
-  if (!scan) return null
-  const ports = Array.isArray(scan.extra.ports) ? (scan.extra.ports as number[]) : []
-  const icmp = scan.extra.icmp
-  return (
-    <>
-      <SectionTitle>Сканер</SectionTitle>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        <dt className="text-text-secondary">Открытые порты</dt><dd className="font-mono text-text">{ports.length ? ports.join(', ') : 'нет'}</dd>
-        <dt className="text-text-secondary">ICMP</dt><dd className="text-text">{icmp === true ? 'отвечает' : icmp === false ? 'не отвечает' : 'не проверялся'}</dd>
-        <dt className="text-text-secondary">TTL</dt><dd className="font-mono text-text">{scan.extra.ttl != null ? String(scan.extra.ttl) : '—'}</dd>
-        <dt className="text-text-secondary">RTT</dt><dd className="font-mono text-text">{scan.extra.rtt_ms != null ? `${String(scan.extra.rtt_ms)} мс` : '—'}</dd>
-      </dl>
-    </>
   )
 }
 
@@ -433,7 +412,7 @@ function MergePicker({ a, onPick }: { a: AssetDetail; onPick: (other: { id: numb
 }
 
 /** Карточка актива справа (спека §6): каноническое с закреплением, наблюдения по источникам с подсветкой
- * расхождений, сканер, ссылки в модули, ручные поля, объединение и отвязка. */
+ * расхождений, ссылки в модули, ручные поля, объединение и отвязка. */
 export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number | null; onClose: () => void; onOpenAsset: (id: number) => void }) {
   const open = assetId !== null
   const { write } = useCan()
@@ -479,7 +458,6 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
                   <SectionTitle>По источникам</SectionTitle>
                   <SourcesTable a={a} write={write && a.merged_into === null} onDetach={setDetaching} />
 
-                  <ScannerBlock a={a} />
                   <LinksBlock a={a} />
                   <UsersBlock a={a} />
 

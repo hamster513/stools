@@ -17,8 +17,9 @@ import httpx
 
 from api.modules.assets.core.matching import normalize_ip
 
-#: Шире — не сеть, а контейнер; модуль сетей принимает IPv4 не шире /16.
-MAX_PREFIX = 16
+#: Адреса запрашиваются только у сетей IPv4 не шире /16: шире — контейнер, его диапазон на миллионы адресов
+#: тяжёл для базы RackTables, а адреса лежат в дочерних сетях. Сама сеть-контейнер заводится.
+ADDRESS_QUERY_MAX_PREFIX = 16
 #: Версия API — короткая строка вида 1.3.3; всё прочее в ответ пользователю не уходит.
 VERSION_RE = re.compile(r"^[\w.\-]{1,32}$")
 
@@ -42,8 +43,9 @@ class RtNetwork:
 
     @property
     def too_wide(self) -> bool:
+        """Шире `ADDRESS_QUERY_MAX_PREFIX`: адреса этой сети не запрашиваются."""
         net = ipaddress.ip_network(self.cidr)
-        return net.version == 4 and net.prefixlen < MAX_PREFIX
+        return net.version == 4 and net.prefixlen < ADDRESS_QUERY_MAX_PREFIX
 
     @property
     def external(self) -> bool:

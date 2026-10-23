@@ -15,8 +15,8 @@ export function JobsPage() {
       canCancel={write}
       kindLabels={JOB_KIND_LABELS}
       stageLabels={STAGE_LABELS}
-      about="Сканы сетей, обновления DNS и синхронизация с модулями идут в фоне — вручную или по расписанию; идущие — сверху."
-      emptyDescription="Задачи появятся после первого скана сети, обновления DNS или синхронизации."
+      about="Обновления DNS, проходы RackTables и синхронизация с модулями идут в фоне — вручную или по расписанию; идущие — сверху."
+      emptyDescription="Задачи появятся после первого обновления DNS, прохода RackTables или синхронизации."
     />
   )
 }

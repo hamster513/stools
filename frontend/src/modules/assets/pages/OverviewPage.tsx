@@ -18,8 +18,6 @@ const ALERT: Partial<Record<DiscrepancyCode, string>> = {
   stale: 'text-kind-1',
   conflict: 'text-kind-2',
   no_av: 'text-risk-high',
-  unreachable: 'text-risk-high',
-  unknown_host: 'text-risk-high',
 }
 
 function when(iso: string | null): string {
@@ -51,7 +49,7 @@ function MoreLink({ to, children }: { to: string; children: ReactNode }) {
   return <Link to={to} className="inline-flex items-center gap-1 text-[11px] text-text-secondary hover:text-text">{children} <ArrowRight size={11} aria-hidden /></Link>
 }
 
-/** Обзор реестра: счётчики со ссылками в отфильтрованный список, последние сканы и DNS, синхронизация. */
+/** Обзор реестра: счётчики со ссылками в отфильтрованный список, последние обновления DNS, синхронизация. */
 export function OverviewPage() {
   const { write } = useCan()
   const overview = useOverview()
@@ -84,7 +82,7 @@ export function OverviewPage() {
         <EmptyState
           icon={Server}
           title="Активов ещё нет"
-          description="Активы появятся после синхронизации с модулями VM, антивируса и AD, скана описанной сети или обновления DNS."
+          description="Активы появятся после синхронизации с модулями VM, антивируса и AD, прохода RackTables или обновления DNS."
           action={<Link to="/assets/networks" className="inline-flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-primary/90">Описать сети <ArrowRight size={13} aria-hidden /></Link>}
         />
       </div>
@@ -138,28 +136,9 @@ export function OverviewPage() {
             <span className="rounded border border-dashed border-grid px-2 py-1 text-text-secondary">без зоны <span className="font-mono tabular-nums">{noZone}</span></span>
           </div>
           <p className="text-xs text-text-secondary">
-            Сетей описано <span className="font-mono tabular-nums text-text">{o.networks.total}</span>, сканировалось{' '}
-            <span className="font-mono tabular-nums text-text">{o.networks.scanned}</span>; активов вне описанных сетей{' '}
+            Сетей описано <span className="font-mono tabular-nums text-text">{o.networks.total}</span>; активов вне описанных сетей{' '}
             <Link to="/assets/list?code=no_network" className="font-mono tabular-nums text-text underline">{o.networks.no_network_assets}</Link>.
           </p>
-        </Block>
-
-        <Block title="Последние сканы" action={<MoreLink to="/assets/networks">сети и расписания</MoreLink>}>
-          {o.last_scans.length === 0 ? (
-            <p className="text-xs text-text-secondary">Сканов ещё не было: включите сканирование в форме сети и запустите его.</p>
-          ) : (
-            <table className="w-full text-xs">
-              <tbody>
-                {o.last_scans.map((s) => (
-                  <tr key={s.network_id} className="border-t border-grid first:border-t-0">
-                    <td className="py-1.5 pr-3"><Link to={`/assets/list?network_id=${s.network_id}`} className="font-mono text-text hover:underline">{s.cidr}</Link>{s.title && <span className="ml-2 text-text-secondary">{s.title}</span>}</td>
-                    <td className="py-1.5 pr-3 text-right text-text-secondary">{when(s.last_scan_at)}</td>
-                    <td className="py-1.5 text-right font-mono tabular-nums text-text" title="живых при скане">{s.last_scan_alive ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
         </Block>
 
         <Block title="Последние обновления DNS" action={<MoreLink to="/assets/settings">DNS-серверы</MoreLink>}>

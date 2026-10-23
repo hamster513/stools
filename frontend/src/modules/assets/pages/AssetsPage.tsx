@@ -78,7 +78,7 @@ function migrateFiltersOpen() {
 }
 migrateFiltersOpen()
 
-type Filters = Omit<AssetsQuery, 'q' | 'port' | 'tag' | 'disc_status' | 'assignee' | 'overdue'>
+type Filters = Omit<AssetsQuery, 'q' | 'tag' | 'disc_status' | 'assignee' | 'overdue'>
 /** Фильтр по статусам расхождений: статусы, исполнитель (`me`, `none`, логин), просроченные. */
 type DiscFilters = Omit<FindingFacetFilters, 'risk_expiring'>
 
@@ -135,7 +135,7 @@ export function FacetSection({ title, children }: { title: string; children: Rea
 const INPUT_BASE = 'rounded border border-border bg-app-bg px-2 py-1 text-xs text-text placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const INPUT = `w-full ${INPUT_BASE}`
 
-function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, port, onPort, tag, onTag, adLabel, onClearAd }: {
+function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, tag, onTag, adLabel, onClearAd }: {
   facets: AssetsFacets | null
   /** Зоны, которые панель уже показывала (ушедшие в ноль — с 0); считает страница, чтобы память жила, пока панель закрыта. */
   zones: FacetValue[]
@@ -144,8 +144,6 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, por
   disc: DiscFilters
   onDisc: (next: DiscFilters) => void
   total: number
-  port: string
-  onPort: (v: string) => void
   tag: string
   onTag: (v: string) => void
   adLabel: string
@@ -215,7 +213,6 @@ function FacetPanel({ facets, zones, filters, onToggle, disc, onDisc, total, por
             <option value="">{filters.network_id ? 'добавить сеть…' : 'все сети'}</option>
             {(networks.data ?? []).filter((n) => !has(filters.network_id, n.id)).map((n) => <option key={n.id} value={n.id}>{n.cidr}{n.title ? ` — ${n.title}` : ''}</option>)}
           </select>
-          <input value={port} onChange={(e) => onPort(e.target.value.replace(/\D/g, ''))} inputMode="numeric" placeholder="порт, например 3389" aria-label="Открытый порт" className={INPUT} />
           <input value={tag} onChange={(e) => onTag(e.target.value)} placeholder="тег" aria-label="Тег" className={INPUT} />
         </div>
       </FacetSection>
@@ -434,10 +431,8 @@ export function AssetsPage() {
   }))
   const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
   const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
-  const [portInput, setPortInput] = useState(params.get('port') ?? '')
   const [tagInput, setTagInput] = useState(params.get('tag') ?? '')
   const q = useDebouncedValue(searchInput, 250)
-  const port = useDebouncedValue(portInput, 250)
   const tag = useDebouncedValue(tagInput, 250)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [openId, setOpenId] = useState<number | null>(() => (Number(params.get('asset')) > 0 ? Number(params.get('asset')) : null))
@@ -451,10 +446,10 @@ export function AssetsPage() {
 
   const queryArgs = useMemo<AssetsQuery>(
     () => ({
-      ...filters, zone: toWire(filters.zone), q: q || undefined, port: port ? Number(port) : undefined, tag: tag.trim() || undefined,
+      ...filters, zone: toWire(filters.zone), q: q || undefined, tag: tag.trim() || undefined,
       disc_status: disc.status, assignee: disc.assignee, overdue: disc.overdue || undefined,
     }),
-    [filters, q, port, tag, disc],
+    [filters, q, tag, disc],
   )
   const query = useAssets(queryArgs)
   const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
@@ -477,7 +472,7 @@ export function AssetsPage() {
     navigate(`/assets/list${rest.size ? `?${rest}` : ''}`, { replace: true })
   }
   function clearAd() { setFilters((prev) => ({ ...prev, ad_snapshot: undefined, ad_cell: undefined })); dropAdFromUrl() }
-  function clearAll() { setFilters({}); setDisc({}); setSearchInput(''); setPortInput(''); setTagInput(''); dropAdFromUrl() }
+  function clearAll() { setFilters({}); setDisc({}); setSearchInput(''); setTagInput(''); dropAdFromUrl() }
   function check(index: number, range: boolean) {
     const from = range && lastChecked.current !== null ? lastChecked.current : index
     const on = !checked.has(items[index].id)
@@ -506,7 +501,6 @@ export function AssetsPage() {
     ...valueChips('Зона', filters.zone, (z) => z, (v) => toggle('zone', v)),
     ...valueChips('Сеть', filters.network_id, (id) => networks.data?.find((n) => n.id === id)?.cidr ?? `#${id}`, (v) => toggle('network_id', v)),
   ]
-  if (portInput) chips.push({ label: `порт ${portInput}`, clear: () => setPortInput('') })
   if (tagInput.trim()) chips.push({ label: `тег ${tagInput.trim()}`, clear: () => setTagInput('') })
   chips.push(...findingFacetChips(disc, setDisc).map((c) => ({ ...c, label: `расхождения · ${c.label.toLowerCase()}` })))
   // Карточка по ссылке открывается один раз: параметр снимается, и закрытая карточка не откроется снова при обновлении страницы.
@@ -530,7 +524,7 @@ export function AssetsPage() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [items.length, selected, openId])
 
-  const hasFilters = Object.values(filters).some((v) => v !== undefined) || Object.values(disc).some((v) => v !== undefined) || q !== '' || port !== '' || tag !== ''
+  const hasFilters = Object.values(filters).some((v) => v !== undefined) || Object.values(disc).some((v) => v !== undefined) || q !== '' || tag !== ''
   const errorMessage = query.error instanceof ApiRequestError
     ? (adOn && query.error.status === 422 ? 'Ссылка из сводки AD неполная — откройте её со страницы сводки заново.'
       : adOn && (query.error.status === 404 || query.error.status === 409) ? `Ячейка сводки AD не открывается: ${query.error.message}` : query.error.message)
@@ -552,7 +546,7 @@ export function AssetsPage() {
         {adCheck && filters.ad_snapshot !== undefined && filters.ad_cell !== undefined && <AdCellNote check={adCheck} snapshot={filters.ad_snapshot} cell={filters.ad_cell} page="assets" />}
       </header>
       <div className="flex min-h-0 flex-1">
-        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} zones={zones} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} port={portInput} onPort={setPortInput} tag={tagInput} onTag={setTagInput} adLabel={adLabel} onClearAd={clearAd} />}
+        {filtersPanel.open && <FacetPanel facets={first?.facets ?? null} zones={zones} filters={filters} onToggle={toggle} disc={disc} onDisc={setDisc} total={total} tag={tagInput} onTag={setTagInput} adLabel={adLabel} onClearAd={clearAd} />}
         <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
           {write && checked.size > 0 && (
             <BulkBar ids={[...checked]} total={total} selectingAll={allIds.isPending} onClear={() => checkAll(false)} facets={first?.facets ?? null} code={filters.code?.length === 1 ? filters.code[0] : undefined}

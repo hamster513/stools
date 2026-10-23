@@ -29,9 +29,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from api.db.models import Base, _utcnow
 from api.jobs import JobColumns
 
-#: Порты TCP по умолчанию: SSH, HTTP(S), RPC/NetBIOS/SMB, RDP — хватает, чтобы узнать хост Windows и Linux.
-DEFAULT_PORTS = [22, 80, 135, 139, 443, 445, 3389]
-
 #: Предустановленные зоны; справочник правится, это лишь стартовый набор миграции.
 #: External — сети с публичными адресами; её получают такие сети из RackTables.
 DEFAULT_ZONES = ("DMZ", "Internal", "Guest", "Management", "Industrial", "External")
@@ -95,21 +92,6 @@ class Network(Base):
     tags: Mapped[list[str]] = mapped_column(JSONType, default=list)
     #: Унаследованные теги RackTables (`itags`); у сетей, описанных вручную, пусто.
     implicit_tags: Mapped[list[str]] = mapped_column(JSONType, default=list, server_default="[]")
-    scan_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    ports: Mapped[list[int]] = mapped_column(JSONType, default=lambda: list(DEFAULT_PORTS))
-    exclude: Mapped[list[str]] = mapped_column(JSONType, default=list)
-    concurrency: Mapped[int] = mapped_column(Integer, default=64)
-    icmp_timeout_ms: Mapped[int] = mapped_column(Integer, default=1000)
-    tcp_timeout_ms: Mapped[int] = mapped_column(Integer, default=2000)
-    #: Новых сокетов (ICMP echo или SYN) в секунду на весь скан сети.
-    rate_per_s: Mapped[int] = mapped_column(Integer, default=500, server_default="500")
-    schedule_id: Mapped[int | None] = mapped_column(
-        ForeignKey("platform_schedule.id", ondelete="SET NULL"), nullable=True,
-    )
-    last_scan_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_scan_alive: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: Шёл ли последний скан с ICMP; False — «только порты» (ICMP-сокет не открылся), None — не сканировали.
-    last_scan_icmp: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     #: Откуда сеть: пусто — описана вручную, racktables — создана задачей RackTables (origin_key — id сети там).
     origin: Mapped[str] = mapped_column(String(32), default="", server_default="")
     origin_key: Mapped[str] = mapped_column(String(64), default="", server_default="")
@@ -153,9 +135,9 @@ class AssetObservation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id", ondelete="CASCADE"), index=True)
-    #: vm | ksc | ad | scan | dns
+    #: vm | ksc | ad | dns | rt
     source: Mapped[str] = mapped_column(String(16))
-    #: KSC «server_id:host_id», SID компьютера AD, VM «hostname|ip», IP для scan, FQDN или IP для dns.
+    #: KSC «server_id:host_id», SID компьютера AD, VM «hostname|ip», FQDN или IP для dns, IP для rt.
     source_key: Mapped[str] = mapped_column(String(512))
     name: Mapped[str] = mapped_column(String(255), default="")
     fqdn: Mapped[str] = mapped_column(String(255), default="", index=True)
@@ -163,7 +145,7 @@ class AssetObservation(Base):
     ip: Mapped[str] = mapped_column(String(64), default="", index=True)
     ips: Mapped[list[str]] = mapped_column(JSONType, default=list)
     os: Mapped[str] = mapped_column(String(255), default="")
-    #: Когда источник видел хост: дата снапшота, скана, запроса.
+    #: Когда источник видел хост: дата снапшота, запроса, импорта.
     seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
     gone_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     extra: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
@@ -393,7 +375,7 @@ class AssetRacktables(Base):
 
 
 class AssetJob(JobColumns, Base):
-    """Сканы, DNS-обновления, проходы RackTables и синхронизация с модулями: kind ∈ scan, dns, rt, sync."""
+    """DNS-обновления, проходы RackTables и синхронизация с модулями: kind ∈ dns, rt, sync."""
 
     __tablename__ = "asset_job"
 

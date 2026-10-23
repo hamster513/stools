@@ -5,7 +5,15 @@ import datetime as dt
 
 import pytest
 
-from api.modules.assets.core.matching import Candidate, Observed, canonical, match, normalize_name
+from api.modules.assets.core.matching import (
+    Candidate,
+    Observed,
+    address_reused,
+    canonical,
+    keyed_by_address,
+    match,
+    normalize_name,
+)
 
 NOW = dt.datetime(2026, 10, 1, 12, 0, tzinfo=dt.UTC)
 
@@ -97,15 +105,15 @@ def test_rule4_does_not_apply_when_asset_knows_a_domain_through_any_observation(
     assert match(obs, [cand(1, vm, ksc, name="WS01", fqdn="ws01.corp.local", domain="corp.local")]) == (None, 0)
 
 
-def test_rule5_ip_when_scan_has_no_name() -> None:
-    obs = Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5")
+def test_rule5_ip_when_observation_has_no_name() -> None:
+    obs = Observed(source="rt", source_key="10.10.0.5", ip="10.10.0.5")
     assert match(obs, [cand(8, name="ws01", fqdn="ws01.corp.local", ip="10.10.0.5")]) == (8, 5)
 
 
 def test_rule5_vm_host_named_by_ip() -> None:
     obs = Observed(source="vm", source_key="10.10.0.9|10.10.0.9", name="10.10.0.9", ip="10.10.0.9")
-    scan = Observed(source="scan", source_key="10.10.0.9", ip="10.10.0.9")
-    assert match(obs, [cand(9, scan, ip="10.10.0.9")]) == (9, 5)
+    addr = Observed(source="rt", source_key="10.10.0.9", ip="10.10.0.9")
+    assert match(obs, [cand(9, addr, ip="10.10.0.9")]) == (9, 5)
 
 
 def test_same_ip_with_different_names_is_not_merged() -> None:
@@ -115,7 +123,7 @@ def test_same_ip_with_different_names_is_not_merged() -> None:
 
 
 def test_rules_are_checked_in_order_across_candidates() -> None:
-    by_ip = cand(1, Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5"), ip="10.10.0.5")
+    by_ip = cand(1, Observed(source="rt", source_key="10.10.0.5", ip="10.10.0.5"), ip="10.10.0.5")
     by_fqdn = cand(2, name="ws01", fqdn="ws01.corp.local")
     obs = Observed(source="ksc", source_key="h-1", name="WS01", fqdn="ws01.corp.local", ip="10.10.0.5")
     assert match(obs, [by_ip, by_fqdn]) == (2, 2)
@@ -152,27 +160,39 @@ def test_netbios_domain_resolved_by_ad_map() -> None:
 
 def test_rule5_gone_ip_does_not_match() -> None:
     gone = Observed(source="vm", source_key="10.10.0.5|10.10.0.5", ip="10.10.0.5", seen_at=days_ago(9), gone_at=days_ago(1))
-    scan = Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5")
-    assert match(scan, [cand(1, gone, ip="10.10.0.6")]) == (None, 0)
+    addr = Observed(source="rt", source_key="10.10.0.5", ip="10.10.0.5")
+    assert match(addr, [cand(1, gone, ip="10.10.0.6")]) == (None, 0)
 
 
 def test_rule5_two_holders_prefer_canonical_ip() -> None:
-    a = cand(1, Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5"), ip="10.10.0.5")
+    a = cand(1, Observed(source="rt", source_key="10.10.0.5", ip="10.10.0.5"), ip="10.10.0.5")
     b_obs = Observed(source="vm", source_key="10.10.0.5|10.10.0.5", ip="10.10.0.5")
-    scan = Observed(source="scan", source_key="10.10.0.5-again", ip="10.10.0.5")
-    assert match(scan, [cand(2, b_obs, ip="10.10.0.7"), a]) == (1, 5)
-    assert match(scan, [cand(2, b_obs, ip="10.10.0.5"), a]) == (None, 0)
+    addr = Observed(source="rt", source_key="10.10.0.5-again", ip="10.10.0.5")
+    assert match(addr, [cand(2, b_obs, ip="10.10.0.7"), a]) == (1, 5)
+    assert match(addr, [cand(2, b_obs, ip="10.10.0.5"), a]) == (None, 0)
 
 
 def test_rule5_ipv6_text_forms() -> None:
-    scan = Observed(source="scan", source_key="2001:DB8:0:0::5", ip="2001:DB8:0:0::5")
-    assert match(scan, [cand(3, ip="2001:db8::5")]) == (3, 5)
+    addr = Observed(source="rt", source_key="2001:DB8:0:0::5", ip="2001:DB8:0:0::5")
+    assert match(addr, [cand(3, ip="2001:db8::5")]) == (3, 5)
     held = Observed(source="vm", source_key="x", ips=["2001:0db8:0000::0005"])
-    assert match(scan, [cand(4, held)]) == (4, 5)
+    assert match(addr, [cand(4, held)]) == (4, 5)
+
+
+def test_only_ptr_is_keyed_by_address() -> None:
+    """Ключ-адрес (DHCP отдаёт адрес другому хосту) — только у обратной записи DNS: сканирования нет."""
+    ptr = Observed(source="dns", source_key="10.10.0.5", name="ws09", ip="10.10.0.5", extra={"record_type": "PTR"})
+    assert keyed_by_address(ptr)
+    assert not keyed_by_address(Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5"))
+    assert not keyed_by_address(Observed(source="dns", source_key="ws09.corp.local", ip="10.10.0.5", extra={"record_type": "A"}))
+    old = Observed(source="dns", source_key="10.10.0.5", name="srv01", ip="10.10.0.5", extra={"record_type": "PTR"})
+    held = cand(1, old, Observed(source="ksc", source_key="srv01", name="SRV01"), name="srv01", ip="10.10.0.5")
+    assert address_reused(ptr, held)
+    assert not address_reused(old, held)
 
 
 def test_no_candidates() -> None:
-    assert match(Observed(source="scan", source_key="10.10.0.5", ip="10.10.0.5"), []) == (None, 0)
+    assert match(Observed(source="rt", source_key="10.10.0.5", ip="10.10.0.5"), []) == (None, 0)
 
 
 # ---- Каноническая карточка -------------------------------------------------
@@ -210,16 +230,16 @@ def test_canonical_tie_prefers_ksc_over_vm() -> None:
         assert card["ip"] == "192.168.2.23" and card["name"] == "MSK1"
 
 
-def test_canonical_tie_order_dns_scan_ksc_ad_vm() -> None:
+def test_canonical_tie_order_dns_ksc_ad_vm_rt() -> None:
     def o(source: str) -> Observed:
         return Observed(source=source, source_key=source, os=source, seen_at=days_ago(0))
-    sources = ["vm", "ad", "ksc", "scan", "dns"]
+    sources = ["rt", "vm", "ad", "ksc", "dns"]
     for i in range(len(sources)):
         assert canonical([o(s) for s in sources[: i + 1]], {}, {})["os"] == sources[i]
 
 
 def test_canonical_ip_is_normalised() -> None:
-    card = canonical([Observed(source="scan", source_key="x", ip="2001:DB8:0:0::5", seen_at=days_ago(0))], {}, {})
+    card = canonical([Observed(source="dns", source_key="x", ip="2001:DB8:0:0::5", seen_at=days_ago(0))], {}, {})
     assert card["ip"] == "2001:db8::5"
 
 

@@ -21,7 +21,7 @@ FIELDS = ("name", "fqdn", "domain", "ip", "os")
 
 #: Порядок источников при равном `seen_at` (спека §2): у VM `seen_at` — время импорта, он последний.
 #: RackTables ведётся руками — ниже всех источников, которые хост видят сами.
-PRECEDENCE = {"dns": 4, "scan": 3, "ksc": 2, "ad": 1, "vm": 0, "rt": -1}
+PRECEDENCE = {"dns": 4, "ksc": 2, "ad": 1, "vm": 0, "rt": -1}
 
 _EPOCH = dt.datetime.min.replace(tzinfo=dt.UTC)
 
@@ -209,8 +209,8 @@ def match(
 
 
 def keyed_by_address(o: Observed) -> bool:
-    """Ключ наблюдения — адрес (скан, обратная запись DNS): DHCP отдаёт адрес другому хосту, а ключ тот же."""
-    return o.source == "scan" or (o.source == "dns" and o.extra.get("record_type") == "PTR")
+    """Ключ наблюдения — адрес (обратная запись DNS): DHCP отдаёт адрес другому хосту, а ключ тот же."""
+    return o.source == "dns" and o.extra.get("record_type") == "PTR"
 
 
 def address_reused(obs: Observed, held: Candidate) -> bool:

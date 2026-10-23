@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,7 +38,7 @@ from api.platform.findings.models import FindingState
 from api.timeutil import utcnow
 
 DEFAULT_SETTINGS: dict[str, Any] = {"inactive_days": 30, "stale_days": 30, "sync_after_import": True}
-SOURCES = ("vm", "ksc", "ad", "scan", "dns", "rt")
+SOURCES = ("vm", "ksc", "ad", "dns", "rt")
 CRITICALITY = ("Critical", "High", "Medium", "Low")
 #: Фильтр и фасет LAPS: есть ли срок пароля LAPS у компьютера AD.
 LAPS = ("yes", "no")
@@ -49,9 +49,6 @@ ANY_CODE = "any"
 #: Расхождения — находки платформы статусов (`findings_adapter`): модуль и единственная область.
 FINDINGS_MODULE = "assets"
 FINDINGS_SCOPE = 0
-
-ScanProbes = tuple[Callable[[str], bool], Callable[[str], bool | None]]
-
 
 class AssetNotFound(LookupError):
     pass
@@ -83,14 +80,6 @@ def save_settings(db: Session, values: dict[str, Any]) -> dict[str, Any]:
     row.data = {**(row.data or {}), **{k: values[k] for k in DEFAULT_SETTINGS}}
     db.flush()
     return {k: row.data[k] for k in DEFAULT_SETTINGS}
-
-
-def scan_probes(db: Session) -> ScanProbes:
-    """Чем расхождения узнают о скане: сканируется ли сеть адреса и ответил ли он последнему скану."""
-    # Импорт здесь: services.scan сам импортирует этот модуль.
-    from api.modules.assets.services.scan import scan_probes as probes
-
-    return probes(db)
 
 
 def observed(row: AssetObservation, extra: dict[str, Any] | None = None) -> Observed:
@@ -162,7 +151,7 @@ class MatchIndex:
 
     @classmethod
     def for_observation(cls, db: Session, obs: Observed) -> MatchIndex:
-        """Только активы, у которых есть общий с наблюдением ключ: одиночная привязка (скан, DNS, отвязка)."""
+        """Только активы, у которых есть общий с наблюдением ключ: одиночная привязка (DNS, отвязка)."""
         toks = tokens(obs)
         fqdns = [t[2:] for t in toks if t.startswith("f:")]
         shorts = [t[2:] for t in toks if t.startswith("n:")]
@@ -241,7 +230,7 @@ def apply_observation(
 ) -> tuple[Asset, int]:
     """match + upsert наблюдения + пересчёт актива; (актив, правило; 0 — новый актив).
     `index`, `rows`, `networks` — заготовки синхронизации; без них всё читается из базы.
-    Адрес, перешедший к другому хосту (скан или PTR с незнакомым активу именем), не переименовывает
+    Адрес, перешедший к другому хосту (PTR с незнакомым активу именем), не переименовывает
     старый актив: его наблюдение уходит в историю, а новое сопоставляется заново по правилам 2–5."""
     idx = index if index is not None else MatchIndex.for_observation(db, obs)
     candidates = idx.candidates_for(obs)
@@ -484,11 +473,9 @@ def _network_view(network: Network | None) -> dict[str, Any] | None:
     return {"id": network.id, "cidr": network.cidr, "title": network.title, "zone": network.zone}
 
 
-def _found(asset: Asset, observations: list[Observed], settings: dict[str, Any], probes: ScanProbes, now: dt.datetime) -> list[Discrepancy]:
-    scanned, alive = probes
+def _found(asset: Asset, observations: list[Observed], settings: dict[str, Any], now: dt.datetime) -> list[Discrepancy]:
     found = discrepancies(
-        _card(asset), observations, stale_days=int(settings["stale_days"]), inactive_days=int(settings["inactive_days"]),
-        scanned_networks=scanned, scan_alive=alive, now=now,
+        _card(asset), observations, stale_days=int(settings["stale_days"]), inactive_days=int(settings["inactive_days"]), now=now,
     )
     if asset.ip and asset.network_id is None and any(o.gone_at is None for o in observations):
         found.append(Discrepancy("no_network", "", "network", asset.ip, "", f"сеть не описана: адрес {asset.ip} не входит ни в одну сеть"))
@@ -614,13 +601,9 @@ def _matches_query(asset: Asset, rows: list[AssetObservation], needle: str) -> b
     return any(needle in (t or "").lower() for t in texts)
 
 
-def _open_ports(observations: list[Observed]) -> set[int]:
-    return {int(p) for o in observations if o.source == "scan" and o.gone_at is None for p in o.extra.get("ports", [])}
-
-
-#: Чей extra нужен списку: порты скана, вход и включённость AD, тип записи DNS. У KSC и VM
-#: extra тяжёлый (компоненты, группы) и списку не нужен — его читает только карточка.
-LIST_EXTRA_SOURCES = ("scan", "ad", "dns")
+#: Чей extra нужен списку: вход и включённость AD, тип записи DNS. У KSC и VM extra тяжёлый
+#: (компоненты, группы) и списку не нужен — его читает только карточка.
+LIST_EXTRA_SOURCES = ("ad", "dns")
 
 
 Picked = list[tuple[Asset, list[AssetObservation], list[Discrepancy]]]
@@ -638,7 +621,6 @@ def _pick(
     source_missing: frozenset[str] | None = None,
     network_id: frozenset[int] | None = None,
     zone: frozenset[str] | None = None,
-    port: int | None = None,
     tag: str | None = None,
     criticality: frozenset[str] | None = None,
     laps: frozenset[str] | None = None,
@@ -652,9 +634,8 @@ def _pick(
     считаются на лету, поэтому фильтры — в памяти; фильтр по расхождениям и их статусам — у
     вызывающего (`DiscFilter`). `with_found=False` — расхождения не считаются и остаются пустыми
     (выбор id для массового изменения без фильтра по расхождениям)."""
-    probes = scan_probes(db) if with_found else None
-    # Наблюдения с extra нужны расхождениям и фильтру по порту; без них extra не читается вовсе.
-    need_observed = probes is not None or port is not None
+    # Наблюдения с extra нужны расхождениям; без них extra не читается вовсе.
+    need_observed = with_found
     assets = list(db.execute(select(Asset).where(Asset.merged_into.is_(None))).scalars())
     per_asset: dict[int, list[AssetObservation]] = defaultdict(list)
     for row in db.execute(select(AssetObservation).options(defer(AssetObservation.extra)).order_by(AssetObservation.id)).scalars():
@@ -694,9 +675,7 @@ def _pick(
         if needle and not _matches_query(asset, rows, needle):
             continue
         observations = [observed(r, extra=dict(extras.get(r.id) or {})) for r in rows] if need_observed else []
-        if port is not None and port not in _open_ports(observations):
-            continue
-        found = _found(asset, observations, settings, probes, now) if probes is not None else []
+        found = _found(asset, observations, settings, now) if with_found else []
         picked.append((asset, rows, found))
     return picked
 
@@ -895,7 +874,7 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
     asset = _asset_or_404(db, asset_id)
     settings = load_settings(db)
     rows = _observations(db, asset.id)
-    found = _found(asset, [observed(r) for r in rows], settings, scan_probes(db), now)
+    found = _found(asset, [observed(r) for r in rows], settings, now)
     network = db.get(Network, asset.network_id) if asset.network_id is not None else None
     counted = finding_svc.counted_statuses(db)
     keys = [finding_key(asset.id, d) for d in found]

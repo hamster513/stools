@@ -40,7 +40,7 @@ def by_name(c: TestClient, name: str) -> dict[str, Any]:
 def test_list_filters_and_facets(analyst: TestClient) -> None:
     body = analyst.get("/api/assets/assets").json()
     assert body["total"] == 4 and names(body) == {"msk1", "ws01", "srv01", "old01"}
-    assert body["facets"]["source"] == {"vm": 2, "ksc": 2, "ad": 3, "scan": 0, "dns": 0, "rt": 0}
+    assert body["facets"]["source"] == {"vm": 2, "ksc": 2, "ad": 3, "dns": 0, "rt": 0}
     # no_av — только ws01: old01 давно не входил, это ad_inactive, а не «нет агента».
     assert body["facets"]["code"]["conflict"] == 1 and body["facets"]["code"]["no_av"] == 1
     item = next(i for i in body["items"] if i["name"].lower() == "msk1")
@@ -317,21 +317,16 @@ def test_merge_and_detach_refused_while_task_writes(analyst: TestClient) -> None
         conn.rollback()
 
 
-def test_scan_ports_in_list_filter_and_card(analyst: TestClient, db_session: Session) -> None:
+def test_list_reads_extra_only_where_needed(analyst: TestClient, db_session: Session) -> None:
     from sqlalchemy import event
 
     from api.db.base import get_engine
-    from api.modules.assets.core.matching import Observed
-    from api.modules.assets.services.assets import apply_observation, list_assets
+    from api.modules.assets.services.assets import list_assets
 
-    asset, _ = apply_observation(db_session, Observed(source="scan", source_key="10.10.0.11", ip="10.10.0.11",
-                                                      seen_at=dt.datetime.now(dt.UTC), extra={"ports": [22, 445]}))
-    db_session.commit()
-    assert names(analyst.get("/api/assets/assets", params={"port": 445}).json()) == {"srv01"}
-    card = analyst.get(f"/api/assets/assets/{asset.id}").json()
-    assert next(o for o in card["observations"] if o["source"] == "scan")["extra"]["ports"] == [22, 445]
+    # Фильтра по открытому порту больше нет (порты знал только сканер): параметр не сужает список.
+    assert names(analyst.get("/api/assets/assets", params={"port": 445}).json()) == {"msk1", "ws01", "srv01", "old01"}
 
-    # Список не тянет extra наблюдений KSC и VM: только scan, ad и dns, которые нужны фильтрам и расхождениям.
+    # Список не тянет extra наблюдений KSC и VM: только ad и dns, которые нужны фильтрам и расхождениям.
     statements: list[str] = []
 
     def remember(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:

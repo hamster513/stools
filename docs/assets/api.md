@@ -8,16 +8,14 @@ ISO 8601 в UTC; окна расписаний — `HH:MM` в поясе `STOOLS
 ## Обзор
 
 ```
-GET  /overview                         {assets_total, by_zone, by_source, codes, networks, last_scans,
-                                        last_dns, sync}
+GET  /overview                         {assets_total, by_zone, by_source, codes, networks, last_dns, sync}
                                         by_zone: {зона: n, "": n} — "" — актив без сети или в сети без зоны
-                                        by_source: {vm, ksc, ad, scan, dns: n} — источник видит актив сейчас
+                                        by_source: {vm, ksc, ad, dns, rt: n} — источник видит актив сейчас
                                         codes: {код: n, any: n} — активов с этим расхождением (коды ниже)
                                         с учитываемым статусом (`counted`); any — хотя бы с одним
                                         (ссылка в список с code=any)
-                                        networks: {total, scanned, no_network_assets} — сетей описано,
-                                        сканировалось хоть раз, активов вне описанных сетей
-                                        last_scans: [{network_id, cidr, title, last_scan_at, last_scan_alive}]
+                                        networks: {total, no_network_assets} — сетей описано,
+                                        активов вне описанных сетей
                                         last_dns: [{dns_id, title, last_run_at}] — по 10, новые сверху
                                         sync: {last_sync_at, running_job_id}
 ```
@@ -31,7 +29,7 @@ GET  /overview                         {assets_total, by_zone, by_source, codes,
 ## Активы
 
 ```
-GET   /assets                          q, source_has, source_missing, code, network_id, zone, port,
+GET   /assets                          q, source_has, source_missing, code, network_id, zone,
                                        tag, criticality (Critical|High|Medium|Low|none), laps (yes|no),
                                        cluster (cluster|role|node — вид кластера Windows по наблюдению AD),
                                        disc_status, assignee, overdue, ad_snapshot + ad_cell, limit≤500 (200), offset
@@ -86,10 +84,10 @@ POST  /assets/discrepancies/bulk  {ids (≤ 50 000), code, change: {status?, ass
                                        false_positive — 422
 POST  /assets/{id}/pin    {field: name|fqdn|domain|ip|os, pinned}   → карточка
 POST  /assets/{id}/merge  {other_id}   → карточка первого; 409 — уже объединён, идёт синхронизация
-                                       или запись результатов скана/DNS («идёт запись результатов
+                                       или запись результатов DNS/RackTables («идёт запись результатов
                                        задачи — повторите позже»)
 POST  /observations/{id}/detach        → карточка нового актива; 409 — у актива одно наблюдение,
-                                       идёт синхронизация или запись результатов скана/DNS
+                                       идёт синхронизация или запись результатов DNS/RackTables
 GET   /racktables                      подключения к JSON API RackTables: [{id, title, url, username,
                                        password_set, verify_tls, rate_per_s, timeout_ms, enabled,
                                        schedule_id, last_run_at, schedule}]
@@ -131,7 +129,7 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 `lookup` — ссылка «в Assets» у хоста модуля: актив по ключу наблюдения
 `(source, source_key)`. Ключи: KSC — `server_id:host_id` (или `key=host_id`
 и `server_id` отдельно), VM — `hostname|ip` как в `vm_host`, AD — SID
-компьютера (DN, если SID нет), `scan` — IP, `dns` — FQDN или IP. После
+компьютера (DN, если SID нет), `dns` — FQDN или IP, `rt` — IP. После
 объединения наблюдение живёт у первого актива — ссылка ведёт к нему.
 
 ### Коды расхождений
@@ -147,16 +145,13 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 |---|---|---|
 | `stale` | значение наблюдения ≠ каноническому, наблюдение старше опорного на ≥ `stale_days` | «в VM IP 192.168.6.53 от 12.09, актуальный 192.168.2.23 (DNS, 01.10) — данные VM устарели» |
 | `conflict` | значение ≠ каноническому, разница меньше `stale_days` | «источники расходятся: IP в VM … (12.09), актуальный … (KSC, 01.10)» |
-| `no_av` | нет живого `ksc`, есть живой `scan`, `dns` или `vm` либо включённый компьютер AD с входом не старше `inactive_days` | «нет агента антивируса» |
+| `no_av` | нет живого `ksc`, есть живой `dns` или `vm` либо включённый компьютер AD с входом не старше `inactive_days` | «нет агента антивируса» |
 | `ad_inactive` | включённый компьютер AD без входа и без других источников дольше `inactive_days` | «неактивный компьютер AD: последний вход 03.06» |
-| `unreachable` | IP из `ksc`/`vm`/`dns` в сети, которую сканировали, и последний скан его не нашёл | «не отвечает по известному адресу 10.10.0.11» |
-| `unknown_host` | только наблюдения `scan` (и PTR из DNS) | «найдено сканером, нигде не описано» |
-| `dns_orphan` | только запись зоны DNS, адрес в сканируемой сети не ответил | «запись DNS без живого хоста» |
 | `no_network` | у актива есть IP, но он не входит ни в одну описанную сеть | «сеть не описана: адрес … не входит ни в одну сеть» |
 
 Каноническое значение поля — из самого свежего по `seen_at` живого
-наблюдения, где оно заполнено (при равенстве: `dns` > `scan` > `ksc` > `ad` >
-`vm`); закреплённое (`pin`) не пересчитывается.
+наблюдения, где оно заполнено (при равенстве: `dns` > `ksc` > `ad` > `vm` >
+`rt`); закреплённое (`pin`) не пересчитывается.
 
 ## Пользователи
 
@@ -368,7 +363,7 @@ SID в домене пользователя; SID `S-1-5-21-*` уникален 
 POST /sync                             {job_id} 202 | 409 идёт синхронизация
 GET  /sync/status                      {last_sync_at, last_job_id, running_job_id,
                                         sources: {vm|ksc|ad: {live, gone, seen_at}}}
-GET    /sync/schedule                  {id, interval_hours, …, tz} | null — как у сетей
+GET    /sync/schedule                  {id, interval_hours, …, tz} | null — см. «Расписания задач»
 PUT    /sync/schedule  {interval_hours 1–720, window_from?, window_to?, enabled}   422 — окно не HH:MM
 DELETE /sync/schedule                  204
 ```
@@ -380,55 +375,40 @@ DELETE /sync/schedule                  204
 запускается сама; если уже идёт — пройдёт ещё раз после текущей. Расписание
 синхронизации одно на модуль (`platform_schedule`: `assets/sync`,
 `target_id = 0`); пока идёт другая синхронизация, запуск откладывается на
-следующий тик. Синхронизация делит блокировку с записью результатов скана и
-DNS: если блокировку держит такая запись, задача ждёт её окончания (стадия
+следующий тик. Синхронизация делит блокировку с записью результатов DNS и
+RackTables: если блокировку держит такая запись, задача ждёт её окончания (стадия
 `pending`); отказывается («синхронизация уже идёт») только когда идёт другая
-синхронизация, заведённая раньше. Скан и DNS между собой не блокируются.
+синхронизация, заведённая раньше.
 
 ## Сети
 
 ```
-GET    /networks                       [{id, cidr, title, description, zone, site, owner, vlan, tags,
-                                        scan_enabled, ports, exclude, concurrency, icmp_timeout_ms,
-                                        tcp_timeout_ms, rate_per_s, estimated_seconds, schedule_id,
-                                        last_scan_at, last_scan_alive, last_scan_icmp, created_at, updated_at,
-                                        stats: {assets, alive_last_scan, unknown_hosts}, schedule|null}]
+GET    /networks                       [{id, cidr, title, description, zone, zone_source, zone_rule_id, site,
+                                        owner, vlan, tags, origin, created_at, updated_at, stats: {assets}}]
 POST   /networks                       201 | 409 такой CIDR уже есть | 422
 GET    /networks/{id}  PUT /networks/{id}  DELETE /networks/{id}   204
 GET    /networks/export?format=csv|xlsx   все сети в порядке таблицы (фильтров у списка нет), любой роли
 ```
 
-`cidr` нормализуется (`10.10.0.7/24` → `10.10.0.0/24`); IPv4 шире /16 — 422
-«сеть шире /16 не принимается — разбейте на несколько». Пересечения
-разрешены: актив привязывается к самой узкой сети, содержащей его IP (если
-сеть не задана вручную). PUT меняет только переданные поля; смена `cidr`
-пересчитывает привязку активов. Удаление — активы без сети, расписание
-удаляется. Поля по умолчанию: `ports` `[22, 80, 135, 139, 443, 445, 3389]`
-(≤ 64), `concurrency` 64 (1–256), `icmp_timeout_ms` 1000 (50–10000),
-`tcp_timeout_ms` 2000 (50–30000), `rate_per_s` 500 (10–5000 новых сокетов в
-секунду), `vlan` 1–4094, `exclude` — IP и CIDR. `estimated_seconds` — секунд
-на скан, если никто не ответит: адресов (CIDR минус служебные и исключения,
-считается арифметикой) × (таймаут ICMP + таймаут TCP) / `concurrency`, но не
-меньше адресов × (1 + портов) / `rate_per_s`; `null` — сеть сканеру не по
-силам. `last_scan_icmp` — `false`, если последний скан шёл в режиме «только
-порты», `null` — сеть не сканировали.
+`cidr` нормализуется (`10.10.0.7/24` → `10.10.0.0/24`); ширина не ограничена —
+сеть-контейнер служит объемлющей. Пересечения разрешены: актив привязывается к
+самой узкой сети, содержащей его IP (если сеть не задана вручную). PUT меняет
+только переданные поля; смена `cidr` пересчитывает привязку активов. Удаление —
+активы без сети. `vlan` 1–4094. Сканирования сети в модуле нет (удалено 24.10
+по решению владельца 23.10: данных скана не было, только синтетика).
 
-## Скан и расписание
+## Расписания задач
 
 ```
-POST   /networks/{id}/scan             {job_id, icmp} 202 | 409 идёт скан или сканирование сети выключено
-GET    /networks/{id}/schedule         {id, interval_hours, window_from, window_to, enabled, next_run_at,
+GET    /dns/{id}/schedule  /racktables/{id}/schedule  /sync/schedule
+                                       {id, interval_hours, window_from, window_to, enabled, next_run_at,
                                         last_run_at, last_job_id, tz} | null
-PUT    /networks/{id}/schedule  {interval_hours 1–720, window_from?, window_to?, enabled}
-                                       422 — сканирование сети выключено, окно не HH:MM
-DELETE /networks/{id}/schedule         204
+PUT    …/schedule  {interval_hours 1–720, window_from?, window_to?, enabled}   422 — окно не HH:MM
+DELETE …/schedule                      204
 ```
 
-`icmp: false` — ICMP-сокет в контейнере не открывается, скан идёт в режиме
-«только порты» (`extra.icmp = null` у наблюдений). Одновременно идёт один
-скан. Скан: ICMP echo, затем TCP connect по `ports` (соединение закрывается
-сразу, данных не отправляется), PTR живых. Окно расписания — в поясе
-`STOOLS_TZ`, конец окна не включается; окно через полночь допускается.
+Окно расписания — в поясе `STOOLS_TZ`, конец окна не включается; окно через
+полночь допускается.
 
 ## DNS
 
@@ -438,7 +418,7 @@ GET    /dns                            [{id, title, mode, server, ad_connection_
                                         last_run_at, schedule|null}]
 POST   /dns  PUT /dns/{id}  DELETE /dns/{id}   201 / 200 / 204
 POST   /dns/{id}/run                   {job_id} 202 | 409 идёт обновление DNS или сервер выключен
-PUT    /dns/{id}/schedule  DELETE /dns/{id}/schedule   как у сетей
+PUT    /dns/{id}/schedule  DELETE /dns/{id}/schedule   см. «Расписания задач»
 ```
 
 `mode: direct` — прямые (A/AAAA по известным FQDN) и обратные (PTR по
@@ -477,5 +457,5 @@ GET  /jobs?limit≤200  GET /jobs/{id}  POST /jobs/{id}/cancel
 | `sync_after_import` | `true` | синхронизация сама после импорта VM, KSC и AD |
 
 Пороги действуют сразу: расхождения считаются при чтении. `kind` задач:
-`scan | dns | sync`; в `message` задачи скана — сеть, DNS — сервер,
+`dns | rt | sync`; в `message` задачи DNS — сервер, RackTables — подключение,
 синхронизации — что её запустило и сколько наблюдений дал каждый источник.

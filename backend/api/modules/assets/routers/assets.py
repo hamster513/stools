@@ -167,7 +167,6 @@ def _filters(
     code: QueryList = None,
     network_id: QueryInts = None,
     zone: QueryList = None,
-    port: int | None = Query(default=None, ge=1, le=65535),
     tag: str | None = None,
     criticality: QueryList = None,
     laps: QueryList = None,
@@ -194,7 +193,7 @@ def _filters(
     _check(picked["cluster"], CLUSTER_KINDS)
     _check(multi(disc_status, commas=True), STATUSES)
     return {
-        "q": q, **picked, "network_id": multi_int(network_id), "port": port, "tag": tag,
+        "q": q, **picked, "network_id": multi_int(network_id), "tag": tag,
         "disc_status": disc_status, "assignee": assignee, "overdue": overdue,
         "ad_keys": ad.computers if ad is not None else None,
     }
@@ -226,7 +225,7 @@ def get_asset_ids(
 
 
 #: Подписи источников — как на экране (SOURCE_LABELS фронтенда).
-SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "Скан", "dns": "DNS", "rt": "RT"}
+SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "dns": "DNS", "rt": "RT"}
 #: Выгрузке нужен весь отбор: страница списка ограничена `MAX_LIMIT`, здесь — нет.
 EXPORT_ALL = 10**9
 
@@ -338,7 +337,7 @@ def pin(asset_id: int, payload: PinIn, db: Session = Depends(get_db), _user: App
 
 def _no_running_sync(db: Session) -> None:
     """Синхронизация держит индекс активов в памяти и вернула бы наблюдения туда, где их видела.
-    Запись результатов скана или DNS идёт под той же блокировкой: она берётся до конца запроса."""
+    Запись результатов DNS или RackTables идёт под той же блокировкой: она берётся до конца запроса."""
     running = active_job(db, AssetJob, ("sync",))
     if running is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт синхронизация #{running.id}, дождитесь её")

@@ -1,8 +1,7 @@
-"""Задача DNS: прямые и обратные запросы, чтение зоны AD, «пропавшие» имена, ручки, расписание,
-PTR сканера через настроенный сервер. DNS — поддельный сервер на 127.0.0.1, LDAP — подделка."""
+"""Задача DNS: прямые и обратные запросы, чтение зоны AD, «пропавшие» имена, ручки, расписание.
+DNS — поддельный сервер на 127.0.0.1, LDAP — подделка."""
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import logging
 from collections.abc import Callable, Iterator
@@ -16,9 +15,7 @@ from sqlalchemy.orm import Session
 from api.jobs import JobHandle, start_job
 from api.modules.ad.models import AdConnection
 from api.modules.assets.core import dns as dns_core
-from api.modules.assets.core import scanner
 from api.modules.assets.core.matching import Observed
-from api.modules.assets.core.scanner import HostResult, ScanTarget
 from api.modules.assets.models import (
     DEFAULT_ZONES,
     Asset,
@@ -26,10 +23,8 @@ from api.modules.assets.models import (
     AssetJob,
     AssetObservation,
     AssetZone,
-    Network,
 )
 from api.modules.assets.services import dns as dns_service
-from api.modules.assets.services import scan as scan_service
 from api.modules.assets.services.assets import apply_observation
 from api.modules.assets.services.dns import DnsBusy, schedule_handler, start_dns
 from api.platform.scheduler import PlatformSchedule, tick
@@ -49,7 +44,6 @@ STAMP = (NOW - dt.timedelta(days=2)).replace(minute=0, second=0, microsecond=0)
 @pytest.fixture(autouse=True)
 def inline_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dns_service, "spawn", lambda fn: fn())
-    monkeypatch.setattr(scan_service, "spawn", lambda fn: fn())
 
 
 @pytest.fixture
@@ -181,10 +175,11 @@ def test_dead_server_fails_job(analyst: TestClient, db_session: Session, fake_dn
 # ---- Обратные запросы -------------------------------------------------------
 
 
-def test_reverse_names_scan_host(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
+def test_reverse_names_nameless_host(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
     srv01 = add(db_session, "ksc", "1:1", name="srv01", fqdn="srv01.corp.local", ip="10.10.0.30")
-    known_scan = add(db_session, "scan", "10.10.0.5", ip="10.10.0.5")
-    unknown_scan = add(db_session, "scan", "10.10.0.7", ip="10.10.0.7")
+    # Адреса RackTables без имени: обратная запись даёт им имя.
+    known_addr = add(db_session, "rt", "10.10.0.5", ip="10.10.0.5")
+    unknown_addr = add(db_session, "rt", "10.10.0.7", ip="10.10.0.7")
     fake_dns.ptr("10.10.0.5", "srv01.corp.local")
     fake_dns.ptr("10.10.0.7", "ws07.corp.local")
 
@@ -193,15 +188,13 @@ def test_reverse_names_scan_host(analyst: TestClient, db_session: Session, fake_
     assert "обратных 3" in job.message
     rows = dns_rows(db_session)
     assert set(rows) == {"10.10.0.5", "10.10.0.7"}
-    # Имя известно — привязка по FQDN (правило 2), а не к хосту скана с тем же адресом.
-    assert rows["10.10.0.5"].asset_id == srv01 != known_scan
+    # Имя известно — привязка по FQDN (правило 2), а не к безымянному хосту с тем же адресом.
+    assert rows["10.10.0.5"].asset_id == srv01 != known_addr
     assert rows["10.10.0.5"].extra["record_type"] == "PTR"
-    # Имя никому не известно — к хосту скана по адресу (правило 5): у него появляется имя.
-    assert rows["10.10.0.7"].asset_id == unknown_scan
-    asset = db_session.get(Asset, unknown_scan)
+    # Имя никому не известно — к хосту по адресу (правило 5): у него появляется имя.
+    assert rows["10.10.0.7"].asset_id == unknown_addr
+    asset = db_session.get(Asset, unknown_addr)
     assert asset is not None and (asset.name, asset.fqdn) == ("ws07", "ws07.corp.local")
-    # PTR не отменяет «найдено сканером, нигде не описано».
-    assert "10.10.0.7" in codes(analyst, "unknown_host")
 
     fake_dns.records.pop(("7.0.10.10.in-addr.arpa", "PTR"))
     run(analyst, direct(analyst, forward=False, reverse=True), db_session)
@@ -211,7 +204,7 @@ def test_reverse_names_scan_host(analyst: TestClient, db_session: Session, fake_
 # ---- Зона AD ----------------------------------------------------------------
 
 
-def test_zone_read_and_dns_orphan(analyst: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
+def test_zone_read(analyst: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
     ldap, conn = zone_ldap
     ldap.zones["corp.local"] = {
         "@": [a_record("10.10.0.2")],
@@ -220,14 +213,6 @@ def test_zone_read_and_dns_orphan(analyst: TestClient, db_session: Session, zone
         "srv01": [a_record("10.10.0.5")],
         "web": [cname_record("srv01.corp.local")],
     }
-    r = analyst.post("/api/assets/networks", json={"cidr": "10.10.0.0/24", "scan_enabled": True})
-    assert r.status_code == 201, r.text
-    net = db_session.get(Network, r.json()["id"])
-    assert net is not None
-    net.last_scan_at = NOW
-    db_session.commit()
-    add(db_session, "scan", "10.10.0.5", ip="10.10.0.5")
-
     r = analyst.post("/api/assets/dns", json={"title": "AD", "mode": "ad", "ad_connection_id": conn.id,
                                               "zones": ["corp.local", "lab.local"], "zone_read": True})
     assert r.status_code == 201, r.text
@@ -242,7 +227,6 @@ def test_zone_read_and_dns_orphan(analyst: TestClient, db_session: Session, zone
     assert srv09.seen_at == STAMP
     assert srv09.extra == {"record_type": "A", "ttl": 300, "record_timestamp": STAMP.isoformat(), "server": "dc01.corp.local", "zone": "corp.local"}
     assert rows["srv01.corp.local"].extra["record_timestamp"] is None
-    assert codes(analyst, "dns_orphan") == {"10.10.0.9"}
 
     del ldap.zones["corp.local"]["srv09"]
     assert run(analyst, dns_id, db_session).status == "done"
@@ -398,32 +382,3 @@ def test_auditor_cannot_write(analyst: TestClient, db_session: Session, fake_dns
     assert auditor.post(f"/api/assets/dns/{dns_id}/run").status_code == 403
     assert auditor.put(f"/api/assets/dns/{dns_id}/schedule", json={"interval_hours": 24, "enabled": True}).status_code == 403
     assert auditor.delete(f"/api/assets/dns/{dns_id}/schedule").status_code == 403
-
-
-# ---- PTR сканера ------------------------------------------------------------
-
-
-def test_scan_ptr_uses_configured_server(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer,
-                                         monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_dns.ptr("10.10.0.5", "srv01.corp.local")
-    seen: dict[str, Any] = {}
-
-    async def fake_scan(target: ScanTarget, **kw: Any) -> list[HostResult]:
-        seen["resolver"] = kw.get("resolver")
-        return []
-
-    monkeypatch.setattr(scanner, "scan", fake_scan)
-    monkeypatch.setattr(scanner, "icmp_available", lambda: True)
-    r = analyst.post("/api/assets/networks", json={"cidr": "10.10.0.0/24", "scan_enabled": True})
-    net = db_session.get(Network, r.json()["id"])
-    assert net is not None
-
-    scan_service.start_scan(db_session, net, "tester")
-    assert seen["resolver"] is None  # DNS-сервера нет — системный резолвер сканера
-
-    direct(analyst, server="127.0.0.1", reverse=True)
-    scan_service.start_scan(db_session, net, "tester")
-    resolver = seen["resolver"]
-    assert resolver is not None
-    assert asyncio.run(resolver("10.10.0.5")) == "srv01.corp.local"
-    assert asyncio.run(resolver("10.10.0.77")) == ""

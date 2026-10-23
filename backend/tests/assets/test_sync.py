@@ -226,7 +226,7 @@ def test_single_observation_finds_asset_by_normalised_observation_name(db_sessio
 
 
 def test_ips_are_stored_normalised(db_session: Session, app_settings: Any, now: dt.datetime) -> None:
-    asset, _ = apply_observation(db_session, Observed(source="scan", source_key="v6", ip="2001:DB8:0:0::5", ips=["2001:DB8:0:0::5"], seen_at=now))
+    asset, _ = apply_observation(db_session, Observed(source="dns", source_key="v6", ip="2001:DB8:0:0::5", ips=["2001:DB8:0:0::5"], seen_at=now))
     row = db_session.execute(select(AssetObservation).where(AssetObservation.source_key == "v6")).scalar_one()
     assert (row.ip, row.ips, asset.ip) == ("2001:db8::5", ["2001:db8::5"], "2001:db8::5")
 
@@ -253,8 +253,8 @@ def test_sync_is_single_flight(loaded: Session) -> None:
     assert loaded.execute(select(func.count()).select_from(AssetObservation)).scalar() == 7
 
 
-def test_sync_waits_for_scan_or_dns_write(loaded: Session) -> None:
-    """Блокировку держит запись скана или DNS, а не синхронизация: синхронизация ждёт её и проходит,
+def test_sync_waits_for_dns_or_rt_write(loaded: Session) -> None:
+    """Блокировку держит запись DNS или RackTables, а не синхронизация: синхронизация ждёт её и проходит,
     а не отбрасывается как «уже идёт»."""
     locked = threading.Event()
 

@@ -7,7 +7,7 @@ import type { FindingSummary } from '@/platform/findings/types'
 import type {
   AdConnectionRef, AssetDetail, AssetPatch, AssetSettings, AssetsOverview, AssetsQuery, AssetsResponse, BulkPatch, DiscrepancyBulk, DnsIn, DnsServer, GroupDetail, GroupExpanded,
   GroupsQuery, GroupsResponse, Job, Network, NetworkIn,
-  NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScanStarted, ScheduleIn, SyncStatus, UserDetail, UserPatch, UsersQuery, UsersResponse, Zone, ZoneIn,
+  NetworkSchedule, PinnableField, Racktables, RacktablesIn, ScheduleIn, SyncStatus, UserDetail, UserPatch, UsersQuery, UsersResponse, Zone, ZoneIn,
 } from './types'
 
 export const ASSETS_PAGE_SIZE = 200
@@ -296,23 +296,6 @@ export function useSaveNetwork() {
 
 export function useDeleteNetwork() {
   return useNetworkMutation<number, void>((id) => api.del(`/api/assets/networks/${id}`))
-}
-
-/** Скан сети сейчас; за задачей следит страница через `useJob`. */
-export function useStartScan() {
-  const qc = useQueryClient()
-  return useMutation<ScanStarted, ApiRequestError, number>({
-    mutationFn: (id) => api.post(`/api/assets/networks/${id}/scan`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['assets-jobs'] }),
-  })
-}
-
-export function useSaveSchedule(networkId: number) {
-  return useNetworkMutation<ScheduleIn, NetworkSchedule>((body) => api.put(`/api/assets/networks/${networkId}/schedule`, body))
-}
-
-export function useDeleteSchedule(networkId: number) {
-  return useNetworkMutation<void, void>(() => api.del(`/api/assets/networks/${networkId}/schedule`))
 }
 
 export function useZones() {

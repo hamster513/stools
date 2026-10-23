@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import datetime as dt
 import ipaddress
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,15 +17,15 @@ from api.modules.assets.core.matching import Observed, normalize_fqdn, normalize
 
 #: no_network — адрес актива не входит ни в одну описанную сеть; считается по реестру сетей,
 #: а не по наблюдениям, поэтому его добавляет services.assets, а не `discrepancies`.
-CODES = ("stale", "conflict", "no_av", "ad_inactive", "unreachable", "unknown_host", "dns_orphan", "no_network")
+CODES = ("stale", "conflict", "no_av", "ad_inactive", "no_network")
 #: Виды `extra.cluster` наблюдения AD, при которых актив — виртуальное имя кластера, а не хост.
 VIRTUAL_CLUSTER_KINDS = ("cluster", "role")
 COMPARED = ("name", "fqdn", "ip")
 FIELD_TITLES = {"name": "имя", "fqdn": "FQDN", "ip": "IP"}
 #: «в VM IP …», «данные VM устарели»
-WHERE = {"vm": "в VM", "ksc": "в KSC", "ad": "в AD", "scan": "в скане", "dns": "в DNS", "rt": "в RackTables"}
-WHOSE = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "скана", "dns": "DNS", "rt": "RackTables"}
-TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "scan": "скан", "dns": "DNS", "rt": "RackTables"}
+WHERE = {"vm": "в VM", "ksc": "в KSC", "ad": "в AD", "dns": "в DNS", "rt": "в RackTables"}
+WHOSE = {"vm": "VM", "ksc": "KSC", "ad": "AD", "dns": "DNS", "rt": "RackTables"}
+TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "dns": "DNS", "rt": "RackTables"}
 
 _EPOCH = dt.datetime.min.replace(tzinfo=dt.UTC)
 
@@ -125,18 +124,14 @@ def discrepancies(
     *,
     stale_days: int,
     inactive_days: int,
-    scanned_networks: Callable[[str], bool],
-    scan_alive: Callable[[str], bool | None],
     now: dt.datetime,
 ) -> list[Discrepancy]:
-    """`asset` — каноническая карточка (`canonical`), `scanned_networks(ip)` — адрес в сети,
-    которую сканируют, `scan_alive(ip)` — ответил ли он последнему скану (None — не знаем)."""
+    """`asset` — каноническая карточка (`canonical`)."""
     live = [o for o in observations if o.gone_at is None]
     if not live:
         return []
     out = _field_discrepancies(asset, live, stale_days)
     sources = {o.source for o in live}
-    ip = str(asset.get("ip") or "")
 
     limit = now - dt.timedelta(days=inactive_days)
     # Учётка кластера и его роль — виртуальные имена, не хосты: у них нет агента, входов и своего адреса.
@@ -144,7 +139,7 @@ def discrepancies(
     # Выключенный компьютер AD не «неактивный» и не «без агента»: он выключен.
     ad = [o for o in live if o.source == "ad" and o.extra.get("enabled")]
     ad_active = any((d := _iso(o.extra.get("last_logon"))) and d >= limit for o in ad)
-    if "ksc" not in sources and not virtual and (sources & {"scan", "dns", "vm"} or ad_active):
+    if "ksc" not in sources and not virtual and (sources & {"dns", "vm"} or ad_active):
         out.append(Discrepancy("no_av", "", "", "", "", "нет агента антивируса"))
 
     if ad and not virtual:
@@ -154,25 +149,4 @@ def discrepancies(
             last = max(logons, default=None)
             text = f"неактивный компьютер AD: последний вход {_day(last)}" if last else "неактивный компьютер AD: входов не было"
             out.append(Discrepancy("ad_inactive", "ad", "", last.isoformat() if last else "", "", text))
-
-    zone_dns = [o for o in live if o.source == "dns" and o.extra.get("record_type") != "PTR"]
-    if sources == {"dns"} and len(zone_dns) == len(live):
-        # Только запись зоны: «не отвечает» здесь и есть «запись без живого хоста».
-        for o in zone_dns:
-            if o.ip and scanned_networks(o.ip) and scan_alive(o.ip) is False:
-                out.append(Discrepancy("dns_orphan", "dns", "ip", o.ip, ip, "запись DNS без живого хоста"))
-                break
-    elif not virtual:
-        checked: set[str] = set()
-        for o in live:
-            # Адрес из RackTables, который не отвечает скану, — устаревший инвентарь.
-            if o.source not in ("ksc", "vm", "dns", "rt") or not o.ip or o.ip in checked:
-                continue
-            checked.add(o.ip)
-            if scanned_networks(o.ip) and scan_alive(o.ip) is False:
-                out.append(Discrepancy("unreachable", o.source, "ip", o.ip, ip, f"не отвечает по известному адресу {o.ip}"))
-
-    ptr_only = all(o.extra.get("record_type") == "PTR" for o in live if o.source == "dns")
-    if "scan" in sources and sources <= {"scan", "dns"} and ptr_only:
-        out.append(Discrepancy("unknown_host", "scan", "", ip, "", "найдено сканером, нигде не описано"))
     return out
