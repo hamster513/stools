@@ -34,7 +34,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
 from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.orm import Session
@@ -78,6 +78,13 @@ AdExportCache = dict[int, Any]
 
 def _cut(value: Any, size: int = FIELD_LEN) -> str:
     return str(value or "")[:size]
+
+
+def ad_user_managed(sid: str | None, sam: str | None) -> TypeGuard[str]:
+    """Заводят ли «Активы» учётку `user` из AD: нужен SID, и это не учётка доверия (sam на `$`).
+    Одно правило у синхронизации и у сверки с ячейкой сводки AD (`services.ad_cells`); `TypeGuard` —
+    после «да» SID известен и проверщику типов."""
+    return bool(sid) and not (sam or "").endswith("$")
 
 
 def read_ad_export(cache: AdExportCache | None, data_dir: Path, snapshot_id: int) -> AdExport:
@@ -165,7 +172,7 @@ def users_from_ad(db: Session, data_dir: Path, cache: AdExportCache | None = Non
             if g.sid and ((g.sam or "").lower() in names or (g.name or "").lower() in names)
         }
         for o in idx.objects("user"):
-            if not o.sid or (o.sam or "").endswith("$"):
+            if not ad_user_managed(o.sid, o.sam):
                 continue
             refs = acc.groups.get(o.sid, [])
             last = filetime_to_datetime(o.lastLogonTimestamp)

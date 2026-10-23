@@ -643,10 +643,12 @@ def _pick(
     criticality: frozenset[str] | None = None,
     laps: frozenset[str] | None = None,
     cluster: frozenset[str] | None = None,
+    ad_keys: frozenset[str] | None = None,
 ) -> Picked:
     """Активы под фильтрами списка по данным: (актив, наблюдения, расхождения). Многозначные фильтры —
     «любое из»: `source_has` — есть хоть один из источников, `source_missing` — нет хоть одного,
-    `criticality` `none` — не задана, `laps` — yes | no (актив без наблюдения AD не подходит ни под одно), `cluster` — cluster | role | node. Расхождения
+    `criticality` `none` — не задана, `laps` — yes | no (актив без наблюдения AD не подходит ни под одно), `cluster` — cluster | role | node,
+    `ad_keys` — есть наблюдение AD (и пропавшее) с ключом из состава ячейки сводки AD. Расхождения
     считаются на лету, поэтому фильтры — в памяти; фильтр по расхождениям и их статусам — у
     вызывающего (`DiscFilter`). `with_found=False` — расхождения не считаются и остаются пустыми
     (выбор id для массового изменения без фильтра по расхождениям)."""
@@ -686,6 +688,8 @@ def _pick(
         if laps and (asset.id not in laps_of or ("yes" if laps_of[asset.id] else "no") not in laps):
             continue
         if cluster and kind_of.get(asset.id) not in cluster:
+            continue
+        if ad_keys is not None and not any(r.source == "ad" and r.source_key in ad_keys for r in rows):
             continue
         if needle and not _matches_query(asset, rows, needle):
             continue

@@ -27,10 +27,12 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.jobs import active_job, run_job, start_job
+from api.modules.ad.services.summary_cells import CellInfo, CellNotFound, CellUnavailable, cell_info
 from api.modules.assets.core.discrepancies import CODES
 from api.modules.assets.findings_adapter import MODULE, SCOPE
 from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import AssetJob
+from api.modules.assets.services.ad_cells import assets_check
 from api.modules.assets.services.assets import (
     ANY_CODE,
     CLUSTER_KINDS,
@@ -64,6 +66,7 @@ from api.platform.findings.core import STATUSES, RoleRequired, TransitionError
 from api.platform.findings.router import ChangeBody
 from api.platform.schedule_views import ScheduleIn, ScheduleView, schedule_view
 from api.platform.scheduler import PlatformSchedule, delete_schedule, upsert_schedule
+from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["assets"])
 
@@ -136,6 +139,27 @@ def _check(value: str | frozenset[str] | None, allowed: tuple[str, ...]) -> None
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестное значение фильтра «{v}»")
 
 
+def ad_cell_filter(
+    ad_snapshot: int | None = Query(default=None, ge=1),
+    ad_cell: str | None = Query(default=None, max_length=600),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CellInfo | None:
+    """Состав ячейки сводки AD для фильтра (`services.ad_cells`) — зависимость `_filters` и ручек списков:
+    FastAPI вызывает её раз на запрос, так что ячейка резолвится однажды. Нет обоих параметров — фильтра
+    нет; одного — 422; нет снапшота или ячейки — 404; выгрузка не читается — 409."""
+    if ad_snapshot is None and ad_cell is None:
+        return None
+    if ad_snapshot is None or ad_cell is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="ad_snapshot и ad_cell задаются вместе")
+    try:
+        return cell_info(db, settings.data_dir, ad_snapshot, ad_cell)
+    except CellNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from None
+    except CellUnavailable as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from None
+
+
 def _filters(
     q: str | None = None,
     source_has: QueryList = None,
@@ -151,12 +175,14 @@ def _filters(
     disc_status: QueryList = None,
     assignee: QueryList = None,
     overdue: bool | None = None,
+    ad: CellInfo | None = Depends(ad_cell_filter),
 ) -> dict[str, Any]:
     """Фильтры списка — одни и те же у страницы списка и у выбора «всех по фильтру». `disc_status`
     (коды статусов повтором ключа или через запятую, или `all`), `assignee` (`me`, `none`, логины) и
     `overdue` — про расхождения: актив подходит, если у него есть расхождение под ними (и под `code`,
     если он задан). Фасеты `code, source_has, source_missing, criticality, zone, assignee, network_id` —
-    повтором ключа, внутри фасета «или»; `laps` — yes | no, `cluster` — cluster | role | node по наблюдению AD."""
+    повтором ключа, внутри фасета «или»; `laps` — yes | no, `cluster` — cluster | role | node по наблюдению AD;
+    `ad_snapshot` + `ad_cell` — компьютеры ячейки сводки AD (`services.ad_cells`)."""
     picked = {"source_has": multi(source_has), "source_missing": multi(source_missing), "code": multi(code),
               "zone": multi(zone), "criticality": multi(criticality), "laps": multi(laps),
               "cluster": multi(cluster)}
@@ -170,6 +196,7 @@ def _filters(
     return {
         "q": q, **picked, "network_id": multi_int(network_id), "port": port, "tag": tag,
         "disc_status": disc_status, "assignee": assignee, "overdue": overdue,
+        "ad_keys": ad.computers if ad is not None else None,
     }
 
 
@@ -178,11 +205,15 @@ def get_assets(
     filters: dict[str, Any] = Depends(_filters),
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
+    ad: CellInfo | None = Depends(ad_cell_filter),
     db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     items, total, facets = list_assets(db, **filters, limit=limit, offset=offset, login=user.login)
-    return {"total": total, "items": items, "facets": facets if offset == 0 else None}
+    body = {"total": total, "items": items, "facets": facets if offset == 0 else None}
+    if ad is not None and offset == 0:
+        body["ad_cell"] = assets_check(db, ad)
+    return body
 
 
 @router.get("/assets/ids")

@@ -13,8 +13,16 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.modules.ad.services.summary_cells import CellInfo
 from api.modules.assets.core.users import USER_CODES
-from api.modules.assets.routers.assets import EXPORT_ALL, MAX_LIMIT, SOURCE_TITLES, _check
+from api.modules.assets.routers.assets import (
+    EXPORT_ALL,
+    MAX_LIMIT,
+    SOURCE_TITLES,
+    _check,
+    ad_cell_filter,
+)
+from api.modules.assets.services.ad_cells import users_check
 from api.modules.assets.services.assets import ANY_CODE
 from api.modules.assets.services.user_views import (
     SESSIONS,
@@ -65,8 +73,10 @@ def _filters(
     privileged: QueryList = None,
     code: QueryList = None,
     host_id: QueryInts = None,
+    ad: CellInfo | None = Depends(ad_cell_filter),
 ) -> dict[str, Any]:
-    """Фильтры списка и выгрузки; многозначные — повтором ключа, внутри оси «или», между осями «и»."""
+    """Фильтры списка и выгрузки; многозначные — повтором ключа, внутри оси «или», между осями «и»;
+    `ad_snapshot` + `ad_cell` — пользователи ячейки сводки AD (`services.ad_cells`)."""
     picked = {"source": multi(source), "state": multi(state), "session": multi(session), "local": multi(local),
               "privileged": multi(privileged), "code": multi(code)}
     _check(picked["source"], USER_SOURCES)
@@ -75,7 +85,7 @@ def _filters(
     _check(picked["local"], YES_NO)
     _check(picked["privileged"], YES_NO)
     _check(picked["code"], (*USER_CODES, ANY_CODE))
-    return {"q": q, **picked, "host_id": multi_int(host_id)}
+    return {"q": q, **picked, "host_id": multi_int(host_id), "ad_keys": ad.users if ad is not None else None}
 
 
 def _errors(fn: Any, *args: Any) -> Any:
@@ -92,11 +102,15 @@ def get_users(
     filters: dict[str, Any] = Depends(_filters),
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
+    ad: CellInfo | None = Depends(ad_cell_filter),
     db: Session = Depends(get_db),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     items, total, facets = list_users(db, **filters, limit=limit, offset=offset)
-    return {"total": total, "items": items, "facets": facets if offset == 0 else None}
+    body = {"total": total, "items": items, "facets": facets if offset == 0 else None}
+    if ad is not None and offset == 0:
+        body["ad_cell"] = users_check(db, ad)
+    return body
 
 
 @router.get("/users/export")

@@ -43,6 +43,7 @@ from api.modules.assets.models import (
     AssetUserHost,
     AssetUserObservation,
 )
+from api.modules.assets.services.ad_cells import key_in
 from api.modules.assets.services.assets import ANY_CODE, load_settings
 from api.modules.assets.services.group_views import user_group_ids
 from api.modules.assets.services.users import ad_domains, ad_group_notes
@@ -178,19 +179,23 @@ def list_users(
     privileged: frozenset[str] | None = None,
     code: frozenset[str] | None = None,
     host_id: frozenset[int] | None = None,
+    ad_keys: frozenset[str] | None = None,
     limit: int = 200,
     offset: int = 0,
     now: dt.datetime | None = None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
     """items, total, facets. Слитые (`merged_into`) не показываются. `q` — подстрока sam, UPN,
     отображаемого имени или SID без учёта регистра; `host_id` — пользователи со связью с этими активами
-    (и пропавшей тоже — как блок «Пользователи» карточки хоста); `code` — коды или `any`.
+    (и пропавшей тоже — как блок «Пользователи» карточки хоста); `code` — коды или `any`; `ad_keys` — SID
+    из состава ячейки сводки AD (`services.ad_cells`).
     `q` и `host_id` отбирает база; наблюдения и связи читаются только у отобранных (подзапросом),
     без ORM-объектов: на 100 тыс. учёток список держит в памяти кортежи, а не карточки."""
     now = now or utcnow()
     stale_days = int(load_settings(db)["stale_days"])
     domains = ad_domains(db)
     conds = _user_conditions(q, host_id)
+    if ad_keys is not None:
+        conds.append(key_in(AssetUser.sid, ad_keys))
     picked_ids = select(AssetUser.id).where(*conds)
     # Core, не ORM: сотни тысяч строк-кортежей без обёртки загрузчика ORM.
     conn = db.connection()
