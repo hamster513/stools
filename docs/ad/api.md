@@ -219,6 +219,58 @@ Authenticated Users, Interactive, SYSTEM и др. Такие субъекты д
   в `notes` оговорка «GPO «<имя>»: файлы прочитаны не полностью — назначения групп могут быть
   неполными».
 
+## Ячейки сводки
+
+Кто дал число сводки снапшота: состав каждой ячейки — те же учётки, длины списков которых стали
+числами (`core/summary_cells.py`), и с теми же настройками, с которыми сводка строилась (`params`
+сводки версии 2). У сводки версии 1, у снапшота без сводки и у сводки, чьи `params` уже не
+проходят проверку настроек, — текущие настройки модуля; тогда размер может разойтись с числом
+сводки, это покажет плашка «Активов».
+
+```
+GET  /snapshots/{id}/summary-cell?cell=<ячейка>
+                                       {snapshot_id, collected_at, domain, cell, label, users: N, computers: M}
+                                       404 — снапшота или ячейки нет («ячейки сводки нет»);
+                                       409 «файл выгрузки снапшота недоступен»
+```
+
+Ячейка — компоненты через «:», последний может сам содержать «:»:
+
+```
+accounts:<users|computers>:<ключ COUNTS>            accounts:users:inactive (у users нет laps)
+<password_age|last_logon>:<all|admins>:<le|over>    password_age:admins:365, last_logon:all:over
+groups:<поле>:<SID группы>                          groups:members:S-1-5-21-…-512
+os:<total|enabled|active>:<сборка>:<имя ОС>         os:active:22631:Windows 11 Pro
+```
+
+`domain` — `dns_root` выгрузки, `collected_at` — время сбора. `label` — название ячейки с точным
+интервалом корзины («Возраст пароля 181–365 дн., админы», последняя — «> 1095 дн. или
+неизвестно»). `users`, `computers` — размеры состава, самих ключей ручка не отдаёт. Ключ учётки —
+`sid or dn` (как `source_key` хоста AD в Активах). В `groups:members` пользователи-участники
+идут в `users`, все остальные участники — в `computers`. Ячейка с нулём — 200 с нулями.
+
+Известные края идентификатора: две привилегированные группы без SID дают одну ячейку
+`groups:<поле>:` (фронт показывает их числа текстом, без ссылки); сборка ОС с «:» сделала бы
+ячейку неоднозначной (на практике сборки числовые).
+
+Python (для Assets) — без HTTP:
+
+```python
+from api.modules.ad.services.summary_cells import CellInfo, CellNotFound, CellUnavailable, cell_info
+# cell_info(db: Session, data_dir: Path, snapshot_id: int, cell_id: str) -> CellInfo
+```
+`CellInfo` — frozen dataclass: `snapshot_id`, `collected_at`, `domain`, `cell_id`, `label`,
+`users: frozenset[str]`, `computers: frozenset[str]`, `user_sams: Mapping[str, str]`.
+`user_sams` — ключ → sAMAccountName всех пользователей снапшота (не только ячейки; `""`, если
+sam нет), один словарь на снапшот, только для чтения: по нему «Активы» сверяют, кого они по
+своим правилам не заводят (учётки доверий). `CellNotFound` (`LookupError`) — нет снапшота или
+ячейки, `CellUnavailable` (`RuntimeError`) — файл выгрузки не читается.
+
+Кэш: составы всех ячеек снапшота строятся при первом запросе одним разбором выгрузки и держатся
+в памяти процесса — LRU на 4 снапшота, ключ — (снапшот, отпечаток выгрузки, настройки), так что
+пересчёт с другими настройками строит составы заново. Сама выгрузка после построения не
+держится. Кэш у каждого процесса API свой и сбрасывается перезапуском.
+
 ## Данные центра сертификации
 
 Файл `stools-ad-ca/1` от PowerShell-сборщика (JSON, можно gzip; поля `format`,

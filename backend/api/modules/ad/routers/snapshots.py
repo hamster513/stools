@@ -48,6 +48,7 @@ from api.modules.ad.services.snapshots import (
     severity_counts,
     snapshot_path,
 )
+from api.modules.ad.services.summary_cells import CellNotFound, CellUnavailable, cell_info
 from api.platform.findings import service as finding_svc
 from api.settings import Settings, get_settings
 
@@ -227,6 +228,26 @@ def get_account_groups(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="учётки с таким SID в снапшоте нет")
     return {"snapshot_id": snap.id, "collected_at": snap.collected_at, "sid": sid, "name": idx.principal_name(sid),
             "groups": groups, "notes": found.notes}
+
+
+@router.get("/snapshots/{snapshot_id}/summary-cell")
+def get_summary_cell(
+    snapshot_id: int,
+    cell: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Подпись и размеры ячейки сводки, без самих SID (контракт — docs/ad/api.md, «Ячейки сводки»)."""
+    snap = snapshot_or_404(db, AdSnapshot, snapshot_id)
+    try:
+        info = cell_info(db, settings.data_dir, snap.id, cell)
+    except CellNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CellUnavailable as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return {"snapshot_id": info.snapshot_id, "collected_at": info.collected_at, "domain": info.domain,
+            "cell": info.cell_id, "label": info.label, "users": len(info.users), "computers": len(info.computers)}
 
 
 @router.get("/snapshots/{snapshot_id}/gpo-rights")
