@@ -287,6 +287,15 @@ def test_search(analyst: TestClient, db_session: Session) -> None:
     assert cidrs(analyst, q="%") == ["10.20.0.0/24"]
     assert cidrs(analyst, q="0%_") == ["10.20.0.0/24"]
     assert page(analyst, q="dmz")["total"] == 2
+    # Число вне диапазона VLAN и не-ASCII «цифры» — только текстовый поиск, не 500.
+    assert cidrs(analyst, q="9" * 20) == []
+    assert cidrs(analyst, q="²") == []
+    # Граница диапазона VLAN — ещё равенство.
+    office = page(analyst, q="Офис")["items"][0]
+    assert analyst.put(f"/api/assets/networks/{office['id']}", json={"vlan": 4094}).status_code == 200
+    assert cidrs(analyst, q="4094") == ["10.10.0.0/16"]
+    # Адрес с зоной интерфейса — зона отбрасывается.
+    assert cidrs(analyst, q="fd00:10::1%eth0") == ["fd00:10::/48"]
     assert analyst.get("/api/assets/networks", params={"q": "x" * 201}).status_code == 422
 
 

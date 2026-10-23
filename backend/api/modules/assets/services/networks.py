@@ -228,7 +228,7 @@ def _tag_matches(column: Any, needle: str) -> Any:
 
 def _search(q: str | None) -> tuple[list[Any], bool]:
     """Условие поиска и признак «искали адрес». Адрес — сети, его содержащие; иначе подстрока CIDR, имени,
-    описания, явного или унаследованного тега без учёта регистра (`%` и `_` — буквально), число — ещё и VLAN."""
+    описания, явного или унаследованного тега без учёта регистра (`%` и `_` — буквально), число 1–4094 — ещё и VLAN."""
     needle = (q or "").strip()
     if not needle:
         return [], False
@@ -237,13 +237,15 @@ def _search(q: str | None) -> tuple[list[Any], bool]:
     except ValueError:
         pass
     else:
-        return [_inet(Network.cidr).op(">>=")(_inet(str(addr)))], True
+        # Зона интерфейса (`fe80::1%eth0`) в `inet` не входит — отбрасывается.
+        return [_inet(Network.cidr).op(">>=")(_inet(str(addr).split("%")[0]))], True
     conds = [
         Network.cidr.icontains(needle, autoescape=True), Network.title.icontains(needle, autoescape=True),
         Network.description.icontains(needle, autoescape=True), _tag_matches(Network.tags, needle),
         _tag_matches(Network.implicit_tags, needle),
     ]
-    if needle.isdigit():
+    # VLAN — только число из его диапазона: иное в INTEGER не влезет (500), а «²» — `isdigit()`, но не `int()`.
+    if needle.isascii() and needle.isdigit() and 1 <= int(needle) <= 4094:
         conds.append(Network.vlan == int(needle))
     return [or_(*conds)], False
 
