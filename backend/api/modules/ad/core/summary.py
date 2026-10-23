@@ -26,7 +26,8 @@ from api.modules.ad.core.export import (
     ExportIndex,
 )
 
-SUMMARY_VERSION = 1
+#: 2 — сводка хранит параметры, с которыми построена (`params`).
+SUMMARY_VERSION = 2
 #: Границы корзин возраста пароля и давности входа, дней; последняя корзина — «старше».
 AGE_BOUNDS = (30, 90, 180, 365, 730, 1095)
 GPO_FLAG_USER_DISABLED = 1
@@ -51,46 +52,86 @@ def _delegation(obj: AdObject) -> bool:
     return unconstrained or bool(obj.allowedToDelegateTo) or obj.protocol_transition
 
 
-def _counts(idx: ExportIndex, objs: list[AdObject], days: int, laps: bool) -> dict[str, int]:
+#: Числа блока «Учётные записи». Числа сводки ниже — длины списков учёток из `*_sets`:
+#: по тем же спискам строится состав ячеек (summary_cells), и число с составом не расходятся.
+ACCOUNT_KEYS = (
+    "total", "enabled", "disabled", "active", "inactive", "pwd_never_expires", "pwd_not_required",
+    "no_preauth", "sid_history", "delegation", "laps",
+)
+GROUP_FIELDS = ("members", "enabled", "inactive", "pwd_never_expires", "delegable", "protected_users")
+OS_FIELDS = ("total", "enabled", "active")
+
+
+def account_sets(idx: ExportIndex, objs: list[AdObject], days: int, laps: bool) -> dict[str, list[AdObject]]:
+    """Учётки за числами блока «Учётные записи». Без `laps` ключа laps нет (в сводке — 0)."""
     enabled = [o for o in objs if o.enabled]
-    active = sum(_active(idx, o, days) for o in enabled)
 
-    def flag(mask: int) -> int:
-        return sum(bool((o.uac or 0) & mask) for o in enabled)
+    def flag(mask: int) -> list[AdObject]:
+        return [o for o in enabled if (o.uac or 0) & mask]
 
-    return {
-        "total": len(objs),
-        "enabled": len(enabled),
-        "disabled": len(objs) - len(enabled),
-        "active": active,
-        "inactive": len(enabled) - active,
+    out = {
+        "total": objs,
+        "enabled": enabled,
+        "disabled": [o for o in objs if not o.enabled],
+        "active": [o for o in enabled if _active(idx, o, days)],
+        "inactive": [o for o in enabled if not _active(idx, o, days)],
         "pwd_never_expires": flag(UAC_DONT_EXPIRE_PASSWORD),
         "pwd_not_required": flag(UAC_PASSWD_NOTREQD),
         "no_preauth": flag(UAC_DONT_REQ_PREAUTH),
-        "sid_history": sum(bool(o.sIDHistory) for o in enabled),
-        "delegation": sum(_delegation(o) for o in enabled),
-        "laps": sum(o.lapsExpiry is not None or o.lapsNewExpiry is not None for o in enabled) if laps else 0,
+        "sid_history": [o for o in enabled if o.sIDHistory],
+        "delegation": [o for o in enabled if _delegation(o)],
     }
+    if laps:
+        out["laps"] = [o for o in enabled if o.lapsExpiry is not None or o.lapsNewExpiry is not None]
+    return out
 
 
-def _buckets(ages: list[int | None]) -> list[dict[str, Any]]:
-    """Неизвестный возраст (не входил, пароль не задан) — в последнюю корзину: сумма равна числу учёток."""
-    counts = [0] * (len(AGE_BOUNDS) + 1)
-    for age in ages:
-        pos = len(AGE_BOUNDS) if age is None else next((i for i, le in enumerate(AGE_BOUNDS) if age <= le), len(AGE_BOUNDS))
-        counts[pos] += 1
-    return [{"le": le, "n": n} for le, n in zip([*AGE_BOUNDS, None], counts, strict=True)]
+def _counts(sets: dict[str, list[AdObject]]) -> dict[str, int]:
+    return {key: len(sets.get(key, ())) for key in ACCOUNT_KEYS}
 
 
-def _os(idx: ExportIndex, computers: list[AdObject], days: int) -> list[dict[str, Any]]:
-    rows: dict[tuple[str, str], dict[str, Any]] = {}
+def bucket_of(age: int | None) -> int:
+    """Номер корзины. Неизвестный возраст (не входил, пароль не задан) — в последнюю: сумма равна числу учёток."""
+    if age is None:
+        return len(AGE_BOUNDS)
+    return next((i for i, le in enumerate(AGE_BOUNDS) if age <= le), len(AGE_BOUNDS))
+
+
+def age_sets(idx: ExportIndex, cfg: AdConfig, attr: str) -> dict[str, list[list[AdObject]]]:
+    """Включённые пользователи по корзинам возраста `attr`, все и админы: корзины по AGE_BOUNDS и последняя «старше»."""
+    admins = admin_dns(idx, cfg)
+    now = idx.export.collected_at
+    out: dict[str, list[list[AdObject]]] = {scope: [[] for _ in range(len(AGE_BOUNDS) + 1)] for scope in ("all", "admins")}
+    for u in idx.objects("user"):
+        if not u.enabled:
+            continue
+        pos = bucket_of(days_between(getattr(u, attr), now))
+        out["all"][pos].append(u)
+        if u.dn.lower() in admins:
+            out["admins"][pos].append(u)
+    return out
+
+
+def _buckets(bins: list[list[AdObject]]) -> list[dict[str, Any]]:
+    return [{"le": le, "n": len(b)} for le, b in zip([*AGE_BOUNDS, None], bins, strict=True)]
+
+
+def os_sets(idx: ExportIndex, computers: list[AdObject], days: int) -> dict[tuple[str, str], dict[str, list[AdObject]]]:
+    """Компьютеры по паре (имя ОС, сборка): всего, включённые, активные."""
+    rows: dict[tuple[str, str], dict[str, list[AdObject]]] = {}
     for c in computers:
-        name, build = c.operatingSystem or "", _build(c.operatingSystemVersion)
-        row = rows.setdefault((name, build), {"name": name, "build": build, "total": 0, "enabled": 0, "active": 0})
-        row["total"] += 1
-        row["enabled"] += c.enabled
-        row["active"] += _active(idx, c, days)
-    return sorted(rows.values(), key=lambda r: (-r["total"], r["name"], r["build"]))
+        row = rows.setdefault((c.operatingSystem or "", _build(c.operatingSystemVersion)), {f: [] for f in OS_FIELDS})
+        row["total"].append(c)
+        if c.enabled:
+            row["enabled"].append(c)
+        if _active(idx, c, days):
+            row["active"].append(c)
+    return rows
+
+
+def _os(sets: dict[tuple[str, str], dict[str, list[AdObject]]]) -> list[dict[str, Any]]:
+    rows = [{"name": name, "build": build, **{f: len(row[f]) for f in OS_FIELDS}} for (name, build), row in sets.items()]
+    return sorted(rows, key=lambda r: (-r["total"], r["name"], r["build"]))
 
 
 def _dcs(idx: ExportIndex) -> list[dict[str, Any]]:
@@ -112,23 +153,31 @@ def _dcs(idx: ExportIndex) -> list[dict[str, Any]]:
     return sorted(out, key=lambda r: r["name"].lower())
 
 
-def _groups(idx: ExportIndex, cfg: AdConfig) -> list[dict[str, Any]]:
+def group_name(g: AdObject) -> str:
+    return g.sam or g.name or g.rdn_value
+
+
+def group_sets(idx: ExportIndex, cfg: AdConfig) -> list[tuple[AdObject, dict[str, list[AdObject]]]]:
+    """Привилегированные группы и учётки за числами их строки: «участники» — все рекурсивные
+    члены (и компьютеры), остальные столбцы — среди включённых пользователей."""
     protected = protected_users_dns(idx)
     out = []
     for g in privileged_groups(idx, cfg):
         members = idx.members_recursive(g)
         users = [m for m in members if m.cls == "user" and m.enabled]
-        out.append({
-            "name": g.sam or g.name or g.rdn_value,
-            "sid": g.sid or "",
-            "members": len(members),
-            "enabled": len(users),
-            "inactive": sum(not _active(idx, u, cfg.user_inactivity_days) for u in users),
-            "pwd_never_expires": sum(bool((u.uac or 0) & UAC_DONT_EXPIRE_PASSWORD) for u in users),
-            "delegable": sum(not (u.uac or 0) & UAC_NOT_DELEGATED for u in users),
-            "protected_users": sum(u.dn.lower() in protected for u in users),
-        })
+        out.append((g, {
+            "members": members,
+            "enabled": users,
+            "inactive": [u for u in users if not _active(idx, u, cfg.user_inactivity_days)],
+            "pwd_never_expires": [u for u in users if (u.uac or 0) & UAC_DONT_EXPIRE_PASSWORD],
+            "delegable": [u for u in users if not (u.uac or 0) & UAC_NOT_DELEGATED],
+            "protected_users": [u for u in users if u.dn.lower() in protected],
+        }))
     return out
+
+
+def _groups(sets: list[tuple[AdObject, dict[str, list[AdObject]]]]) -> list[dict[str, Any]]:
+    return [{"name": group_name(g), "sid": g.sid or "", **{f: len(row[f]) for f in GROUP_FIELDS}} for g, row in sets]
 
 
 def _trusts(idx: ExportIndex) -> list[dict[str, Any]]:
@@ -243,27 +292,24 @@ def _clusters(idx: ExportIndex) -> dict[str, Any]:
 
 
 def build_summary(idx: ExportIndex, cfg: AdConfig) -> dict[str, Any]:
-    users = idx.objects("user")
+    """`params` — настройки, с которыми считалась сводка: по ним же считается состав её ячеек."""
     computers = idx.objects("computer")
-    enabled_users = [u for u in users if u.enabled]
-    admins = admin_dns(idx, cfg)
-    now = idx.export.collected_at
 
     def ages(attr: str) -> dict[str, list[dict[str, Any]]]:
-        values = [(u.dn.lower() in admins, days_between(getattr(u, attr), now)) for u in enabled_users]
-        return {"all": _buckets([v for _, v in values]), "admins": _buckets([v for admin, v in values if admin])}
+        return {scope: _buckets(bins) for scope, bins in age_sets(idx, cfg, attr).items()}
 
     return {
         "version": SUMMARY_VERSION,
+        "params": cfg.model_dump(mode="json"),
         "accounts": {
-            "users": _counts(idx, users, cfg.user_inactivity_days, laps=False),
-            "computers": _counts(idx, computers, cfg.computer_inactivity_days, laps=True),
+            "users": _counts(account_sets(idx, idx.objects("user"), cfg.user_inactivity_days, laps=False)),
+            "computers": _counts(account_sets(idx, computers, cfg.computer_inactivity_days, laps=True)),
         },
         "password_age": ages("pwdLastSet"),
         "last_logon": ages("lastLogonTimestamp"),
-        "os": _os(idx, computers, cfg.computer_inactivity_days),
+        "os": _os(os_sets(idx, computers, cfg.computer_inactivity_days)),
         "dcs": _dcs(idx),
-        "groups": _groups(idx, cfg),
+        "groups": _groups(group_sets(idx, cfg)),
         "trusts": _trusts(idx),
         "password_policies": _password_policies(idx),
         "gpos": _gpos(idx),

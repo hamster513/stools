@@ -54,7 +54,7 @@ def _bucket(buckets: list[dict[str, Any]], le: int | None) -> int:
 
 def test_accounts_counts() -> None:
     s = _summary()
-    assert s["version"] == 1
+    assert s["version"] == 2
     assert s["accounts"]["users"] == {
         "total": 6, "enabled": 3, "disabled": 3, "active": 1, "inactive": 2, "pwd_never_expires": 1, "pwd_not_required": 1,
         "no_preauth": 1, "sid_history": 1, "delegation": 0, "laps": 0,
@@ -134,7 +134,7 @@ def test_clusters_block() -> None:
         computer("WS1", 1201, spn=["HOST/ws1"]),
     ])
     s = build_summary(ExportIndex(export), AdConfig())
-    assert s["version"] == 1
+    assert s["version"] == 2
     assert s["clusters"] == {
         "clusters": [{
             "name": "CLUSTER01", "dn": f"CN=CLUSTER01,CN=Computers,{DN}", "enabled": True,

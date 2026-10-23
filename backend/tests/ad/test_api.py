@@ -154,7 +154,7 @@ def test_summary_after_import_and_409_when_not_computed(auth_client: TestClient,
     r = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["version"] == 1 and body["accounts"]["users"]["total"] > 0 and body["accounts"]["computers"]["total"] == 2
+    assert body["version"] == 2 and body["accounts"]["users"]["total"] > 0 and body["accounts"]["computers"]["total"] == 2
     db_session.get(AdSnapshot, snap_id).summary_json = ""
     db_session.commit()
     r = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary")
