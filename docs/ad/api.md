@@ -59,7 +59,8 @@ DELETE /snapshots/{id}                 204        — удаляет наход�
 409, нужен пересчёт.
 
 ```
-{version: 1,
+{version: 2,
+ params: {…}                                                          AdConfig, с которым построена сводка
  accounts: {users: COUNTS, computers: COUNTS},
  password_age: {all: BUCKETS, admins: BUCKETS}, last_logon: {all: BUCKETS, admins: BUCKETS},
  os:   [{name, build, total, enabled, active}]                         по убыванию total
@@ -225,11 +226,14 @@ Authenticated Users, Interactive, SYSTEM и др. Такие субъекты д
 числами (`core/summary_cells.py`), и с теми же настройками, с которыми сводка строилась (`params`
 сводки версии 2). У сводки версии 1, у снапшота без сводки и у сводки, чьи `params` уже не
 проходят проверку настроек, — текущие настройки модуля; тогда размер может разойтись с числом
-сводки, это покажет плашка «Активов».
+сводки. Ручка отдаёт оба: `users`/`computers` — размеры состава, `summary_n` — число со страницы
+сводки, `params_saved` — состав посчитан по `params` сводки. Если `users + computers` не равно
+`summary_n`, плашка «Активов» называет оба числа и просит пересчитать снапшот.
 
 ```
 GET  /snapshots/{id}/summary-cell?cell=<ячейка>
-                                       {snapshot_id, collected_at, domain, cell, label, users: N, computers: M}
+                                       {snapshot_id, collected_at, domain, cell, label, users: N, computers: M,
+                                        summary_n: K | null, params_saved}
                                        404 — снапшота или ячейки нет («ячейки сводки нет»);
                                        409 «файл выгрузки снапшота недоступен»
 ```
@@ -248,6 +252,9 @@ os:<total|enabled|active>:<сборка>:<имя ОС>         os:active:22631:W
 неизвестно»). `users`, `computers` — размеры состава, самих ключей ручка не отдаёт. Ключ учётки —
 `sid or dn` (как `source_key` хоста AD в Активах). В `groups:members` пользователи-участники
 идут в `users`, все остальные участники — в `computers`. Ячейка с нулём — 200 с нулями.
+`summary_n` — число ячейки в сохранённой сводке снапшота; `null` — сводки нет, её JSON не читается
+или такого числа в ней нет. `params_saved: false` — состав посчитан по текущим настройкам модуля
+(сводка версии 1, без сводки, `params` не проходят проверку, JSON сводки испорчен).
 
 Известные края идентификатора: две привилегированные группы без SID дают одну ячейку
 `groups:<поле>:` (фронт показывает их числа текстом, без ссылки); сборка ОС с «:» сделала бы
@@ -260,7 +267,8 @@ from api.modules.ad.services.summary_cells import CellInfo, CellNotFound, CellUn
 # cell_info(db: Session, data_dir: Path, snapshot_id: int, cell_id: str) -> CellInfo
 ```
 `CellInfo` — frozen dataclass: `snapshot_id`, `collected_at`, `domain`, `cell_id`, `label`,
-`users: frozenset[str]`, `computers: frozenset[str]`, `user_sams: Mapping[str, str]`.
+`users: frozenset[str]`, `computers: frozenset[str]`, `user_sams: Mapping[str, str]`,
+`summary_n: int | None`, `params_saved: bool` (как в ручке).
 `user_sams` — ключ → sAMAccountName всех пользователей снапшота (не только ячейки; `""`, если
 sam нет), один словарь на снапшот, только для чтения: по нему «Активы» сверяют, кого они по
 своим правилам не заводят (учётки доверий). `CellNotFound` (`LookupError`) — нет снапшота или
@@ -270,7 +278,10 @@ sam нет), один словарь на снапшот, только для ч
 в памяти процесса — LRU на 4 снапшота, ключ — (снапшот, отпечаток выгрузки, настройки), так что
 пересчёт с другими настройками строит составы заново. Построения идут по одному: одновременные
 первые запросы по снапшоту ждут одного разбора, а попадания в кэш построения не ждут. Сама
-выгрузка после построения не держится. Кэш у каждого процесса API свой и сбрасывается перезапуском.
+выгрузка после построения не держится. Разобранный JSON сводки (параметры и числа для `summary_n`)
+тоже держится — LRU на 4, ключ — (снапшот, отпечаток выгрузки, JSON сводки): листание, выгрузки и
+выбор «всех по фильтру» сводку повторно не разбирают, а пересчёт снапшота (новая сводка при том же
+файле) разбирается заново. Кэш у каждого процесса API свой и сбрасывается перезапуском.
 
 ## Данные центра сертификации
 

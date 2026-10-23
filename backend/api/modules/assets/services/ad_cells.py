@@ -26,7 +26,8 @@ def key_in(column: Any, keys: frozenset[str]) -> Any:
 
 def _check(info: CellInfo, mine: frozenset[str], other: frozenset[str], found: int, not_managed: int) -> dict[str, Any]:
     return {"label": info.label, "collected_at": info.collected_at.isoformat(), "domain": info.domain,
-            "in_summary": len(mine), "found": found, "not_managed": not_managed, "other": len(other)}
+            "in_summary": len(mine), "found": found, "not_managed": not_managed, "other": len(other),
+            "summary_n": info.summary_n}
 
 
 def users_check(db: Session, info: CellInfo) -> dict[str, Any]:

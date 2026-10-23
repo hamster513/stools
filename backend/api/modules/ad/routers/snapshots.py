@@ -247,7 +247,8 @@ def get_summary_cell(
     except CellUnavailable as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return {"snapshot_id": info.snapshot_id, "collected_at": info.collected_at, "domain": info.domain,
-            "cell": info.cell_id, "label": info.label, "users": len(info.users), "computers": len(info.computers)}
+            "cell": info.cell_id, "label": info.label, "users": len(info.users), "computers": len(info.computers),
+            "summary_n": info.summary_n, "params_saved": info.params_saved}
 
 
 @router.get("/snapshots/{snapshot_id}/gpo-rights")

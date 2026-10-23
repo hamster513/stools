@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -70,7 +71,8 @@ def test_summary_cell_ok(auth_client: TestClient) -> None:
     body = r.json()
     assert body == {"snapshot_id": snap_id, "collected_at": snap["collected_at"], "domain": "corp.local",
                     "cell": INACTIVE, "label": "Пользователи: неактивно",
-                    "users": cell_count(summary, INACTIVE), "computers": 0}
+                    "users": cell_count(summary, INACTIVE), "computers": 0,
+                    "summary_n": cell_count(summary, INACTIVE), "params_saved": True}
     assert body["users"] > 0
     r = auth_client.get(url, params={"cell": ADMINS_MEMBERS})
     assert r.status_code == 200, r.text
@@ -140,6 +142,9 @@ def test_cell_info_uses_build_params(auth_client: TestClient, app_settings: Any,
     save_config(db_session, AdConfig(user_inactivity_days=365), "tester")
     info = svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE)
     assert len(info.users) == cell_count(summary, INACTIVE)
+    assert info.params_saved and info.summary_n == len(info.users) + len(info.computers)
+    info = svc.cell_info(db_session, app_settings.data_dir, snap_id, ADMINS_MEMBERS)
+    assert info.params_saved and info.summary_n == len(info.users) + len(info.computers) == cell_count(summary, ADMINS_MEMBERS)
 
 
 def test_cell_info_v1_summary_uses_current_config(auth_client: TestClient, app_settings: Any, db_session: Session) -> None:
@@ -151,28 +156,68 @@ def test_cell_info_v1_summary_uses_current_config(auth_client: TestClient, app_s
     assert len(expected) != cell_count(summary, INACTIVE)  # иначе тест не различает настройки
     v1 = {k: v for k, v in summary.items() if k != "params"} | {"version": 1}
     _set_summary(db_session, snap_id, v1)
-    assert svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE).users == expected
+    info = svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE)
+    assert info.users == expected
+    # Число со страницы сводки — из сохранённой сводки, а не размер состава по текущим настройкам.
+    assert info.summary_n == cell_count(summary, INACTIVE) and not info.params_saved
+    body = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary-cell", params={"cell": INACTIVE}).json()
+    assert body["users"] == len(expected)
+    assert body["summary_n"] == cell_count(summary, INACTIVE) and body["params_saved"] is False
 
 
-@pytest.mark.parametrize("summary_json", ["", "bad-params"])
+@pytest.mark.parametrize("summary_json", ["", "bad-params", "corrupt", "not-object"])
 def test_cell_info_no_or_invalid_params_uses_current_config(
     auth_client: TestClient, app_settings: Any, db_session: Session, summary_json: str
 ) -> None:
-    """Сводки нет (снапшот до её появления) или её параметры уже не проходят проверку — текущие настройки."""
+    """Сводки нет (снапшот до её появления), её параметры уже не проходят проверку или сам JSON сводки
+    испорчен — текущие настройки; числа сводки нет, если сводка не читается."""
     snap_id = _snapshot(auth_client)
     current = AdConfig(user_inactivity_days=365)
     save_config(db_session, current, "tester")
     expected = _cells_by(app_settings.data_dir, snap_id, current)[INACTIVE].users
     snap = db_session.get(AdSnapshot, snap_id)
     assert snap is not None
-    if summary_json:
-        summary = json.loads(snap.summary_json)
+    summary = json.loads(snap.summary_json)
+    summary_n = None
+    if summary_json == "bad-params":
         summary["params"] = {"user_inactivity_days": "не число"}
         snap.summary_json = json.dumps(summary)
+        summary_n = cell_count(summary, INACTIVE)
+    elif summary_json == "corrupt":
+        snap.summary_json = snap.summary_json[: len(snap.summary_json) // 2]
+    elif summary_json == "not-object":
+        snap.summary_json = "[]"
     else:
         snap.summary_json = ""
     db_session.commit()
-    assert svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE).users == expected
+    info = svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE)
+    assert info.users == expected
+    assert info.summary_n == summary_n and not info.params_saved
+    r = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary-cell", params={"cell": INACTIVE})
+    assert r.status_code == 200, r.text
+
+
+def test_cell_info_summary_parsed_once(auth_client: TestClient, app_settings: Any, db_session: Session,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """JSON сводки разбирается один раз на снапшот; пересчёт снапшота (новая сводка при том же файле
+    выгрузки) разбирается заново, а не отдаёт прежнее число."""
+    snap_id = _snapshot(auth_client)
+    summary = _summary(auth_client, snap_id)
+    parsed: list[str] = []
+
+    def counting(text: str) -> Any:
+        parsed.append(text)
+        return json.loads(text)
+
+    monkeypatch.setattr(svc, "json", SimpleNamespace(loads=counting))
+    svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE)
+    svc.cell_info(db_session, app_settings.data_dir, snap_id, ADMINS_MEMBERS)
+    assert svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE).params_saved
+    assert len(parsed) == 1
+    _set_summary(db_session, snap_id, summary | {"accounts": summary["accounts"] | {
+        "users": summary["accounts"]["users"] | {"inactive": 12345}}})
+    assert svc.cell_info(db_session, app_settings.data_dir, snap_id, INACTIVE).summary_n == 12345
+    assert len(parsed) == 2
 
 
 def test_cell_info_lru_keeps_four_snapshots(auth_client: TestClient, app_settings: Any, db_session: Session,

@@ -42,9 +42,9 @@ SAMS = {sid(1001): "user01", sid(1002): "user02", sid(1004): "user04", sid(1005)
 
 
 def info(users: frozenset[str] = CELL_USERS, computers: frozenset[str] = CELL_COMPUTERS,
-         sams: dict[str, str] | None = None) -> CellInfo:
+         sams: dict[str, str] | None = None, summary_n: int | None = 8) -> CellInfo:
     return CellInfo(SNAP, COLLECTED, "corp.example", CELL, "Возраст пароля 181–365 дн., админы", users, computers,
-                    sams if sams is not None else SAMS)
+                    sams if sams is not None else SAMS, summary_n, True)
 
 
 @pytest.fixture
@@ -116,7 +116,8 @@ def test_users_filtered_by_cell(auth_client: TestClient, registry: dict[str, int
     assert body["total"] == 2
     assert body["facets"]["privileged"] == {"yes": 1, "no": 1}
     assert body["ad_cell"] == {"label": "Возраст пароля 181–365 дн., админы", "collected_at": COLLECTED.isoformat(),
-                               "domain": "corp.example", "in_summary": 5, "found": 2, "not_managed": 1, "other": 3}
+                               "domain": "corp.example", "in_summary": 5, "found": 2, "not_managed": 1, "other": 3,
+                               "summary_n": 8}
     assert cell["calls"] == [(SNAP, CELL)]
 
 
@@ -137,6 +138,13 @@ def test_users_found_ignores_other_filters(auth_client: TestClient, registry: di
     assert [u["id"] for u in body["items"]] == [registry["u1"]]
     assert body["total"] == 1
     assert body["ad_cell"]["found"] == 2
+
+
+def test_users_check_summary_n_none(auth_client: TestClient, registry: dict[str, int], cell: dict[str, Any]) -> None:
+    """Числа на странице сводки нет (сводка не читается) — `summary_n` null, состав и сверка как обычно."""
+    cell["info"] = info(summary_n=None)
+    body = auth_client.get("/api/assets/users", params=PARAMS).json()
+    assert body["ad_cell"]["summary_n"] is None and body["ad_cell"]["in_summary"] == 5
 
 
 def test_users_without_cell_or_on_next_page_have_no_check(auth_client: TestClient, registry: dict[str, int], cell: dict[str, Any]) -> None:
@@ -165,7 +173,8 @@ def test_assets_filtered_by_cell(auth_client: TestClient, registry: dict[str, in
     assert {a["id"] for a in body["items"]} == {registry["a1"], registry["a2"]}
     assert body["total"] == 2
     assert body["ad_cell"] == {"label": "Возраст пароля 181–365 дн., админы", "collected_at": COLLECTED.isoformat(),
-                               "domain": "corp.example", "in_summary": 3, "found": 2, "not_managed": 0, "other": 5}
+                               "domain": "corp.example", "in_summary": 3, "found": 2, "not_managed": 0, "other": 5,
+                               "summary_n": 8}
     assert cell["calls"] == [(SNAP, CELL)]
     body = auth_client.get("/api/assets/assets", params={**PARAMS, "q": "ws01"}).json()
     assert [a["id"] for a in body["items"]] == [registry["a1"]] and body["ad_cell"]["found"] == 2
@@ -200,6 +209,7 @@ def test_cell_param_pair_required_422(auth_client: TestClient, cell: dict[str, A
         r = auth_client.get(url, params=params)
         assert r.status_code == 422, (params, r.text)
     assert auth_client.get(url, params={"ad_snapshot": 0, "ad_cell": CELL}).status_code == 422
+    assert auth_client.get(url, params={"ad_snapshot": 99999999999, "ad_cell": CELL}).status_code == 422
     assert auth_client.get(url, params={"ad_snapshot": SNAP, "ad_cell": "x" * 601}).status_code == 422
     assert cell["calls"] == []
 
@@ -258,9 +268,11 @@ def test_cell_filter_on_real_snapshot(auth_client: TestClient) -> None:
     assert check["found"] == check["in_summary"] - 1 == body["total"]
     assert "PARTNER$" not in {u["sam"] for u in body["items"]}
     assert check["domain"] == cell_users["domain"] and check["label"] == cell_users["label"]
+    assert check["summary_n"] == cell_users["summary_n"] == check["in_summary"]
 
     cell_hosts = auth_client.get(f"/api/ad/snapshots/{snap_id}/summary-cell", params={"cell": "accounts:computers:total"}).json()
     body = auth_client.get("/api/assets/assets", params={"ad_snapshot": snap_id, "ad_cell": "accounts:computers:total"}).json()
     assert body["ad_cell"]["in_summary"] == cell_hosts["computers"] > 0
     assert body["ad_cell"]["found"] == body["total"] == cell_hosts["computers"]
+    assert body["ad_cell"]["summary_n"] == cell_hosts["computers"]
     assert body["ad_cell"]["other"] == 0

@@ -140,7 +140,7 @@ def _check(value: str | frozenset[str] | None, allowed: tuple[str, ...]) -> None
 
 
 def ad_cell_filter(
-    ad_snapshot: int | None = Query(default=None, ge=1),
+    ad_snapshot: int | None = Query(default=None, ge=1, le=2**31 - 1),  # integer базы; больше — ошибка драйвера
     ad_cell: str | None = Query(default=None, max_length=600),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
