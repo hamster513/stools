@@ -21,7 +21,7 @@ const ACCOUNT_COLUMNS: ColumnDef<'label' | 'users' | 'computers'>[] = [
   { key: 'users', label: 'Пользователи', width: 120, align: 'right' },
   { key: 'computers', label: 'Компьютеры', width: 120, align: 'right' },
 ]
-const DC_COLUMNS: ColumnDef<'name' | 'dns' | 'os' | 'build' | 'rodc' | 'logon' | 'pwd' | 'owner' | 'asset' | 'ips' | 'subnet' | 'vm' | 'av'>[] = [
+const DC_COLUMNS: ColumnDef<'name' | 'dns' | 'os' | 'build' | 'rodc' | 'logon' | 'pwd' | 'owner' | 'ips' | 'subnet' | 'vm' | 'av'>[] = [
   { key: 'name', label: 'Имя', width: 140 },
   { key: 'dns', label: 'DNS', width: 200, flex: true },
   { key: 'os', label: 'ОС', width: 200 },
@@ -30,7 +30,6 @@ const DC_COLUMNS: ColumnDef<'name' | 'dns' | 'os' | 'build' | 'rodc' | 'logon' |
   { key: 'logon', label: 'Вход, дн.', width: 88, align: 'right' },
   { key: 'pwd', label: 'Пароль, дн.', width: 96, align: 'right' },
   { key: 'owner', label: 'Владелец', width: 180 },
-  { key: 'asset', label: 'Актив', width: 88 },
   { key: 'ips', label: 'IP', width: 128 },
   { key: 'subnet', label: 'Подсеть AD', width: 104 },
   { key: 'vm', label: 'Уязвимости (VM)', width: 176 },
@@ -124,6 +123,20 @@ function num(n: number | null): string {
   return n === null ? '—' : n.toLocaleString('ru-RU')
 }
 
+/** Список «Активов» с составом ячейки сводки (идентификатор — как в `core/summary_cells.py`). */
+function cellHref(page: 'users' | 'assets', snapshotId: number, cell: string): string {
+  return `/assets/${page === 'users' ? 'users' : 'list'}?ad_snapshot=${snapshotId}&ad_cell=${encodeURIComponent(cell)}`
+}
+
+const CELL_TITLE = 'Открыть список в Активах'
+const CELL_LINK = 'rounded-sm hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
+
+/** Число ячейки: ненулевое — ссылка на её состав в «Активах», ноль, «—» и ячейка без адреса — текстом. */
+function cellNum(n: number | null, href: string | null): ReactNode {
+  if (!n || !href) return num(n)
+  return <Link to={href} className={CELL_LINK} title={CELL_TITLE}>{num(n)}</Link>
+}
+
 function yesNo(v: boolean | null): string {
   return v === null ? '—' : v ? 'да' : 'нет'
 }
@@ -154,8 +167,8 @@ function Table<C extends string>({ storageKey, columns, rows }: { storageKey: st
   )
 }
 
-/** Горизонтальные полосы по корзинам; длина — от самой большой корзины. */
-function Histogram({ title, buckets }: { title: string; buckets: SummaryBucket[] }) {
+/** Горизонтальные полосы по корзинам; длина — от самой большой корзины. Ненулевая полоса — ссылка на её состав. */
+function Histogram({ title, buckets, href }: { title: string; buckets: SummaryBucket[]; href: (b: SummaryBucket) => string }) {
   const total = buckets.reduce((s, b) => s + b.n, 0)
   const max = Math.max(1, ...buckets.map((b) => b.n))
   return (
@@ -165,22 +178,30 @@ function Histogram({ title, buckets }: { title: string; buckets: SummaryBucket[]
         <p className="text-xs text-text-secondary">учётных записей нет</p>
       ) : (
         <div className="flex flex-col gap-1.5">
-          {buckets.map((b) => (
-            <div key={String(b.le)} className="flex items-center gap-2 text-xs" title={`${bucketLabel(b)}: ${b.n.toLocaleString('ru-RU')} (${Math.round((b.n / total) * 100)}%)`}>
-              <span className="w-20 shrink-0 text-text-secondary">{bucketLabel(b)}</span>
-              <div className="h-3 min-w-0 flex-1 rounded-sm bg-row-hover">
-                <div className="h-full rounded-sm bg-primary" style={{ width: `${(b.n / max) * 100}%` }} />
-              </div>
-              <span className="w-14 shrink-0 text-right font-mono tabular-nums text-text">{b.n.toLocaleString('ru-RU')}</span>
-            </div>
-          ))}
+          {buckets.map((b) => {
+            const info = `${bucketLabel(b)}: ${b.n.toLocaleString('ru-RU')} (${Math.round((b.n / total) * 100)}%)`
+            const bar = (
+              <>
+                <span className="w-20 shrink-0 text-text-secondary group-hover:underline">{bucketLabel(b)}</span>
+                <div className="h-3 min-w-0 flex-1 rounded-sm bg-row-hover">
+                  <div className="h-full rounded-sm bg-primary" style={{ width: `${(b.n / max) * 100}%` }} />
+                </div>
+                <span className="w-14 shrink-0 text-right font-mono tabular-nums text-text group-hover:underline">{b.n.toLocaleString('ru-RU')}</span>
+              </>
+            )
+            return b.n > 0 ? (
+              <Link key={String(b.le)} to={href(b)} className="group flex items-center gap-2 rounded-sm text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title={`${info}. ${CELL_TITLE}`}>{bar}</Link>
+            ) : (
+              <div key={String(b.le)} className="flex items-center gap-2 text-xs" title={info}>{bar}</div>
+            )
+          })}
         </div>
       )}
     </div>
   )
 }
 
-function Distributions({ s }: { s: Summary }) {
+function Distributions({ s, snapshotId }: { s: Summary; snapshotId: number }) {
   const [admins, setAdmins] = useState(false)
   const pick = admins ? 'admins' : 'all'
   return (
@@ -202,8 +223,8 @@ function Distributions({ s }: { s: Summary }) {
         ))}
       </div>
       <div className="grid gap-6 md:grid-cols-2">
-        <Histogram title="Возраст паролей" buckets={s.password_age[pick]} />
-        <Histogram title="Давность входа" buckets={s.last_logon[pick]} />
+        <Histogram title="Возраст паролей" buckets={s.password_age[pick]} href={(b) => cellHref('users', snapshotId, `password_age:${pick}:${b.le ?? 'over'}`)} />
+        <Histogram title="Давность входа" buckets={s.last_logon[pick]} href={(b) => cellHref('users', snapshotId, `last_logon:${pick}:${b.le ?? 'over'}`)} />
       </div>
     </Section>
   )
@@ -285,9 +306,6 @@ function Clusters({ c }: { c: SummaryClusters }) {
 /** Ячейки связок контроллера; пока связки грузятся или не пришли — «—». */
 function dcLinkCells(l: DcLink | undefined) {
   return {
-    asset: l?.asset_id != null
-      ? <Link to={`/assets/list?asset=${l.asset_id}`} className="text-text underline hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title="Карточка актива в реестре Assets">#{l.asset_id}</Link>
-      : '—',
     ips: l?.ips.length ? <span className="font-mono">{l.ips.join(', ')}</span> : '—',
     subnet: l?.in_ad_subnet == null ? '—' : l.in_ad_subnet ? 'да' : <span className="text-risk-high">нет подсети</span>,
     vm: l?.vm ? `${l.vm.critical} критичных, ${l.vm.exploitable} с эксплойтом` : '—',
@@ -295,7 +313,7 @@ function dcLinkCells(l: DcLink | undefined) {
   }
 }
 
-function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
+function SummaryView({ s, domainId, snapshotId }: { s: Summary; domainId: number; snapshotId: number }) {
   const { users, computers } = s.accounts
   const links = useDcLinks(domainId)
   const clusters = s.clusters
@@ -308,33 +326,42 @@ function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
             columns={ACCOUNT_COLUMNS}
             rows={ACCOUNT_ROWS.map((r) => ({
               key: r.key,
-              cells: { label: r.label, users: r.key === 'laps' ? '—' : num(users[r.key]), computers: num(computers[r.key]) },
+              cells: {
+                label: r.label,
+                users: r.key === 'laps' ? '—' : cellNum(users[r.key], cellHref('users', snapshotId, `accounts:users:${r.key}`)),
+                computers: cellNum(computers[r.key], cellHref('assets', snapshotId, `accounts:computers:${r.key}`)),
+              },
             }))}
           />
         </Section>
       )}
 
-      {s.password_age.all.some((b) => b.n > 0) || s.last_logon.all.some((b) => b.n > 0) ? <Distributions s={s} /> : null}
+      {s.password_age.all.some((b) => b.n > 0) || s.last_logon.all.some((b) => b.n > 0) ? <Distributions s={s} snapshotId={snapshotId} /> : null}
 
       {s.dcs.length > 0 && (
-        <Section title="Контроллеры домена" about="Дни — с последнего входа и с последней смены пароля учётной записи контроллера на момент сбора. Владелец — владелец объекта в AD; «—» — дескриптор не прочитан. Актив, IP, уязвимости и антивирус — из Assets, VM и KSC сейчас, по имени хоста; «нет подсети» — ни один адрес не входит в подсети сайтов AD; «—» — данных нет.">
+        <Section title="Контроллеры домена" about="Дни — с последнего входа и с последней смены пароля учётной записи контроллера на момент сбора. Владелец — владелец объекта в AD; «—» — дескриптор не прочитан. IP, уязвимости и антивирус — из Assets, VM и KSC сейчас, по имени хоста; имя ведёт в карточку актива, если хост есть в Assets; «нет подсети» — ни один адрес не входит в подсети сайтов AD; «—» — данных нет.">
           <Table
             storageKey="ad-summary-dcs"
             columns={DC_COLUMNS}
-            rows={s.dcs.map((d) => ({
-              key: d.dn,
-              cells: {
-                name: <span className="text-text">{d.name}</span>,
-                dns: <span className="break-all">{d.dns || '—'}</span>,
-                os: d.os || '—',
-                build: d.build || '—',
-                rodc: d.rodc ? 'да' : '',
-                logon: num(d.last_logon_days),
-                pwd: num(d.pwd_age_days),
-                owner: d.owner || '—',
-                ...dcLinkCells(links.data?.find((l) => l.name === d.name)),
-              },
-            }))}
+            rows={s.dcs.map((d) => {
+              const l = links.data?.find((x) => x.name === d.name)
+              return {
+                key: d.dn,
+                cells: {
+                  name: l?.asset_id != null
+                    ? <Link to={`/assets/list?asset=${l.asset_id}`} className="rounded-sm text-text hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title="Карточка актива в реестре Assets">{d.name}</Link>
+                    : <span className="text-text">{d.name}</span>,
+                  dns: <span className="break-all">{d.dns || '—'}</span>,
+                  os: d.os || '—',
+                  build: d.build || '—',
+                  rodc: d.rodc ? 'да' : '',
+                  logon: num(d.last_logon_days),
+                  pwd: num(d.pwd_age_days),
+                  owner: d.owner || '—',
+                  ...dcLinkCells(l),
+                },
+              }
+            })}
           />
         </Section>
       )}
@@ -346,18 +373,22 @@ function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
           <Table
             storageKey="ad-summary-groups"
             columns={GROUP_COLUMNS}
-            rows={s.groups.map((g) => ({
-              key: g.sid || g.name,
-              cells: {
-                name: <Link to={`/ad/domains/${domainId}/findings?q=${encodeURIComponent(g.name)}`} className="text-text hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">{g.name}</Link>,
-                members: num(g.members),
-                enabled: num(g.enabled),
-                inactive: num(g.inactive),
-                never: num(g.pwd_never_expires),
-                delegable: num(g.delegable),
-                protected: num(g.protected_users),
-              },
-            }))}
+            rows={s.groups.map((g) => {
+              // Группа без SID ячейки не имеет — числа текстом.
+              const n = (field: string, v: number) => cellNum(v, g.sid ? cellHref('users', snapshotId, `groups:${field}:${g.sid}`) : null)
+              return {
+                key: g.sid || g.name,
+                cells: {
+                  name: <Link to={`/ad/domains/${domainId}/findings?q=${encodeURIComponent(g.name)}`} className="text-text hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">{g.name}</Link>,
+                  members: n('members', g.members),
+                  enabled: n('enabled', g.enabled),
+                  inactive: n('inactive', g.inactive),
+                  never: n('pwd_never_expires', g.pwd_never_expires),
+                  delegable: n('delegable', g.delegable),
+                  protected: n('protected_users', g.protected_users),
+                },
+              }
+            })}
           />
         </Section>
       )}
@@ -369,7 +400,14 @@ function SummaryView({ s, domainId }: { s: Summary; domainId: number }) {
             columns={OS_COLUMNS}
             rows={s.os.map((o) => ({
               key: `${o.name}|${o.build}`,
-              cells: { name: <span className="text-text">{o.name || 'не указана'}</span>, build: o.build || '—', total: num(o.total), enabled: num(o.enabled), active: num(o.active) },
+              cells: {
+                name: <span className="text-text">{o.name || 'не указана'}</span>,
+                build: o.build || '—',
+                // Ячейка — сборка и имя как в JSON сводки, пустые строки тоже.
+                total: cellNum(o.total, cellHref('assets', snapshotId, `os:total:${o.build}:${o.name}`)),
+                enabled: cellNum(o.enabled, cellHref('assets', snapshotId, `os:enabled:${o.build}:${o.name}`)),
+                active: cellNum(o.active, cellHref('assets', snapshotId, `os:active:${o.build}:${o.name}`)),
+              },
             }))}
           />
         </Section>
@@ -467,7 +505,7 @@ export function SummaryPage({ domainId }: { domainId: number }) {
         <h1 className="text-base font-semibold text-text">Сводка — {overview.data.domain.dns_root || overview.data.domain.netbios}</h1>
         <p className="max-w-2xl text-xs text-text-secondary">Снапшот #{snap.id} от {when(snap.collected_at)}. Числа — на момент сбора выгрузки.</p>
       </div>
-      <SummaryView s={summary.data} domainId={domainId} />
+      <SummaryView s={summary.data} domainId={domainId} snapshotId={snap.id} />
     </div>
   )
 }
