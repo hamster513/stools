@@ -1,5 +1,6 @@
 """Таблицы модуля Assets (спека §1): сети, справочник зон, активы, наблюдения источников,
-DNS-серверы, задачи, настройки; пользователи как активы — свои таблицы `asset_user*`.
+DNS-серверы, задачи, настройки; пользователи и группы как активы — свои таблицы `asset_user*`,
+`asset_group*`.
 
 Актив — каноническая карточка, наблюдение — последнее, что о хосте сказал один источник.
 Карточка пересчитывается из наблюдений, а ручные поля (`criticality`, `tags`, `note`,
@@ -217,6 +218,85 @@ class AssetUserGroup(Base):
     group_name: Mapped[str] = mapped_column(String(512), default="")
     direct: Mapped[bool] = mapped_column(Boolean, default=True)
     source: Mapped[str] = mapped_column(String(16), default="ad")
+
+
+class AssetGroup(Base):
+    """Группа как актив (спека «Группы как активы» §3): доменная из AD или локальная хоста из VM.
+
+    Личность — `group_key` (`core.groups.group_key`): (домен, SID) у доменной, (хост, SID) у локальной,
+    без SID — имя. `in_ad=False` — доменная группа, которую VM видит участником, а выгрузки AD — нет."""
+
+    __tablename__ = "asset_group"
+    __table_args__ = (UniqueConstraint("group_key", name="uq_asset_group_group_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_key: Mapped[str] = mapped_column(String(600))
+    sid: Mapped[str] = mapped_column(String(255), default="", index=True)
+    name: Mapped[str] = mapped_column(String(512), default="")
+    #: DNS-домен (`corp.local`); у локальной пусто.
+    domain: Mapped[str] = mapped_column(String(255), default="")
+    local: Mapped[bool] = mapped_column(Boolean, default=False)
+    host_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("asset.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    description: Mapped[str] = mapped_column(Text, default="")
+    #: ad | vm
+    sources: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    in_ad: Mapped[bool] = mapped_column(Boolean, default=False)
+    first_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    gone_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class AssetGroupMember(Base):
+    """Прямой участник группы и то, с чем его удалось связать: пользователь, группа или актив-хост."""
+
+    __tablename__ = "asset_group_member"
+    __table_args__ = (
+        UniqueConstraint("group_id", "source", "member_sid", "member_name", name="uq_asset_group_member"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("asset_group.id", ondelete="CASCADE"), index=True)
+    #: user | group | computer | well_known | unknown
+    member_kind: Mapped[str] = mapped_column(String(16))
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("asset_user.id", ondelete="SET NULL"), nullable=True)
+    member_group_id: Mapped[int | None] = mapped_column(
+        ForeignKey("asset_group.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("asset.id", ondelete="SET NULL"), nullable=True)
+    member_sid: Mapped[str] = mapped_column(String(255), default="")
+    member_name: Mapped[str] = mapped_column(String(512), default="")
+    member_domain: Mapped[str] = mapped_column(String(255), default="")
+    #: Членство через primaryGroupID (Domain Users и т. п.).
+    primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: ad | vm
+    source: Mapped[str] = mapped_column(String(8))
+
+
+class AssetGroupGpo(Base):
+    """Права по политике: запись `ad.core.gpo_rights` — группа становится членом локальной группы на хостах GPO."""
+
+    __tablename__ = "asset_group_gpo"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), index=True)
+    group_sid: Mapped[str] = mapped_column(String(255), default="", index=True)
+    group_name: Mapped[str] = mapped_column(String(512), default="")
+    local_group: Mapped[str] = mapped_column(String(255), default="")
+    local_group_sid: Mapped[str] = mapped_column(String(255), default="")
+    #: restricted_groups | gpp; `action` — member | memberof | add | replace | delete (как в `gpo_rights`).
+    via: Mapped[str] = mapped_column(String(32), default="")
+    action: Mapped[str] = mapped_column(String(16), default="")
+    gpo_name: Mapped[str] = mapped_column(String(512), default="")
+    gpo_dn: Mapped[str] = mapped_column(String(1024), default="")
+    filtered: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: Имена хостов, как в `gpo_rights`; полное число — `hosts_total`.
+    hosts: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    hosts_total: Mapped[int] = mapped_column(Integer, default=0)
+    seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
 
 
 class AssetDns(Base):

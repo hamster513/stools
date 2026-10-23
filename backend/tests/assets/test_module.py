@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from api.db.models import Base
 from api.modules.assets.models import (
     Asset,
+    AssetGroup,
+    AssetGroupMember,
     AssetUser,
     AssetUserGroup,
     AssetUserHost,
@@ -45,6 +47,51 @@ def test_user_tables_match_models(db_session: Session) -> None:
     """Таблицы пользователей из миграции совпадают с моделями."""
     ctx = MigrationContext.configure(db_session.connection(), opts={"compare_type": True, "compare_server_default": False})
     assert [d for d in compare_metadata(ctx, Base.metadata) if "asset_user" in repr(d)] == []
+
+
+def test_group_tables_match_models(db_session: Session) -> None:
+    """Таблицы групп из миграции совпадают с моделями."""
+    ctx = MigrationContext.configure(db_session.connection(), opts={"compare_type": True, "compare_server_default": False})
+    assert [d for d in compare_metadata(ctx, Base.metadata) if "asset_group" in repr(d)] == []
+
+
+def test_group_cascades(db_session: Session) -> None:
+    """Удаление хоста уносит его локальные группы с составом; удаление участника лишь рвёт ссылку."""
+    host, member_host = Asset(name="WS01"), Asset(name="SRV01")
+    user = AssetUser(sid="S-1-5-21-1111111111-2222222222-3333333333-1001", name_key="corp.local\\user01")
+    db_session.add_all([host, member_host, user])
+    db_session.flush()
+    domain = AssetGroup(group_key="d:corp.local:n:helpdesk", name="helpdesk", domain="corp.local", sources=["ad"])
+    local = AssetGroup(group_key=f"l:{host.id}:S-1-5-32-544", sid="S-1-5-32-544", name="administrators",
+                       local=True, host_asset_id=host.id, sources=["vm"])
+    db_session.add_all([domain, local])
+    db_session.flush()
+    db_session.add_all([
+        AssetGroupMember(group_id=domain.id, member_kind="user", user_id=user.id, member_name="user01", source="ad"),
+        AssetGroupMember(group_id=domain.id, member_kind="computer", asset_id=member_host.id,
+                         member_name="srv01$", source="ad"),
+        AssetGroupMember(group_id=local.id, member_kind="group", member_group_id=domain.id,
+                         member_name="helpdesk", source="vm"),
+    ])
+    db_session.commit()
+
+    def links() -> list[tuple[int | None, int | None, int | None]]:
+        rows = db_session.scalars(select(AssetGroupMember).order_by(AssetGroupMember.id)).all()
+        return [(m.user_id, m.asset_id, m.member_group_id) for m in rows]
+
+    db_session.delete(user)
+    db_session.delete(member_host)
+    db_session.commit()
+    db_session.expire_all()
+    assert links() == [(None, None, None), (None, None, None), (None, None, domain.id)]
+    db_session.delete(host)
+    db_session.commit()
+    db_session.expire_all()
+    assert db_session.scalars(select(AssetGroup.name)).all() == ["helpdesk"]
+    assert links() == [(None, None, None), (None, None, None)]
+    db_session.delete(domain)
+    db_session.commit()
+    assert db_session.scalar(select(func.count()).select_from(AssetGroupMember)) == 0
 
 
 def test_user_cascades(db_session: Session) -> None:
