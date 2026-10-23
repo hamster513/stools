@@ -30,21 +30,23 @@ GET  /overview                         {assets_total, by_zone, by_source, codes,
 
 ```
 GET   /assets                          q, source_has, source_missing, code, network_id, zone,
+                                       placement (internal|dmz|external|- — по группе сети актива),
                                        tag, criticality (Critical|High|Medium|Low|none), laps (yes|no),
                                        cluster (cluster|role|node — вид кластера Windows по наблюдению AD),
                                        disc_status, assignee, overdue, ad_snapshot + ad_cell, limit≤500 (200), offset
                                        → {total, items, facets|null, ad_cell?}
                                        items: [{id, cluster: cluster|role|node|null, name, fqdn, domain, ip, os, network: {id, cidr, title,
-                                       zone}|null, first_seen, last_seen, criticality, tags, pinned,
+                                       zone, zone_title, placement, internet_facing, confidential}|null, first_seen, last_seen, criticality, tags, pinned,
                                        sources: [{source, live, fresh, seen_at}], discrepancy_count, codes}]
                                        discrepancy_count, codes — только расхождения с учитываемым статусом
-                                       facets: {source, code, zone, criticality, laps: {yes, no}, cluster: {cluster, role, node},
+                                       facets: {source, code, zone, placement: {internal, dmz, external, ""}, criticality,
+                                       laps: {yes, no}, cluster: {cluster, role, node},
                                        disc_status, disc_overdue}; laps, cluster — только активы с наблюдением AD
                                        — только при offset=0; code.any — активов хотя бы с одним
                                        расхождением; code считает расхождения под статусами фильтра
                                        (без disc_status — учитываемые)
                                        code: код ниже или any — хотя бы одно расхождение
-                                       неизвестное значение source_*/code/criticality/laps/cluster/disc_status — 422
+                                       неизвестное значение source_*/code/criticality/placement/laps/cluster/disc_status — 422
                                        ad_snapshot + ad_cell — компьютеры ячейки сводки AD (ниже)
 GET   /assets/{id}                     + network_manual, note, merged_into, created_at, updated_at,
                                        observations: [{id, source, source_key, name, fqdn, domain, ip, ips,
@@ -113,10 +115,11 @@ GET   /lookup?source=&key=[&server_id=]   {asset_id} | 404 — хост моду
 моложе `stale_days`.
 
 Многозначные фасеты — `code`, `source_has`, `source_missing`, `criticality`,
-`zone`, `network_id` (числа), `assignee`, `disc_status`: несколько значений
+`zone`, `placement`, `network_id` (числа), `assignee`, `disc_status`: несколько значений
 повторением ключа (`?zone=DMZ&zone=-&code=no_av&code=stale`), значение по
 запятой не делится; внутри фасета — «или», между фасетами — «и». `zone=-` —
-активы без зоны (`-` — общий маркер «не задано»), у критичности «не задана» —
+активы без зоны (`-` — общий маркер «не задано»), `placement=-` — вне сети, в сети без группы
+или в группе без расположения; у критичности «не задана» —
 `none`; `all` — фильтр не задан. Через запятую принимается только
 `disc_status` (старая форма `disc_status=new,in_work`).
 

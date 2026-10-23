@@ -29,8 +29,8 @@ from api.modules.assets.core.matching import (
     normalize_name,
     tokens,
 )
-from api.modules.assets.models import Asset, AssetObservation, AssetSettings, Network
-from api.modules.assets.services.networks import NetworkList, network_for_ip
+from api.modules.assets.models import Asset, AssetObservation, AssetSettings, AssetZone, Network
+from api.modules.assets.services.networks import PLACEMENTS, NetworkList, network_for_ip
 from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import STATUS_TITLES, STATUSES, is_overdue
@@ -467,10 +467,29 @@ def _sources(rows: list[AssetObservation], now: dt.datetime, stale_days: int) ->
     return out
 
 
-def _network_view(network: Network | None) -> dict[str, Any] | None:
+def _network_view(network: Network | None, zone: AssetZone | None) -> dict[str, Any] | None:
+    """Сеть актива с признаками её группы: где хост — внутри, в DMZ, снаружи."""
     if network is None:
         return None
-    return {"id": network.id, "cidr": network.cidr, "title": network.title, "zone": network.zone}
+    return {
+        "id": network.id, "cidr": network.cidr, "title": network.title, "zone": network.zone,
+        "zone_title": zone.title if zone is not None else None, "placement": zone.placement if zone is not None else "",
+        "internet_facing": zone is not None and zone.internet_facing, "confidential": zone is not None and zone.confidential,
+    }
+
+
+def _zones(db: Session) -> dict[str, AssetZone]:
+    return {z.name: z for z in db.execute(select(AssetZone)).scalars()}
+
+
+def _zone_of(net: Network | None, zones: dict[str, AssetZone]) -> AssetZone | None:
+    return zones.get(net.zone) if net is not None and net.zone else None
+
+
+def _placement(net: Network | None, zones: dict[str, AssetZone]) -> str:
+    """Расположение по группе сети; вне сети или в сети без группы — '' (не задано)."""
+    zone = _zone_of(net, zones)
+    return zone.placement if zone is not None else ""
 
 
 def _found(asset: Asset, observations: list[Observed], settings: dict[str, Any], now: dt.datetime) -> list[Discrepancy]:
@@ -560,14 +579,14 @@ def _hits(t: Tracked, f: DiscFilter, today: dt.date, *, code: bool = True, statu
 
 
 def _item(asset: Asset, rows: list[AssetObservation], tracked: list[Tracked], network: Network | None, now: dt.datetime,
-          stale_days: int, counted: frozenset[str], cluster: str | None) -> dict[str, Any]:
+          stale_days: int, counted: frozenset[str], cluster: str | None, zone: AssetZone | None) -> dict[str, Any]:
     """Счётчик и коды расхождений — только с учитываемым статусом: принятый риск не «висит».
     `cluster` — cluster | role | node из наблюдения AD: учётка кластера и роль — виртуальные имена."""
     live = [t.d for t in tracked if t.status in counted]
     return {
         "cluster": cluster,
         "id": asset.id, "name": asset.name, "fqdn": asset.fqdn, "domain": asset.domain, "ip": asset.ip, "os": asset.os,
-        "network": _network_view(network), "first_seen": _iso(asset.first_seen), "last_seen": _iso(asset.last_seen),
+        "network": _network_view(network, zone), "first_seen": _iso(asset.first_seen), "last_seen": _iso(asset.last_seen),
         "criticality": asset.criticality, "tags": list(asset.tags or []), "pinned": dict(asset.pinned or {}),
         "sources": _sources(rows, now, stale_days), "discrepancy_count": len(live), "codes": sorted({d.code for d in live}, key=CODES.index),
     }
@@ -621,6 +640,7 @@ def _pick(
     source_missing: frozenset[str] | None = None,
     network_id: frozenset[int] | None = None,
     zone: frozenset[str] | None = None,
+    placement: frozenset[str] | None = None,
     tag: str | None = None,
     criticality: frozenset[str] | None = None,
     laps: frozenset[str] | None = None,
@@ -646,6 +666,7 @@ def _pick(
     needle = (q or "").strip().lower()
     laps_of = laps_flags(db) if laps else {}
     kind_of = cluster_kinds(db) if cluster else {}
+    zones = _zones(db) if placement is not None else {}
 
     picked: Picked = []
     for asset in assets:
@@ -660,6 +681,8 @@ def _pick(
         net = networks.get(asset.network_id) if asset.network_id is not None else None
         # '' в наборе (`-` в запросе) — актив без зоны: вне сетей или в сети без зоны.
         if not matches(net.zone if net is not None else None, zone):
+            continue
+        if not matches(_placement(net, zones), placement):
             continue
         if tag and tag not in (asset.tags or []):
             continue
@@ -767,11 +790,13 @@ def list_assets(
     facets: dict[str, Any] = {
         "source": dict.fromkeys(SOURCES, 0), "code": dict.fromkeys((*CODES, ANY_CODE), 0), "zone": {},
         "criticality": dict.fromkeys([*CRITICALITY, "none"], 0),
+        "placement": dict.fromkeys(PLACEMENTS, 0),
         "disc_status": dict.fromkeys(STATUSES, 0), "disc_overdue": 0, "laps": dict.fromkeys(LAPS, 0),
         "cluster": dict.fromkeys(CLUSTER_KINDS, 0),
     }
     laps_of = laps_flags(db)
     clusters = cluster_kinds(db)
+    zones = _zones(db)
     for tracked in all_tracked:
         for t in tracked:
             if _hits(t, f, today, status=False):
@@ -789,6 +814,7 @@ def list_assets(
         net = networks.get(asset.network_id) if asset.network_id is not None else None
         if net is not None and net.zone:
             facets["zone"][net.zone] = facets["zone"].get(net.zone, 0) + 1
+        facets["placement"][_placement(net, zones)] += 1
         facets["criticality"][asset.criticality or "none"] = facets["criticality"].get(asset.criticality or "none", 0) + 1
         if asset.id in laps_of:
             facets["laps"]["yes" if laps_of[asset.id] else "no"] += 1
@@ -797,10 +823,10 @@ def list_assets(
 
     picked.sort(key=lambda t: (t[0].name_key or normalize_fqdn(t[0].fqdn) or "~", t[0].ip, t[0].id))
     stale_days = int(settings["stale_days"])
-    page = [
-        _item(asset, rows, tracked, networks.get(asset.network_id) if asset.network_id is not None else None, now, stale_days, counted, clusters.get(asset.id))
-        for asset, rows, tracked in picked[offset : offset + limit]
-    ]
+    page = []
+    for asset, rows, tracked in picked[offset : offset + limit]:
+        net = networks.get(asset.network_id) if asset.network_id is not None else None
+        page.append(_item(asset, rows, tracked, net, now, stale_days, counted, clusters.get(asset.id), _zone_of(net, zones)))
     return page, len(picked), facets
 
 
@@ -882,7 +908,8 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
     today = finding_svc.today()
     cluster = next((str(r.extra["cluster"]) for r in rows if r.source == "ad" and r.gone_at is None and (r.extra or {}).get("cluster")), None)
     return {
-        **_item(asset, rows, tracked, network, now, int(settings["stale_days"]), counted, cluster),
+        **_item(asset, rows, tracked, network, now, int(settings["stale_days"]), counted, cluster,
+                db.get(AssetZone, network.zone) if network is not None and network.zone else None),
         "network_manual": asset.network_manual, "note": asset.note, "merged_into": asset.merged_into,
         "created_at": _iso(asset.created_at), "updated_at": _iso(asset.updated_at),
         "observations": [

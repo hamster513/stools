@@ -182,6 +182,36 @@ def test_cluster_filter_and_facet(analyst: TestClient, db_session: Session, app_
     assert analyst.get("/api/assets/assets", params={"cluster": "host"}).status_code == 422
 
 
+def test_placement_filter_facet_and_network_view(analyst: TestClient) -> None:
+    """Расположение хоста — признак группы его сети (актив → сеть → группа → placement); вне сети или в сети
+    без группы — «не задано» (`-`). Признаки группы видны у сети актива в списке и карточке."""
+    assert analyst.post("/api/assets/zones", json={"name": "dmz", "title": "Демилитаризованная", "placement": "dmz", "internet_facing": True}).status_code == 201
+    assert analyst.post("/api/assets/zones", json={"name": "prod", "placement": "internal", "confidential": True}).status_code == 201
+    nets = []
+    for cidr, zone in (("10.91.0.0/24", "dmz"), ("10.92.0.0/24", "prod")):
+        r = analyst.post("/api/assets/networks", json={"cidr": cidr, "zone": zone})
+        assert r.status_code == 201, r.text
+        nets.append(r.json()["id"])
+    for name, net in (("msk1", nets[0]), ("ws01", nets[1]), ("srv01", nets[1])):
+        assert analyst.patch(f"/api/assets/assets/{by_name(analyst, name)['id']}", json={"network_id": net, "network_manual": True}).status_code == 200
+
+    body = analyst.get("/api/assets/assets").json()
+    assert body["facets"]["placement"] == {"internal": 2, "dmz": 1, "external": 0, "": 1}
+    assert names(analyst.get("/api/assets/assets", params={"placement": "dmz"}).json()) == {"msk1"}
+    assert names(analyst.get("/api/assets/assets", params={"placement": "internal"}).json()) == {"ws01", "srv01"}
+    assert names(analyst.get("/api/assets/assets", params=[("placement", "dmz"), ("placement", "-")]).json()) == {"msk1", "old01"}
+    assert analyst.get("/api/assets/assets", params={"placement": "external"}).json()["total"] == 0
+    assert analyst.get("/api/assets/assets/ids", params={"placement": "internal"}).json()["total"] == 2
+    assert analyst.get("/api/assets/assets", params={"placement": "outside"}).status_code == 422
+
+    msk1 = by_name(analyst, "msk1")
+    assert msk1["network"] == {"id": nets[0], "cidr": "10.91.0.0/24", "title": "", "zone": "dmz", "zone_title": "Демилитаризованная",
+                               "placement": "dmz", "internet_facing": True, "confidential": False}
+    card = analyst.get(f"/api/assets/assets/{by_name(analyst, 'ws01')['id']}").json()
+    assert card["network"]["placement"] == "internal" and card["network"]["confidential"] is True and card["network"]["zone_title"] == ""
+    assert by_name(analyst, "old01")["network"] is None
+
+
 def test_delete_single_and_bulk(analyst: TestClient) -> None:
     ws01, srv01, old01 = (by_name(analyst, n)["id"] for n in ("ws01", "srv01", "old01"))
     assert analyst.delete(f"/api/assets/assets/{ws01}").status_code == 204

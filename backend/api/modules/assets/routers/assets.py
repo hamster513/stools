@@ -53,6 +53,7 @@ from api.modules.assets.services.assets import (
     pin_field,
     update_manual,
 )
+from api.modules.assets.services.networks import PLACEMENTS
 from api.modules.assets.services.sync import (
     SCHEDULE_TARGET_ID,
     sync_job,
@@ -167,6 +168,7 @@ def _filters(
     code: QueryList = None,
     network_id: QueryInts = None,
     zone: QueryList = None,
+    placement: QueryList = None,
     tag: str | None = None,
     criticality: QueryList = None,
     laps: QueryList = None,
@@ -180,15 +182,16 @@ def _filters(
     (коды статусов повтором ключа или через запятую, или `all`), `assignee` (`me`, `none`, логины) и
     `overdue` — про расхождения: актив подходит, если у него есть расхождение под ними (и под `code`,
     если он задан). Фасеты `code, source_has, source_missing, criticality, zone, assignee, network_id` —
-    повтором ключа, внутри фасета «или»; `laps` — yes | no, `cluster` — cluster | role | node по наблюдению AD;
+    повтором ключа, внутри фасета «или»; `placement` — internal | dmz | external | `-` по группе сети актива; `laps` — yes | no, `cluster` — cluster | role | node по наблюдению AD;
     `ad_snapshot` + `ad_cell` — компьютеры ячейки сводки AD (`services.ad_cells`)."""
     picked = {"source_has": multi(source_has), "source_missing": multi(source_missing), "code": multi(code),
-              "zone": multi(zone), "criticality": multi(criticality), "laps": multi(laps),
+              "zone": multi(zone), "placement": multi(placement), "criticality": multi(criticality), "laps": multi(laps),
               "cluster": multi(cluster)}
     _check(picked["source_has"], SOURCES)
     _check(picked["source_missing"], SOURCES)
     _check(picked["code"], (*CODES, ANY_CODE))
     _check(picked["criticality"], (*CRITICALITY, "none", ""))
+    _check(picked["placement"], PLACEMENTS)
     _check(picked["laps"], LAPS)
     _check(picked["cluster"], CLUSTER_KINDS)
     _check(multi(disc_status, commas=True), STATUSES)
