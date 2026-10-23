@@ -45,22 +45,60 @@ PDQL_SELECT = (
 )
 
 
-def build_pdql(conn: ConnectionLike, limit: int | None = None) -> str:
-    """`filter(...)` собирается из исключений ОС и дополнения человека.
-    Кавычки в именах ОС экранируются: PDQL строковый литерал в одинарных."""
-    conditions = ["Host.OsName != null"]
+#: Локальные группы (спека 2026-10-23 §2): `filter` видит только выбранные столбцы,
+#: поэтому `OsName` своего типа выбирается и по нему фильтруется.
+GROUPS_PDQL = {
+    "windows": (
+        "WindowsHost",
+        (
+            "select(WindowsHost.Fqdn, WindowsHost.Hostname, WindowsHost.IpAddress, WindowsHost.OsName, "
+            "WindowsHost.Groups.Name, WindowsHost.Groups.SID, WindowsHost.Groups.Description, "
+            "WindowsHost.Groups.Members.Name, WindowsHost.Groups.Members.Domain, WindowsHost.Groups.Members.SID, "
+            "WindowsHost.Groups.Members.Type, WindowsHost.Groups.Members.IsLocal, WindowsHost.Groups.Members.IsSystem)"
+        ),
+    ),
+    "linux": (
+        "UnixHost",
+        (
+            "select(UnixHost.Fqdn, UnixHost.Hostname, UnixHost.IpAddress, UnixHost.OsName, "
+            "UnixHost.Groups.GID, UnixHost.Groups.Name, UnixHost.Groups.Users)"
+        ),
+    ),
+}
+
+
+def _os_conditions(conn: ConnectionLike, column: str) -> list[str]:
+    """Кавычки в именах ОС экранируются: PDQL строковый литерал в одинарных."""
+    conditions = [f"{column} != null"]
     for os_name in conn.os_exclude:
         name = os_name.strip().replace("'", "\\'")
         if name:
-            conditions.append(f"Host.OsName != '{name}'")
-    extra = conn.pdql_extra.strip()
-    if extra:
-        conditions.append(f"({extra})")
-    pdql = f"{PDQL_SELECT} | filter({' and '.join(conditions)})"
+            conditions.append(f"{column} != '{name}'")
+    return conditions
+
+
+def _with_limit(pdql: str, conn: ConnectionLike, limit: int | None) -> str:
     effective = conn.limit if limit is None else limit
     if effective and effective > 0:
         pdql += f" | limit({effective})"
     return pdql
+
+
+def build_pdql(conn: ConnectionLike, limit: int | None = None) -> str:
+    """`filter(...)` собирается из исключений ОС и дополнения человека."""
+    conditions = _os_conditions(conn, "Host.OsName")
+    extra = conn.pdql_extra.strip()
+    if extra:
+        conditions.append(f"({extra})")
+    return _with_limit(f"{PDQL_SELECT} | filter({' and '.join(conditions)})", conn, limit)
+
+
+def build_groups_pdql(conn: ConnectionLike, family: str, limit: int | None = None) -> str:
+    """Второй и третий PDQL подключения: те же исключения ОС и лимит, дополнение
+    PDQL написано под столбцы основного запроса и сюда не подставляется."""
+    root, select_ = GROUPS_PDQL[family]
+    conditions = _os_conditions(conn, f"{root}.OsName")
+    return _with_limit(f"{select_} | filter({' and '.join(conditions)})", conn, limit)
 
 
 def make_client(conn: ConnectionLike, timeout: float = 60.0) -> httpx.Client:

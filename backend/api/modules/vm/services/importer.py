@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,13 +18,22 @@ from typing import IO, Any, cast
 from sqlalchemy import Table, delete, func, insert, select
 from sqlalchemy.orm import Session
 
-from api.modules.vm.core.mpvm import MpVmClient, build_pdql, make_client
+from api.modules.vm.core.groups import ROOT_TYPE, iter_group_rows
+from api.modules.vm.core.mpvm import (
+    MpVmClient,
+    MpVmError,
+    build_groups_pdql,
+    build_pdql,
+    make_client,
+)
 from api.modules.vm.core.sources import HostRow, iter_csv, iter_json
 from api.modules.vm.findings_adapter import reconcile_after_import
 from api.modules.vm.models import (
     VmCve,
+    VmGroupImport,
     VmHost,
     VmHostCve,
+    VmHostGroup,
     VmImport,
     VmStageHost,
     VmStagePair,
@@ -37,7 +47,7 @@ from api.modules.vm.services.scoring import (
     rebuild_hosts_value,
     rescore_pairs,
 )
-from api.modules.vm.services.settings import VmSettings
+from api.modules.vm.services.settings import Connection, VmSettings
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +57,12 @@ STAGE_PAIR = cast(Table, VmStagePair.__table__)
 HOST_T = cast(Table, VmHost.__table__)
 CVE_T = cast(Table, VmCve.__table__)
 PAIR_T = cast(Table, VmHostCve.__table__)
+GROUP_T = cast(Table, VmHostGroup.__table__)
+GROUP_BATCH = 10_000
+GROUP_COLUMNS = (
+    "os_family", "fqdn", "hostname", "ip", "group_name", "group_sid", "group_gid", "group_description",
+    "member_name", "member_domain", "member_sid", "member_type", "member_local", "member_system",
+)
 
 
 @dataclass
@@ -177,6 +193,65 @@ def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tupl
     return stats, new_cves
 
 
+def _write_groups(db: Session, family: str, path: Path) -> None:
+    """Строки семейства — заменой, пакетами, без commit: фиксирует вызывающий."""
+    db.execute(delete(GROUP_T).where(GROUP_T.c.os_family == family))
+    batch: list[tuple[Any, ...]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        for row in iter_group_rows(fh, family):
+            batch.append(tuple(getattr(row, c) for c in GROUP_COLUMNS))
+            if len(batch) >= GROUP_BATCH:
+                bulk_insert(db, GROUP_T, GROUP_COLUMNS, batch)
+                batch.clear()
+    bulk_insert(db, GROUP_T, GROUP_COLUMNS, batch)
+
+
+def import_groups(db: Session, client: MpVmClient, conn: Connection, data_dir: Path) -> VmGroupImport:
+    """Снимок локальных групп (спека 2026-10-23 §2): экспорт Windows и Linux во временные
+    файлы, затем замена `vm_host_group` и новая `VmGroupImport` одной транзакцией.
+    Семейство, чей экспорт не прошёл, остаётся из прежнего снимка; не прошли оба —
+    исключение, таблица не тронута."""
+    exported: dict[str, Path] = {}
+    errors: dict[str, Exception] = {}
+    temps: list[Path] = []
+    try:
+        (data_dir / "vm").mkdir(parents=True, exist_ok=True)
+        for family in ROOT_TYPE:
+            temp = data_dir / "vm" / f"groups-{family}-{uuid.uuid4().hex}.csv"
+            temps.append(temp)
+            try:
+                client.export_csv(build_groups_pdql(conn, family), temp)
+            except Exception as exc:  # noqa: BLE001 — любой отказ семейства оставляет его прежний снимок
+                log.warning("локальные группы VM (%s) не получены: %s", family, exc)
+                errors[family] = exc
+            else:
+                exported[family] = temp
+        if not exported:
+            detail = "; ".join(f"{f}: {e}" for f, e in errors.items())
+            raise MpVmError(f"локальные группы не получены — {detail}")
+        try:
+            for family, path in exported.items():
+                _write_groups(db, family, path)
+            hosts = select(GROUP_T.c.os_family, GROUP_T.c.fqdn, GROUP_T.c.hostname, GROUP_T.c.ip).distinct().subquery()
+            done = VmGroupImport(
+                finished_at=dt.datetime.now(dt.UTC),
+                hosts=int(db.execute(select(func.count()).select_from(hosts)).scalar() or 0),
+                rows=int(db.execute(select(func.count()).select_from(GROUP_T)).scalar() or 0),
+                windows_ok="windows" in exported,
+                linux_ok="linux" in exported,
+            )
+            db.add(done)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        return done
+    finally:
+        for temp in temps:
+            if temp.exists():
+                os.unlink(temp)
+
+
 def _notify_assets(db: Session) -> None:
     """Assets пересоберёт реестр хостов из записанного импорта. Его сбой не должен ронять импорт:
     данные модуля уже зафиксированы. Импорт внутри функции — Assets сам читает таблицы модуля."""
@@ -199,6 +274,7 @@ def run_import(
     filename: str = "",
 ) -> ImportStats:
     temp: Path | None = None
+    client: MpVmClient | None = None
     try:
         if source == "vm":
             conn = settings.connection.unsealed()
@@ -238,6 +314,15 @@ def run_import(
         db.commit()
         # Статусы пар: исчезнувшие с решением закрываются, вернувшиеся переоткрываются.
         reconcile_after_import(db, done.id)
+        if client is not None:
+            # Группы — отдельный снимок: их сбой не роняет записанный импорт хостов и CVE.
+            handle.stage("groups", message="локальные группы")
+            try:
+                import_groups(db, client, conn, data_dir)
+            except Exception as exc:
+                db.rollback()
+                log.exception("локальные группы VM не получены")
+                handle.stage("groups", message=f"локальные группы не получены: {exc.__class__.__name__}")
         _notify_assets(db)
         return stats
     finally:

@@ -258,6 +258,55 @@ class VmImport(Base):
     new_zones: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class VmHostGroup(Base):
+    """Локальная группа хоста из второго и третьего PDQL (спека 2026-10-23 §2).
+
+    Строка на участника; группа без участников — строка с пустыми полями участника.
+    Хост — по FQDN, имени и IP, без внешнего ключа на `vm_host`: импорт отбрасывает
+    хосты без CVE, а группы у пропатченных серверов нужны не меньше. Заменяется
+    целиком успешным снимком; семейство, чей запрос не прошёл, остаётся прежним.
+    """
+
+    __tablename__ = "vm_host_group"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #: windows | linux
+    os_family: Mapped[str] = mapped_column(String(8), index=True)
+    fqdn: Mapped[str] = mapped_column(String(255), default="", index=True)
+    hostname: Mapped[str] = mapped_column(String(255), default="")
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    group_name: Mapped[str] = mapped_column(String(512), default="")
+    #: Верхний регистр; у Linux пусто.
+    group_sid: Mapped[str] = mapped_column(String(255), default="")
+    #: Только Linux.
+    group_gid: Mapped[str] = mapped_column(String(32), default="")
+    group_description: Mapped[str] = mapped_column(Text, default="")
+    member_name: Mapped[str] = mapped_column(String(512), default="")
+    member_domain: Mapped[str] = mapped_column(String(255), default="")
+    member_sid: Mapped[str] = mapped_column(String(255), default="")
+    #: account | group | '' (группа без участников)
+    member_type: Mapped[str] = mapped_column(String(16), default="")
+    member_local: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    member_system: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+
+class VmGroupImport(Base):
+    """Снимок локальных групп; последний по `finished_at` описывает `vm_host_group`.
+
+    `windows_ok` / `linux_ok` — запрос семейства прошёл в этом снимке; если нет,
+    его строки остались от прежнего.
+    """
+
+    __tablename__ = "vm_group_import"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    finished_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    hosts: Mapped[int] = mapped_column(Integer, default=0)
+    rows: Mapped[int] = mapped_column(Integer, default=0)
+    windows_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    linux_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class VmJob(JobColumns, Base):
     """Фоновая задача модуля: импорт, справочник, пересчёт.
 
