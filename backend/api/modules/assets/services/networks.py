@@ -351,6 +351,8 @@ def network_detail(db: Session, network_id: int) -> dict[str, Any]:
 
 
 ZONE_ATTRS = ("title", "description", "placement", "internet_facing", "confidential")
+#: Сетей в отказе удалить зону — не больше (у External их тысячи); остальные — «и ещё N».
+ZONE_CIDRS_SHOWN = 10
 
 
 def zone_view(zone: AssetZone, networks: int) -> dict[str, Any]:
@@ -392,9 +394,12 @@ def delete_zone(db: Session, name: str) -> None:
     zone = db.get(AssetZone, name)
     if zone is None:
         raise NetworkNotFound("зона не найдена")
-    cidrs = list(db.execute(select(Network.cidr).where(Network.zone == name).order_by(Network.cidr)).scalars())
-    if cidrs:
-        raise NetworkConflict(f"зона «{name}» задана у сетей: {', '.join(cidrs)} — сначала смените им зону")
+    used = Network.zone == name
+    count = int(db.execute(select(func.count()).select_from(Network).where(used)).scalar_one())
+    if count:
+        cidrs = list(db.execute(select(Network.cidr).where(used).order_by(_inet(Network.cidr)).limit(ZONE_CIDRS_SHOWN)).scalars())
+        more = f" и ещё {count - len(cidrs)}" if count > len(cidrs) else ""
+        raise NetworkConflict(f"зона «{name}» задана у сетей: {', '.join(cidrs)}{more} — сначала смените им зону")
     positions = list(db.execute(select(NetworkZoneRule.position).where(NetworkZoneRule.zone == name).order_by(NetworkZoneRule.position)).scalars())
     if positions:
         raise NetworkConflict(f"зона «{name}» задана в правилах групп: {', '.join(f'№{p}' for p in positions)} — сначала смените их")

@@ -174,6 +174,14 @@ def test_zones(analyst: TestClient) -> None:
     assert "DMZ" in {z["name"] for z in analyst.get("/api/assets/zones").json()}
 
 
+def test_delete_zone_lists_first_ten_networks(analyst: TestClient) -> None:
+    for i in range(13):
+        add_network(analyst, f"10.10.{i}.0/24", zone="DMZ")
+    r = analyst.delete("/api/assets/zones/DMZ")
+    # Сети — по адресу, не больше десяти; остальные — числом.
+    assert r.status_code == 409 and "10.10.9.0/24" in detail(r) and "10.10.10.0/24" not in detail(r) and "и ещё 3" in detail(r)
+
+
 def test_auditor_reads_but_cannot_write(zones: None, client_as: Callable[[str], TestClient]) -> None:
     analyst = client_as("analyst")
     net = add_network(analyst, "10.10.0.0/24")
