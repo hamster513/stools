@@ -20,6 +20,11 @@ MAX_VALUE = 500
 MAX_REGEX = 200
 MAX_TITLE = 255
 NESTED_REPEAT = "шаблон с вложенными повторами (например, (\\w+)+) не принимается — упростите"
+BRANCH_REPEAT = "шаблон с повтором над альтернативой вида (a|b)+ не принимается — упростите: без повтора над альтернативой"
+#: Несколько неограниченных повторов подряд (`\\w*\\w*\\w*!`) дают полиномиальный перебор, который на
+#: длинном имени не заканчивается; двух хватает для обычных шаблонов вроде `^APP_.*_\\d+`.
+MAX_UNBOUNDED = 2
+TOO_MANY_UNBOUNDED = f"в шаблоне не больше {MAX_UNBOUNDED} повторов * или + (и {{n,}}) — упростите"
 _REPEATS = (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT, sre_parse.POSSESSIVE_REPEAT)
 #: То же имя, что `models.EXTERNAL_ZONE`; ядро не тянет модели.
 EXTERNAL_ZONE = "External"
@@ -53,8 +58,14 @@ def validate_rule(match: str, value: str) -> None:
             parsed = sre_parse.parse(value)
         except re.error as exc:
             raise ValueError(f"«{value}» — неверное регулярное выражение: {exc}") from None
+        except (OverflowError, RecursionError):
+            raise ValueError("слишком большое число повторов или слишком глубокая вложенность скобок — упростите шаблон") from None
         if _nested_repeat(parsed, inside=False):
             raise ValueError(NESTED_REPEAT)
+        if _branch_repeat(parsed, inside=False):
+            raise ValueError(BRANCH_REPEAT)
+        if _unbounded_repeats(parsed) > MAX_UNBOUNDED:
+            raise ValueError(TOO_MANY_UNBOUNDED)
     if match == "cidr":
         try:
             ipaddress.ip_network(value.strip(), strict=False)
@@ -87,13 +98,38 @@ def _nested_repeat(items: sre_parse.SubPattern, *, inside: bool) -> bool:
     return False
 
 
+def _branch_repeat(items: sre_parse.SubPattern, *, inside: bool) -> bool:
+    """Есть ли альтернатива (`a|aa`) внутри повтора с верхней границей больше 1 — экспоненциальный
+    перебор вроде `(a|aa)+$`. Альтернативы из одиночных символов разбор сам сворачивает в набор `[ab]`."""
+    for op, av in items:
+        if op in _REPEATS:
+            _low, high, sub = av
+            if _branch_repeat(sub, inside=inside or high > 1):
+                return True
+        elif (op is sre_parse.BRANCH and inside) or any(_branch_repeat(child, inside=inside) for child in _children(av)):
+            return True
+    return False
+
+
+def _unbounded_repeats(items: sre_parse.SubPattern) -> int:
+    """Сколько во всём шаблоне повторов без верхней границы (`*`, `+`, `{n,}`)."""
+    count = 0
+    for op, av in items:
+        if op in _REPEATS:
+            _low, high, sub = av
+            count += (high == sre_parse.MAXREPEAT) + _unbounded_repeats(sub)
+        else:
+            count += sum(_unbounded_repeats(child) for child in _children(av))
+    return count
+
+
 def broken_regex(rule: Rule) -> bool:
     """Правило name_regex, чей шаблон не компилируется (записан в обход проверки): оно не срабатывает."""
     if rule.match != "name_regex":
         return False
     try:
         _regex(rule.value)
-    except re.error:
+    except (re.error, OverflowError, RecursionError):
         return True
     return False
 
@@ -124,7 +160,7 @@ def rule_matches(rule: Rule, *, title: str, tags: Iterable[str], cidr: str) -> b
     if rule.match == "name_regex":
         try:
             return _regex(value).search(title[:MAX_TITLE]) is not None
-        except re.error:
+        except (re.error, OverflowError, RecursionError):
             return False
     if rule.match == "tag":
         wanted = value.strip().casefold()

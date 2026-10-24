@@ -45,6 +45,14 @@ def matches(r: Rule, title: str = "", tags: tuple[str, ...] = (), cidr: str = "1
     ("name_regex", "(a*)*", "вложенными повторами"),
     ("name_regex", "(x+){2,}", "вложенными повторами"),
     ("name_regex", "a" * 201, "длиннее 200"),
+    # Полиномиальный перебор (десятки секунд на имени в 40 символов) — больше двух неограниченных повторов.
+    ("name_regex", r"\w*\w*\w*\w*\w*\w*\w*\w*!", "не больше 2 повторов"),
+    ("name_regex", r"a+b*c{2,}", "не больше 2 повторов"),
+    # Экспоненциальный перебор — повтор над альтернативой.
+    ("name_regex", "(a|aa)+$", "повтором над альтернативой"),
+    ("name_regex", "(DMZ|WEB){2}", "повтором над альтернативой"),
+    # Число повторов не помещается — 422 с понятным текстом, а не 500.
+    ("name_regex", "a{99999999999}", "слишком большое число повторов"),
 ])
 def test_validate_rule_rejects(match: str, value: str, fragment: str) -> None:
     with pytest.raises(ValueError, match=fragment):
@@ -53,7 +61,8 @@ def test_validate_rule_rejects(match: str, value: str, fragment: str) -> None:
 
 def test_validate_rule_accepts_every_match() -> None:
     for match, value in [("name_prefix", "APP_DMZ_"), ("name_contains", "dmz"), ("name_regex", r"dmz_\d+"),
-                         ("name_regex", r"^APP_(DMZ|WEB)_\d+"), ("name_regex", "(ab)+"),
+                         ("name_regex", r"^APP_(DMZ|WEB)_\d+"), ("name_regex", "(ab)+"), ("name_regex", "DMZ"),
+                         ("name_regex", r"^Internet_DMZ_.*"), ("name_regex", r"^APP_.*_\d+"), ("name_regex", "(?:a|b)+"),
                          ("tag", "prod"), ("cidr", "10.10.0.0/16"), ("cidr", "203.0.113.7/24")]:
         validate_rule(match, value)
 
@@ -61,6 +70,7 @@ def test_validate_rule_accepts_every_match() -> None:
 def test_regex_is_safe_on_bad_input() -> None:
     # Шаблон, записанный в обход проверки, не срабатывает и не роняет пересчёт.
     assert not matches(rule("name_regex", "APP_(DMZ"), "APP_(DMZ")
+    assert not matches(rule("name_regex", "a{99999999999}"), "aaa")
     # Имя сравнивается не дальше 255 символов.
     assert not matches(rule("name_regex", "z$"), "a" * 300 + "z")
     assert matches(rule("name_regex", "z$"), "a" * 254 + "z")
@@ -250,6 +260,9 @@ def test_rule_validation(analyst: TestClient) -> None:
     for body in [
         {"match": "name_regex", "value": "APP_(DMZ", "zone": "DMZ"},
         {"match": "name_regex", "value": r"(\w+)+$", "zone": "DMZ"},
+        {"match": "name_regex", "value": "(a|aa)+$", "zone": "DMZ"},
+        {"match": "name_regex", "value": r"\w*\w*\w*!", "zone": "DMZ"},
+        {"match": "name_regex", "value": "a{99999999999}", "zone": "DMZ"},
         {"match": "cidr", "value": "10.10.0.0/33", "zone": "DMZ"},
         {"match": "glob", "value": "APP*", "zone": "DMZ"},
         {"match": "tag", "value": " ", "zone": "DMZ"},
