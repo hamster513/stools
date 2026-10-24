@@ -129,6 +129,35 @@ def test_narrowest_network_wins(analyst: TestClient, db_session: Session) -> Non
     assert network_of(analyst, a) is None
 
 
+def test_container_networks_are_not_bound(analyst: TestClient, db_session: Session) -> None:
+    """Сеть шире /16 (IPv6 — шире /48) — контейнер: активы к ней сами не привязываются (правило R5)."""
+    a = add_asset(db_session, "ws01", "10.99.1.5")
+    v6 = add_asset(db_session, "ws02", "fd00:10::5")
+    top = add_network(analyst, "10.0.0.0/8", zone="Internal")
+    add_network(analyst, "fd00::/32")
+    assert network_of(analyst, a) is None and network_of(analyst, v6) is None
+    found = analyst.get(f"/api/assets/assets/{a}").json()["discrepancies"]
+    assert any(d["code"] == "no_network" for d in found)
+    assert [i["id"] for i in analyst.get("/api/assets/assets", params={"code": "no_network"}).json()["items"]] == [a, v6]
+    assert analyst.get(f"/api/assets/networks/{top['id']}").json()["assets"] == 0
+    # Новое наблюдение тоже не попадает в контейнер.
+    b = add_asset(db_session, "ws03", "10.99.2.5")
+    assert network_of(analyst, b) is None
+
+    net = add_network(analyst, "10.99.1.0/24")
+    add_network(analyst, "fd00:10::/48")
+    assert network_of(analyst, a) == "10.99.1.0/24" and network_of(analyst, v6) == "fd00:10::/48"
+    assert not any(d["code"] == "no_network" for d in analyst.get(f"/api/assets/assets/{a}").json()["discrepancies"])
+    # Контейнер остаётся объемлющей в карточке.
+    assert [p["cidr"] for p in analyst.get(f"/api/assets/networks/{net['id']}").json()["parents"]] == ["10.0.0.0/8"]
+    # Руками аналитик может выбрать контейнер — выбор сохраняется.
+    r = analyst.patch(f"/api/assets/assets/{b}", json={"network_id": top["id"]})
+    assert r.status_code == 200 and r.json()["network_manual"] is True
+    add_network(analyst, "10.99.3.0/24")
+    assert network_of(analyst, b) == "10.0.0.0/8"
+    assert analyst.get(f"/api/assets/networks/{top['id']}").json()["assets"] == 1
+
+
 def test_cidr_change_recomputes(analyst: TestClient, db_session: Session) -> None:
     a = add_asset(db_session, "ws01", "10.10.0.5")
     c = add_asset(db_session, "srv01", "10.20.0.5")

@@ -2,7 +2,8 @@
 содержащей их адрес.
 
 Пересечение сетей разрешено (вложенность — потом), поэтому привязка выбирает сеть с
-самым длинным префиксом. Ручная сеть актива (`network_manual`) пересчёт не трогает.
+самым длинным префиксом. Сети шире `BIND_MAX_PREFIX_V4` / `BIND_MAX_PREFIX_V6` (контейнеры) к активам
+не привязываются. Ручная сеть актива (`network_manual`) пересчёт не трогает.
 """
 from __future__ import annotations
 
@@ -35,6 +36,13 @@ from api.modules.assets.models import (
 log = logging.getLogger("stools.assets")
 
 NetworkList = list[tuple[int, ipaddress.IPv4Network | ipaddress.IPv6Network]]
+#: Сеть шире этого префикса — контейнер (например, 10.0.0.0/8 из RackTables): она остаётся сетью, ищется,
+#: имеет группу и служит объемлющей в карточке, но активы к ней сами не привязываются — иначе хост вне
+#: описанных подсетей получил бы группу контейнера и потерял расхождение «сеть не описана». Это правило
+#: привязки; лимит запроса адресов RackTables (`core.racktables.ADDRESS_QUERY_MAX_PREFIX`) — про нагрузку
+#: на RackTables, поэтому константы разные. Аналитик может выбрать такую сеть активу вручную.
+BIND_MAX_PREFIX_V4 = 16
+BIND_MAX_PREFIX_V6 = 48
 
 
 class NetworkNotFound(LookupError):
@@ -68,9 +76,14 @@ def load_networks(db: Session) -> NetworkList:
     return out
 
 
+def bindable(net: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool:
+    """Не шире `BIND_MAX_PREFIX_V4` / `BIND_MAX_PREFIX_V6`: к такой сети активы привязываются сами."""
+    return net.prefixlen >= (BIND_MAX_PREFIX_V4 if net.version == 4 else BIND_MAX_PREFIX_V6)
+
+
 def network_for_ip(source: Session | NetworkList, ip: str) -> int | None:
-    """Id самой узкой сети, содержащей `ip`; `source` — база или заранее прочитанный список
-    (синхронизация привязывает тысячи активов и читает сети один раз)."""
+    """Id самой узкой сети, содержащей `ip`, без контейнеров шире `BIND_MAX_PREFIX_*`; `source` — база или
+    заранее прочитанный список (синхронизация привязывает тысячи активов и читает сети один раз)."""
     networks = load_networks(source) if isinstance(source, Session) else source
     try:
         addr = ipaddress.ip_address(ip)
@@ -78,7 +91,7 @@ def network_for_ip(source: Session | NetworkList, ip: str) -> int | None:
         return None
     best: tuple[int, int] | None = None
     for network_id, net in networks:
-        if addr.version == net.version and addr in net and (best is None or net.prefixlen > best[1]):
+        if addr.version == net.version and bindable(net) and addr in net and (best is None or net.prefixlen > best[1]):
             best = (network_id, net.prefixlen)
     return best[0] if best else None
 
