@@ -160,7 +160,7 @@ GET /api/auth/oidc/callback  ?code=&state=&error= -> 302 /attack + cookie сес
 
 Ручки под `/api/settings/…` — панель администратора; и запись, и чтение
 там требуют роль `admin`, кроме состояния модели и матрицы
-(см. «Общие правила»). `GET /api/auth/me`, `PATCH /api/auth/me`
+(см. «Общие правила») и сводки свежести данных (`data-status`, ниже). `GET /api/auth/me`, `PATCH /api/auth/me`
 и `POST /api/auth/password` — своя учётка, доступны любой роли.
 
 ```
@@ -260,6 +260,37 @@ POST /api/settings/oidc/test  {issuer_url} -> {ok, issuer, endpoints, keys, erro
 подписных ключей; `ok: false` — с текстом ошибки в `error`, `issuer`
 и `endpoints` — `null`, `keys` — `0`. `issuer_url` проверяется тем же
 правилом https, что и в настройках.
+
+```
+GET /api/settings/data-status -> {items: [{module, key, title, kind, updated_at,
+                                          state, source, detail, anchor}]}
+```
+
+Сводка «что и когда обновлялось» по всем модулям для страницы `/settings`;
+читает любая роль, запись не предусмотрена. Строки отдают модули через реестр
+`api/platform/data_status.py` (`register_data_status`) в порядке модулей
+платформы, внутри модуля — как отдал провайдер. `module` — id модуля (`attack`,
+`siem`, `vm`, `ad`, `ksc`, `assets`, `toolbox`), `key` — устойчивый ключ строки
+внутри модуля (`bundle`, `ru-ttp`, `kb-snapshot`, `kb-connection`, `import`,
+`ref:<имя>`, `conn:<id>`, `file`, `sync`, `dns:<id>`, `racktables:<id>`),
+`kind` — `reference` (справочник), `snapshot` (последняя выгрузка) или
+`source` (подключение или синхронизация). `updated_at` — ISO-время последнего
+обновления, `null`, если его ещё не было; `source` — откуда данные (адрес,
+`API`, `файл`) или `null`; `detail` — короткая подпись (версия, число
+записей, имя файла, «сбора ещё не было»); `anchor` — якорь секции на странице
+`/settings/<module>`, куда ведёт стрелка «→».
+
+`state`: `fresh` — свежо, `stale` — устарело, `missing` — не загружалось
+или не настроено, `running` — обновление идёт сейчас (важнее возраста).
+Пороги фиксированы и не настраиваются: справочники VM — собственный флаг
+`stale` обзора справочников (30 дней); база MITRE ATT&CK и применяемость
+техник в России — 90 дней; снапшоты и синхронизации (KB SIEM, импорт VM,
+подключения AD и KSC и «Выгрузка файлом», синхронизация Assets, DNS,
+RackTables) — 7 дней. У ToolBox строк нет.
+
+Сбой одного модуля не роняет сводку: вместо его строк приходит одна строка
+`key: "error"`, `state: "missing"`, `detail: «ошибка: <класс исключения>»`,
+`anchor: ""`, а сессия БД откатывается, чтобы следующие модули отработали.
 
 ## Снапшоты
 
