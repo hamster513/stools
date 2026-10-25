@@ -29,7 +29,8 @@ const STAGES: { key: JobStage; label: string }[] = [
 
 export function KbSource() {
   const connection = useKbConnection()
-  if (connection.isLoading) return <Spinner />
+  // Якорь и у загрузки: сводка «Данные» ведёт сюда по #kb.
+  if (connection.isLoading) return <section id="kb"><Spinner /></section>
   if (connection.isError || !connection.data) {
     return (
       <Section id="kb" title="Подключение к MaxPatrol" about="Не удалось загрузить подключение.">
