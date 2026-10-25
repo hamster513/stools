@@ -71,6 +71,10 @@ def collect(db: Session) -> list[DataItem]:
         try:
             items.extend(_PROVIDERS[module](db))
         except Exception as exc:  # noqa: BLE001 — сводка не должна падать из-за одного модуля
+            # Ошибка SQL оставляет транзакцию прерванной: без отката все следующие провайдеры
+            # получили бы ту же ошибку на общей сессии.
+            if db is not None:
+                db.rollback()
             items.append(
                 DataItem(module, "error", module, "source", None, "missing", None, f"ошибка: {type(exc).__name__}", "")
             )
