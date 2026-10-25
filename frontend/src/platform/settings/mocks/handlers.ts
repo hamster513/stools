@@ -25,6 +25,7 @@ import type {
   SecuritySettings,
   UserRow,
 } from '@/platform/settings/api/types'
+import type { DataItem } from '@/platform/settings/api/dataStatus'
 
 /** Пароль «pw» в макете считается текущим — иначе не посмотреть ни успех, ни отказ. */
 const MOCK_PASSWORD = 'pw'
@@ -205,6 +206,26 @@ function acceptBundle(version: string | null, source: 'uploaded' | 'online', dif
   bundle.missing = diff.untranslated
   bundle.stale = diff.stale_translations
   bundle.translated = bundle.technique_count - diff.untranslated
+}
+
+/** Сводка «Данные»: по строке-двум на модуль, среди них видны все
+ *  четыре состояния. Даты считаются от «сейчас», чтобы «N дн. назад»
+ *  не уплывало. Матрица — из состояния выше: её обновление видно сразу. */
+function dataStatus(): DataItem[] {
+  const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString()
+  const bundleOld = Date.now() - Date.parse(bundle.loaded_at) > 90 * 86_400_000
+  return [
+    { module: 'attack', key: 'bundle', title: 'База MITRE ATT&CK', kind: 'reference', updated_at: bundle.loaded_at, state: bundleOld ? 'stale' : 'fresh', source: bundle.source, detail: bundle.version ? `версия ${bundle.version}` : '', anchor: 'bundle' },
+    { module: 'attack', key: 'ru-ttp', title: 'Применяемость техник в России', kind: 'reference', updated_at: ago(120), state: 'stale', source: 'ru-ttp.xlsx', detail: '412 строк, ATT&CK 19.2', anchor: 'ru-ttp' },
+    { module: 'siem', key: 'kb-snapshot', title: 'База знаний SIEM (снапшот)', kind: 'snapshot', updated_at: ago(2), state: 'fresh', source: 'файл', detail: 'kb-export.zip', anchor: 'upload' },
+    { module: 'siem', key: 'kb-connection', title: 'Подключение к MaxPatrol KB', kind: 'source', updated_at: ago(2.1), state: 'fresh', source: 'kb.example.local', detail: '', anchor: 'kb' },
+    { module: 'vm', key: 'import', title: 'Импорт уязвимостей', kind: 'snapshot', updated_at: ago(1), state: 'fresh', source: 'API', detail: '', anchor: 'upload' },
+    { module: 'vm', key: 'ref:fstec', title: 'Банк данных угроз ФСТЭК', kind: 'reference', updated_at: ago(5), state: 'fresh', source: 'bdu.fstec.ru', detail: '', anchor: 'references' },
+    { module: 'ad', key: 'conn:1', title: 'corp.example', kind: 'source', updated_at: null, state: 'missing', source: 'dc01.corp.example', detail: 'сбора ещё не было', anchor: 'connections' },
+    { module: 'ksc', key: 'conn:1', title: 'Сервер администрирования', kind: 'source', updated_at: ago(0.2), state: 'fresh', source: 'ksc.corp.example', detail: '', anchor: 'connections' },
+    { module: 'assets', key: 'sync', title: 'Синхронизация с модулями', kind: 'source', updated_at: ago(3), state: 'running', source: null, detail: '', anchor: 'sync' },
+    { module: 'assets', key: 'dns:1', title: 'DNS офиса', kind: 'source', updated_at: ago(0.5), state: 'fresh', source: 'AD', detail: '', anchor: 'dns' },
+  ]
 }
 
 const conflict = (detail: string) => HttpResponse.json({ detail }, { status: 409 })
@@ -405,6 +426,10 @@ export const platformHandlers = [
       error: null,
     })
   }),
+
+  // --- Сводка «Данные» ---------------------------------------------------
+
+  http.get('/api/settings/data-status', () => noSession() ?? HttpResponse.json({ items: dataStatus() })),
 
   // --- База ATT&CK ------------------------------------------------------
 

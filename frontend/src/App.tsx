@@ -26,11 +26,11 @@ const MOVED_SETTINGS = new Set(['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', '
  * и /<модуль>/settings (до переезда настроек в /settings/<модуль>). На них ведут
  * закладки и ссылки в чужих инструкциях — переводим на новые, а не ломаем.
  */
-function legacyPath(path: string, search: string): string | null {
-  if (path.startsWith('/snapshots/')) return `/siem${path}${search}`
-  if (path === '/upload' || path === '/siem/upload') return `/settings/siem${search}`
+function legacyPath(path: string, tail: string): string | null {
+  if (path.startsWith('/snapshots/')) return `/siem${path}${tail}`
+  if (path === '/upload' || path === '/siem/upload') return `/settings/siem${tail}`
   const m = /^\/([a-z]+)\/settings$/.exec(path)
-  if (m && MOVED_SETTINGS.has(m[1])) return `/settings/${m[1]}${search}`
+  if (m && MOVED_SETTINGS.has(m[1])) return `/settings/${m[1]}${tail}`
   return null
 }
 
@@ -60,7 +60,8 @@ function Root() {
     return <FullPageSpinner />
   }
 
-  const legacy = legacyPath(path, search)
+  // Хвост — строка запроса и якорь: /vm/settings#zones ведёт к той же секции.
+  const legacy = legacyPath(path, search + window.location.hash)
   if (legacy) return <Redirect to={legacy} />
 
   // Общие настройки — не модуль: они над модулями и живут в своей оболочке.

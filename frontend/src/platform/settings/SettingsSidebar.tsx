@@ -1,4 +1,4 @@
-import { Bot, KeyRound, ListChecks, ScrollText, ShieldCheck, UserRound, Users, type LucideIcon } from 'lucide-react'
+import { Bot, Database, KeyRound, ListChecks, ScrollText, ShieldCheck, UserRound, Users, type LucideIcon } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { useCan } from '@/lib/can'
@@ -67,7 +67,9 @@ export function SettingsSidebar() {
         <div className="text-xs text-text-secondary">платформа и модули</div>
       </div>
       <nav className="flex flex-col gap-0.5 px-2" aria-label="Разделы настроек">
-        <div className={GROUP}>Платформа</div>
+        {/* Всем: сводка свежести баз и выгрузок всех модулей. */}
+        <NavItem to="/settings" label="Данные" icon={Database} />
+        <div className={cn(GROUP, 'mt-2 border-t border-grid pt-3')}>Платформа</div>
         {admin &&
           ADMIN_ITEMS.map(({ key, label, icon }) => (
             <NavItem key={key} to={`/settings/${key}`} label={label} icon={icon} />

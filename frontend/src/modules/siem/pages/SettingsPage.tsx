@@ -12,6 +12,7 @@ import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
 import { moduleTitle } from '@/platform/modules'
 import { useLlm } from '@/platform/settings/api/queries'
+import { useScrollToAnchor } from '@/platform/settings/useScrollToAnchor'
 import { HuntingSettings } from '../hunting/pages/settings/HuntingSettings'
 import { DataSources } from './settings/DataSources'
 
@@ -31,6 +32,8 @@ export function SettingsPage() {
     if (!settings.data) return
     setAttack(settings.data.attack)
   }, [settings.data])
+  // Секции отрисовываются, когда форма разметки получила данные.
+  useScrollToAnchor(attack !== null)
 
   if (settings.isLoading || !attack) return <FullPageSpinner />
   if (settings.isError) {

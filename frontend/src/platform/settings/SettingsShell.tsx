@@ -19,6 +19,7 @@ import { AuditPage } from './pages/AuditPage'
 import { LlmPage } from './pages/LlmPage'
 import { AttackSettingsPage } from './pages/AttackSettingsPage'
 import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
+import { DataStatusPage } from './pages/DataStatusPage'
 
 /**
  * Разделы, открытые всем ролям. Статусы находок: от них зависят подсчёты,
@@ -59,11 +60,12 @@ export function SettingsShell() {
   const Open = section ? OPEN_PAGES.get(section) : undefined
   const Admin = section ? ADMIN_PAGES.get(section) : undefined
 
-  // Голый /settings и неизвестные разделы уводят на первый раздел, а не
-  // показывают его на чужом адресе: иначе в сайдбаре не подсвечен ни один
-  // пункт, и непонятно, что именно открыто.
+  // Голый /settings — сводка «Данные», её видят все роли. Неизвестные
+  // разделы уводят на первый раздел, а не показывают его на чужом адресе:
+  // иначе в сайдбаре не подсвечен ни один пункт, и непонятно, что открыто.
   let page: ReactNode
-  if (Open) page = <Open />
+  if (path === '/settings') page = <DataStatusPage />
+  else if (Open) page = <Open />
   else if (!admin) page = <Forbidden />
   else if (Admin) page = <Admin />
   else page = <Redirect to="/settings/users" />

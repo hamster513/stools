@@ -9,6 +9,7 @@ import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Section } from '@/platform/collector/ui'
 import { moduleTitle } from '@/platform/modules'
+import { useScrollToAnchor } from '@/platform/settings/useScrollToAnchor'
 import { useSaveToolboxSettings, useToolboxSettings } from '../api/queries'
 import type { ToolboxSettings } from '../api/types'
 
@@ -21,6 +22,7 @@ const RETENTION_MAX = 3650
 export function SettingsPage() {
   const { admin } = useCan()
   const settings = useToolboxSettings(admin)
+  useScrollToAnchor(admin && !!settings.data)
   if (!admin) {
     return <div className="p-6"><EmptyState icon={Lock} title="Только для администратора" description="Слова, подсети и срок хранения файлов меняет администратор." /></div>
   }

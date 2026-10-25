@@ -3,6 +3,7 @@ import type { UseQueryResult } from '@tanstack/react-query'
 import { ApiRequestError } from '@/api/client'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { useScrollToAnchor } from '@/platform/settings/useScrollToAnchor'
 
 /** Страница модуля в общих настройках: загрузка настроек и колонка блоков. */
 export function ModuleSettingsPage<T>({ settings, title, about, children }: {
@@ -11,6 +12,7 @@ export function ModuleSettingsPage<T>({ settings, title, about, children }: {
   about: string
   children: (data: T) => ReactNode
 }) {
+  useScrollToAnchor(!settings.isLoading && !!settings.data)
   if (settings.isLoading) return <FullPageSpinner />
   if (settings.isError || !settings.data) {
     const msg = settings.error instanceof ApiRequestError ? settings.error.message : 'Не удалось загрузить настройки'

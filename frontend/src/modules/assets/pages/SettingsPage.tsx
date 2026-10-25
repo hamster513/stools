@@ -15,6 +15,7 @@ import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+import { useScrollToAnchor } from '@/platform/settings/useScrollToAnchor'
 import { DnsSection } from './settings/DnsSection'
 import { RacktablesSection } from './settings/RacktablesSection'
 import { SyncButton } from './SyncButton'
@@ -257,6 +258,8 @@ function ZonesSection() {
 
 /** Настройки модуля Assets: пороги, синхронизация с модулями, DNS-серверы, RackTables, группы сетей. */
 export function SettingsPage() {
+  // Секции отрисованы сразу, данные они грузят каждая сама.
+  useScrollToAnchor(true)
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-5">
