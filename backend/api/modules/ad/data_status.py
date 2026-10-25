@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.modules.ad.models import AdConnection, AdSnapshot
-from api.platform.data_status import DataItem, register_data_status, stale_after
+from api.platform.data_status import DataItem, count_ru, register_data_status, stale_after
 
 SNAPSHOT_DAYS = 7
 NEVER = "сбора ещё не было"
@@ -25,7 +25,7 @@ def _connection_row(db: Session, conn: AdConnection) -> DataItem:
         return DataItem("ad", key, title, "source", None, "missing", conn.host, NEVER, "connections")
     return DataItem(
         "ad", key, title, "source", last.collected_at, stale_after(last.collected_at, SNAPSHOT_DAYS),
-        conn.host, f"{last.objects} объектов", "connections",
+        conn.host, count_ru(last.objects, ("объект", "объекта", "объектов")), "connections",
     )
 
 

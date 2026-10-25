@@ -6,9 +6,12 @@ from sqlalchemy.orm import Session
 
 from api.modules.vm.models import VmImport
 from api.modules.vm.services.refs_view import RefView, ref_views
-from api.platform.data_status import DataItem, State, register_data_status, stale_after
+from api.platform.data_status import DataItem, State, count_ru, register_data_status, stale_after
 
 IMPORT_DAYS = 7
+
+#: Внутренние коды происхождения импорта в словах для экрана; незнакомый код показывается как есть.
+IMPORT_SOURCES = {"vm": "MaxPatrol VM", "file": "файл"}
 
 
 def _import_row(db: Session) -> DataItem:
@@ -18,14 +21,15 @@ def _import_row(db: Session) -> DataItem:
         return DataItem("vm", "import", title, "snapshot", None, "missing", None, "импортов ещё не было", "upload")
     return DataItem(
         "vm", "import", title, "snapshot", last.finished_at, stale_after(last.finished_at, IMPORT_DAYS),
-        last.source, last.filename or f"{last.hosts} хостов", "upload",
+        IMPORT_SOURCES.get(last.source, last.source),
+        last.filename or count_ru(last.hosts, ("хост", "хоста", "хостов")), "upload",
     )
 
 
 def _ref_row(ref: RefView) -> DataItem:
     # Порог в 30 дней уже посчитан обзором (`RefView.stale`): второй раз его не считаем.
     state: State = "running" if ref.active_job_id else "missing" if ref.loaded_at is None else "stale" if ref.stale else "fresh"
-    detail = f"{ref.records} записей" if ref.loaded_at else "не загружено"
+    detail = count_ru(ref.records, ("запись", "записи", "записей")) if ref.loaded_at else "не загружено"
     return DataItem("vm", f"ref:{ref.name}", ref.title, "reference", ref.loaded_at, state, ref.source, detail, "references")
 
 

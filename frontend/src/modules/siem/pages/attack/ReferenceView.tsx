@@ -112,7 +112,7 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
           to="/settings/siem"
           className="text-sm text-primary underline underline-offset-2 hover:text-text"
         >
-          Настройки и данные →
+          Настройки модуля →
         </Link>
       </div>
     )

@@ -56,7 +56,9 @@ const ADMIN_PAGES = new Map<string, ComponentType>([
 export function SettingsShell() {
   const { path } = useRouter()
   const { admin } = useCan()
-  const section = matchPath('/settings/:section', path)?.section ?? null
+  // /settings/ с хвостовым слэшем — тот же корень, что и /settings.
+  const base = path.length > 1 ? path.replace(/\/+$/, '') : path
+  const section = matchPath('/settings/:section', base)?.section ?? null
   const Open = section ? OPEN_PAGES.get(section) : undefined
   const Admin = section ? ADMIN_PAGES.get(section) : undefined
 
@@ -64,7 +66,7 @@ export function SettingsShell() {
   // разделы уводят на первый раздел, а не показывают его на чужом адресе:
   // иначе в сайдбаре не подсвечен ни один пункт, и непонятно, что открыто.
   let page: ReactNode
-  if (path === '/settings') page = <DataStatusPage />
+  if (base === '/settings') page = <DataStatusPage />
   else if (Open) page = <Open />
   else if (!admin) page = <Forbidden />
   else if (Admin) page = <Admin />

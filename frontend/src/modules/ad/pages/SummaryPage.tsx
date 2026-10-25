@@ -483,7 +483,7 @@ export function SummaryPage({ domainId }: { domainId: number }) {
   if (!snap) {
     return (
       <div className="p-6">
-        <EmptyState icon={ServerCog} title="Снапшотов ещё нет" description="Загрузите выгрузку скрипта или запустите сбор по LDAP в настройках модуля." action={<Link to="/settings/ad" className={ACTION_LINK}>Настройки и данные <ArrowRight size={13} aria-hidden /></Link>} />
+        <EmptyState icon={ServerCog} title="Снапшотов ещё нет" description="Загрузите выгрузку скрипта или запустите сбор по LDAP в настройках модуля." action={<Link to="/settings/ad" className={ACTION_LINK}>Настройки модуля <ArrowRight size={13} aria-hidden /></Link>} />
       </div>
     )
   }

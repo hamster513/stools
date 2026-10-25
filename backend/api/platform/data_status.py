@@ -45,6 +45,18 @@ def registered_modules() -> frozenset[str]:
     return frozenset(_PROVIDERS)
 
 
+def count_ru(n: int, forms: tuple[str, str, str]) -> str:
+    """«1 запись», «2 записи», «248 312 записей»: число с разрядами и слово в нужной форме."""
+    n10, n100 = n % 10, n % 100
+    if n10 == 1 and n100 != 11:
+        word = forms[0]
+    elif 2 <= n10 <= 4 and not 12 <= n100 <= 14:
+        word = forms[1]
+    else:
+        word = forms[2]
+    return f"{n:,}".replace(",", " ") + " " + word
+
+
 def stale_after(updated_at: dt.datetime | None, days: int, *, running: bool = False) -> State:
     """Состояние по возрасту: идущее обновление важнее возраста; naive-время считается UTC."""
     if running:

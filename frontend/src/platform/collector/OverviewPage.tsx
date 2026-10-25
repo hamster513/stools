@@ -91,7 +91,7 @@ export function CollectorOverviewPage<O extends OverviewBase>({ overview, settin
   if (!o.snapshot) {
     return (
       <div className="p-6">
-        <EmptyState icon={ServerCog} title="Снапшотов ещё нет" description={emptyDescription} action={<Link to={settingsPath} className="inline-flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-primary/90">Настройки и данные <ArrowRight size={13} aria-hidden /></Link>} />
+        <EmptyState icon={ServerCog} title="Снапшотов ещё нет" description={emptyDescription} action={<Link to={settingsPath} className="inline-flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-primary/90">Настройки модуля <ArrowRight size={13} aria-hidden /></Link>} />
       </div>
     )
   }

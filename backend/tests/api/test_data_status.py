@@ -101,7 +101,7 @@ def test_vm_ref_loaded_is_fresh(db_session: Any) -> None:
 def test_attack_bundle_present(db_session: Any) -> None:
     rows = _rows(db_session, "attack")
     bundle = rows["bundle"]
-    assert bundle.state in {"fresh", "stale"} and bundle.source == "builtin"
+    assert bundle.state in {"fresh", "stale"} and bundle.source == "встроенный"
     assert bundle.title == "База MITRE ATT&CK" and bundle.anchor == "bundle"
     assert rows["ru-ttp"].state == "missing" and rows["ru-ttp"].anchor == "ru-ttp"
 

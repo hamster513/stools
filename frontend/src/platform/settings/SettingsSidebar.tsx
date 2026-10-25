@@ -13,7 +13,7 @@ const ADMIN_ITEMS = [
   { key: 'llm', label: 'Модель LLM', icon: Bot },
 ] as const
 
-/** Настройки и данные модулей — в порядке рейки, только работающие модули. */
+/** Страницы настроек модулей — в порядке рейки, только работающие модули. */
 const MODULE_ITEMS = MODULES.filter((m) => m.status === 'available').map((m) => ({ key: m.id, label: m.title, icon: m.icon }))
 
 const GROUP = 'px-3 pt-1 pb-1 text-xs font-medium text-text-secondary'

@@ -21,7 +21,13 @@ export function useScrollToAnchor(ready: boolean): void {
 
     const follow = () => {
       release()
-      const id = decodeURIComponent(window.location.hash.slice(1))
+      const raw = window.location.hash.slice(1)
+      let id = raw
+      try {
+        id = decodeURIComponent(raw)
+      } catch {
+        // Битая запись вроде #%E0: ищем по сырому значению, а не роняем страницу.
+      }
       if (!id) return
       // Ищем по id каждый раз: секция появляется позже или перерисовывается другим элементом.
       const scroll = () => document.getElementById(id)?.scrollIntoView({ block: 'start' })

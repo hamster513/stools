@@ -46,3 +46,18 @@ def test_register_replaces_module_provider(monkeypatch: pytest.MonkeyPatch) -> N
     register_data_status("x", lambda db: [DataItem("x", "k", "T", "source", None, "missing", None, "", "")])
     assert data_status.registered_modules() == frozenset({"x"})
     assert len(collect(db=None)) == 1  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("n", "expected"),
+    [
+        (1, "1 запись"),
+        (2, "2 записи"),
+        (5, "5 записей"),
+        (11, "11 записей"),
+        (21, "21 запись"),
+        (248312, "248 312 записей"),
+    ],
+)
+def test_count_ru(n: int, expected: str) -> None:
+    assert data_status.count_ru(n, ("запись", "записи", "записей")) == expected

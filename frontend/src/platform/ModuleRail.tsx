@@ -99,22 +99,21 @@ export function ModuleRail() {
             )}
           </Link>
         )}
-        {/* Общие настройки — только администратору: остальным этот экран
-            всё равно отвечает отказом, а значок обещал бы обратное. */}
-        {can.admin && (
-          <Link
-            to="/settings"
-            className={cn(
-              'rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text',
-              FOCUS,
-              path.startsWith('/settings') && 'bg-row-selected text-text',
-            )}
-            aria-label="Настройки"
-            title="Настройки"
-          >
-            <Settings2 size={16} aria-hidden />
-          </Link>
-        )}
+        {/* Настройки — для всех ролей: в них страницы модулей и сводка
+            «Данные», а у боковых панелей модулей своей ссылки на настройки
+            больше нет. Разделы платформы внутри остаются администратору. */}
+        <Link
+          to="/settings"
+          className={cn(
+            'rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text',
+            FOCUS,
+            path.startsWith('/settings') && 'bg-row-selected text-text',
+          )}
+          aria-label="Настройки"
+          title="Настройки"
+        >
+          <Settings2 size={16} aria-hidden />
+        </Link>
         {/* Тема — не настройка администратора: за экраном сидит каждый,
             и менять её надо там, где сидишь, а не через раздел настроек. */}
         <button

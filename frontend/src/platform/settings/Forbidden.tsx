@@ -12,7 +12,7 @@ export function Forbidden() {
       <EmptyState
         icon={Lock}
         title="Недостаточно прав"
-        description="Общие настройки доступны администратору. Если вам нужен доступ, попросите его у администратора."
+        description="Этот раздел настроек доступен администратору. Настройки модулей и сводка данных открыты всем — они в меню слева."
         action={
           <Link to="/attack" className="text-sm text-primary underline underline-offset-2">
             К матрице ATT&CK →

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.modules.ksc.models import KscConnection, KscSnapshot
-from api.platform.data_status import DataItem, register_data_status, stale_after
+from api.platform.data_status import DataItem, count_ru, register_data_status, stale_after
 
 SNAPSHOT_DAYS = 7
 NEVER = "сбора ещё не было"
@@ -25,7 +25,7 @@ def _connection_row(db: Session, conn: KscConnection) -> DataItem:
         return DataItem("ksc", key, title, "source", None, "missing", conn.host, NEVER, "connections")
     return DataItem(
         "ksc", key, title, "source", last.collected_at, stale_after(last.collected_at, SNAPSHOT_DAYS),
-        conn.host, f"{last.hosts} хостов", "connections",
+        conn.host, count_ru(last.hosts, ("хост", "хоста", "хостов")), "connections",
     )
 
 
