@@ -497,7 +497,7 @@ def _found(asset: Asset, observations: list[Observed], settings: dict[str, Any],
         _card(asset), observations, stale_days=int(settings["stale_days"]), inactive_days=int(settings["inactive_days"]), now=now,
     )
     if asset.ip and asset.network_id is None and any(o.gone_at is None for o in observations):
-        found.append(Discrepancy("no_network", "", "network", asset.ip, "", f"сеть не описана: адрес {asset.ip} не входит ни в одну сеть"))
+        found.append(Discrepancy("no_network", "", "network", asset.ip, "", f"сеть не описана: адрес {asset.ip} не входит ни в одну подсеть (сети шире /16 не учитываются)"))
     return found
 
 

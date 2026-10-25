@@ -2,6 +2,7 @@
 ядро правил, ручки правил и признаков, ручная группа главнее правил, импорт RackTables, миграция данных."""
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -53,6 +54,9 @@ def matches(r: Rule, title: str = "", tags: tuple[str, ...] = (), cidr: str = "1
     ("name_regex", "(DMZ|WEB){2}", "повтором над альтернативой"),
     # Число повторов не помещается — 422 с понятным текстом, а не 500.
     ("name_regex", "a{99999999999}", "слишком большое число повторов"),
+    # Ограниченные повторы: 61⁴ и 4¹² — больше 256², секунды перебора на имени до 255 символов.
+    ("name_regex", r"\w{0,60}\w{0,60}\w{0,60}\w{0,60}!", "слишком много повторов"),
+    ("name_regex", r"\w{0,3}" * 12 + "!", "слишком много повторов"),
 ])
 def test_validate_rule_rejects(match: str, value: str, fragment: str) -> None:
     with pytest.raises(ValueError, match=fragment):
@@ -63,6 +67,7 @@ def test_validate_rule_accepts_every_match() -> None:
     for match, value in [("name_prefix", "APP_DMZ_"), ("name_contains", "dmz"), ("name_regex", r"dmz_\d+"),
                          ("name_regex", r"^APP_(DMZ|WEB)_\d+"), ("name_regex", "(ab)+"), ("name_regex", "DMZ"),
                          ("name_regex", r"^Internet_DMZ_.*"), ("name_regex", r"^APP_.*_\d+"), ("name_regex", "(?:a|b)+"),
+                         ("name_regex", r"\w*\w*!"), ("name_regex", r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
                          ("tag", "prod"), ("cidr", "10.10.0.0/16"), ("cidr", "203.0.113.7/24")]:
         validate_rule(match, value)
 
@@ -74,6 +79,14 @@ def test_regex_is_safe_on_bad_input() -> None:
     # Имя сравнивается не дальше 255 символов.
     assert not matches(rule("name_regex", "z$"), "a" * 300 + "z")
     assert matches(rule("name_regex", "z$"), "a" * 254 + "z")
+
+
+def test_worst_accepted_regex_is_fast() -> None:
+    # Худший допустимый шаблон (256²) на длинном неподходящем имени — доли секунды.
+    validate_rule("name_regex", r"\w*\w*!")
+    start = time.perf_counter()
+    assert not matches(rule("name_regex", r"\w*\w*!"), "a" * 255)
+    assert time.perf_counter() - start < 0.5
 
 
 def test_name_matches_ignore_case() -> None:

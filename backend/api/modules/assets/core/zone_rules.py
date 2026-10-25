@@ -25,6 +25,11 @@ BRANCH_REPEAT = "шаблон с повтором над альтернатив�
 #: длинном имени не заканчивается; двух хватает для обычных шаблонов вроде `^APP_.*_\\d+`.
 MAX_UNBOUNDED = 2
 TOO_MANY_UNBOUNDED = f"в шаблоне не больше {MAX_UNBOUNDED} повторов * или + (и {{n,}}) — упростите"
+#: Ограниченные повторы тоже дают полиномиальный перебор (`\\w{0,60}` ×4 + `!` — 13 с на 255 символах).
+#: Сложность — произведение (min(верхняя граница, 255) + 1) по всем повторам с границей больше 1
+#: (неограниченный считается как 255): `\\w*\\w*` даёт ровно 256² и ещё допустим.
+MAX_COMPLEXITY = 256 * 256
+TOO_COMPLEX = "слишком много повторов — упростите шаблон"
 _REPEATS = (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT, sre_parse.POSSESSIVE_REPEAT)
 #: То же имя, что `models.EXTERNAL_ZONE`; ядро не тянет модели.
 EXTERNAL_ZONE = "External"
@@ -66,6 +71,8 @@ def validate_rule(match: str, value: str) -> None:
             raise ValueError(BRANCH_REPEAT)
         if _unbounded_repeats(parsed) > MAX_UNBOUNDED:
             raise ValueError(TOO_MANY_UNBOUNDED)
+        if _complexity(parsed) > MAX_COMPLEXITY:
+            raise ValueError(TOO_COMPLEX)
     if match == "cidr":
         try:
             ipaddress.ip_network(value.strip(), strict=False)
@@ -121,6 +128,21 @@ def _unbounded_repeats(items: sre_parse.SubPattern) -> int:
         else:
             count += sum(_unbounded_repeats(child) for child in _children(av))
     return count
+
+
+def _complexity(items: sre_parse.SubPattern) -> int:
+    """Произведение (min(верхняя граница, MAX_TITLE) + 1) по всем повторам шаблона с границей больше 1."""
+    product = 1
+    for op, av in items:
+        if op in _REPEATS:
+            _low, high, sub = av
+            if high > 1:
+                product *= min(high, MAX_TITLE) + 1
+            product *= _complexity(sub)
+        else:
+            for child in _children(av):
+                product *= _complexity(child)
+    return product
 
 
 def broken_regex(rule: Rule) -> bool:
