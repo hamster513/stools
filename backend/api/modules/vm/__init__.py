@@ -8,6 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from api.modules.attack.layers import register_layer
+from api.modules.vm import data_status as data_status  # регистрирует провайдера свежести данных
 from api.modules.vm import models as models  # таблицы должны попасть в metadata
 from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job

@@ -8,7 +8,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
@@ -17,7 +16,6 @@ from api.deps import get_current_user
 from api.jobs import UPLOAD_INTERRUPTED
 from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.core.refs import REF_NAMES
-from api.modules.vm.models import VmRefState
 from api.modules.vm.routers.import_ import JobStarted
 from api.modules.vm.services.bundle import classify, run_bundle
 from api.modules.vm.services.jobs import (
@@ -29,34 +27,12 @@ from api.modules.vm.services.jobs import (
     run_job,
     start_job,
 )
-from api.modules.vm.services.refs import URLS, nvd_years_default, run_ref_download, run_ref_file
+from api.modules.vm.services.refs import nvd_years_default, run_ref_download, run_ref_file
+from api.modules.vm.services.refs_view import RefView, ref_views
 from api.modules.vm.services.settings import load_settings
 from api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/refs", tags=["vm"])
-
-TITLES = {
-    "epss": "EPSS",
-    "nvd": "NVD CVE",
-    "exploitdb": "ExploitDB",
-    "msf": "Metasploit",
-    "attack": "CVE → ATT&CK (CTID)",
-    "kev": "CISA KEV",
-}
-
-
-class RefView(BaseModel):
-    name: str
-    title: str
-    url: str
-    loaded_at: dt.datetime | None = None
-    source: str | None = None
-    records: int
-    detail: str
-    #: Старше 30 дней — справочник устарел, обзор это подсвечивает.
-    stale: bool
-    active_job_id: int | None = None
-
 
 class DownloadRequest(BaseModel):
     years: list[int] | None = None
@@ -98,30 +74,7 @@ def _has_known_refs(path: Path) -> bool:
 
 @router.get("", response_model=list[RefView])
 def list_refs(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[RefView]:
-    states = {s.name: s for s in db.execute(select(VmRefState)).scalars()}
-    now = dt.datetime.now(dt.UTC)
-    out = []
-    for name in REF_NAMES:
-        s = states.get(name)
-        # Архив грузит все справочники сразу: его задача видна на каждой карточке.
-        running = active_job(db, [f"ref_{name}", "ref_bundle"])
-        loaded = s.loaded_at if s else None
-        if loaded is not None and loaded.tzinfo is None:
-            loaded = loaded.replace(tzinfo=dt.UTC)
-        out.append(
-            RefView(
-                name=name,
-                title=TITLES[name],
-                url=URLS[name].replace("{year}", "<год>"),
-                loaded_at=loaded,
-                source=s.source if s else None,
-                records=s.records if s else 0,
-                detail=s.detail if s else "",
-                stale=loaded is None or (now - loaded) > dt.timedelta(days=30),
-                active_job_id=running.id if running else None,
-            )
-        )
-    return out
+    return ref_views(db)
 
 
 @router.post("/bundle/upload", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)

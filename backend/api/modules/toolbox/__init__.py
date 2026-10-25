@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from api.modules.toolbox import data_status as data_status  # провайдер свежести данных
 from api.modules.toolbox import models as models  # таблицы должны попасть в metadata
 from api.modules.toolbox.routers import aliases, scrub, settings
 from api.modules.toolbox.services.scrub import CLEANUP, cleanup_handler

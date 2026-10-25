@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from api.jobs import make_jobs_router
+from api.modules.attack import data_status as data_status  # регистрирует провайдера свежести данных
 from api.modules.attack import models as models  # таблицы должны попасть в metadata
 from api.modules.attack.models import AttackJob
 from api.modules.attack.routers import bundle, matrix, ru_ttp

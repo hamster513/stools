@@ -9,6 +9,7 @@ from fastapi import APIRouter
 
 from api.collector_routes import make_collect_schedule_handler
 from api.jobs import make_jobs_router
+from api.modules.ksc import data_status as data_status  # регистрирует провайдера свежести данных
 from api.modules.ksc import models as models  # таблицы должны попасть в metadata
 from api.modules.ksc.core import extractors as extractors  # регистрирует извлекатели
 from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
