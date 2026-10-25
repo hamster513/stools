@@ -33,7 +33,7 @@ router = APIRouter(prefix="/networks/zone-rules", tags=["assets"])
 
 
 class RuleIn(BaseModel):
-    #: name_prefix | name_contains | name_regex | tag | cidr — проверяет ядро (русский текст ошибки).
+    #: name_prefix | name_contains | name_glob | tag | cidr — проверяет ядро (русский текст ошибки).
     match: str = Field(max_length=32)
     value: str = Field(max_length=500)
     zone: str = Field(max_length=64)

@@ -60,7 +60,7 @@ class NetworkZoneRule(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     #: Группу, на которую ссылается правило, удалить нельзя (RESTRICT).
     zone: Mapped[str] = mapped_column(ForeignKey("asset_zone.name", ondelete="RESTRICT", onupdate="CASCADE"), index=True)
-    #: name_prefix | name_contains | name_regex | tag | cidr
+    #: name_prefix | name_contains | name_glob | tag | cidr
     match: Mapped[str] = mapped_column(String(16))
     value: Mapped[str] = mapped_column(String(500))
     note: Mapped[str] = mapped_column(Text, default="")

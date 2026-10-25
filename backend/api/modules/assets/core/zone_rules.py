@@ -7,31 +7,18 @@
 from __future__ import annotations
 
 import ipaddress
-import re
-import re._parser as sre_parse  # type: ignore[import-untyped]  # разбор шаблона без компиляции; заглушек нет
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
-MATCHES = ("name_prefix", "name_contains", "name_regex", "tag", "cidr")
+MATCHES = ("name_prefix", "name_contains", "name_glob", "tag", "cidr")
 MAX_VALUE = 500
-#: Регулярное выражение короче прочих значений, а сравнивается с именем не длиннее `MAX_TITLE`:
-#: так худший случай перебора остаётся ограниченным.
-MAX_REGEX = 200
+#: Шаблон со звёздочкой короче прочих значений; сравнивается с именем не длиннее `MAX_TITLE`.
+MAX_GLOB = 200
 MAX_TITLE = 255
-NESTED_REPEAT = "шаблон с вложенными повторами (например, (\\w+)+) не принимается — упростите"
-BRANCH_REPEAT = "шаблон с повтором над альтернативой вида (a|b)+ не принимается — упростите: без повтора над альтернативой"
-#: Несколько неограниченных повторов подряд (`\\w*\\w*\\w*!`) дают полиномиальный перебор, который на
-#: длинном имени не заканчивается; двух хватает для обычных шаблонов вроде `^APP_.*_\\d+`.
-MAX_UNBOUNDED = 2
-TOO_MANY_UNBOUNDED = f"в шаблоне не больше {MAX_UNBOUNDED} повторов * или + (и {{n,}}) — упростите"
-#: Ограниченные повторы тоже дают полиномиальный перебор (`\\w{0,60}` ×4 + `!` — 13 с на 255 символах).
-#: Сложность — произведение (min(верхняя граница, 255) + 1) по всем повторам с границей больше 1
-#: и больше нижней (неограниченный считается как 255; точный `{n}` выбора не даёт и не считается):
-#: `\\w*\\w*` даёт ровно 256² и ещё допустим.
-MAX_COMPLEXITY = 256 * 256
-TOO_COMPLEX = "слишком много повторов — упростите шаблон"
-_REPEATS = (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT, sre_parse.POSSESSIVE_REPEAT)
+#: Регулярные выражения убраны (владелец 25.10): ни одна проверка шаблона не закрывала зависание
+#: единственного процесса API.
+REGEX_GONE = "тип правила name_regex больше не поддерживается — используйте шаблон со звёздочкой"
 #: То же имя, что `models.EXTERNAL_ZONE`; ядро не тянет модели.
 EXTERNAL_ZONE = "External"
 SOURCE_MANUAL = "manual"
@@ -50,30 +37,17 @@ class Rule:
 
 
 def validate_rule(match: str, value: str) -> None:
-    """ValueError с русским текстом: неизвестный вид, пустое или длинное значение, неверный regex или CIDR."""
+    """ValueError с русским текстом: неизвестный вид, пустое или длинное значение, неверный CIDR."""
+    if match == "name_regex":
+        raise ValueError(REGEX_GONE)
     if match not in MATCHES:
         raise ValueError(f"неизвестный вид правила «{match}»; допустимы: {', '.join(MATCHES)}")
     if not value.strip():
         raise ValueError("значение правила не может быть пустым")
     if len(value) > MAX_VALUE:
         raise ValueError(f"значение правила длиннее {MAX_VALUE} символов")
-    if match == "name_regex":
-        if len(value) > MAX_REGEX:
-            raise ValueError(f"регулярное выражение длиннее {MAX_REGEX} символов")
-        try:
-            parsed = sre_parse.parse(value)
-        except re.error as exc:
-            raise ValueError(f"«{value}» — неверное регулярное выражение: {exc}") from None
-        except (OverflowError, RecursionError):
-            raise ValueError("слишком большое число повторов или слишком глубокая вложенность скобок — упростите шаблон") from None
-        if _nested_repeat(parsed, inside=False):
-            raise ValueError(NESTED_REPEAT)
-        if _branch_repeat(parsed, inside=False):
-            raise ValueError(BRANCH_REPEAT)
-        if _unbounded_repeats(parsed) > MAX_UNBOUNDED:
-            raise ValueError(TOO_MANY_UNBOUNDED)
-        if _complexity(parsed) > MAX_COMPLEXITY:
-            raise ValueError(TOO_COMPLEX)
+    if match == "name_glob" and len(value.strip()) > MAX_GLOB:
+        raise ValueError(f"шаблон длиннее {MAX_GLOB} символов")
     if match == "cidr":
         try:
             ipaddress.ip_network(value.strip(), strict=False)
@@ -81,92 +55,45 @@ def validate_rule(match: str, value: str) -> None:
             raise ValueError(f"«{value}» — не адрес сети CIDR, например 10.10.0.0/16") from None
 
 
-def _children(av: object) -> Iterable[sre_parse.SubPattern]:
-    """Вложенные подшаблоны аргумента узла разбора (группы, ветви, проверки)."""
-    if isinstance(av, sre_parse.SubPattern):
-        yield av
-    elif isinstance(av, (tuple, list)):
-        for item in av:
-            yield from _children(item)
-
-
-def _nested_repeat(items: sre_parse.SubPattern, *, inside: bool) -> bool:
-    """Есть ли повтор (верхняя граница больше 1) внутри другого такого повтора — источник
-    катастрофического перебора вроде `(\\w+)+$`. Проверка с запасом: отвергает и безобидные случаи."""
-    for op, av in items:
-        if op in _REPEATS:
-            _low, high, sub = av
-            many = high > 1
-            if many and inside:
-                return True
-            if _nested_repeat(sub, inside=inside or many):
-                return True
-        elif any(_nested_repeat(child, inside=inside) for child in _children(av)):
-            return True
-    return False
-
-
-def _branch_repeat(items: sre_parse.SubPattern, *, inside: bool) -> bool:
-    """Есть ли альтернатива (`a|aa`) внутри повтора с верхней границей больше 1 — экспоненциальный
-    перебор вроде `(a|aa)+$`. Альтернативы из одиночных символов разбор сам сворачивает в набор `[ab]`."""
-    for op, av in items:
-        if op in _REPEATS:
-            _low, high, sub = av
-            if _branch_repeat(sub, inside=inside or high > 1):
-                return True
-        elif (op is sre_parse.BRANCH and inside) or any(_branch_repeat(child, inside=inside) for child in _children(av)):
-            return True
-    return False
-
-
-def _unbounded_repeats(items: sre_parse.SubPattern) -> int:
-    """Сколько во всём шаблоне повторов без верхней границы (`*`, `+`, `{n,}`)."""
-    count = 0
-    for op, av in items:
-        if op in _REPEATS:
-            _low, high, sub = av
-            count += (high == sre_parse.MAXREPEAT) + _unbounded_repeats(sub)
-        else:
-            count += sum(_unbounded_repeats(child) for child in _children(av))
-    return count
-
-
-def _complexity(items: sre_parse.SubPattern) -> int:
-    """Произведение (min(верхняя граница, MAX_TITLE) + 1) по всем повторам шаблона с верхней границей
-    больше 1 и больше нижней; точный повтор `{n}` точек выбора не создаёт."""
-    product = 1
-    for op, av in items:
-        if op in _REPEATS:
-            low, high, sub = av
-            if high > 1 and high > low:
-                product *= min(high, MAX_TITLE) + 1
-            product *= _complexity(sub)
-        else:
-            for child in _children(av):
-                product *= _complexity(child)
-    return product
-
-
-def broken_regex(rule: Rule) -> bool:
-    """Правило name_regex, чей шаблон не компилируется (записан в обход проверки): оно не срабатывает."""
-    if rule.match != "name_regex":
-        return False
-    try:
-        _regex(rule.value)
-    except (re.error, OverflowError, RecursionError):
-        return True
-    return False
-
-
 def normalize_value(match: str, value: str) -> str:
-    """Значение для хранения: без пробелов по краям, CIDR — адресом сети (`10.10.0.7/16` → `10.10.0.0/16`)."""
+    """Значение для хранения: без пробелов по краям, CIDR — адресом сети (`10.10.0.7/16` → `10.10.0.0/16`),
+    в шаблоне несколько `*` подряд — одной."""
     value = value.strip()
-    return str(ipaddress.ip_network(value, strict=False)) if match == "cidr" else value
+    if match == "cidr":
+        return str(ipaddress.ip_network(value, strict=False))
+    if match == "name_glob":
+        while "**" in value:
+            value = value.replace("**", "*")
+    return value
 
 
-@lru_cache(maxsize=512)
-def _regex(value: str) -> re.Pattern[str]:
-    return re.compile(value, re.IGNORECASE)
+def glob_match(pattern: str, title: str) -> bool:
+    """Шаблон по всему имени (первые `MAX_TITLE` символов) без учёта регистра: `*` — любая
+    последовательность, в т. ч. пустая, `?` — ровно один символ, прочие символы буквально.
+
+    Без `re`: два указателя и возврат только к последней `*` — время не хуже длина имени × длина
+    шаблона при любом шаблоне. Регистр сравнивается посимвольно, чтобы `?` всегда был одним символом
+    имени (`casefold` всей строки превратил бы «ß» в два)."""
+    p = [c.casefold() for c in pattern]
+    t = [c.casefold() for c in title[:MAX_TITLE]]
+    pi = ti = 0
+    star, mark = -1, 0
+    while ti < len(t):
+        if pi < len(p) and p[pi] == "*":
+            star, mark = pi, ti
+            pi += 1
+        elif pi < len(p) and (p[pi] == "?" or p[pi] == t[ti]):
+            pi += 1
+            ti += 1
+        elif star >= 0:
+            # Последняя `*` забирает ещё один символ имени; более ранние `*` пересматривать не нужно.
+            mark += 1
+            pi, ti = star + 1, mark
+        else:
+            return False
+    while pi < len(p) and p[pi] == "*":
+        pi += 1
+    return pi == len(p)
 
 
 @lru_cache(maxsize=512)
@@ -181,11 +108,8 @@ def rule_matches(rule: Rule, *, title: str, tags: Iterable[str], cidr: str) -> b
         return title.casefold().startswith(value.casefold())
     if rule.match == "name_contains":
         return value.casefold() in title.casefold()
-    if rule.match == "name_regex":
-        try:
-            return _regex(value).search(title[:MAX_TITLE]) is not None
-        except (re.error, OverflowError, RecursionError):
-            return False
+    if rule.match == "name_glob":
+        return glob_match(value, title)
     if rule.match == "tag":
         wanted = value.strip().casefold()
         return any(t.strip().casefold() == wanted for t in tags)

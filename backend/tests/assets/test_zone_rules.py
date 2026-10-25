@@ -18,7 +18,13 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from api.db.models import Base
-from api.modules.assets.core.zone_rules import Rule, pick_zone, rule_matches, validate_rule
+from api.modules.assets.core.zone_rules import (
+    Rule,
+    normalize_value,
+    pick_zone,
+    rule_matches,
+    validate_rule,
+)
 from api.modules.assets.models import DEFAULT_ZONES, AssetZone, Network, NetworkZoneRule
 from api.modules.assets.services import racktables as rt_service
 from tests.assets.fake_racktables import FakeRacktables
@@ -38,25 +44,12 @@ def matches(r: Rule, title: str = "", tags: tuple[str, ...] = (), cidr: str = "1
 @pytest.mark.parametrize(("match", "value", "fragment"), [
     ("wildcard", "x", "неизвестный"),
     ("name_prefix", "  ", "пуст"),
-    ("name_regex", "APP_(DMZ", "регулярн"),
+    ("name_glob", "  ", "пуст"),
+    ("name_glob", "a" * 201, "длиннее 200"),
     ("cidr", "10.10.0.0/33", "CIDR"),
     ("cidr", "сеть", "CIDR"),
-    # Вложенные повторы — катастрофический перебор: отвергаются.
-    ("name_regex", r"(\w+)+$", "вложенными повторами"),
-    ("name_regex", "(a*)*", "вложенными повторами"),
-    ("name_regex", "(x+){2,}", "вложенными повторами"),
-    ("name_regex", "a" * 201, "длиннее 200"),
-    # Полиномиальный перебор (десятки секунд на имени в 40 символов) — больше двух неограниченных повторов.
-    ("name_regex", r"\w*\w*\w*\w*\w*\w*\w*\w*!", "не больше 2 повторов"),
-    ("name_regex", r"a+b*c{2,}", "не больше 2 повторов"),
-    # Экспоненциальный перебор — повтор над альтернативой.
-    ("name_regex", "(a|aa)+$", "повтором над альтернативой"),
-    ("name_regex", "(DMZ|WEB){2}", "повтором над альтернативой"),
-    # Число повторов не помещается — 422 с понятным текстом, а не 500.
-    ("name_regex", "a{99999999999}", "слишком большое число повторов"),
-    # Ограниченные повторы: 61⁴ и 4¹² — больше 256², секунды перебора на имени до 255 символов.
-    ("name_regex", r"\w{0,60}\w{0,60}\w{0,60}\w{0,60}!", "слишком много повторов"),
-    ("name_regex", r"\w{0,3}" * 12 + "!", "слишком много повторов"),
+    # Регулярные выражения убраны (владелец 25.10): ни одна проверка не закрывала зависание API.
+    ("name_regex", "APP_.*", "name_regex больше не поддерживается — используйте шаблон со звёздочкой"),
 ])
 def test_validate_rule_rejects(match: str, value: str, fragment: str) -> None:
     with pytest.raises(ValueError, match=fragment):
@@ -64,30 +57,57 @@ def test_validate_rule_rejects(match: str, value: str, fragment: str) -> None:
 
 
 def test_validate_rule_accepts_every_match() -> None:
-    for match, value in [("name_prefix", "APP_DMZ_"), ("name_contains", "dmz"), ("name_regex", r"dmz_\d+"),
-                         ("name_regex", r"^APP_(DMZ|WEB)_\d+"), ("name_regex", "(ab)+"), ("name_regex", "DMZ"),
-                         ("name_regex", r"^Internet_DMZ_.*"), ("name_regex", r"^APP_.*_\d+"), ("name_regex", "(?:a|b)+"),
-                         ("name_regex", r"\w*\w*!"), ("name_regex", r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
-                         ("name_regex", r".*_\d+_\d{2}"),
+    for match, value in [("name_prefix", "APP_DMZ_"), ("name_contains", "dmz"), ("name_glob", "APP_DMZ_*"),
+                         ("name_glob", "*DMZ*"), ("name_glob", "a" * 200), ("name_glob", "*"), ("name_glob", "(x[.]?"),
                          ("tag", "prod"), ("cidr", "10.10.0.0/16"), ("cidr", "203.0.113.7/24")]:
         validate_rule(match, value)
 
 
-def test_regex_is_safe_on_bad_input() -> None:
-    # Шаблон, записанный в обход проверки, не срабатывает и не роняет пересчёт.
-    assert not matches(rule("name_regex", "APP_(DMZ"), "APP_(DMZ")
-    assert not matches(rule("name_regex", "a{99999999999}"), "aaa")
-    # Имя сравнивается не дальше 255 символов.
-    assert not matches(rule("name_regex", "z$"), "a" * 300 + "z")
-    assert matches(rule("name_regex", "z$"), "a" * 254 + "z")
+def test_glob_value_is_stripped_and_stars_collapsed() -> None:
+    assert normalize_value("name_glob", "  APP_**DMZ***_*  ") == "APP_*DMZ*_*"
+    assert normalize_value("name_prefix", " a**b ") == "a**b"
 
 
-def test_worst_accepted_regex_is_fast() -> None:
-    # Худший допустимый шаблон (256²) на длинном неподходящем имени — доли секунды.
-    validate_rule("name_regex", r"\w*\w*!")
+@pytest.mark.parametrize(("pattern", "title", "expected"), [
+    ("APP_DMZ_*", "app_dmz_web", True),
+    ("APP_DMZ_*", "APP_DMZ_", True),
+    ("APP_DMZ_*", "X_APP_DMZ_web", False),  # шаблон — по всему имени, не поиск в середине
+    ("*DMZ*", "Internet_DMZ_01", True),
+    ("*DMZ*", "Internet_01", False),
+    ("APP_?MZ_*", "APP_DMZ_X", True),
+    ("APP_?MZ_*", "APP_DDMZ_X", False),
+    ("APP_?MZ_*", "APP_MZ_X", False),  # ? — ровно один символ, не ноль
+    ("*", "anything at all", True),
+    ("*", "", True),
+    ("", "", True),
+    ("?", "", False),
+    ("a*b*c", "aXXbYYc", True),
+    ("a*b*c", "aXXbYY", False),
+    # Прочие символы — буквально: точка, скобки, обратная косая черта не особые.
+    ("net.1", "net.1", True),
+    ("net.1", "netX1", False),
+    ("APP_(DMZ", "app_(dmz", True),
+    ("[ab]*", "a_net", False),
+    ("[ab]*", "[ab]_net", True),
+    ("\\d+", "\\d+", True),
+    ("\\d+", "12", False),
+])
+def test_glob_matches(pattern: str, title: str, expected: bool) -> None:
+    assert matches(rule("name_glob", pattern), title) is expected
+
+
+def test_glob_compares_first_255_chars() -> None:
+    assert not matches(rule("name_glob", "*z"), "a" * 300 + "z")
+    assert matches(rule("name_glob", "*z"), "a" * 254 + "z")
+
+
+def test_worst_glob_is_fast() -> None:
+    # Без перебора с возвратом по всем звёздочкам: время не хуже длина имени × длина шаблона.
+    pattern = "*a" * 10 + "*b"
+    validate_rule("name_glob", pattern)
     start = time.perf_counter()
-    assert not matches(rule("name_regex", r"\w*\w*!"), "a" * 255)
-    assert time.perf_counter() - start < 0.5
+    assert not matches(rule("name_glob", pattern), "a" * 255)
+    assert time.perf_counter() - start < 0.1
 
 
 def test_name_matches_ignore_case() -> None:
@@ -95,9 +115,11 @@ def test_name_matches_ignore_case() -> None:
     assert not matches(rule("name_prefix", "DMZ_"), "APP_DMZ_WEB")
     assert matches(rule("name_contains", "dmz"), "Internet_DMZ_01")
     assert not matches(rule("name_contains", "guest"), "Internet_DMZ_01")
-    # regex ищется в любом месте имени, не только с начала.
-    assert matches(rule("name_regex", r"dmz_\d+"), "Internet_DMZ_01")
-    assert not matches(rule("name_regex", r"^dmz"), "Internet_DMZ_01")
+    assert matches(rule("name_glob", "internet_dmz_??"), "Internet_DMZ_01")
+
+
+def test_unknown_match_never_matches() -> None:
+    assert not matches(rule("name_regex", ".*"), "anything")
 
 
 def test_tag_matches_explicit_or_implicit_ignore_case() -> None:
@@ -211,11 +233,11 @@ def test_hand_made_public_network_gets_no_external(analyst: TestClient) -> None:
     assert group(analyst, pub["id"]) == ("DMZ", "rule", r["id"])
 
 
-def test_stored_broken_regex_is_skipped(analyst: TestClient, db_session: Session, caplog: pytest.LogCaptureFixture) -> None:
+def test_stored_unknown_match_is_skipped(analyst: TestClient, db_session: Session, caplog: pytest.LogCaptureFixture) -> None:
     web = add_network(analyst, "10.10.0.0/24", title="APP_DMZ_WEB")
     good = add_rule(analyst, "name_prefix", "APP_DMZ_", "DMZ")
-    # Неверный regex первым по порядку — записан в обход проверки.
-    db_session.add(NetworkZoneRule(position=0, enabled=True, zone="Guest", match="name_regex", value="APP_(DMZ", note=""))
+    # Правило с видом, которого больше нет, первым по порядку — записано в обход проверки.
+    db_session.add(NetworkZoneRule(position=0, enabled=True, zone="Guest", match="name_regex", value=".*", note=""))
     db_session.commit()
     analyst.put(f"/api/assets/networks/{web['id']}", json={"zone": "Internal"})
     analyst.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "rules"})
@@ -225,7 +247,23 @@ def test_stored_broken_regex_is_skipped(analyst: TestClient, db_session: Session
     assert r.status_code == 200
     # Пересчёт дошёл до конца, остальные правила действуют, предупреждение — одно на пересчёт.
     assert group(analyst, web["id"]) == ("DMZ", "rule", good["id"])
-    assert [m for m in caplog.messages if "неверным regex" in m] == ["правила групп сетей с неверным regex пропущены: №0 (id 2)"]
+    assert [m for m in caplog.messages if "неизвестным видом" in m] == [
+        "правила групп сетей с неизвестным видом пропущены: №0 (id 2, name_regex)",
+    ]
+    assert analyst.post(f"{RULES}/preview", json={"match": "name_prefix", "value": "APP_", "zone": "DMZ"}).status_code == 200
+
+
+def test_glob_rule_assigns_group(analyst: TestClient) -> None:
+    web = add_network(analyst, "10.10.0.0/24", title="app_dmz_web")
+    mail = add_network(analyst, "10.10.1.0/24", title="Internet_DMZ_01")
+    other = add_network(analyst, "10.10.2.0/24", title="APP_DDMZ_X")
+    r = add_rule(analyst, "name_glob", " APP_?MZ_** ", "DMZ")
+    assert r["value"] == "APP_?MZ_*"
+    assert group(analyst, web["id"]) == ("DMZ", "rule", r["id"])
+    assert group(analyst, mail["id"]) == (None, "", None)
+    assert group(analyst, other["id"]) == (None, "", None)
+    p = analyst.post(f"{RULES}/preview", json={"match": "name_glob", "value": "*DMZ*", "zone": "Guest"}).json()
+    assert p["count"] == 2  # web уже забрало правило выше
 
 
 def test_rule_edit_delete_and_order_recompute(analyst: TestClient, db_session: Session) -> None:
@@ -272,11 +310,8 @@ def test_rule_edit_delete_and_order_recompute(analyst: TestClient, db_session: S
 
 def test_rule_validation(analyst: TestClient) -> None:
     for body in [
-        {"match": "name_regex", "value": "APP_(DMZ", "zone": "DMZ"},
-        {"match": "name_regex", "value": r"(\w+)+$", "zone": "DMZ"},
-        {"match": "name_regex", "value": "(a|aa)+$", "zone": "DMZ"},
-        {"match": "name_regex", "value": r"\w*\w*\w*!", "zone": "DMZ"},
-        {"match": "name_regex", "value": "a{99999999999}", "zone": "DMZ"},
+        {"match": "name_glob", "value": "a" * 201, "zone": "DMZ"},
+        {"match": "name_glob", "value": "  ", "zone": "DMZ"},
         {"match": "cidr", "value": "10.10.0.0/33", "zone": "DMZ"},
         {"match": "glob", "value": "APP*", "zone": "DMZ"},
         {"match": "tag", "value": " ", "zone": "DMZ"},
@@ -285,7 +320,13 @@ def test_rule_validation(analyst: TestClient) -> None:
     ]:
         r = analyst.post(RULES, json=body)
         assert r.status_code == 422, (body, r.text)
-    assert analyst.get(RULES).json() == []
+    r = analyst.post(RULES, json={"match": "name_regex", "value": "APP_.*", "zone": "DMZ"})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "тип правила name_regex больше не поддерживается — используйте шаблон со звёздочкой"
+    rid = add_rule(analyst, "tag", "prod", "DMZ")["id"]
+    r = analyst.put(f"{RULES}/{rid}", json={"match": "name_regex", "value": "APP_.*", "zone": "DMZ"})
+    assert r.status_code == 422 and "name_regex больше не поддерживается" in r.json()["detail"]
+    assert [x["match"] for x in analyst.get(RULES).json()] == ["tag"]
     assert analyst.put(f"{RULES}/999", json={"match": "tag", "value": "prod", "zone": "DMZ"}).status_code == 404
 
 
@@ -305,7 +346,7 @@ def test_preview_counts_without_writing(analyst: TestClient, db_session: Session
     r = analyst.post(f"{RULES}/preview", json={**body, "position": 1})
     assert r.json()["count"] == 2
     assert r.json()["sample"][0] == {"id": web["id"], "cidr": "10.10.0.0/24", "title": "APP_DMZ_WEB", "zone_before": "Internal"}
-    assert analyst.post(f"{RULES}/preview", json={**body, "value": "APP_(DMZ", "match": "name_regex"}).status_code == 422
+    assert analyst.post(f"{RULES}/preview", json={**body, "value": "APP_.*", "match": "name_regex"}).status_code == 422
 
     # Ничего не записано.
     db_session.expire_all()
@@ -468,3 +509,38 @@ def test_migration_sets_zone_source_and_attributes(scratch: tuple[Engine, Config
         assert not {"zone_source", "zone_rule_id"} & cols
         assert conn.execute(text("SELECT to_regclass('network_zone_rule')")).scalar() is None
         assert conn.execute(text("SELECT count(*) FROM network")).scalar() == len(rows)
+
+
+BEFORE_GLOB = "33287f3fcc17"
+
+
+def test_migration_turns_regex_rules_into_disabled_globs(scratch: tuple[Engine, Config]) -> None:
+    engine, cfg = scratch
+    command.upgrade(cfg, BEFORE_GLOB)
+    rows = [
+        # id, match, value, enabled, note
+        (1, "name_regex", r"^APP_DMZ_\d+", True, ""),
+        (2, "name_regex", "dmz", False, "старая заметка"),
+        (3, "name_prefix", "APP_", True, ""),
+    ]
+    with engine.begin() as conn:
+        for rid, match, value, enabled, note in rows:
+            conn.execute(text(
+                "INSERT INTO network_zone_rule (id, position, enabled, zone, match, value, note, created_at, updated_at) "
+                "VALUES (:id, :id, :enabled, 'DMZ', :match, :value, :note, now(), now())"
+            ), {"id": rid, "match": match, "value": value, "enabled": enabled, "note": note})
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        got = {r[0]: tuple(r[1:]) for r in conn.execute(text("SELECT id, match, value, enabled, note FROM network_zone_rule"))}
+    hint = "было регулярным выражением — проверьте шаблон и включите"
+    assert got == {
+        1: ("name_glob", r"^APP_DMZ_\d+", False, hint),
+        2: ("name_glob", "dmz", False, f"старая заметка\n{hint}"),
+        3: ("name_prefix", "APP_", True, ""),
+    }
+
+    # Откат данных не возвращает: шаблон со звёздочкой остаётся (вид name_glob откат не трогает).
+    command.downgrade(cfg, BEFORE_GLOB)
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM network_zone_rule WHERE match = 'name_glob'")).scalar() == 2

@@ -398,12 +398,12 @@ export type ZoneIn = Omit<Zone, 'networks'>
 export type ZonePatch = Partial<Omit<Zone, 'name' | 'networks'>>
 
 /** Условие правила группы: по имени сети (без учёта регистра), тегу (явному или унаследованному), адресу. */
-export type RuleMatch = 'name_prefix' | 'name_contains' | 'name_regex' | 'tag' | 'cidr'
-export const RULE_MATCHES: RuleMatch[] = ['name_prefix', 'name_contains', 'name_regex', 'tag', 'cidr']
+export type RuleMatch = 'name_prefix' | 'name_contains' | 'name_glob' | 'tag' | 'cidr'
+export const RULE_MATCHES: RuleMatch[] = ['name_prefix', 'name_contains', 'name_glob', 'tag', 'cidr']
 export const RULE_MATCH_LABELS: Record<RuleMatch, string> = {
   name_prefix: 'имя начинается с',
   name_contains: 'имя содержит',
-  name_regex: 'имя подходит под шаблон',
+  name_glob: 'имя по шаблону',
   tag: 'есть тег',
   cidr: 'сеть внутри',
 }

@@ -18,9 +18,9 @@ from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Session
 
 from api.modules.assets.core.zone_rules import (
+    MATCHES,
     SOURCE_MANUAL,
     Rule,
-    broken_regex,
     normalize_value,
     pick_zone,
     validate_rule,
@@ -432,16 +432,19 @@ RT_ORIGIN = "racktables"
 
 
 def _rules(db: Session) -> list[Rule]:
-    """Правила по порядку без тех, чей regex не компилируется (записан в обход проверки): такое правило
-    не срабатывает, предупреждение — одно на пересчёт."""
+    """Правила по порядку без тех, чей вид неизвестен (записан в обход проверки или убран, как name_regex):
+    такое правило не срабатывает и не роняет пересчёт, предупреждение — одно на пересчёт."""
     rules = [
         Rule(id=r.id, position=r.position, enabled=r.enabled, zone=r.zone, match=r.match, value=r.value)
         for r in db.execute(select(NetworkZoneRule).order_by(NetworkZoneRule.position, NetworkZoneRule.id)).scalars()
     ]
-    broken = [r for r in rules if broken_regex(r)]
-    if broken:
-        log.warning("правила групп сетей с неверным regex пропущены: %s", ", ".join(f"№{r.position} (id {r.id})" for r in broken))
-    return [r for r in rules if r not in broken]
+    unknown = [r for r in rules if r.match not in MATCHES]
+    if unknown:
+        log.warning(
+            "правила групп сетей с неизвестным видом пропущены: %s",
+            ", ".join(f"№{r.position} (id {r.id}, {r.match})" for r in unknown),
+        )
+    return [r for r in rules if r.match in MATCHES]
 
 
 def _is_public(cidr: str) -> bool:

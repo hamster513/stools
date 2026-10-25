@@ -28,9 +28,19 @@ const WRITE_COLUMNS: ColumnDef[] = [...COLUMNS, { key: 'actions', label: 'Дей
 const PLACEHOLDERS: Record<RuleMatch, string> = {
   name_prefix: 'APP_DMZ_',
   name_contains: 'DMZ',
-  name_regex: '^Internet_DMZ_\\d+',
+  name_glob: 'APP_DMZ_*',
   tag: 'dmz',
   cidr: '10.10.0.0/16',
+}
+
+/** В выпадающем списке шаблон объясняется сразу: в таблице и карточке сети — короткая подпись. */
+const OPTION_LABELS: Record<RuleMatch, string> = { ...RULE_MATCH_LABELS, name_glob: 'имя по шаблону: * — любые символы, ? — один символ' }
+
+/** Подсказка под полем значения. */
+function valueHint(match: RuleMatch): string {
+  if (match === 'name_glob') return ' · всё имя, без учёта регистра; например APP_DMZ_* или *DMZ*'
+  if (match === 'cidr') return ' · сеть внутри этого CIDR или равна ему'
+  return ' · без учёта регистра'
 }
 
 const EMPTY: ZoneRuleIn = { match: 'name_prefix', value: '', zone: '', enabled: true, note: '' }
@@ -56,12 +66,12 @@ function RuleForm({ rule, onDone }: { rule: ZoneRule | null; onDone: () => void 
         <label className="block">
           <span className="mb-1 block text-text-secondary">Условие</span>
           <select value={f.match} onChange={(e) => patch({ match: e.target.value as RuleMatch })} className={cn(FIELD, 'text-xs')}>
-            {RULE_MATCHES.map((m) => <option key={m} value={m}>{RULE_MATCH_LABELS[m]}</option>)}
+            {RULE_MATCHES.map((m) => <option key={m} value={m}>{OPTION_LABELS[m]}</option>)}
           </select>
         </label>
         <label className="block">
-          <span className="mb-1 block text-text-secondary">Значение{f.match === 'name_regex' ? ' · регулярное выражение Python, без учёта регистра' : f.match === 'cidr' ? ' · сеть внутри этого CIDR или равна ему' : ' · без учёта регистра'}</span>
-          <input value={f.value} onChange={(e) => patch({ value: e.target.value })} placeholder={PLACEHOLDERS[f.match]} maxLength={500} spellCheck={false} className={cn(FIELD, 'font-mono text-xs')} />
+          <span className="mb-1 block text-text-secondary">Значение{valueHint(f.match)}</span>
+          <input value={f.value} onChange={(e) => patch({ value: e.target.value })} placeholder={PLACEHOLDERS[f.match]} maxLength={f.match === 'name_glob' ? 200 : 500} spellCheck={false} className={cn(FIELD, 'font-mono text-xs')} />
         </label>
         <label className="block">
           <span className="mb-1 block text-text-secondary">Группа сетей</span>
