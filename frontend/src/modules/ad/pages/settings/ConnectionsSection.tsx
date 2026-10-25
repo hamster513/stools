@@ -25,6 +25,7 @@ export function ConnectionsSection() {
   const remove = useDeleteConnection()
   return (
     <CollectorConnectionsSection<Connection, ConnectionIn>
+      storageKey="ad-connections-columns"
       list={list}
       test={test}
       collect={collect}

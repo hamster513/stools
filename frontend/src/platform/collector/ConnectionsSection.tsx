@@ -5,7 +5,6 @@ import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { useRouter } from '@/lib/router'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { ScheduleBlock } from './ScheduleBlock'
@@ -92,7 +91,8 @@ function Form<CI extends { host: string; password: string }>({ empty, initial, u
  * Подключения онлайн-режима: список, проверка, сбор, правка. Модуль задаёт
  * тексты, ячейки адреса и учётной записи и поля формы.
  * useSaveConnection — хук модуля: форма держит своё состояние сохранения.
- * Ширины колонок — под `storageKey`, по умолчанию по модулю из адреса (`ad-connections-columns`).
+ * Ширины колонок — под `storageKey` модуля (`ad-connections-columns`): страница живёт
+ * в общих настройках, и модуль из адреса не выводится.
  */
 export function CollectorConnectionsSection<C extends ConnectionBase, CI extends { host: string; password: string }>({ list, test, collect, remove, useSaveConnection, schedule, empty, toForm, fields, title, about, hostHeader, linked, address, account, storageKey }: {
   list: UseQueryResult<C[], ApiRequestError>
@@ -110,7 +110,7 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
   linked: (c: C) => ReactNode
   address: (c: C) => ReactNode
   account: (c: C) => ReactNode
-  storageKey?: string
+  storageKey: string
 }) {
   // Подключения аудитор видит списком — адрес и учётная запись нужны,
   // чтобы понимать, откуда снапшот; править, проверять и собирать не может.
@@ -119,8 +119,7 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
   const [testResult, setTestResult] = useState<{ id: number; ok: boolean; message: string } | null>(null)
   // Подключение, под строкой которого раскрыт блок расписания.
   const [scheduleFor, setScheduleFor] = useState<number | null>(null)
-  const { path } = useRouter()
-  const cols = useColumnWidths(storageKey ?? `${path.split('/')[1] || 'collector'}-connections-columns`, write ? WRITE_COLUMNS : COLUMNS)
+  const cols = useColumnWidths(storageKey, write ? WRITE_COLUMNS : COLUMNS)
 
   return (
     <Section id="connections" title={title} about={about}>
