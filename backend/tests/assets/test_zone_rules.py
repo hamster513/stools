@@ -68,6 +68,7 @@ def test_validate_rule_accepts_every_match() -> None:
                          ("name_regex", r"^APP_(DMZ|WEB)_\d+"), ("name_regex", "(ab)+"), ("name_regex", "DMZ"),
                          ("name_regex", r"^Internet_DMZ_.*"), ("name_regex", r"^APP_.*_\d+"), ("name_regex", "(?:a|b)+"),
                          ("name_regex", r"\w*\w*!"), ("name_regex", r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"),
+                         ("name_regex", r".*_\d+_\d{2}"),
                          ("tag", "prod"), ("cidr", "10.10.0.0/16"), ("cidr", "203.0.113.7/24")]:
         validate_rule(match, value)
 
