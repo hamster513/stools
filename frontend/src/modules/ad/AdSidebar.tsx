@@ -1,4 +1,4 @@
-import { BarChart3, Camera, LayoutDashboard, ListChecks, Settings2, ShieldAlert } from 'lucide-react'
+import { BarChart3, Camera, LayoutDashboard, ListChecks, ShieldAlert } from 'lucide-react'
 import type { Domain } from '@/modules/ad/api/types'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -54,10 +54,6 @@ export function AdSidebar({ domains, domainId }: { domains: Domain[]; domainId: 
         <Link to="/ad/jobs" className={cn(LINK, items.length ? 'mt-2 border-t border-grid pt-3' : '', active('/ad/jobs', false) ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')} aria-current={active('/ad/jobs', false) ? 'page' : undefined}>
           <ListChecks size={16} strokeWidth={2} aria-hidden />
           Задачи
-        </Link>
-        <Link to="/ad/settings" className={cn(LINK, active('/ad/settings', false) ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')} aria-current={active('/ad/settings', false) ? 'page' : undefined}>
-          <Settings2 size={16} strokeWidth={2} aria-hidden />
-          Настройки и данные
         </Link>
       </nav>
     </aside>

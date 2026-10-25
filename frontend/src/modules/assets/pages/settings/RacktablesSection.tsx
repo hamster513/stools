@@ -142,7 +142,7 @@ export function RacktablesSection() {
   const cols = useColumnWidths('assets-racktables-columns', write ? WRITE_COLUMNS : COLUMNS)
 
   return (
-    <Section title="RackTables" about="Проход по JSON API RackTables: все сети (listCells) создаются или обновляются в Assets с названием, VLAN и тегами, затем по каждой сети читаются адреса (getIPAddressList). Адрес с именем становится наблюдением источника RT и сопоставляется с активами по имени и IP; адрес только с IP не переносится. Сеть, описанная вручную с тем же CIDR, остаётся вашей.">
+    <Section id="racktables" title="RackTables" about="Проход по JSON API RackTables: все сети (listCells) создаются или обновляются в Assets с названием, VLAN и тегами, затем по каждой сети читаются адреса (getIPAddressList). Адрес с именем становится наблюдением источника RT и сопоставляется с активами по имени и IP; адрес только с IP не переносится. Сеть, описанная вручную с тем же CIDR, остаётся вашей.">
       {rows.isLoading && <Spinner />}
       {rows.isError && <ErrorState message={message(rows.error, 'Не удалось загрузить подключения RackTables')} onRetry={() => rows.refetch()} />}
       {editing !== undefined && <RacktablesForm key={editing?.id ?? 'new'} rt={editing} onDone={() => setEditing(undefined)} />}

@@ -1,4 +1,4 @@
-import { Grid3x3, ListChecks, MapPin, Settings2, Waypoints } from 'lucide-react'
+import { Grid3x3, ListChecks, MapPin, Waypoints } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
@@ -33,10 +33,6 @@ export function AttackSidebar() {
         <Link to="/attack/jobs" className={cn(LINK, 'mt-2 border-t border-grid pt-3', active('/attack/jobs', false) ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')} aria-current={active('/attack/jobs', false) ? 'page' : undefined}>
           <ListChecks size={16} strokeWidth={2} aria-hidden />
           Задачи
-        </Link>
-        <Link to="/attack/settings" className={cn(LINK, active('/attack/settings', false) ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')} aria-current={active('/attack/settings', false) ? 'page' : undefined}>
-          <Settings2 size={16} strokeWidth={2} aria-hidden />
-          Настройки и данные
         </Link>
       </nav>
     </aside>

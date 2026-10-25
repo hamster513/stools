@@ -36,7 +36,7 @@ export function CollectorExportUpload({ upload, useJob, fileError, about, label 
   const error = localError ?? (upload.error instanceof ApiRequestError ? upload.error.message : upload.error ? 'Не удалось загрузить' : null) ?? (job.data?.status === 'failed' ? job.data.error : null)
 
   return (
-    <Section title="Загрузить выгрузку" about={about}>
+    <Section id="upload" title="Загрузить выгрузку" about={about}>
       {label && <div className="mb-1 text-xs font-medium text-text">{label}</div>}
       <div onDragOver={(e) => { e.preventDefault(); setDragOver(true) }} onDragLeave={() => setDragOver(false)} onDrop={onDrop} onClick={() => !busy && inputRef.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !busy) inputRef.current?.click() }} aria-label={label ?? 'Выбрать файл выгрузки'} className={cn('flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed px-6 py-10 text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', dragOver ? 'border-primary bg-primary/5' : 'border-grid bg-surface', busy ? 'cursor-default opacity-80' : 'cursor-pointer hover:border-border')}>
         <input ref={inputRef} type="file" accept=".json,.gz" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handle(f); e.target.value = '' }} />

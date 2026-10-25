@@ -17,6 +17,7 @@ import type { AttackBundleDiff } from '@/modules/attack/api/types'
 import { Button } from '@/components/ui/Button'
 import { ReplacementNotice } from '@/modules/attack/components/ReplacementNotice'
 import { Spinner } from '@/components/ui/Spinner'
+import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 
 function message(error: unknown, fallback: string): string {
@@ -70,8 +71,12 @@ function DiffCounts({ diff }: { diff: AttackBundleDiff }) {
  *
  * Перевод живёт здесь же не случайно: та же модель и переводит то, чего в
  * матрице ещё нет по-русски.
+ *
+ * Состояние матрицы видят все; скачать, загрузить, применить и перевести —
+ * только администратор: матрица одна на все модули.
  */
 export function BundleUpdate() {
+  const { admin } = useCan()
   const state = useAttackBundle()
   const gaps = useTranslationGaps()
   const preview = usePreviewBundle()
@@ -183,32 +188,34 @@ export function BundleUpdate() {
       {/* Загрузка с сайта MITRE. Скачанное кладётся рядом с действующей
           матрицей и ждёт подтверждения — до него в продукте ничего
           не меняется. */}
-      <div className="flex flex-wrap items-center gap-2 border-t border-grid pt-3">
-        <Button
-          loading={download.isPending || downloading}
-          // Между ответом на запуск и первым опросом задания кнопка
-          // осталась бы нажимаемой, а вторую загрузку сервер отвергнет.
-          disabled={download.isPending || downloadJobId !== undefined}
-          onClick={() =>
-            download.mutate(undefined, {
-              onSuccess: (r) => {
-                setOutcome(null)
-                setDownloadJobId(r.job_id)
-              },
-              onError: (e) => setOutcome({ failed: true, text: message(e, 'не удалось начать загрузку') }),
-            })
-          }
-          title="Скачать enterprise-attack.json с сайта MITRE. Применится только после подтверждения"
-        >
-          <CloudDownload size={14} aria-hidden />
-          {downloading ? 'Скачиваю…' : 'Скачать с сайта MITRE'}
-        </Button>
-        {downloading && (
-          <span className="text-xs text-text-secondary">
-            {downloadJob.data?.message || 'соединяюсь с сайтом MITRE…'}
-          </span>
-        )}
-      </div>
+      {admin && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-grid pt-3">
+          <Button
+            loading={download.isPending || downloading}
+            // Между ответом на запуск и первым опросом задания кнопка
+            // осталась бы нажимаемой, а вторую загрузку сервер отвергнет.
+            disabled={download.isPending || downloadJobId !== undefined}
+            onClick={() =>
+              download.mutate(undefined, {
+                onSuccess: (r) => {
+                  setOutcome(null)
+                  setDownloadJobId(r.job_id)
+                },
+                onError: (e) => setOutcome({ failed: true, text: message(e, 'не удалось начать загрузку') }),
+              })
+            }
+            title="Скачать enterprise-attack.json с сайта MITRE. Применится только после подтверждения"
+          >
+            <CloudDownload size={14} aria-hidden />
+            {downloading ? 'Скачиваю…' : 'Скачать с сайта MITRE'}
+          </Button>
+          {downloading && (
+            <span className="text-xs text-text-secondary">
+              {downloadJob.data?.message || 'соединяюсь с сайтом MITRE…'}
+            </span>
+          )}
+        </div>
+      )}
 
       {waiting && (
         <div className="mt-3 rounded border border-grid bg-app-bg p-3">
@@ -227,27 +234,31 @@ export function BundleUpdate() {
             </p>
           )}
           <div className="flex items-center gap-2">
-            <Button
-              variant="primary"
-              loading={applyPending.isPending}
-              onClick={() =>
-                applyPending.mutate(undefined, {
-                  onSuccess: () => {
-                    setOutcome({ failed: false, text: 'матрица обновлена' })
-                    void gaps.refetch()
-                  },
-                })
-              }
-            >
-              Применить
-            </Button>
-            <Button
-              variant="ghost"
-              loading={discardPending.isPending}
-              onClick={() => discardPending.mutate()}
-            >
-              Отбросить
-            </Button>
+            {admin && (
+              <>
+                <Button
+                  variant="primary"
+                  loading={applyPending.isPending}
+                  onClick={() =>
+                    applyPending.mutate(undefined, {
+                      onSuccess: () => {
+                        setOutcome({ failed: false, text: 'матрица обновлена' })
+                        void gaps.refetch()
+                      },
+                    })
+                  }
+                >
+                  Применить
+                </Button>
+                <Button
+                  variant="ghost"
+                  loading={discardPending.isPending}
+                  onClick={() => discardPending.mutate()}
+                >
+                  Отбросить
+                </Button>
+              </>
+            )}
             <span className="ml-auto truncate font-mono text-[11px] text-text-secondary">
               {waiting.url}
             </span>
@@ -265,39 +276,41 @@ export function BundleUpdate() {
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".json,application/json"
-          className="hidden"
-          onChange={(e) => choose(e.target.files?.[0] ?? null)}
-        />
-        <Button onClick={() => inputRef.current?.click()} loading={preview.isPending}>
-          <Upload size={14} aria-hidden />
-          Выбрать enterprise-attack.json
-        </Button>
-        {file && <span className="font-mono text-xs text-text-secondary">{file.name}</span>}
-        <Button
-          variant="primary"
-          className="ml-auto"
-          disabled={!s || (s.missing === 0 && s.stale === 0) || translating}
-          loading={translate.isPending || translating}
-          onClick={() =>
-            translate.mutate(undefined, {
-              onSuccess: (r) => {
-                setOutcome(null)
-                setJobId(r.job_id)
-              },
-              onError: (e) => setOutcome({ failed: true, text: message(e, 'не удалось запустить') }),
-            })
-          }
-          title="Перевести локальной моделью то, чего нет по-русски или чей исходник изменился"
-        >
-          <Languages size={14} aria-hidden />
-          {translating ? 'Перевожу…' : 'Перевести недостающее'}
-        </Button>
-      </div>
+      {admin && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => choose(e.target.files?.[0] ?? null)}
+          />
+          <Button onClick={() => inputRef.current?.click()} loading={preview.isPending}>
+            <Upload size={14} aria-hidden />
+            Выбрать enterprise-attack.json
+          </Button>
+          {file && <span className="font-mono text-xs text-text-secondary">{file.name}</span>}
+          <Button
+            variant="primary"
+            className="ml-auto"
+            disabled={!s || (s.missing === 0 && s.stale === 0) || translating}
+            loading={translate.isPending || translating}
+            onClick={() =>
+              translate.mutate(undefined, {
+                onSuccess: (r) => {
+                  setOutcome(null)
+                  setJobId(r.job_id)
+                },
+                onError: (e) => setOutcome({ failed: true, text: message(e, 'не удалось запустить') }),
+              })
+            }
+            title="Перевести локальной моделью то, чего нет по-русски или чей исходник изменился"
+          >
+            <Languages size={14} aria-hidden />
+            {translating ? 'Перевожу…' : 'Перевести недостающее'}
+          </Button>
+        </div>
+      )}
 
       {preview.isError && (
         <p className="mt-2 text-xs text-kind-1">

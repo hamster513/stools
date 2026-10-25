@@ -114,7 +114,7 @@ export function HuntingSettings() {
   const settings = useThSettings()
 
   return (
-    <section className="rounded border border-grid bg-surface p-4" aria-label="Threat Hunting">
+    <section id="hunting" className="rounded border border-grid bg-surface p-4" aria-label="Threat Hunting">
       <h2 className="mb-1 text-sm font-semibold text-text">Threat Hunting</h2>
       <p className="mb-4 text-xs text-text-secondary">
         Ночной прогон библиотеки хантов и большие ханты за длинный период. Подключение к MaxPatrol задаётся ниже, в блоке «Подключение к MaxPatrol».

@@ -12,7 +12,6 @@ import { RulesPage } from './pages/RulesPage'
 import { ClonesPage } from './pages/ClonesPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { AttackPage } from './pages/AttackPage'
-import { SettingsPage } from './pages/SettingsPage'
 import { FindingPage } from './hunting/pages/FindingPage'
 import { FindingsPage } from './hunting/pages/FindingsPage'
 import { HuntPage } from './hunting/pages/HuntPage'
@@ -37,11 +36,6 @@ export function SiemModule() {
     return <HuntingRoute />
   }
 
-  // Загрузки собраны в настройках. Прежний адрес /upload остаётся рабочим:
-  // на него ведут закладки и ссылки в чужих инструкциях.
-  if (path === '/siem/settings' || path === '/siem/upload') {
-    return <SettingsRoute />
-  }
   // Ссылка на находку из «Моих находок» не знает снапшота: `?key=` открывается на актуальном.
   if (path === '/siem/hygiene') {
     return <HygieneRedirect />
@@ -132,29 +126,6 @@ function HuntingRoute() {
   )
 }
 
-/**
- * Настройки не привязаны к снапшоту — адрес модели один на инсталляцию, —
- * но показываются в оболочке. Снапшот для сайдбара берётся последний,
- * только чтобы ссылки разделов вели куда-то осмысленно; без выгрузок
- * сайдбар остаётся с неактивными разделами — видно, что здесь будет.
- */
-function SettingsRoute() {
-  const { navigate } = useRouter()
-  const { data: snapshots, isLoading } = useSnapshots()
-
-  if (isLoading) return <FullPageSpinner />
-
-  const latest = snapshots ? latestOf(snapshots) : null
-
-  return (
-    <AppShell sidebar={<SiemSidebar snapshotId={latest?.id ?? null} />}>
-      <ErrorBoundary resetLabel="Показать снова" onReset={() => navigate('/siem/settings')}>
-        <SettingsPage />
-      </ErrorBoundary>
-    </AppShell>
-  )
-}
-
 /** `/siem/hygiene?key=…` — находки активного снапшота (последнего разобранного:
  *  статусы сверяются с ним) с той же строкой запроса. */
 function HygieneRedirect() {
@@ -164,7 +135,7 @@ function HygieneRedirect() {
   if (isLoading || !snapshots) return <FullPageSpinner />
 
   const latest = latestOf(snapshots.filter((s) => s.parsed)) ?? latestOf(snapshots)
-  return <Redirect to={latest ? `/siem/snapshots/${latest.id}/hygiene${search}` : '/siem/settings'} />
+  return <Redirect to={latest ? `/siem/snapshots/${latest.id}/hygiene${search}` : '/settings/siem'} />
 }
 
 /** `/siem` и неизвестные пути модуля ведут на актуальный снапшот или на загрузку. */
@@ -174,5 +145,5 @@ function SiemRootRedirect() {
   if (isLoading || !snapshots) return <FullPageSpinner />
 
   const latest = latestOf(snapshots)
-  return <Redirect to={latest ? `/siem/snapshots/${latest.id}/rules` : '/siem/settings'} />
+  return <Redirect to={latest ? `/siem/snapshots/${latest.id}/rules` : '/settings/siem'} />
 }

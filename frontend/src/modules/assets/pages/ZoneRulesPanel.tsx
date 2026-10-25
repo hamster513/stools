@@ -172,7 +172,7 @@ export function ZoneRulesPanel() {
         <p className="max-w-3xl text-xs text-text-secondary">
           Правило относит сеть к группе по имени, тегу RackTables или адресу. Правила проверяются по порядку, срабатывает первое
           включённое подошедшее; группу, выбранную у сети вручную, правила не трогают. Публичные сети RackTables без правила — в External.
-          Группы и их признаки (расположение, доступ из интернета) — в <Link to="/assets/settings" className="text-primary hover:underline">настройках модуля</Link>.
+          Группы и их признаки (расположение, доступ из интернета) — в <Link to="/settings/assets#zones" className="text-primary hover:underline">настройках модуля</Link>.
         </p>
         {write && (
           <div className="ml-auto flex shrink-0 items-center gap-2">

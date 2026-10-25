@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
+import { moduleTitle } from '@/platform/modules'
 import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
@@ -82,7 +83,7 @@ function ThresholdsForm({ saved }: { saved: AssetSettings }) {
 function ThresholdsSection() {
   const settings = useAssetSettings()
   return (
-    <Section title="Пороги и автосинхронизация" about="Пороги задают, когда отличие значения источника — устаревшие данные, а когда — расхождение, и какой компьютер AD считать неактивным. Меняются сразу для всего реестра: расхождения считаются при чтении.">
+    <Section id="rules" title="Пороги и автосинхронизация" about="Пороги задают, когда отличие значения источника — устаревшие данные, а когда — расхождение, и какой компьютер AD считать неактивным. Меняются сразу для всего реестра: расхождения считаются при чтении.">
       {settings.isLoading && <Spinner />}
       {settings.isError && <ErrorState message={message(settings.error, 'Не удалось загрузить настройки')} onRetry={() => settings.refetch()} />}
       {settings.data && <ThresholdsForm key={JSON.stringify(settings.data)} saved={settings.data} />}
@@ -126,7 +127,7 @@ function SyncSection() {
   const s = status.data
   const cols = useColumnWidths('assets-sync-columns', SYNC_COLUMNS)
   return (
-    <Section title="Синхронизация с модулями" about="Assets читает хосты VM, последние снапшоты антивируса и выгрузки AD и сопоставляет их с активами. Хосты, которых источник больше не отдаёт, помечаются пропавшими. Время источника — когда он видел хост: у VM это время импорта, у антивируса и AD — время сбора снапшота.">
+    <Section id="sync" title="Синхронизация с модулями" about="Assets читает хосты VM, последние снапшоты антивируса и выгрузки AD и сопоставляет их с активами. Хосты, которых источник больше не отдаёт, помечаются пропавшими. Время источника — когда он видел хост: у VM это время импорта, у антивируса и AD — время сбора снапшота.">
       {status.isLoading && <Spinner />}
       {status.isError && <ErrorState message={message(status.error, 'Не удалось загрузить состояние синхронизации')} onRetry={() => status.refetch()} />}
       {s && (
@@ -183,7 +184,7 @@ function ZonesSection() {
   const cols = useColumnWidths('assets-zones-columns', ZONE_COLUMNS)
 
   return (
-    <Section title="Группы сетей" about={<>Группа сети — DMZ, внутренняя, гостевая и т. п.; её признаки показывают, где хост, и по ним фильтруются сети и активы (в расчёт риска не идут). Группу сети выбирают в её карточке или назначают <Link to="/assets/networks?tab=rules" className="text-primary hover:underline">правила групп</Link>. Группу, которая задана у сетей или в правилах, удалить нельзя.</>}>
+    <Section id="zones" title="Группы сетей" about={<>Группа сети — DMZ, внутренняя, гостевая и т. п.; её признаки показывают, где хост, и по ним фильтруются сети и активы (в расчёт риска не идут). Группу сети выбирают в её карточке или назначают <Link to="/assets/networks?tab=rules" className="text-primary hover:underline">правила групп</Link>. Группу, которая задана у сетей или в правилах, удалить нельзя.</>}>
       {zones.isLoading && <Spinner />}
       {zones.isError && <ErrorState message={message(zones.error, 'Не удалось загрузить группы сетей')} onRetry={() => zones.refetch()} />}
       {zones.data && (
@@ -254,12 +255,12 @@ function ZonesSection() {
   )
 }
 
-/** «Настройки и данные» модуля Assets: пороги, синхронизация с модулями, DNS-серверы, RackTables, группы сетей. */
+/** Настройки модуля Assets: пороги, синхронизация с модулями, DNS-серверы, RackTables, группы сетей. */
 export function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-5">
-        <h1 className="text-base font-semibold text-text">Настройки и данные</h1>
+        <h1 className="text-base font-semibold text-text">{moduleTitle('assets')}</h1>
         <p className="max-w-2xl text-xs text-text-secondary">Справочники и настройки реестра активов.</p>
       </div>
       <div className="flex max-w-5xl flex-col gap-4">

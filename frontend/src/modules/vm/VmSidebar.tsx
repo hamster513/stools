@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, Settings2, ShieldAlert } from 'lucide-react'
+import { LayoutDashboard, ListChecks, ShieldAlert } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
@@ -37,18 +37,6 @@ export function VmSidebar() {
             </Link>
           )
         })}
-        <Link
-          to="/vm/settings"
-          className={cn(
-            LINK,
-            'mt-2 border-t border-grid pt-3',
-            isActive('/vm/settings', false) ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text',
-          )}
-          aria-current={isActive('/vm/settings', false) ? 'page' : undefined}
-        >
-          <Settings2 size={16} strokeWidth={2} aria-hidden />
-          Настройки и данные
-        </Link>
       </nav>
     </aside>
   )

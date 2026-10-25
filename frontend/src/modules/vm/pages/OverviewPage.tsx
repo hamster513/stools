@@ -89,7 +89,7 @@ export function OverviewPage() {
           title="Уязвимостей ещё нет"
           description="Импортируйте хосты и CVE из MaxPatrol VM по API или из файла экспорта — в настройках модуля. Справочники EPSS, NVD, ExploitDB, Metasploit и CISA KEV можно загрузить до или после импорта."
           action={
-            <Link to="/vm/settings" className="inline-flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+            <Link to="/settings/vm" className="inline-flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
               Настроить импорт <ArrowRight size={13} aria-hidden />
             </Link>
           }
@@ -236,7 +236,7 @@ export function OverviewPage() {
               <ul className="flex flex-col gap-1 text-xs">
                 <li className="flex justify-between"><Link to="/vm/vulns?cvss_source=none" className="text-text hover:text-primary">CVE без записи в NVD</Link><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_nvd.toLocaleString('ru-RU')}</span></li>
                 <li className="flex justify-between"><span className="text-text">CVE без EPSS ({weights ? `взято ${weights.prior_epss.toLocaleString('ru-RU')}` : 'подставлено'})</span><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_epss.toLocaleString('ru-RU')}</span></li>
-                <li className="flex justify-between"><Link to="/vm/settings#zones" className="text-text hover:text-primary">Зоны без разметки</Link><span className={cn('font-mono tabular-nums', o.data.unmarked_zones ? 'text-risk-medium' : 'text-text-secondary')}>{o.data.unmarked_zones}</span></li>
+                <li className="flex justify-between"><Link to="/settings/vm#zones" className="text-text hover:text-primary">Зоны без разметки</Link><span className={cn('font-mono tabular-nums', o.data.unmarked_zones ? 'text-risk-medium' : 'text-text-secondary')}>{o.data.unmarked_zones}</span></li>
               </ul>
             </div>
             <div>

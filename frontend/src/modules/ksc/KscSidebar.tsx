@@ -1,4 +1,4 @@
-import { Camera, FileCog, History, LayoutDashboard, ListChecks, ListX, Monitor, Network, ServerCog, Settings2, ShieldAlert } from 'lucide-react'
+import { Camera, FileCog, History, LayoutDashboard, ListChecks, ListX, Monitor, Network, ServerCog, ShieldAlert } from 'lucide-react'
 import type { Server } from '@/modules/ksc/api/types'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -59,10 +59,6 @@ export function KscSidebar({ servers, serverId }: { servers: Server[]; serverId:
         <Link to="/ksc/jobs" className={cn(LINK, items.length ? 'mt-2 border-t border-grid pt-3' : '', active('/ksc/jobs', false) ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')} aria-current={active('/ksc/jobs', false) ? 'page' : undefined}>
           <ListChecks size={16} strokeWidth={2} aria-hidden />
           Задачи
-        </Link>
-        <Link to="/ksc/settings" className={cn(LINK, active('/ksc/settings', false) ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')} aria-current={active('/ksc/settings', false) ? 'page' : undefined}>
-          <Settings2 size={16} strokeWidth={2} aria-hidden />
-          Настройки и данные
         </Link>
       </nav>
     </aside>

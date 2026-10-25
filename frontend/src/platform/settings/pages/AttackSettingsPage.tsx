@@ -4,33 +4,32 @@ import { ApiRequestError } from '@/api/client'
 import { useDropRuTtp, useRuTtpState, useUploadRuTtp } from '@/modules/attack/api/queries'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
-import { Link } from '@/lib/router'
+import { moduleTitle } from '@/platform/modules'
+import { BundleUpdate } from './BundleUpdate'
 
 /**
- * Данные модуля ATT&CK: применяемость техник здесь.
+ * Настройки модуля ATT&CK: сама матрица и применяемость техник в России.
  *
- * Сама матрица отсюда ушла в общие настройки: она общая для всех модулей,
- * и обновлять её — дело администратора. Аналитику, которому сюда и надо,
- * путь к ней всё равно должен быть виден.
+ * Матрица одна на все модули — на идентификаторы её техник ссылаются и
+ * разметка правил SIEM, и техники VM с AD, — поэтому обновляет её
+ * администратор; состояние видят все.
  */
-export function SettingsPage() {
+export function AttackSettingsPage() {
   const { admin } = useCan()
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-5">
-        <h1 className="text-base font-semibold text-text">Настройки и данные</h1>
+        <h1 className="text-base font-semibold text-text">{moduleTitle('attack')}</h1>
         <p className="max-w-2xl text-xs text-text-secondary">
-          Файлы разбираются на месте и никуда не отправляются.{' '}
-          {admin ? (
-            <Link to="/settings/attack" className="text-primary underline underline-offset-2 hover:text-text">
-              База ATT&amp;CK обновляется в общих настройках →
-            </Link>
-          ) : (
-            'База ATT&CK обновляется администратором в общих настройках.'
-          )}
+          Матрица одна на все модули: её обновление видят и покрытие правилами, и экспозиция.
+          Файлы разбираются на месте и никуда не отправляются.
+          {!admin && ' Матрицу обновляет администратор.'}
         </p>
       </div>
       <div className="flex max-w-5xl flex-col gap-4">
+        <section id="bundle">
+          <BundleUpdate />
+        </section>
         <RuTtpSource />
       </div>
     </div>
@@ -53,7 +52,7 @@ function RuTtpSource() {
     : null
 
   return (
-    <section className="rounded border border-grid bg-surface p-4">
+    <section id="ru-ttp" className="rounded border border-grid bg-surface p-4">
       <h2 className="mb-1 text-sm font-semibold text-text">Применяемость техник в России</h2>
       <p className="mb-3 max-w-3xl text-xs leading-relaxed text-text-secondary">
         Выгрузка «техника → процедура» — XLSX или CSV с идентификатором техники, процедурой,

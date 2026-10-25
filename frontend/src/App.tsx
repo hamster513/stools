@@ -18,14 +18,19 @@ import { KscModule } from '@/modules/ksc/KscModule'
 import { AssetsModule } from '@/modules/assets/AssetsModule'
 import { ToolboxModule } from '@/modules/toolbox/ToolboxModule'
 
+/** Модули, чьи настройки жили на /<модуль>/settings до переезда в общие настройки. */
+const MOVED_SETTINGS = new Set(['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', 'toolbox'])
+
 /**
- * Адреса до появления модулей: /snapshots/…, /upload. На них ведут
- * закладки и ссылки в чужих инструкциях — переводим на /siem/…, а не
- * ломаем.
+ * Прежние адреса: /snapshots/…, /upload (до появления модулей), /siem/upload
+ * и /<модуль>/settings (до переезда настроек в /settings/<модуль>). На них ведут
+ * закладки и ссылки в чужих инструкциях — переводим на новые, а не ломаем.
  */
 function legacyPath(path: string, search: string): string | null {
   if (path.startsWith('/snapshots/')) return `/siem${path}${search}`
-  if (path === '/upload') return `/siem/settings${search}`
+  if (path === '/upload' || path === '/siem/upload') return `/settings/siem${search}`
+  const m = /^\/([a-z]+)\/settings$/.exec(path)
+  if (m && MOVED_SETTINGS.has(m[1])) return `/settings/${m[1]}${search}`
   return null
 }
 

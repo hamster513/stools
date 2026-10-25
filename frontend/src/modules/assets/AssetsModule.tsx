@@ -7,7 +7,6 @@ import { GroupsPage } from './pages/GroupsPage'
 import { JobsPage } from './pages/JobsPage'
 import { NetworksPage } from './pages/NetworksPage'
 import { OverviewPage } from './pages/OverviewPage'
-import { SettingsPage } from './pages/SettingsPage'
 import { UsersPage } from './pages/UsersPage'
 
 /** Маршруты модуля Assets — всё под /assets. Реестр один на платформу, поэтому в адресе нет сервера или домена. */
@@ -20,7 +19,6 @@ export function AssetsModule() {
   else if (path === '/assets/users') page = <UsersPage />
   else if (path === '/assets/groups') page = <GroupsPage />
   else if (path === '/assets/networks') page = <NetworksPage />
-  else if (path === '/assets/settings') page = <SettingsPage />
   else if (path === '/assets/jobs') page = <JobsPage />
   else return <Redirect to="/assets" />
 

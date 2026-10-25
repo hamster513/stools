@@ -129,7 +129,7 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
   const patchComponent = (code: string, values: string[]) => { setDirty(true); setCfg((c) => ({ ...c, key_components: { ...c.key_components, [code]: values } })) }
 
   return (
-    <Section title="Пороги проверок" about="Пороги, по которым проверки решают, что агент молчит слишком долго, базы устарели, поиск давно не выполнялся или лицензия истекает. После изменения порогов пересчитайте снапшот на экране «Снапшоты».">
+    <Section id="rules" title="Пороги проверок" about="Пороги, по которым проверки решают, что агент молчит слишком долго, базы устарели, поиск давно не выполнялся или лицензия истекает. После изменения порогов пересчитайте снапшот на экране «Снапшоты».">
       {!write ? (
         <ReadOnlyView config={cfg} />
       ) : (

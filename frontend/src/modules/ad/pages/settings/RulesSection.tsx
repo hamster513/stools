@@ -62,7 +62,7 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
   const setRows = (rows: OsRow[]) => { setBuilds(rows); patch({ obsolete_os_builds: parseOsRows(rows) }) }
 
   return (
-    <Section title="Правила проверок" about="Allowlist понижает находку до Low и помечает её; привилегированные группы ищутся по RID (не зависят от языка домена) и по именам. После изменения пересчитайте нужные снапшоты на экране «Снапшоты».">
+    <Section id="rules" title="Правила проверок" about="Allowlist понижает находку до Low и помечает её; привилегированные группы ищутся по RID (не зависят от языка домена) и по именам. После изменения пересчитайте нужные снапшоты на экране «Снапшоты».">
       <div className="grid gap-4 md:grid-cols-2">
         <Field label="Allowlist: короткие имена" hint="По одному в строке, без домена; регистр не важен"><textarea className={AREA} value={lines(cfg.allowlist_short)} onChange={(e) => patch({ allowlist_short: parseLines(e.target.value) })} disabled={!write} /></Field>
         <Field label="Allowlist: полные имена" hint="Например NT AUTHORITY\SYSTEM"><textarea className={AREA} value={lines(cfg.allowlist_full)} onChange={(e) => patch({ allowlist_full: parseLines(e.target.value) })} disabled={!write} /></Field>

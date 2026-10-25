@@ -51,6 +51,7 @@ export function AttackThresholdSection({ settings }: { settings: SettingsView })
 
   return (
     <Section
+      id="threshold"
       title="Матрица ATT&CK"
       about="Пары хост–CVE с риском не ниже порога считаются экспозицией в матрице ATT&CK. Порог отдельный от порога «требует действия»: очередь работ и способ атаки — разные вопросы, и опустить его до нуля значит объявить экспозицией всё подряд."
     >

@@ -6,7 +6,7 @@ export function OverviewPage({ domainId }: { domainId: number }) {
   return (
     <CollectorOverviewPage
       overview={overview}
-      settingsPath="/ad/settings"
+      settingsPath="/settings/ad"
       emptyDescription="Загрузите выгрузку скрипта или запустите сбор по LDAP в настройках модуля."
       findingsPath={`/ad/domains/${domainId}/findings`}
       title={(o) => o.domain.dns_root || o.domain.netbios}

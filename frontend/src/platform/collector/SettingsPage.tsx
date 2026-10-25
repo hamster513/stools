@@ -4,9 +4,10 @@ import { ApiRequestError } from '@/api/client'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 
-/** Экран «Настройки и данные» модуля: загрузка настроек и колонка блоков. */
-export function ModuleSettingsPage<T>({ settings, about, children }: {
+/** Страница модуля в общих настройках: загрузка настроек и колонка блоков. */
+export function ModuleSettingsPage<T>({ settings, title, about, children }: {
   settings: UseQueryResult<T, ApiRequestError>
+  title: string
   about: string
   children: (data: T) => ReactNode
 }) {
@@ -18,7 +19,7 @@ export function ModuleSettingsPage<T>({ settings, about, children }: {
   return (
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-5">
-        <h1 className="text-base font-semibold text-text">Настройки и данные</h1>
+        <h1 className="text-base font-semibold text-text">{title}</h1>
         <p className="max-w-2xl text-xs text-text-secondary">{about}</p>
       </div>
       <div className="flex max-w-5xl flex-col gap-4">

@@ -10,6 +10,7 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
+import { moduleTitle } from '@/platform/modules'
 import { useLlm } from '@/platform/settings/api/queries'
 import { HuntingSettings } from '../hunting/pages/settings/HuntingSettings'
 import { DataSources } from './settings/DataSources'
@@ -63,7 +64,7 @@ export function SettingsPage() {
     <div className="h-full overflow-y-auto p-6">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">Настройки</h1>
+          <h1 className="text-base font-semibold text-text">{moduleTitle('siem')}</h1>
           <p className="max-w-2xl text-xs text-text-secondary">
             Разбор выгрузки, поиск хардкода, клоны и критичные списки считаются здесь же и без
             языковой модели — она нужна только для предложений по разметке ATT&CK.
@@ -94,7 +95,7 @@ export function SettingsPage() {
       )}
 
       <div className="grid max-w-2xl gap-5">
-        <section className="rounded border border-grid bg-surface p-4">
+        <section id="attack" className="rounded border border-grid bg-surface p-4">
           <h2 className="mb-1 text-sm font-semibold text-text">Разметка ATT&CK</h2>
           <p className="mb-4 text-xs text-text-secondary">
             Матрица вложена в образ и не тянется из сети. Подтверждённая разметка привязана к версии

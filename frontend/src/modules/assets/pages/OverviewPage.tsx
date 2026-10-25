@@ -141,7 +141,7 @@ export function OverviewPage() {
           </p>
         </Block>
 
-        <Block title="Последние обновления DNS" action={<MoreLink to="/assets/settings">DNS-серверы</MoreLink>}>
+        <Block title="Последние обновления DNS" action={<MoreLink to="/settings/assets#dns">DNS-серверы</MoreLink>}>
           {o.last_dns.length === 0 ? (
             <p className="text-xs text-text-secondary">Обновлений через DNS ещё не было: DNS-серверы задаются в настройках модуля.</p>
           ) : (

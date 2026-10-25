@@ -55,6 +55,7 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
 
   return (
     <Section
+      id="connections"
       title="Подключение к MaxPatrol VM"
       about="Хосты, их ОС, критичность, зона и список CVE запрашиваются PDQL-запросом через API и приходят CSV-экспортом. Персональный API-токен MaxPatrol хранится в базе и наружу не показывается: пустое поле при сохранении оставляет прежнее значение."
     >

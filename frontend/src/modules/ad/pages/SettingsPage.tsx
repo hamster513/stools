@@ -1,6 +1,7 @@
 import { useAdSettings } from '@/modules/ad/api/queries'
 import { useCan } from '@/lib/can'
 import { ModuleSettingsPage } from '@/platform/collector/SettingsPage'
+import { moduleTitle } from '@/platform/modules'
 import { CaDataSection } from './settings/CaDataSection'
 import { CollectorScript } from './settings/CollectorScript'
 import { ExportUpload } from './settings/ExportUpload'
@@ -13,7 +14,7 @@ export function SettingsPage() {
   const { write } = useCan()
   const settings = useAdSettings()
   return (
-    <ModuleSettingsPage settings={settings} about="Два режима сбора — скрипт на доменной машине или подключение по LDAP из STools — дают одну и ту же выгрузку; проверки одни и те же.">
+    <ModuleSettingsPage settings={settings} title={moduleTitle('ad')} about="Два режима сбора — скрипт на доменной машине или подключение по LDAP из STools — дают одну и ту же выгрузку; проверки одни и те же.">
       {(data) => (
         <>
           <CollectorScript />

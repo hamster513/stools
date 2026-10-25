@@ -96,3 +96,8 @@ export const MODULES: readonly ModuleSpec[] = [
 export function findModule(id: string): ModuleSpec | null {
   return MODULES.find((m) => m.id === id) ?? null
 }
+
+/** Название модуля для заголовка его страницы настроек. */
+export function moduleTitle(id: string): string {
+  return findModule(id)?.title ?? id
+}

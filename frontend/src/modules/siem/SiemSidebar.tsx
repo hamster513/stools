@@ -1,4 +1,4 @@
-import { CalendarClock, Copy, Crosshair, LayoutDashboard, Library, ListTree, Radar, Settings2, SlidersHorizontal, Telescope } from 'lucide-react'
+import { CalendarClock, Copy, Crosshair, LayoutDashboard, Library, ListTree, Radar, SlidersHorizontal, Telescope } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { useThFindings } from './hunting/api/queries'
@@ -110,20 +110,6 @@ export function SiemSidebar({ snapshotId }: { snapshotId: number | null }) {
             </Link>
           )
         })}
-        <Link
-          to="/siem/settings"
-          className={cn(
-            LINK,
-            'mt-2 border-t border-grid pt-3',
-            path === '/siem/settings'
-              ? 'bg-row-selected text-text'
-              : 'text-text-secondary hover:bg-row-hover hover:text-text',
-          )}
-          aria-current={path === '/siem/settings' ? 'page' : undefined}
-        >
-          <Settings2 size={16} strokeWidth={2} aria-hidden />
-          Настройки и данные
-        </Link>
       </nav>
     </aside>
   )

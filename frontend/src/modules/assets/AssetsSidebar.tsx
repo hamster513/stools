@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, Monitor, Network, Settings2, Users, UsersRound } from 'lucide-react'
+import { LayoutDashboard, ListChecks, Monitor, Network, Users, UsersRound } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
@@ -36,10 +36,6 @@ export function AssetsSidebar() {
         <Link to="/assets/jobs" className={cn(linkClass('/assets/jobs', false), 'mt-2 border-t border-grid pt-3')} aria-current={active('/assets/jobs', false) ? 'page' : undefined}>
           <ListChecks size={16} strokeWidth={2} aria-hidden />
           Задачи
-        </Link>
-        <Link to="/assets/settings" className={linkClass('/assets/settings', false)} aria-current={active('/assets/settings', false) ? 'page' : undefined}>
-          <Settings2 size={16} strokeWidth={2} aria-hidden />
-          Настройки и данные
         </Link>
       </nav>
     </aside>

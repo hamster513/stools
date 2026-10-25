@@ -109,7 +109,7 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
           — его можно отдать аналитику или вендору для заполнения.
         </p>
         <Link
-          to="/settings"
+          to="/settings/siem"
           className="text-sm text-primary underline underline-offset-2 hover:text-text"
         >
           Настройки и данные →
@@ -134,7 +134,7 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
           </span>
         )}
         <Link
-          to="/settings"
+          to="/settings/siem"
           className="ml-auto text-text-secondary underline underline-offset-2 hover:text-primary"
         >
           заменить или убрать — в настройках

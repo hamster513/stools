@@ -1,6 +1,5 @@
-import { BookKey, Eraser, Settings2, Undo2 } from 'lucide-react'
+import { BookKey, Eraser, Undo2 } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
-import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 
 const LINK =
@@ -13,13 +12,11 @@ const ITEMS = [
   { to: '/toolbox/aliases', label: 'Соответствия', icon: BookKey, match: (p: string) => p === '/toolbox/aliases' },
 ]
 
-/** Второй уровень навигации модуля ToolBox; настройки — только администратору. */
+/** Второй уровень навигации модуля ToolBox. */
 export function ToolboxSidebar() {
   const { path } = useRouter()
-  const { admin } = useCan()
   const linkClass = (on: boolean) =>
     cn(LINK, on ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')
-  const settingsOn = path === '/toolbox/settings'
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-grid bg-surface">
@@ -34,12 +31,6 @@ export function ToolboxSidebar() {
             {label}
           </Link>
         ))}
-        {admin && (
-          <Link to="/toolbox/settings" className={cn(linkClass(settingsOn), 'mt-2 border-t border-grid pt-3')} aria-current={settingsOn ? 'page' : undefined}>
-            <Settings2 size={16} strokeWidth={2} aria-hidden />
-            Настройки
-          </Link>
-        )}
       </nav>
     </aside>
   )

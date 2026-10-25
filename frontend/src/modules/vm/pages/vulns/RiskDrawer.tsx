@@ -124,10 +124,10 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                   </table>
                   {(r.value_parts.internet.substituted || r.value_parts.criticality.substituted || r.likelihood_parts.kev.substituted) && (
                     <p className="mb-4 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-[11px] text-text-secondary">
-                      {r.value_parts.internet.substituted && <>Зона «{d.host.zone || '—'}» не размечена — доступ из интернета и конфиденциальные данные взяты как «нет». <Link to="/vm/settings#zones" className="text-text underline">Разметить зоны</Link>. </>}
+                      {r.value_parts.internet.substituted && <>Зона «{d.host.zone || '—'}» не размечена — доступ из интернета и конфиденциальные данные взяты как «нет». <Link to="/settings/vm#zones" className="text-text underline">Разметить зоны</Link>. </>}
                       {r.value_parts.criticality.substituted && <>Критичность хоста в VM не задана — учтена как None. </>}
                       {/* Без каталога «нет в KEV» не факт: эксплуатируемая CVE считается только по EPSS и эксплойтам. */}
-                      {r.likelihood_parts.kev.substituted && <>Справочник CISA KEV не загружен — факт эксплуатации не учтён. <Link to="/vm/settings" className="text-text underline">Загрузить справочники</Link>.</>}
+                      {r.likelihood_parts.kev.substituted && <>Справочник CISA KEV не загружен — факт эксплуатации не учтён. <Link to="/settings/vm#references" className="text-text underline">Загрузить справочники</Link>.</>}
                     </p>
                   )}
 

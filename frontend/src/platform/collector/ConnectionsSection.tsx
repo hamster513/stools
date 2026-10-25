@@ -123,7 +123,7 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
   const cols = useColumnWidths(storageKey ?? `${path.split('/')[1] || 'collector'}-connections-columns`, write ? WRITE_COLUMNS : COLUMNS)
 
   return (
-    <Section title={title} about={about}>
+    <Section id="connections" title={title} about={about}>
       {(list.data ?? []).length > 0 && (
         <div className="mb-3 overflow-x-auto">
           <table className="w-full text-xs" style={cols.tableStyle}>

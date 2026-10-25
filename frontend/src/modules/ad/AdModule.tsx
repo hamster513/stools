@@ -8,7 +8,6 @@ import { OverviewPage } from './pages/OverviewPage'
 import { SummaryPage } from './pages/SummaryPage'
 import { FindingsPage } from './pages/FindingsPage'
 import { SnapshotsPage } from './pages/SnapshotsPage'
-import { SettingsPage } from './pages/SettingsPage'
 import { JobsPage } from './pages/JobsPage'
 
 /** Маршруты модуля AD — всё под /ad. Домен — в адресе, как снапшот у SIEM. */
@@ -24,9 +23,8 @@ export function AdModule() {
 
   let page: React.ReactNode
   if (path === '/ad') {
-    return <Redirect to={list.length ? `/ad/domains/${list[0].id}` : '/ad/settings'} />
-  } else if (path === '/ad/settings') page = <SettingsPage />
-  else if (path === '/ad/jobs') page = <JobsPage />
+    return <Redirect to={list.length ? `/ad/domains/${list[0].id}` : '/settings/ad'} />
+  } else if (path === '/ad/jobs') page = <JobsPage />
   else if (domainId !== null && section === '') page = <OverviewPage domainId={domainId} />
   else if (domainId !== null && section === 'summary') page = <SummaryPage domainId={domainId} />
   else if (domainId !== null && section === 'findings') page = <FindingsPage domainId={domainId} />

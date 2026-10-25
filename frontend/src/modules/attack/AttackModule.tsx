@@ -5,7 +5,6 @@ import { AttackSidebar } from './AttackSidebar'
 import { MatrixPage } from './pages/MatrixPage'
 import { ChainsPage } from './pages/ChainsPage'
 import { RuTtpPage } from './pages/RuTtpPage'
-import { SettingsPage } from './pages/SettingsPage'
 import { JobsPage } from './pages/JobsPage'
 
 /** Маршруты модуля ATT&CK — всё под /attack. Снапшота у него нет: матрица показывает текущее состояние. */
@@ -16,7 +15,6 @@ export function AttackModule() {
   if (section === 'matrix') page = <MatrixPage />
   else if (section === 'chains') page = <ChainsPage />
   else if (section === 'ru') page = <RuTtpPage />
-  else if (section === 'settings') page = <SettingsPage />
   else if (section === 'jobs') page = <JobsPage />
   else return <Redirect to="/attack" />
   return (

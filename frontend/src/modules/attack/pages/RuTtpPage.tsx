@@ -46,7 +46,7 @@ export function RuTtpPage() {
           файлами продукта.
         </p>
         <Link
-          to="/attack/settings"
+          to="/settings/attack#ru-ttp"
           className="text-sm text-primary underline underline-offset-2 hover:text-text"
         >
           Настройки и данные →
@@ -79,7 +79,7 @@ export function RuTtpPage() {
         )}
         <span className="text-text-secondary">матрица {data.attack_version}</span>
         <Link
-          to="/attack/settings"
+          to="/settings/attack#ru-ttp"
           className="ml-auto text-text-secondary underline underline-offset-2 hover:text-primary"
         >
           заменить или убрать — в настройках

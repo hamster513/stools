@@ -88,7 +88,7 @@ export function SnapshotUpload() {
   }
 
   return (
-    <section className="rounded border border-grid bg-surface p-4">
+    <section id="upload" className="rounded border border-grid bg-surface p-4">
       <div className="mb-3">
         <h2 className="mb-1 text-sm font-semibold text-text">Выгрузка правил</h2>
         <p className="text-xs text-text-secondary">

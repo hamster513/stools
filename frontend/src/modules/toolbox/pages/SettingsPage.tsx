@@ -8,6 +8,7 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Section } from '@/platform/collector/ui'
+import { moduleTitle } from '@/platform/modules'
 import { useSaveToolboxSettings, useToolboxSettings } from '../api/queries'
 import type { ToolboxSettings } from '../api/types'
 
@@ -74,18 +75,18 @@ function SettingsForm({ initial }: { initial: ToolboxSettings }) {
 
   return (
     <form onSubmit={submit} className="h-full overflow-y-auto p-6">
-      <h1 className="mb-4 text-base font-semibold text-text">Настройки</h1>
+      <h1 className="mb-4 text-base font-semibold text-text">{moduleTitle('toolbox')}</h1>
       <div className="max-w-3xl space-y-4">
-        <Section title="Слова" about="Свои слова: названия проектов, площадок, систем. Слово ищется как часть слова, без учёта регистра — короткое слово заменится и внутри других слов. Псевдоним можно не задавать — тогда он будет вида word-NNNN.">
+        <Section id="words" title="Слова" about="Свои слова: названия проектов, площадок, систем. Слово ищется как часть слова, без учёта регистра — короткое слово заменится и внутри других слов. Псевдоним можно не задавать — тогда он будет вида word-NNNN.">
           <PairEditor cfg={WORDS} rows={words} setRows={setWords} mk={mk} onChange={touch} invalid={noWord} />
           {noWord.map((i) => <p key={i} role="alert" className="mt-2 text-xs text-kind-1">Слово не задано в строке {i + 1}</p>)}
         </Section>
 
-        <Section title="Подсети" about="Дополнительные подсети к сетям модуля «Активы»: адреса первой подсети заменяются адресами второй, которую вы задаёте явно. Длины префиксов в паре должны совпадать.">
+        <Section id="subnets" title="Подсети" about="Дополнительные подсети к сетям модуля «Активы»: адреса первой подсети заменяются адресами второй, которую вы задаёте явно. Длины префиксов в паре должны совпадать.">
           <PairEditor cfg={SUBNETS} rows={subnets} setRows={setSubnets} mk={mk} onChange={touch} />
         </Section>
 
-        <Section title="Хранение файлов" about="Файлы задания (исходный, результат, отчёт) удаляются при ежесуточной очистке: через указанное число дней после завершения задания; 0 — при ближайшей очистке. Строка задания, находки и таблица соответствий остаются.">
+        <Section id="retention" title="Хранение файлов" about="Файлы задания (исходный, результат, отчёт) удаляются при ежесуточной очистке: через указанное число дней после завершения задания; 0 — при ближайшей очистке. Строка задания, находки и таблица соответствий остаются.">
           <label className="block max-w-[200px]">
             <span className="mb-1 block text-xs font-medium text-text">Срок хранения, дней</span>
             <input type="number" min={0} max={RETENTION_MAX} step={1} className={cn(FIELD, 'font-mono', !daysOk && 'border-kind-1')} value={days} onChange={(e) => { setDays(e.target.value); setSaved(false) }} aria-invalid={!daysOk} />

@@ -190,7 +190,7 @@ export function DnsSection() {
   const cols = useColumnWidths('assets-dns-columns', write ? WRITE_COLUMNS : COLUMNS)
 
   return (
-    <Section title="DNS" about="Запросы к серверу: A/AAAA по известным именам обновляют IP активов (устаревшие адреса в VM и антивирусе подсвечиваются), PTR по известным адресам даёт имена хостам, известным только по адресу. Зоны AD читаются через подключение AD с его паузами между запросами.">
+    <Section id="dns" title="DNS" about="Запросы к серверу: A/AAAA по известным именам обновляют IP активов (устаревшие адреса в VM и антивирусе подсвечиваются), PTR по известным адресам даёт имена хостам, известным только по адресу. Зоны AD читаются через подключение AD с его паузами между запросами.">
       {servers.isLoading && <Spinner />}
       {servers.isError && <ErrorState message={message(servers.error, 'Не удалось загрузить DNS-серверы')} onRetry={() => servers.refetch()} />}
       {editing !== undefined && <DnsForm key={editing?.id ?? 'new'} dns={editing} connections={conns} onDone={() => setEditing(undefined)} />}

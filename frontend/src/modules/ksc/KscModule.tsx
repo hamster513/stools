@@ -11,7 +11,6 @@ import { PoliciesPage } from './pages/PoliciesPage'
 import { PolicyPage } from './pages/PolicyPage'
 import { ServerPage } from './pages/ServerPage'
 import { SnapshotsPage } from './pages/SnapshotsPage'
-import { SettingsPage } from './pages/SettingsPage'
 import { JobsPage } from './pages/JobsPage'
 import { ExclusionsPage } from './pages/ExclusionsPage'
 import { NetRulesPage } from './pages/NetRulesPage'
@@ -31,9 +30,8 @@ export function KscModule() {
 
   let page: React.ReactNode
   if (path === '/ksc') {
-    return <Redirect to={list.length ? `/ksc/servers/${list[0].id}` : '/ksc/settings'} />
-  } else if (path === '/ksc/settings') page = <SettingsPage />
-  else if (path === '/ksc/jobs') page = <JobsPage />
+    return <Redirect to={list.length ? `/ksc/servers/${list[0].id}` : '/settings/ksc'} />
+  } else if (path === '/ksc/jobs') page = <JobsPage />
   else if (policyMatch) page = <PolicyPage serverId={Number(policyMatch.id)} policyId={Number(policyMatch.policyId)} />
   else if (serverId !== null && section === '') page = <OverviewPage serverId={serverId} />
   else if (serverId !== null && section === 'hosts') page = <HostsPage serverId={serverId} />

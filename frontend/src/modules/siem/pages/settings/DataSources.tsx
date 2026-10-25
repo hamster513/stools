@@ -24,10 +24,9 @@ import { SnapshotUpload } from './SnapshotUpload'
  * эталоном и списки расхождений живут на экране покрытия. Гонять человека
  * в настройки, чтобы посмотреть результат, — та же ошибка наоборот.
  *
- * Матрица и выгрузка РФ TTP отсюда ушли: они общие для всех модулей.
- * Матрицу обновляет администратор в общих настройках, выгрузку РФ TTP
- * загружают в модуле ATT&CK. Оставить их копию здесь значило бы завести
- * второе место, где то же самое обновляется по-другому.
+ * Матрица и выгрузка РФ TTP отсюда ушли: они общие для всех модулей и
+ * живут в настройках модуля ATT&CK. Оставить их копию здесь значило бы
+ * завести второе место, где то же самое обновляется по-другому.
  */
 export function DataSources() {
   // Аудитору загружать нечем: сервер ответит 403. Рамка с полем для файла
@@ -39,13 +38,13 @@ export function DataSources() {
       {write && <SnapshotUpload />}
       <ReferenceSource />
       <p className="text-xs text-text-secondary">
-        База ATT&amp;CK — в общих настройках:{' '}
-        <Link to="/settings/attack" className="underline underline-offset-2 hover:text-primary">
+        База ATT&amp;CK и выгрузка РФ TTP — в настройках модуля ATT&amp;CK:{' '}
+        <Link to="/settings/attack#bundle" className="underline underline-offset-2 hover:text-primary">
           обновление матрицы
         </Link>
-        . Выгрузка РФ TTP — в модуле ATT&amp;CK:{' '}
-        <Link to="/attack/settings" className="underline underline-offset-2 hover:text-primary">
-          применяемость техник здесь
+        ,{' '}
+        <Link to="/settings/attack#ru-ttp" className="underline underline-offset-2 hover:text-primary">
+          применяемость техник
         </Link>
         .
       </p>

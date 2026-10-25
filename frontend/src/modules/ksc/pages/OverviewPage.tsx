@@ -78,7 +78,7 @@ export function OverviewPage({ serverId }: { serverId: number }) {
   return (
     <CollectorOverviewPage
       overview={overview}
-      settingsPath="/ksc/settings"
+      settingsPath="/settings/ksc"
       emptyDescription="Загрузите выгрузку скрипта или запустите сбор из KSC в настройках модуля."
       findingsPath={`/ksc/servers/${serverId}/findings`}
       title={(o) => o.server.name}

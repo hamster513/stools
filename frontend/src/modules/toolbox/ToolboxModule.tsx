@@ -7,7 +7,6 @@ import { NewJobForm } from './pages/NewJobForm'
 import { ReversePage } from './pages/ReversePage'
 import { ScrubJobPage } from './pages/ScrubJobPage'
 import { ScrubJobsPage } from './pages/ScrubJobsPage'
-import { SettingsPage } from './pages/SettingsPage'
 
 /** Маршруты модуля ToolBox — всё под /toolbox. */
 export function ToolboxModule() {
@@ -21,7 +20,6 @@ export function ToolboxModule() {
   else if (jobId !== null) page = <ScrubJobPage id={jobId} />
   else if (path === '/toolbox/reverse') page = <ReversePage />
   else if (path === '/toolbox/aliases') page = <AliasesPage />
-  else if (path === '/toolbox/settings') page = <SettingsPage />
   else return <Redirect to="/toolbox" />
 
   return (
