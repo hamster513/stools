@@ -103,12 +103,13 @@ const ACCOUNT_ROWS: { key: keyof SummaryCounts; label: string }[] = [
   { key: 'laps', label: 'С LAPS' },
 ]
 
-const BUCKET_LABELS: Record<number, string> = { 30: '≤ 30 дн.', 90: '≤ 90 дн.', 180: '≤ 180 дн.', 365: '≤ 1 года', 730: '≤ 2 лет', 1095: '≤ 3 лет' }
+/** Точные интервалы — как в подписи ячейки сводки на плашке «Активов» (core/summary_cells.py). */
+const BUCKET_LABELS: Record<number, string> = { 30: '0–30 дн.', 90: '31–90 дн.', 180: '91–180 дн.', 365: '181–365 дн.', 730: '366–730 дн.', 1095: '731–1095 дн.' }
 const TRUST_DIRECTION: Record<number, string> = { 0: 'отключено', 1: 'входящее', 2: 'исходящее', 3: 'двустороннее' }
 const TRUST_TYPE: Record<number, string> = { 1: 'Windows NT', 2: 'Active Directory', 3: 'Kerberos (MIT)', 4: 'DCE' }
 
 function bucketLabel(b: SummaryBucket): string {
-  return b.le === null ? '> 3 лет' : (BUCKET_LABELS[b.le] ?? `≤ ${b.le} дн.`)
+  return b.le === null ? '> 1095 дн.' : (BUCKET_LABELS[b.le] ?? `≤ ${b.le} дн.`)
 }
 
 function when(iso: string): string {
@@ -182,7 +183,7 @@ function Histogram({ title, buckets, href }: { title: string; buckets: SummaryBu
             const info = `${bucketLabel(b)}: ${b.n.toLocaleString('ru-RU')} (${Math.round((b.n / total) * 100)}%)`
             const bar = (
               <>
-                <span className="w-20 shrink-0 text-text-secondary group-hover:underline">{bucketLabel(b)}</span>
+                <span className="w-24 shrink-0 text-text-secondary group-hover:underline">{bucketLabel(b)}</span>
                 <div className="h-3 min-w-0 flex-1 rounded-sm bg-row-hover">
                   <div className="h-full rounded-sm bg-primary" style={{ width: `${(b.n / max) * 100}%` }} />
                 </div>
@@ -205,7 +206,7 @@ function Distributions({ s, snapshotId }: { s: Summary; snapshotId: number }) {
   const [admins, setAdmins] = useState(false)
   const pick = admins ? 'admins' : 'all'
   return (
-    <Section title="Возраст паролей и давность входа" about="Включённые пользователи по корзинам дней с последней смены пароля и с последнего входа; «админы» — включённые администраторы (RID из настроек и встроенный администратор). В «> 3 лет» попадают и те, у кого дата неизвестна: не входил, пароль не задавался.">
+    <Section title="Возраст паролей и давность входа" about="Включённые пользователи по корзинам дней с последней смены пароля и с последнего входа; «админы» — включённые администраторы (RID из настроек и встроенный администратор). В «> 1095 дн.» попадают и те, у кого дата неизвестна: не входил, пароль не задавался.">
       <div className="mb-4 flex items-center gap-2" role="group" aria-label="Чьи учётные записи">
         {([[false, 'все'], [true, 'админы']] as const).map(([value, label]) => (
           <button
