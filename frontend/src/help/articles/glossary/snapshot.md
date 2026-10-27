@@ -21,4 +21,5 @@ routes: []
 
 - [Снапшоты домена](help:ad-snapshots) — список, пересчёт и удаление в AD.
 - [Обзор домена](help:ad-domain-overview) — итог по последнему снапшоту.
+- [Снапшоты сервера KSC](help:ksc-snapshots) — список, пересчёт и удаление в модуле «Антивирус».
 - [Обзор снапшота SIEM](help:siem-snapshot-overview) — сводка выгрузки базы знаний MaxPatrol SIEM.
