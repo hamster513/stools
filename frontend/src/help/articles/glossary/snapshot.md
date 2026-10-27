@@ -21,3 +21,4 @@ routes: []
 
 - [Снапшоты домена](help:ad-snapshots) — список, пересчёт и удаление в AD.
 - [Обзор домена](help:ad-domain-overview) — итог по последнему снапшоту.
+- [Обзор снапшота SIEM](help:siem-snapshot-overview) — сводка выгрузки базы знаний MaxPatrol SIEM.
