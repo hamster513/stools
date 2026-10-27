@@ -91,7 +91,7 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
           </div>
 
           <div className="border-t border-grid px-4 py-3 text-sm">
-            <Link to={`/help/${article.slug}`} className={cn('text-text underline hover:no-underline', FOCUS)}>Вся справка →</Link>
+            <Link to={`/help/${article.slug}`} onNavigate={onClose} className={cn('text-text underline hover:no-underline', FOCUS)}>Вся справка →</Link>
           </div>
         </>
       )}

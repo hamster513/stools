@@ -4,6 +4,7 @@
 import { MODULES } from '@/platform/modules'
 import { HelpParseError, parseArticle } from './core/frontmatter.ts'
 import { articleForPath } from './core/match.ts'
+import { plainText } from './core/plain.ts'
 import type { Article } from './core/types.ts'
 
 export interface TocItem {
@@ -45,6 +46,9 @@ export function helpFor(path: string): { article: Article; fallback: 'none' | 'm
   return found
 }
 
+// Текст статей для поиска: считается один раз при загрузке, а не на каждый ввод.
+const PLAIN: Map<string, string> = new Map(ARTICLES.map((a) => [a.slug, plainText(a.body)]))
+
 const SNIPPET_RADIUS = 60
 const MAX_RESULTS = 20
 
@@ -58,21 +62,22 @@ function snippetAround(text: string, at: number, length: number): string {
   return `${from > 0 ? '…' : ''}${oneLine(text.slice(from, to))}${to < text.length ? '…' : ''}`
 }
 
-/** Регистронезависимое вхождение в заголовок и текст; совпадения в заголовке — первыми. */
+/** Регистронезависимое вхождение в заголовок и текст без разметки; совпадения в заголовке — первыми. */
 export function search(q: string): { article: Article; snippet: string }[] {
   const needle = q.trim().toLowerCase()
   if (!needle) return []
   const inTitle: { article: Article; snippet: string }[] = []
   const inBody: { article: Article; snippet: string }[] = []
   for (const article of ARTICLES) {
-    const bodyAt = article.body.toLowerCase().indexOf(needle)
+    const plain = PLAIN.get(article.slug) ?? ''
+    const bodyAt = plain.toLowerCase().indexOf(needle)
     const titleHit = article.title.toLowerCase().includes(needle)
     if (bodyAt >= 0) {
-      const hit = { article, snippet: snippetAround(article.body, bodyAt, needle.length) }
+      const hit = { article, snippet: snippetAround(plain, bodyAt, needle.length) }
       if (titleHit) inTitle.push(hit)
       else inBody.push(hit)
     } else if (titleHit) {
-      inTitle.push({ article, snippet: snippetAround(article.body, 0, 0) })
+      inTitle.push({ article, snippet: snippetAround(plain, 0, 0) })
     }
   }
   return [...inTitle, ...inBody].slice(0, MAX_RESULTS)
