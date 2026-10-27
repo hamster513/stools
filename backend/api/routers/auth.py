@@ -18,7 +18,7 @@ from api.crypto import hash_token
 from api.db.base import get_db
 from api.db.models import AppUser, AuditEvent, SessionRow
 from api.deps import get_current_user
-from api.platform.services.access import Access, groups_of
+from api.platform.services.access import Access, GroupRef, groups_of
 from api.platform.services.security import load_security
 from api.rbac import current_access
 from api.security import hash_password, new_session_token, session_expiry, verify_password
@@ -64,12 +64,6 @@ _PASSWORD_CHECKS = threading.BoundedSemaphore(8)
 class LoginRequest(BaseModel):
     login: str
     password: str = Field(max_length=1024)
-
-
-class GroupRef(BaseModel):
-    id: int
-    name: str
-    source: str
 
 
 class MeResponse(BaseModel):

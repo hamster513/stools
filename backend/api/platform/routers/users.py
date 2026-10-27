@@ -12,8 +12,6 @@ from api.platform.export import Column, export_response
 from api.platform.services import users as svc
 
 router = APIRouter(prefix="/users", tags=["settings"])
-#: Подпись старой роли в выгрузке — пока учётки не переведены на группы.
-_ROLE_TITLES = {"admin": "администратор", "analyst": "аналитик", "auditor": "аудитор"}
 
 
 @router.get("", response_model=list[svc.UserView])
@@ -22,7 +20,7 @@ def list_users(db: Session = Depends(get_db), _user: AppUser = Depends(get_curre
 
 
 EXPORT_COLUMNS = [
-    Column("login", "Логин"), Column("name", "Имя"), Column("role", "Роль"), Column("auth", "Вход"), Column("state", "Состояние"),
+    Column("login", "Логин"), Column("name", "Имя"), Column("groups", "Группы"), Column("auth", "Вход"), Column("state", "Состояние"),
     Column("last_login", "Последний вход"),
 ]
 
@@ -33,7 +31,7 @@ def export_users(
 ) -> StreamingResponse:
     """Учётки, как в таблице на экране; права — как на сам список (платформа, чтение)."""
     rows = [
-        {"login": u.login, "name": u.display_name, "role": _ROLE_TITLES.get(u.role, u.role),
+        {"login": u.login, "name": u.display_name, "groups": ", ".join(g.name for g in u.groups),
          "auth": "FAM" if u.auth_source == "oidc" else "пароль", "state": "активен" if u.is_active else "заблокирован",
          "last_login": u.last_login_at}
         for u in svc.list_users(db)
@@ -42,8 +40,8 @@ def export_users(
 
 
 @router.post("", response_model=svc.UserView, status_code=status.HTTP_201_CREATED)
-def create_user(payload: svc.UserCreate, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> svc.UserView:
-    return svc.create_user(db, payload)
+def create_user(payload: svc.UserCreate, db: Session = Depends(get_db), actor: AppUser = Depends(get_current_user)) -> svc.UserView:
+    return svc.create_user(db, actor, payload)
 
 
 @router.patch("/{user_id}", response_model=svc.UserView)

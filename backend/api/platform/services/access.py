@@ -77,6 +77,14 @@ def access_for(db: Session, user_id: int) -> Access:
     return access
 
 
+class GroupRef(BaseModel):
+    """Краткая ссылка на группу: в карточке пользователя и в `/api/auth/me`."""
+
+    id: int
+    name: str
+    source: str
+
+
 def groups_of(db: Session, user_id: int) -> list[AccessGroup]:
     """Группы пользователя по имени."""
     return list(db.scalars(

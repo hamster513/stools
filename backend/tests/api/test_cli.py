@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from api.cli import app
 from api.db.base import get_sessionmaker
 from api.db.models import AppUser
+from api.platform.services.access import groups_of
 from api.security import verify_password
 
 runner = CliRunner()
@@ -53,29 +54,58 @@ def test_create_user_rejects_mismatched_passwords(
         session.close()
 
 
+def _groups_by_login() -> dict[str, list[str]]:
+    session = get_sessionmaker()()
+    try:
+        return {u.login: sorted(g.name for g in groups_of(session, u.id)) for u in session.query(AppUser)}
+    finally:
+        session.close()
+
+
 def test_first_user_is_admin_and_next_is_analyst(
     app_settings: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Первый пользователь — администратор (иначе некому управлять),
-    следующие — аналитики, если роль не задана явно."""
+    """Первый пользователь — в «Администраторах» (иначе некому управлять), следующие — в
+    «Аналитиках», если группа не задана явно. Встроенные группы заводит сама команда:
+    API при этом не запущен."""
     result = _create("root", monkeypatch=monkeypatch)
     assert result.exit_code == 0, result.output
     result = _create("ann", monkeypatch=monkeypatch)
     assert result.exit_code == 0, result.output
-    result = _create("aud", "--role", "auditor", monkeypatch=monkeypatch)
+    result = _create("aud", "--group", "Аудиторы", monkeypatch=monkeypatch)
     assert result.exit_code == 0, result.output
+    assert _groups_by_login() == {"root": ["Администраторы"], "ann": ["Аналитики"], "aud": ["Аудиторы"]}
+
+
+def test_group_option_is_repeatable(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = _create("x", "--group", "Аудиторы", "--group", "Аналитики", monkeypatch=monkeypatch)
+    assert result.exit_code == 0, result.output
+    assert _groups_by_login() == {"x": ["Аналитики", "Аудиторы"]}
+
+
+def test_unknown_group_is_refused_with_its_name(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = _create("x", "--group", "Боссы", monkeypatch=monkeypatch)
+    assert result.exit_code != 0
+    assert "Боссы" in result.output
+    assert _groups_by_login() == {}
+
+
+def test_oidc_group_is_refused_by_name(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Членство в группе из OIDC выдаёт вход через провайдера, не CLI."""
+    from api.db.models import AccessGroup, AccessRole
+    from api.platform.services.access import ensure_builtin
 
     session = get_sessionmaker()()
     try:
-        roles = {u.login: u.role for u in session.query(AppUser)}
+        ensure_builtin(session)
+        role = session.query(AccessRole).filter_by(name="Аудитор").one()
+        session.add(AccessGroup(name="FAM", source="oidc", external_name="fam", role_id=role.id))
+        session.commit()
     finally:
         session.close()
-    assert roles == {"root": "admin", "ann": "analyst", "aud": "auditor"}
-
-
-def test_unknown_role_is_refused(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    result = _create("x", "--role", "boss", monkeypatch=monkeypatch)
-    assert result.exit_code != 0
+    result = _create("x", "--group", "FAM", monkeypatch=monkeypatch)
+    assert result.exit_code != 0 and "FAM" in result.output
+    assert _groups_by_login() == {}
 
 
 def test_reseal_secrets_encrypts_plaintext_in_place(app_settings: Any, db_session: Any) -> None:
