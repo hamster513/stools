@@ -78,7 +78,7 @@ class FindingEvent(Base):
 
 
 class FindingSettingsRow(Base):
-    """Одна строка: {"counted": {...}, "risk_max_days": null, "risk_accept_role": "analyst"}."""
+    """Одна строка: {"counted": {...}, "risk_max_days": null, "risk_accept_role": "write"}."""
 
     __tablename__ = "platform_finding_settings"
 

@@ -207,7 +207,6 @@ def test_bulk_by_keys_stays_synchronous(decided: TestClient) -> None:
     assert _keys(_list(decided, status="in_work")) == {_key(SRV, B), _key(SRV, C), _key(WS, D)}
 
 
-@pytest.mark.xfail(strict=True, reason="запись находок пока не проверяет уровень в модуле находки — проверка внутри ручки, следующий шаг ролей")
 def test_bulk_by_filter_runs_a_job(auth_client: TestClient, test_user: AppUser, db_session: Any,
                                    client_as: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("api.modules.vm.findings_adapter.BULK_CHUNK", 2)

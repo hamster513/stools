@@ -9,9 +9,9 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 STATUSES = ("new", "in_work", "risk_accepted", "false_positive", "fixed", "resolved", "reopened")
 MANUAL = ("new", "in_work", "risk_accepted", "false_positive", "fixed")
@@ -29,9 +29,12 @@ STATUS_TITLES: dict[str, str] = {
 #: Закрывающие решения людей и подтверждённое данными устранение по умолчанию в подсчёты не идут.
 DEFAULT_COUNTED: dict[str, bool] = {s: s not in {"risk_accepted", "false_positive", "resolved"} for s in STATUSES}
 
-#: Своя шкала, а не api.rbac.allows: ядро не тянет за собой зависимости HTTP-слоя.
-_RANK = {"admin": 2, "analyst": 1, "auditor": 0}
-_ROLE_TITLES = {"admin": "администратор", "analyst": "аналитик"}
+#: Своя шкала уровней в модуле (как api.db.models.LEVELS), а не api.platform.services.access:
+#: ядро не тянет за собой базу и HTTP-слой.
+_RANK = {"deny": 0, "read": 1, "write": 2, "admin": 3}
+_LEVEL_TITLES = {"write": "аналитик модуля", "admin": "администратор модуля"}
+#: Значения `risk_accept_role`, сохранённые до ролей по уровням.
+_OLD_RISK_ACCEPT_ROLE = {"analyst": "write", "admin": "admin"}
 
 
 class TransitionError(ValueError):
@@ -39,14 +42,22 @@ class TransitionError(ValueError):
 
 
 class RoleRequired(TransitionError):
-    """Переход разрешён только роли выше, чем у автора (`risk_accept_role`)."""
+    """Переход разрешён только уровню выше, чем у автора в модуле находки (`risk_accept_role`)."""
 
 
 class FindingSettings(BaseModel):
     counted: dict[str, bool] = Field(default_factory=lambda: dict(DEFAULT_COUNTED))
     #: Предел срока принятия риска в днях; None — срок не обязателен и не ограничен.
     risk_max_days: int | None = Field(default=None, ge=1, le=3650)
-    risk_accept_role: Literal["analyst", "admin"] = "analyst"
+    #: Какой уровень в модуле находки нужен, чтобы принять риск: `write` — аналитик, `admin` — администратор.
+    risk_accept_role: Literal["write", "admin"] = "write"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _old_risk_accept_role(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("risk_accept_role") in _OLD_RISK_ACCEPT_ROLE:
+            return {**data, "risk_accept_role": _OLD_RISK_ACCEPT_ROLE[data["risk_accept_role"]]}
+        return data
 
     @field_validator("counted")
     @classmethod
@@ -58,7 +69,7 @@ class FindingSettings(BaseModel):
 
 
 def check_manual(
-    status: str, *, reason: str, role: str, settings: FindingSettings, risk_until: dt.date | None, today: dt.date,
+    status: str, *, reason: str, level: str, settings: FindingSettings, risk_until: dt.date | None, today: dt.date,
 ) -> None:
     if status not in STATUSES:
         raise TransitionError(f"неизвестный статус «{status}»")
@@ -69,8 +80,8 @@ def check_manual(
     if status != "risk_accepted":
         return
     needed = settings.risk_accept_role
-    if _RANK.get(role, -1) < _RANK[needed]:
-        raise RoleRequired(f"принять риск может только роль: {_ROLE_TITLES[needed]}")
+    if _RANK.get(level, -1) < _RANK[needed]:
+        raise RoleRequired(f"принять риск может только: {_LEVEL_TITLES[needed]}")
     if risk_until is not None and risk_until < today:
         raise TransitionError("срок принятия риска уже прошёл")
     if settings.risk_max_days is not None:

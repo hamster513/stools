@@ -284,7 +284,7 @@ def start_bulk_job(db: Session, req: BulkJobRequest) -> tuple[int, Callable[[], 
                 if session.scalar(select(func.max(VmImport.id))) != data:
                     raise RuntimeError("данные VM заменены импортом посреди массовой смены — она остановлена")
                 changed += finding_svc.bulk_change(session, module=MODULE, scope_id=SCOPE, keys=chunk,
-                                                   change=req.change, actor=actor, bulk_id=req.bulk_id)
+                                                   change=req.change, actor=actor, level=req.level, bulk_id=req.bulk_id)
                 done += len(chunk)
                 # Пар могло стать больше, чем при подсчёте: прогресс не уходит за 100 %.
                 total = max(total, done)

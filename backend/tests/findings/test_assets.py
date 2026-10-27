@@ -198,7 +198,7 @@ def test_sync_resolves_and_reopens(db_session: Session, app_settings: Any, make_
     user = make_user("analyst1", "analyst")
     key = next(f.key for f in get_adapter("assets").current(db_session, 0) or [] if f.title.lower().startswith("ws01:")
                and f.key.endswith("|no_av"))
-    svc.change(db_session, module="assets", scope_id=0, key=key, change=svc.Change(status="in_work"), actor=user)
+    svc.change(db_session, module="assets", scope_id=0, key=key, change=svc.Change(status="in_work"), actor=user, level="write")
 
     # Агент антивируса появился — расхождения нет: устранено системой.
     load_ksc(db_session, data_dir, [("MSK1", "192.168.2.23"), ("SRV01", "10.10.0.11"), ("WS01", "10.10.0.21")],
@@ -269,8 +269,8 @@ def test_bulk_by_code(analyst: TestClient, db_session: Session, client_as: Calla
 
 def test_rekey_keeps_history(db_session: Session, app_settings: Any, make_user: Callable[[str, str], AppUser]) -> None:
     user = make_user("analyst1", "analyst")
-    svc.change(db_session, module="assets", scope_id=0, key="1|no_av", change=svc.Change(status="in_work"), actor=user)
-    svc.change(db_session, module="assets", scope_id=0, key="3|no_av", change=svc.Change(status="fixed"), actor=user)
+    svc.change(db_session, module="assets", scope_id=0, key="1|no_av", change=svc.Change(status="in_work"), actor=user, level="write")
+    svc.change(db_session, module="assets", scope_id=0, key="3|no_av", change=svc.Change(status="fixed"), actor=user, level="write")
     assert svc.rekey(db_session, "assets", 0, "1|no_av", "2|no_av", actor="analyst1") is True
     assert svc.rekey(db_session, "assets", 0, "2|no_av", "3|no_av") is False  # новый ключ занят — не трогаем
     assert svc.rekey(db_session, "assets", 0, "9|no_av", "10|no_av") is False  # строки нет
