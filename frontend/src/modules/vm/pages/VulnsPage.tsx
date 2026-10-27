@@ -89,7 +89,7 @@ export function VulnsPage() {
   const filtersPanel = useFiltersPanel('vm-vulns')
   const { write } = useCan()
   const me = useMe()
-  const directory = useUsersDirectory()
+  const directory = useUsersDirectory('vm', write)
   const names = useMemo(() => new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login])), [directory.data])
   const qc = useQueryClient()
   const job = useJob(jobId)

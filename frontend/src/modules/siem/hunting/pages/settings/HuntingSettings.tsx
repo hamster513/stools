@@ -128,7 +128,7 @@ export function HuntingSettings() {
 }
 
 function HuntingForm({ view }: { view: ThSettingsView }) {
-  const { write } = useCan()
+  const { admin } = useCan()
   const save = useSaveThSettings()
   const [draft, setDraft] = useState<Draft>(() => toDraft(plain(view)))
   const [saved, setSaved] = useState(false)
@@ -144,7 +144,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
   }
 
   function submit() {
-    if (!valid || !write) return
+    if (!valid || !admin) return
     save.mutate(toSettings(draft, plain(view)), { onSuccess: () => setSaved(true) })
   }
 
@@ -152,7 +152,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
     return (
       <Row label={label} hint={hint} error={errors[key]}>
         <div className="flex items-center gap-2">
-          <div className="w-28"><input value={draft[key]} onChange={(e) => set(key, e.target.value)} disabled={!write} inputMode="numeric" aria-invalid={errors[key] ? true : undefined} className={cn(FIELD, 'font-mono')} /></div>
+          <div className="w-28"><input value={draft[key]} onChange={(e) => set(key, e.target.value)} disabled={!admin} inputMode="numeric" aria-invalid={errors[key] ? true : undefined} className={cn(FIELD, 'font-mono')} /></div>
           {unit && <span className="text-xs text-text-secondary">{unit}</span>}
         </div>
       </Row>
@@ -166,7 +166,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
         <div className="grid gap-3">
           {number('request_timeout_s', 'Таймаут запроса', 'По умолчанию 300.', 'с')}
           <Row label="График повторов" hint="Минуты ожидания перед каждым повтором упавшего запроса через запятую; сколько чисел — столько повторов. По умолчанию 10, 20, 30, 30, 30, 30, 30." error={errors.retry_minutes}>
-            <input value={draft.retry_minutes} onChange={(e) => set('retry_minutes', e.target.value)} disabled={!write} aria-invalid={errors.retry_minutes ? true : undefined} className={cn(FIELD, 'font-mono')} />
+            <input value={draft.retry_minutes} onChange={(e) => set('retry_minutes', e.target.value)} disabled={!admin} aria-invalid={errors.retry_minutes ? true : undefined} className={cn(FIELD, 'font-mono')} />
           </Row>
           {number('nightly_deadline_h', 'Предел длительности ночи', 'По умолчанию 20. Незавершённый к этому часу прогон снимается, оставшиеся запросы помечаются пропущенными.', 'ч')}
           {number('default_limit', 'Предел событий по умолчанию', 'По умолчанию 5000. Для запроса без своего предела; достигнутый предел помечается в находке.', 'событий')}
@@ -188,7 +188,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
         {number('retention_days', 'Хранение событий', 'По умолчанию 180. Старше события находок удаляются, сами находки и решения по ним остаются.', 'сут')}
       </div>
 
-      {write && (
+      {admin && (
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" variant="primary" loading={save.isPending} disabled={!valid || !dirty}>
             <Save size={14} aria-hidden /> Сохранить настройки Threat Hunting

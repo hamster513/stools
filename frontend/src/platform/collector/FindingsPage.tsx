@@ -82,7 +82,7 @@ export function CollectorFindingsPage<F extends FindingBase>({ module, scopeId, 
   const filtersPanel = useFiltersPanel(filtersKey)
   const { write } = useCan()
   const me = useMe()
-  const directory = useUsersDirectory()
+  const directory = useUsersDirectory(module, write)
   const names = useMemo(() => new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login])), [directory.data])
 
   const queryArgs = useMemo<Omit<FindingsQuery, 'limit' | 'offset'>>(() => ({

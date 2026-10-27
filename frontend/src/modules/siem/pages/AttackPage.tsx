@@ -63,7 +63,7 @@ export function AttackPage({ snapshotId }: { snapshotId: number }) {
   //: Итог последнего прогона: провал или предупреждение о пропусках.
   const [outcome, setOutcome] = useState<{ failed: boolean; message: string } | null>(null)
 
-  const { admin, write } = useCan()
+  const { platform, write } = useCan()
   const coverage = useAttackCoverage(snapshotId)
   const groups = useAttackGroups({
     snapshot_id: snapshotId,
@@ -209,7 +209,7 @@ export function AttackPage({ snapshotId }: { snapshotId: number }) {
           <Settings2 size={14} className="text-kind-3" aria-hidden />
           Адрес модели не задан — предложения по разметке недоступны. Остальные разделы работают,
           а разметку можно вносить руками.
-          {admin ? (
+          {platform.admin ? (
             <Link to="/settings/llm" className="underline underline-offset-2 hover:text-primary">
               Открыть настройки модели
             </Link>

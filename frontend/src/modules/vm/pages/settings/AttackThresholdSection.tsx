@@ -17,7 +17,7 @@ import { NUM } from './ui'
  */
 export function AttackThresholdSection({ settings }: { settings: SettingsView }) {
   // Порог аудитору виден: по нему собирается матрица, которую он читает.
-  const { write } = useCan()
+  const { admin } = useCan()
   const save = useSaveVmSettings()
   const [value, setValue] = useState(settings.attack_min_risk)
   const [dirty, setDirty] = useState(false)
@@ -69,11 +69,11 @@ export function AttackThresholdSection({ settings }: { settings: SettingsView })
             setValue(Number(e.target.value))
           }}
           aria-label="Порог риска для матрицы ATT&CK"
-          disabled={!write}
+          disabled={!admin}
         />
         <span className="text-[11px] text-text-secondary">40 — граница High</span>
       </div>
-      {write && (
+      {admin && (
         <div className="mt-4 flex items-center gap-2 border-t border-grid pt-3">
           <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
             <Save size={13} aria-hidden /> Сохранить

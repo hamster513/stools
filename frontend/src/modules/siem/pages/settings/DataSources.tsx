@@ -142,7 +142,8 @@ function Loaded({
 function ReferenceSource() {
   // Сверка привязана к снапшоту, а настройки открываются и без него:
   // до первой выгрузки эталону не с чем сверяться, и это надо сказать.
-  const { write } = useCan()
+  // Эталон — справочник модуля: загружает и убирает его администратор SIEM.
+  const { admin } = useCan()
   const snapshots = useSnapshots()
   const latest = snapshots.data?.reduce((a, b) => (b.id > a.id ? b : a), snapshots.data[0])
   const compare = useReferenceCompare(latest?.id)
@@ -186,7 +187,7 @@ function ReferenceSource() {
       }
       actions={
         // Аудитору остаётся состояние источника: что загружено и кем.
-        write ? (
+        admin ? (
           <>
             {latest && (
               <Picker

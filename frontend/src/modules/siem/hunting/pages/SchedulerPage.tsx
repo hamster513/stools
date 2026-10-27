@@ -88,7 +88,7 @@ function NextRun({ data }: { data: SchedulerOut }) {
 }
 
 function ScheduleForm({ data }: { data: SchedulerOut }) {
-  const { write } = useCan()
+  const { admin } = useCan()
   const save = useSaveScheduler()
   const [draft, setDraft] = useState<Draft>({ nightly_enabled: data.nightly_enabled, window_from: data.window_from, hunt_pause_s: String(data.hunt_pause_s) })
   const [saved, setSaved] = useState(false)
@@ -105,8 +105,9 @@ function ScheduleForm({ data }: { data: SchedulerOut }) {
 
   const about = 'Прогон ищет события за сутки, закончившиеся в час старта, по часам сервера. Ханты идут по очереди ниже; запросы одного ханта — подряд, между хантами — пауза, чтобы не нагружать MaxPatrol.'
 
-  // Аудитор видит расписание текстом: поля, которые нельзя менять, выглядели бы как сломанные.
-  if (!write) {
+  // Расписание — настройка модуля: не администратор видит его текстом, поля, которые нельзя
+  // менять, выглядели бы как сломанные.
+  if (!admin) {
     return (
       <Section title="Расписание" about={about}>
         <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-xs">
@@ -168,7 +169,8 @@ function moveTo(ids: number[], moved: number, target: number): number[] {
 }
 
 function Queue({ data }: { data: SchedulerOut }) {
-  const { write } = useCan()
+  // Включить хант в очередь — работа аналитика; порядок очереди — настройка расписания, администратору модуля.
+  const { write, admin } = useCan()
   const toggle = useToggleHunt()
   const saveOrder = useSaveQueueOrder()
   const cols = useColumnWidths('siem-th-scheduler-columns', COLUMNS)
@@ -182,7 +184,7 @@ function Queue({ data }: { data: SchedulerOut }) {
   const ids = rows.map((h) => h.id)
   // Пока сервер не ответил на прошлую перестановку, новая не начинается: иначе ответы пришли бы вразнобой.
   // Стрелки при этом остаются в фокусе (`aria-disabled`, не `disabled`): отключённая кнопка роняет фокус с клавиатуры.
-  const canMove = write && !saveOrder.isPending
+  const canMove = admin && !saveOrder.isPending
 
   function commit(next: number[]) {
     if (next.every((id, i) => id === ids[i])) return
@@ -202,7 +204,7 @@ function Queue({ data }: { data: SchedulerOut }) {
   return (
     <Section
       title="Очередь хантов"
-      about={`Ночью ханты идут сверху вниз. Хант не в очереди пропускается, но его место в порядке сохраняется.${write ? ' Порядок меняется перетаскиванием строки или стрелками.' : ''}`}
+      about={`Ночью ханты идут сверху вниз. Хант не в очереди пропускается, но его место в порядке сохраняется.${admin ? ' Порядок меняется перетаскиванием строки или стрелками.' : ''}`}
     >
       {error && <p className="mb-2 text-xs text-kind-1" role="alert">{error}</p>}
       {data.hunts.length === 0 ? (
@@ -262,9 +264,9 @@ function Queue({ data }: { data: SchedulerOut }) {
                 )}
               </div>
               <div className="flex min-w-0 items-center gap-1 px-2">
-                {write && <GripVertical size={14} className={cn('shrink-0 text-text-secondary', canMove && 'cursor-grab')} aria-hidden />}
+                {admin && <GripVertical size={14} className={cn('shrink-0 text-text-secondary', canMove && 'cursor-grab')} aria-hidden />}
                 <span className="w-5 text-right font-mono tabular-nums text-text-secondary">{index + 1}</span>
-                {write && (
+                {admin && (
                   <>
                     <button type="button" className={ICON_BUTTON} aria-disabled={!canMove || index === 0} onClick={() => { if (canMove && index > 0) commit(moveTo(ids, h.id, ids[index - 1])) }} aria-label={`Выше: ${h.code}`} title="Выше">
                       <ChevronUp size={14} aria-hidden />

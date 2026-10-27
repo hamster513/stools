@@ -21,7 +21,7 @@ const COLUMNS: ColumnDef[] = [
 /** Разметка зон — единственный источник надбавок к ценности хоста V и доступа из интернета для достижимости в S. */
 export function ZonesSection() {
   // Разметка зон — решение, а не наблюдение: аудитор видит её, но не ставит.
-  const { write } = useCan()
+  const { admin } = useCan()
   const zones = useZones()
   const save = useSaveZones()
   const recalc = useRecalculate()
@@ -67,15 +67,15 @@ export function ZonesSection() {
                   <tr key={z.name} className="border-t border-grid">
                     <td className="truncate py-1.5 pr-3 font-mono text-text" title={z.name}>{z.name}</td>
                     <td className="py-1.5 pr-3 text-right font-mono tabular-nums text-text-secondary">{z.hosts.toLocaleString('ru-RU')}</td>
-                    <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.internet_access} onChange={() => toggle(z.name, 'internet_access')} aria-label={`${z.name}: доступна из интернета`} disabled={!write} /></label></td>
-                    <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.confidential_data} onChange={() => toggle(z.name, 'confidential_data')} aria-label={`${z.name}: конфиденциальные данные`} disabled={!write} /></label></td>
+                    <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.internet_access} onChange={() => toggle(z.name, 'internet_access')} aria-label={`${z.name}: доступна из интернета`} disabled={!admin} /></label></td>
+                    <td className="py-1.5 pr-3"><label className="inline-flex items-center gap-2"><input type="checkbox" className="accent-primary" checked={z.confidential_data} onChange={() => toggle(z.name, 'confidential_data')} aria-label={`${z.name}: конфиденциальные данные`} disabled={!admin} /></label></td>
                     <td className={cn('truncate py-1.5 pr-3', z.marked ? 'text-text-secondary' : 'text-risk-medium')}>{z.marked ? 'размечена' : 'не размечена'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {write && (
+          {admin && (
             <div className="mt-3 flex items-center gap-3 border-t border-grid pt-3">
               <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}><Save size={13} aria-hidden /> Сохранить и пересчитать</Button>
               {unmarked > 0 && <span className="text-xs text-risk-medium">не размечено: {unmarked}</span>}

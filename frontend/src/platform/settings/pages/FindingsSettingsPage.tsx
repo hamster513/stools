@@ -11,10 +11,10 @@ import { STATUSES, STATUS_TITLES, type FindingSettings } from '@/platform/findin
 /**
  * Статусы находок — настройки платформы: какие статусы учитывать в
  * подсчётах модулей, предельный срок и кто может принимать риск. Видят все,
- * меняет администратор.
+ * меняет администратор платформы.
  */
 export function FindingsSettingsPage() {
-  const { admin } = useCan()
+  const admin = useCan().platform.admin
   const settings = useFindingSettings()
   const save = useSaveFindingSettings()
 
@@ -127,8 +127,8 @@ export function FindingsSettingsPage() {
             value={form.risk_accept_role}
             onChange={(e) => patch({ risk_accept_role: e.target.value as FindingSettings['risk_accept_role'] })}
           >
-            <option value="analyst">аналитик и администратор</option>
-            <option value="admin">только администратор</option>
+            <option value="write">аналитик модуля</option>
+            <option value="admin">администратор модуля</option>
           </select>
         </Field>
       </section>

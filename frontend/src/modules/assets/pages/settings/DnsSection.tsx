@@ -180,14 +180,14 @@ function DnsForm({ dns, connections, onDone }: { dns: DnsServer | null; connecti
 
 /** DNS-серверы: прямые и обратные запросы обновляют IP и имена активов, зоны AD дают записи без живых хостов. */
 export function DnsSection() {
-  const { write } = useCan()
+  const { admin } = useCan()
   const servers = useDnsServers()
   const connections = useAdConnections()
   const remove = useDeleteDns()
   // undefined — форма закрыта, null — новый сервер.
   const [editing, setEditing] = useState<DnsServer | null | undefined>(undefined)
   const conns = connections.data ?? []
-  const cols = useColumnWidths('assets-dns-columns', write ? WRITE_COLUMNS : COLUMNS)
+  const cols = useColumnWidths('assets-dns-columns', admin ? WRITE_COLUMNS : COLUMNS)
 
   return (
     <Section id="dns" title="DNS" about="Запросы к серверу: A/AAAA по известным именам обновляют IP активов (устаревшие адреса в VM и антивирусе подсвечиваются), PTR по известным адресам даёт имена хостам, известным только по адресу. Зоны AD читаются через подключение AD с его паузами между запросами.">
@@ -210,7 +210,7 @@ export function DnsSection() {
                   <td className="py-2 pr-3 break-words text-text-secondary">{whatText(d, conns)}</td>
                   <td className="py-2 pr-3 text-text-secondary">{when(d.last_run_at)}</td>
                   <td className="py-2 pr-3 break-words text-text-secondary">{scheduleText(d.schedule)}</td>
-                  {write && (
+                  {admin && (
                     <td className="py-2">
                       <div className="flex items-start justify-end gap-1 whitespace-nowrap">
                         <RunButton dns={d} />
@@ -229,7 +229,7 @@ export function DnsSection() {
       )}
       {servers.data?.length === 0 && editing === undefined && <p className="mb-3 text-xs text-text-secondary">DNS-серверов ещё нет.</p>}
       {remove.error && <p className="mb-2 text-xs text-kind-1">{message(remove.error, 'DNS-сервер не удалён')}</p>}
-      {write && editing === undefined && <Button onClick={() => setEditing(null)}><Plus size={13} aria-hidden /> Добавить DNS-сервер</Button>}
+      {admin && editing === undefined && <Button onClick={() => setEditing(null)}><Plus size={13} aria-hidden /> Добавить DNS-сервер</Button>}
     </Section>
   )
 }

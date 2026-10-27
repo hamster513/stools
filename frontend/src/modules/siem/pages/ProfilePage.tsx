@@ -20,9 +20,9 @@ export function ProfilePage({ snapshotId }: { snapshotId: number }) {
   const summary = useSnapshotSummary(snapshotId)
   const update = useUpdateProfile()
   const preview = usePreviewProfile()
-  // Профиль аудитор читает, но не правит: и сохранение, и прикидка
-  // «что изменится» — запись, сервер их ему не даст.
-  const { write } = useCan()
+  // Профиль — настройка модуля: читают все, а сохранение и прикидку
+  // «что изменится» сервер даёт только администратору SIEM.
+  const { admin } = useCan()
 
   const [scoping, setScoping] = useState<Set<string>>(new Set())
   const [accounts, setAccounts] = useState<string[]>([])
@@ -130,7 +130,7 @@ export function ProfilePage({ snapshotId }: { snapshotId: number }) {
               {summary.data.profile_confirmed ? 'Профиль подтверждён' : 'Профиль не подтверждён'}
             </span>
           )}
-          {write && (
+          {admin && (
             <>
               <Button onClick={checkEffect} loading={preview.isPending}>
                 <Calculator size={13} aria-hidden /> Что изменится
@@ -246,7 +246,7 @@ export function ProfilePage({ snapshotId }: { snapshotId: number }) {
               className="inline-flex items-center gap-1.5 rounded border border-grid bg-app-bg px-2 py-1 font-mono text-xs text-text-secondary"
             >
               {a}
-              {write && (
+              {admin && (
                 <button
                   type="button"
                   onClick={() => {
@@ -265,7 +265,7 @@ export function ProfilePage({ snapshotId }: { snapshotId: number }) {
             <span className="text-xs text-text-secondary">не задано ни одной</span>
           )}
         </div>
-        {write && (
+        {admin && (
         <form
           className="flex items-center gap-2"
           onSubmit={(e) => {

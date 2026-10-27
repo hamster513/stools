@@ -7,7 +7,7 @@ import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useChangeFinding, useFindingSettings, useFindingState, useUsersDirectory } from './queries'
 import { StatusBadge } from './StatusBadge'
-import { MANUAL_STATUSES, NEEDS_REASON, STATUS_TITLES, type FindingChange, type FindingEvent, type FindingState, type FindingStatus } from './types'
+import { findingArea, MANUAL_STATUSES, NEEDS_REASON, STATUS_TITLES, type FindingChange, type FindingEvent, type FindingState, type FindingStatus } from './types'
 
 const SYSTEM = 'system'
 const LABEL = 'mb-1 block text-[11px] font-semibold tracking-wide text-text-secondary uppercase'
@@ -77,10 +77,10 @@ export function FindingWorkBlock({ module, scopeId, findingKey, title, severity,
   severity: string
   onChanged?: (state: FindingState) => void
 }) {
-  const { write, admin } = useCan()
+  const { write, admin } = useCan(findingArea(module))
   const settings = useFindingSettings()
   const state = useFindingState({ module, scope_id: scopeId, key: findingKey })
-  const directory = useUsersDirectory()
+  const directory = useUsersDirectory(module, write)
   const save = useChangeFinding()
   const s = state.data
   const [form, setForm] = useState<Form | null>(null)
@@ -93,7 +93,8 @@ export function FindingWorkBlock({ module, scopeId, findingKey, title, severity,
   const needsReason = change.status !== undefined && NEEDS_REASON.includes(change.status)
   const blocked = Object.keys(change).length === 0 || (needsReason && !change.comment)
   const set = (patch: Partial<Form>) => setForm({ ...form, ...patch })
-  // Принять риск может только администратор — остальным статус не предлагается (сервер всё равно откажет).
+  // Принять риск при настройке «администратор модуля» может только он — остальным статус не
+  // предлагается (сервер всё равно откажет).
   const canAcceptRisk = admin || settings.data?.risk_accept_role !== 'admin'
   const choices = MANUAL_STATUSES.filter((st) => st !== 'risk_accepted' || canAcceptRisk)
   const names = new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login]))

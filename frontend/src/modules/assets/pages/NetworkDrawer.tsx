@@ -210,7 +210,7 @@ export function NetworkDrawer({ networkId, newCidr, onClose, onOpen }: {
 }) {
   const creating = newCidr !== null
   const open = networkId !== null || creating
-  const { write } = useCan()
+  const { admin } = useCan()
   const detail = useNetwork(creating ? null : networkId)
   const [editing, setEditing] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -233,7 +233,7 @@ export function NetworkDrawer({ networkId, newCidr, onClose, onOpen }: {
                 {n?.title && <span className="truncate text-xs text-text-secondary">{n.title}</span>}
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                {write && n && !editing && (
+                {admin && n && !editing && (
                   <>
                     <Button variant="ghost" onClick={() => setEditing(true)}><Pencil size={13} aria-hidden /> Изменить</Button>
                     <Button variant="ghost" className="text-risk-high" onClick={() => setDeleting(true)} aria-label={`Удалить сеть ${n.cidr}`}><Trash2 size={13} aria-hidden /></Button>

@@ -50,10 +50,10 @@ export function HygienePage({ snapshotId }: { snapshotId: number }) {
   const filtersPanel = useFiltersPanel('siem-hygiene')
   const qc = useQueryClient()
   const me = useMe()
-  const directory = useUsersDirectory()
-  const names = useMemo(() => new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login])), [directory.data])
   // Изменения статусов — решения, а решения аудитор не выносит: галочек и полосы у него нет.
   const { write } = useCan()
+  const directory = useUsersDirectory('siem', write)
+  const names = useMemo(() => new Map((directory.data ?? []).map((u) => [u.login, u.display_name || u.login])), [directory.data])
 
   // Экран открывают двумя путями: из инвентаря по конкретному правилу
   // и целиком по снапшоту. Правило приходит идентификатором в адресе —

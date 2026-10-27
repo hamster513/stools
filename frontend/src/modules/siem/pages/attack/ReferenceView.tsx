@@ -76,9 +76,9 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
   const compare = useReferenceCompare(snapshotId)
   const apply = useApplyReference()
   const [filter, setFilter] = useState<ReferenceVerdict | 'all'>('all')
-  // Сама сверка — чтение, и аудитору она нужна целиком; принятие эталона
-  // записывает разметку, и для него оно недоступно.
-  const { write } = useCan()
+  // Сама сверка — чтение, и она нужна всем; принятие эталона записывает разметку из
+  // справочника — это настройка модуля, она у его администратора.
+  const { admin } = useCan()
   const cols = useColumnWidths('siem-attack-reference-columns', COLUMNS)
 
   if (compare.isLoading) return <FullPageSpinner />
@@ -183,7 +183,7 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
       {/* Принятие эталона — явное решение человека, а не побочное действие
           загрузки файла: подменив разметку молча, продукт лишил бы себя
           того, ради чего эталон и грузят. */}
-      {write && (
+      {admin && (
       <div className="flex flex-wrap items-center gap-2 rounded border border-grid bg-surface px-3 py-2 text-xs">
         <span className="text-text-secondary">
           Эталон — работа ваших аналитиков, и она точнее модели. Принятое записывается
@@ -244,7 +244,7 @@ export function ReferenceView({ snapshotId }: { snapshotId: number }) {
                 key={item.uuid}
                 item={item}
                 onApply={
-                  write
+                  admin
                     ? () => apply.mutate({ snapshot_id: snapshotId, rule_uuid: item.uuid })
                     : undefined
                 }
@@ -267,7 +267,7 @@ function Row({
   busy,
 }: {
   item: ReferenceItem
-  /** Не задан — принимать нечем: у аудитора строка остаётся только чтением. */
+  /** Не задан — принимать нечем: без права строка остаётся только чтением. */
   onApply?: () => void
   busy: boolean
 }) {

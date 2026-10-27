@@ -134,12 +134,12 @@ function RacktablesForm({ rt, onDone }: { rt: Racktables | null; onDone: () => v
 
 /** RackTables: сети с названиями и VLAN становятся сетями Assets, имена адресов — наблюдениями источника RT. */
 export function RacktablesSection() {
-  const { write } = useCan()
+  const { admin } = useCan()
   const rows = useRacktables()
   const remove = useDeleteRacktables()
   // undefined — форма закрыта, null — новое подключение.
   const [editing, setEditing] = useState<Racktables | null | undefined>(undefined)
-  const cols = useColumnWidths('assets-racktables-columns', write ? WRITE_COLUMNS : COLUMNS)
+  const cols = useColumnWidths('assets-racktables-columns', admin ? WRITE_COLUMNS : COLUMNS)
 
   return (
     <Section id="racktables" title="RackTables" about="Проход по JSON API RackTables: все сети (listCells) создаются или обновляются в Assets с названием, VLAN и тегами, затем по каждой сети читаются адреса (getIPAddressList). Адрес с именем становится наблюдением источника RT и сопоставляется с активами по имени и IP; адрес только с IP не переносится. Сеть, описанная вручную с тем же CIDR, остаётся вашей.">
@@ -162,7 +162,7 @@ export function RacktablesSection() {
                   <td className="py-2 pr-3 break-all text-text-secondary">{d.url}{d.username && <span> · {d.username}</span>}{!d.password_set && <span className="text-kind-1"> · пароль не задан</span>}</td>
                   <td className="py-2 pr-3 text-text-secondary">{when(d.last_run_at)}</td>
                   <td className="py-2 pr-3 break-words text-text-secondary">{scheduleText(d.schedule)}</td>
-                  {write && (
+                  {admin && (
                     <td className="py-2">
                       <div className="flex items-start justify-end gap-1 whitespace-nowrap">
                         <Actions rt={d} />
@@ -181,7 +181,7 @@ export function RacktablesSection() {
       )}
       {rows.data?.length === 0 && editing === undefined && <p className="mb-3 text-xs text-text-secondary">Подключений RackTables ещё нет.</p>}
       {remove.error && <p className="mb-2 text-xs text-kind-1">{message(remove.error, 'Подключение не удалено')}</p>}
-      {write && editing === undefined && <Button onClick={() => setEditing(null)}><Plus size={13} aria-hidden /> Добавить подключение</Button>}
+      {admin && editing === undefined && <Button onClick={() => setEditing(null)}><Plus size={13} aria-hidden /> Добавить подключение</Button>}
     </Section>
   )
 }

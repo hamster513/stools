@@ -43,7 +43,7 @@ export function KbSource() {
 
 function KbForm({ c }: { c: KbConnectionView }) {
   // Аудитору поля видны, но закрыты, а кнопок нет: сервер ответит 403.
-  const { write } = useCan()
+  const { admin } = useCan()
   const { navigate } = useRouter()
   const save = useSaveKbConnection()
   const test = useTestKb()
@@ -87,24 +87,24 @@ function KbForm({ c }: { c: KbConnectionView }) {
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Сервер MaxPatrol" hint="Имя или адрес Core без https://">
-          <input className={FIELD} value={form.host} onChange={(e) => patch({ host: e.target.value })} placeholder="mp.corp.local" spellCheck={false} disabled={!write} />
+          <input className={FIELD} value={form.host} onChange={(e) => patch({ host: e.target.value })} placeholder="mp.corp.local" spellCheck={false} disabled={!admin} />
         </Field>
         <Field label="Порт базы знаний" hint="Обычно 8091">
-          <input className={FIELD} type="number" min={1} max={65535} value={form.kb_port} onChange={(e) => patch({ kb_port: Number(e.target.value) })} disabled={!write} />
+          <input className={FIELD} type="number" min={1} max={65535} value={form.kb_port} onChange={(e) => patch({ kb_port: Number(e.target.value) })} disabled={!admin} />
         </Field>
         <Field label="API-токен" hint={c.api_token_set ? 'задан; введите, чтобы заменить' : 'не задан. Персональный токен доступа MaxPatrol (pat_…); выпускается в консоли управления; подойдёт тот же, что у подключения к MaxPatrol VM'}>
-          <input className={FIELD} type="password" value={form.api_token} onChange={(e) => patch({ api_token: e.target.value })} autoComplete="new-password" spellCheck={false} disabled={!write} />
+          <input className={FIELD} type="password" value={form.api_token} onChange={(e) => patch({ api_token: e.target.value })} autoComplete="new-password" spellCheck={false} disabled={!admin} />
         </Field>
         <div className="flex flex-col justify-end pb-1">
           <label className="flex items-center gap-2 text-xs text-text">
-            <input type="checkbox" checked={form.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} className="accent-primary" disabled={!write} />
+            <input type="checkbox" checked={form.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} className="accent-primary" disabled={!admin} />
             <span>Проверять TLS-сертификат</span>
           </label>
           <span className="mt-1 text-[11px] text-text-secondary">Выключено — сертификат MaxPatrol не проверяется; включите за доверенным CA.</span>
         </div>
       </div>
 
-      {write && (
+      {admin && (
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
           <Button variant="primary" onClick={() => save.mutate(form, {
               // Токен после сохранения не держим в состоянии: подсказка снова скажет «задан».

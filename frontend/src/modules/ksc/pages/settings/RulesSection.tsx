@@ -120,7 +120,7 @@ function ReadOnlyView({ config }: { config: KscConfig }) {
 /** Пороги проверок — то, что в прототипе лежало в KSC_audit.config.json. */
 export function RulesSection({ settings }: { settings: SettingsView }) {
   // Пороги аудитор читает: по ним считались находки, которые он разбирает.
-  const { write } = useCan()
+  const { admin } = useCan()
   const save = useSaveKscSettings()
   const [cfg, setCfg] = useState<KscConfig>(settings.config)
   const [dirty, setDirty] = useState(false)
@@ -130,7 +130,7 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
 
   return (
     <Section id="rules" title="Пороги проверок" about="Пороги, по которым проверки решают, что агент молчит слишком долго, базы устарели, поиск давно не выполнялся или лицензия истекает. После изменения порогов пересчитайте снапшот на экране «Снапшоты».">
-      {!write ? (
+      {!admin ? (
         <ReadOnlyView config={cfg} />
       ) : (
         <>

@@ -114,12 +114,12 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
 }) {
   // Подключения аудитор видит списком — адрес и учётная запись нужны,
   // чтобы понимать, откуда снапшот; править, проверять и собирать не может.
-  const { write } = useCan()
+  const { admin } = useCan()
   const [editing, setEditing] = useState<Editing<CI> | null>(null)
   const [testResult, setTestResult] = useState<{ id: number; ok: boolean; message: string } | null>(null)
   // Подключение, под строкой которого раскрыт блок расписания.
   const [scheduleFor, setScheduleFor] = useState<number | null>(null)
-  const cols = useColumnWidths(storageKey, write ? WRITE_COLUMNS : COLUMNS)
+  const cols = useColumnWidths(storageKey, admin ? WRITE_COLUMNS : COLUMNS)
 
   return (
     <Section id="connections" title={title} about={about}>
@@ -136,7 +136,7 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
                     <td className="py-2 pr-3 font-mono break-all text-text-secondary">{address(c)}</td>
                     <td className="py-2 pr-3 font-mono break-all text-text-secondary">{account(c)}{c.password_set ? '' : ' (нет пароля)'}</td>
                     <td className="py-2 pr-3 break-words text-text-secondary">{scheduleText(c.schedule)}</td>
-                    {write && (
+                    {admin && (
                       <td className="py-2 text-right">
                         <div className="flex flex-wrap justify-end gap-1 whitespace-nowrap">
                           <Button variant="ghost" onClick={() => test.mutate(c.id, { onSuccess: (r) => setTestResult({ id: c.id, ...r }) })} loading={test.isPending}><PlugZap size={13} aria-hidden /> проверить</Button>
@@ -151,7 +151,7 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
                       </td>
                     )}
                   </tr>
-                  {write && scheduleFor === c.id && (
+                  {admin && scheduleFor === c.id && (
                     <tr><td colSpan={5} className="pb-3"><ConnectionSchedule id={c.id} current={c.schedule} schedule={schedule} /></td></tr>
                   )}
                 </Fragment>
@@ -160,7 +160,7 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
           </table>
         </div>
       )}
-      {write && (editing ? <Form empty={empty} initial={editing} useSaveConnection={useSaveConnection} fields={fields} onDone={() => setEditing(null)} onCancel={() => setEditing(null)} /> : <Button onClick={() => setEditing({ ...empty })}><Plus size={13} aria-hidden /> Добавить подключение</Button>)}
+      {admin && (editing ? <Form empty={empty} initial={editing} useSaveConnection={useSaveConnection} fields={fields} onDone={() => setEditing(null)} onCancel={() => setEditing(null)} /> : <Button onClick={() => setEditing({ ...empty })}><Plus size={13} aria-hidden /> Добавить подключение</Button>)}
       {collect.data && <p className="mt-2 text-xs text-text-secondary">сбор запущен, задача #{collect.data.job_id} — прогресс на экране «Задачи»</p>}
       {collect.error && <p className="mt-2 text-xs text-kind-1">{collect.error instanceof ApiRequestError ? collect.error.message : 'Сбор не запущен'}</p>}
     </Section>
