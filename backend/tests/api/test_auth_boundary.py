@@ -405,3 +405,52 @@ def test_admin_is_never_denied(
     response = admin.request(method, _sample(route, route_path), **kwargs)
 
     assert response.status_code != 403, f"{method} {route_path}: {response.text}"
+
+
+#: Ручки находок и справочник исполнителей правило `needed` пропускает: уровень в модуле находки
+#: проверяет сама ручка. Без групп каждая отвечает 403, кроме чтения «своего» — оно фильтрует по
+#: модулям с правами и без прав пусто. Новая ручка под префиксом без строки здесь валит тест.
+FINDINGS_ROUTES = [
+    (r, p, m) for r, p, m in ROUTES if p.startswith("/api/findings/") or p == "/api/users/directory"
+]
+_FINDING = {"module": "vm", "scope_id": 1, "key": "k"}
+#: Запросы, которые проходят валидацию и доходят до проверки уровня в ручке.
+FINDINGS_REQUESTS: dict[tuple[str, str], dict[str, Any]] = {
+    ("GET", "/api/findings/state"): {"params": _FINDING},
+    ("PUT", "/api/findings/state"): {"json": {**_FINDING, "status": "in_work"}},
+    ("POST", "/api/findings/comment"): {"json": {**_FINDING, "text": "x"}},
+    ("POST", "/api/findings/bulk"): {"json": {"module": "vm", "scope_id": 1, "keys": ["k"], "change": {"comment": "x"}}},
+    ("GET", "/api/findings/summary"): {"params": {"module": "vm", "scope_id": 1}},
+    ("GET", "/api/users/directory"): {"params": {"module": "vm"}},
+}
+#: Чтение своего, отфильтрованное по правам вызывающего, — открыто и пусто.
+FINDINGS_OWN_READS = {
+    ("GET", "/api/findings/mine"), ("GET", "/api/findings/mine/export"), ("GET", "/api/findings/mine/count"),
+}
+
+
+def test_findings_routes_without_groups(monkeypatch: pytest.MonkeyPatch, client_as: Any) -> None:
+    _no_background(monkeypatch)
+    found = {(m, p) for _r, p, m in FINDINGS_ROUTES}
+    assert len(found) >= 9
+    assert sorted(found - FINDINGS_REQUESTS.keys() - FINDINGS_OWN_READS) == [], \
+        "новая ручка находок — впишите запрос в FINDINGS_REQUESTS или чтение своего в FINDINGS_OWN_READS"
+    client = client_as({})
+    wrong = []
+    for _route, route_path, method in FINDINGS_ROUTES:
+        response = client.request(method, route_path, **FINDINGS_REQUESTS.get((method, route_path), {}))
+        expect_403 = (method, route_path) not in FINDINGS_OWN_READS
+        if (response.status_code == 403) != expect_403:
+            wrong.append((method, route_path, "403" if expect_403 else "не 403", response.status_code, response.text))
+    assert wrong == [], "\n".join(map(str, wrong))
+
+    assert client.get("/api/findings/mine").json() == []
+    assert client.get("/api/findings/mine/count").json() == {"open": 0, "overdue": 0}
+    export = client.get("/api/findings/mine/export")
+    assert export.status_code == 200 and len(export.text.strip().splitlines()) == 1, export.text
+
+
+def test_unknown_path_needs_platform_admin() -> None:
+    """Ручка вне известных префиксов закрыта по умолчанию: только администратору платформы."""
+    assert needed("GET", "/api/unknown") == ("platform", "admin")
+    assert needed("POST", "/api/unknown/thing") == ("platform", "admin")
