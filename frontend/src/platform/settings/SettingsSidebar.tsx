@@ -52,7 +52,8 @@ function NavItem({
   className?: string
 }) {
   const { path } = useRouter()
-  const active = path === to
+  // Карточка внутри раздела (/settings/roles/3) подсвечивает свой раздел.
+  const active = path === to || (to !== '/settings' && path.startsWith(`${to}/`))
   return (
     <Link
       to={to}

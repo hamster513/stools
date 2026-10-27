@@ -8,6 +8,8 @@
  * не бывает.
  */
 import { http, HttpResponse } from 'msw'
+import { AREAS, type Access, type Level } from '@/platform/access/types'
+import type { RoleInput, RoleRow } from '@/platform/settings/api/access'
 import type { Role } from '@/platform/settings/api/types'
 import type { AttackBundleDiff, AttackBundleState, PendingBundle } from '@/modules/attack/api/types'
 import { startMockBundleDownload } from '@/modules/attack/mocks/handlers'
@@ -233,6 +235,47 @@ const unprocessable = (detail: string) => HttpResponse.json({ detail }, { status
 
 const activeAdmins = () => users.filter((u) => u.role === 'admin' && u.is_active).length
 
+
+// --- Роли и группы доступа ----------------------------------------------
+
+const matrix = (module: Level, platform: Level) =>
+  Object.fromEntries(AREAS.map((a) => [a, a === 'platform' ? platform : module])) as Access
+
+let nextRoleId = 4
+const roles: Array<Omit<RoleRow, 'groups'>> = [
+  { id: 1, name: 'Администратор', description: 'Полный доступ ко всем модулям и настройкам', builtin: true, levels: matrix('admin', 'admin') },
+  { id: 2, name: 'Аналитик', description: 'Выгрузки и разметка во всех модулях, без настроек платформы', builtin: true, levels: matrix('write', 'deny') },
+  { id: 3, name: 'Аудитор', description: 'Просмотр всех модулей без изменений', builtin: true, levels: matrix('read', 'deny') },
+]
+
+interface MockGroup {
+  id: number
+  name: string
+  source: 'local' | 'oidc'
+  external_name: string | null
+  role_id: number
+  member_ids: number[]
+}
+
+const groups: MockGroup[] = [
+  { id: 1, name: 'Администраторы', source: 'local', external_name: null, role_id: 1, member_ids: [1] },
+  { id: 2, name: 'Аналитики', source: 'local', external_name: null, role_id: 2, member_ids: [2] },
+  { id: 3, name: 'Аудиторы', source: 'local', external_name: null, role_id: 3, member_ids: [3] },
+  { id: 4, name: 'stools-admins', source: 'oidc', external_name: 'stools-admins', role_id: 1, member_ids: [4] },
+]
+
+const roleView = (r: Omit<RoleRow, 'groups'>): RoleRow => ({
+  ...r,
+  groups: groups.filter((g) => g.role_id === r.id).length,
+})
+
+/** Проверка тела роли — те же отказы, что у сервера. */
+function roleBodyError(body: RoleInput): ReturnType<typeof unprocessable> | null {
+  if ((body.name ?? '').trim() === '') return unprocessable('название роли не может быть пустым')
+  if (body.levels?.platform === 'write') return unprocessable('у платформы нет уровня «аналитик»')
+  return null
+}
+
 export const platformHandlers = [
   http.post('/api/auth/password', async ({ request }) => {
     const denied = noSession()
@@ -338,6 +381,51 @@ export const platformHandlers = [
   }),
 
   // --- Безопасность -----------------------------------------------------
+
+  // --- Роли -------------------------------------------------------------
+
+  http.get('/api/settings/roles', () => noSession() ?? HttpResponse.json(roles.map(roleView))),
+
+  http.post('/api/settings/roles', async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const body = (await request.json()) as RoleInput
+    const invalid = roleBodyError(body)
+    if (invalid) return invalid
+    if (roles.some((r) => r.name === body.name.trim())) return conflict('роль с таким названием уже есть')
+    const row = { id: nextRoleId++, name: body.name.trim(), description: body.description, builtin: false, levels: body.levels }
+    roles.push(row)
+    return HttpResponse.json(roleView(row), { status: 201 })
+  }),
+
+  http.put('/api/settings/roles/:id', async ({ params, request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = roles.find((r) => r.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'роль не найдена' }, { status: 404 })
+    const body = (await request.json()) as RoleInput
+    if (row.builtin && row.id === 1) return conflict('встроенную роль «Администратор» нельзя изменить')
+    const invalid = roleBodyError(body)
+    if (invalid) return invalid
+    if (row.builtin && body.name.trim() !== row.name) return conflict('встроенную роль нельзя переименовать')
+    if (roles.some((r) => r.id !== row.id && r.name === body.name.trim())) return conflict('роль с таким названием уже есть')
+    row.name = body.name.trim()
+    row.description = body.description
+    row.levels = body.levels
+    return HttpResponse.json(roleView(row))
+  }),
+
+  http.delete('/api/settings/roles/:id', ({ params }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const index = roles.findIndex((r) => r.id === Number(params.id))
+    if (index === -1) return HttpResponse.json({ detail: 'роль не найдена' }, { status: 404 })
+    const row = roles[index]
+    if (row.builtin) return conflict('встроенную роль нельзя удалить')
+    if (groups.some((g) => g.role_id === row.id)) return conflict('роль назначена группам, удалить её нельзя')
+    roles.splice(index, 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
 
   http.get('/api/settings/security', () => {
     const denied = noSession()

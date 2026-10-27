@@ -23,8 +23,10 @@ import { LlmPage } from './pages/LlmPage'
 import { AttackSettingsPage } from './pages/AttackSettingsPage'
 import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
 import { DataStatusPage } from './pages/DataStatusPage'
+import { RolesPage } from './pages/RolesPage'
+import { RoleEditor } from './pages/RoleEditor'
 
-/** Разделы «Группы» и «Роли» до появления своих страниц: адрес уже есть, экрана ещё нет. */
+/** Раздел «Группы» до появления своей страницы: адрес уже есть, экрана ещё нет. */
 function PlannedPage() {
   return (
     <div className="p-6">
@@ -38,12 +40,12 @@ function PlannedPage() {
  * открыт всем: профиль и статусы находок (сохранить их может только
  * администратор платформы — это проверяет сама страница).
  */
-const PAGES = new Map<string, { page: ComponentType; need: [Area, Level] | null }>([
+const PAGES = new Map<string, { page: ComponentType; detail?: ComponentType; need: [Area, Level] | null }>([
   ['profile', { page: ProfilePage, need: null }],
   ['findings', { page: FindingsSettingsPage, need: null }],
   ['users', { page: UsersPage, need: ['platform', 'read'] }],
   ['groups', { page: PlannedPage, need: ['platform', 'read'] }],
-  ['roles', { page: PlannedPage, need: ['platform', 'read'] }],
+  ['roles', { page: RolesPage, detail: RoleEditor, need: ['platform', 'read'] }],
   ['security', { page: SecurityPage, need: ['platform', 'read'] }],
   ['oidc', { page: OidcPage, need: ['platform', 'read'] }],
   ['audit', { page: AuditPage, need: ['platform', 'read'] }],
@@ -70,7 +72,9 @@ export function SettingsShell() {
   const { data: me } = useMe()
   // /settings/ с хвостовым слэшем — тот же корень, что и /settings.
   const base = path.length > 1 ? path.replace(/\/+$/, '') : path
-  const section = matchPath('/settings/:section', base)?.section ?? null
+  // /settings/<раздел> и карточка внутри раздела /settings/<раздел>/<id | new>.
+  const card = matchPath('/settings/:section/:id', base)
+  const section = (card ?? matchPath('/settings/:section', base))?.section ?? null
   const entry = section ? PAGES.get(section) : undefined
 
   // Голый /settings — сводка «Данные», её видят все: строки сервер отбирает
@@ -79,9 +83,9 @@ export function SettingsShell() {
   // пункт, и непонятно, что открыто.
   let page: ReactNode
   if (base === '/settings') page = <DataStatusPage />
-  else if (!entry) page = <Redirect to="/settings" />
+  else if (!entry || (card && !entry.detail)) page = <Redirect to="/settings" />
   else if (entry.need && !(me && atLeast(me.access, ...entry.need))) page = <Forbidden kind="settings" />
-  else page = <entry.page />
+  else page = card && entry.detail ? <entry.detail /> : <entry.page />
 
   return (
     <AppShell sidebar={<SettingsSidebar />}>
