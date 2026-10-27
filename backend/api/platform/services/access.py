@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Literal
 
@@ -24,6 +25,8 @@ from api.db.models import (
     AccessRoleLevel,
     AppUser,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Область → уровень; присутствуют все AREAS.
 Access = dict[str, str]
@@ -85,18 +88,29 @@ def groups_of(db: Session, user_id: int) -> list[AccessGroup]:
 
 
 def ensure_builtin(db: Session) -> None:
-    """Три встроенные роли и три группы — идемпотентно, при каждом старте API.
+    """Три встроенные роли — при каждом старте API; три встроенные группы — только вместе с ролью.
 
-    Существующие роли не перезаписываются, кроме «Администратора»: его
-    матрица всегда полная. Существующие группы не трогаются (владелец мог
-    назначить им другую роль)."""
-    roles = {r.name: r for r in db.scalars(select(AccessRole).where(AccessRole.name.in_(BUILTIN_ROLES)))}
+    Роли ищутся по имени среди `builtin`; существующие не перезаписываются,
+    кроме «Администратора»: его матрица всегда полная. Группа сеется лишь
+    для только что созданной роли (чистая схема) и никогда не возвращается:
+    владелец мог удалить, переименовать её или назначить другую роль.
+    Обычная роль с именем встроенной не присваивается — запись об этом в
+    лог, встроенная роль не создаётся (имя уникально)."""
+    roles = {
+        r.name: r
+        for r in db.scalars(select(AccessRole).where(AccessRole.name.in_(BUILTIN_ROLES), AccessRole.builtin.is_(True)))
+    }
+    taken = set(db.scalars(select(AccessRole.name).where(AccessRole.name.in_(BUILTIN_ROLES)))) - roles.keys()
+    created: set[str] = set()
     for name, matrix in BUILTIN_ROLES.items():
         role = roles.get(name)
-        if role is None:
+        if role is None and name in taken:
+            logger.error("роль «%s» уже занята обычной ролью — встроенная не создана", name)
+        elif role is None:
             role = roles[name] = AccessRole(name=name, description="", builtin=True)
             role.levels = [AccessRoleLevel(area=a, level=lv) for a, lv in matrix.items()]
             db.add(role)
+            created.add(name)
         elif name == _ADMIN_ROLE:
             have = {lv.area: lv for lv in role.levels}
             for area, level in matrix.items():
@@ -107,7 +121,7 @@ def ensure_builtin(db: Session) -> None:
     db.flush()
     existing = set(db.scalars(select(AccessGroup.name).where(AccessGroup.name.in_(BUILTIN_GROUPS))))
     for group_name, role_name in BUILTIN_GROUPS.items():
-        if group_name not in existing:
+        if role_name in created and group_name not in existing:
             db.add(AccessGroup(name=group_name, source="local", role_id=roles[role_name].id))
     db.commit()
 
@@ -116,6 +130,7 @@ def ensure_builtin(db: Session) -> None:
 
 LAST_ADMIN = "нельзя оставить систему без администратора"
 SELF_LOCKOUT = "нельзя снять права с себя"
+BUILTIN_RENAME = "встроенную роль нельзя переименовать"
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -244,6 +259,8 @@ def update_role(db: Session, actor: AppUser, role_id: int, payload: RoleIn) -> R
     role = _role(db, role_id)
     if role.builtin and role.name == _ADMIN_ROLE:
         raise _conflict("встроенную роль «Администратор» нельзя изменить")
+    if role.builtin and payload.name != role.name:
+        raise _conflict(BUILTIN_RENAME)
     _check_role_name(db, payload.name, exclude_id=role.id)
 
     def apply() -> None:

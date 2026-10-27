@@ -125,6 +125,18 @@ def test_other_builtin_roles_editable_but_not_deletable(auth_client: TestClient)
     assert auth_client.delete(f"/api/settings/roles/{auditor}").status_code == 409
 
 
+def test_builtin_role_cannot_be_renamed_but_custom_can(auth_client: TestClient) -> None:
+    analyst = _role_id(auth_client, "Аналитик")
+    renamed = auth_client.put(f"/api/settings/roles/{analyst}", json={"name": "Аналитик 2", "levels": {"siem": "read"}})
+    assert renamed.status_code == 409 and renamed.json()["detail"] == svc.BUILTIN_RENAME
+    assert next(r for r in auth_client.get("/api/settings/roles").json() if r["id"] == analyst)["name"] == "Аналитик"
+    renamed_admin = auth_client.put(f"/api/settings/roles/{_role_id(auth_client, 'Администратор')}", json={"name": "Админ", "levels": {}})
+    assert renamed_admin.status_code == 409
+    custom = auth_client.post("/api/settings/roles", json={"name": "Своя", "levels": {}}).json()
+    ok = auth_client.put(f"/api/settings/roles/{custom['id']}", json={"name": "Своя 2", "levels": {}})
+    assert ok.status_code == 200 and ok.json()["name"] == "Своя 2"
+
+
 def test_role_assigned_to_group_is_not_deletable(auth_client: TestClient) -> None:
     role = auth_client.post("/api/settings/roles", json={"name": "Занятая", "levels": {"siem": "read"}}).json()
     group = auth_client.post("/api/settings/groups", json={"name": "Г", "source": "local", "role_id": role["id"]})

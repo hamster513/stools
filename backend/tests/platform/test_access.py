@@ -116,3 +116,26 @@ def test_ensure_builtin_keeps_edits_to_analyst_but_restores_admin(db_session: An
     roles = {r.name: r for r in db_session.scalars(select(AccessRole))}
     assert {lv.area: lv.level for lv in roles["Аналитик"].levels}["vm"] == "admin"
     assert {lv.area: lv.level for lv in roles["Администратор"].levels}["ksc"] == "admin"
+
+
+def test_ensure_builtin_does_not_resurrect_deleted_groups(db_session: Any) -> None:
+    ensure_builtin(db_session)
+    for name in ("Аудиторы", "Администраторы"):
+        db_session.delete(db_session.scalar(select(AccessGroup).where(AccessGroup.name == name)))
+    db_session.commit()
+    ensure_builtin(db_session)
+    assert {g.name for g in db_session.scalars(select(AccessGroup))} == {"Аналитики"}
+    assert db_session.scalar(select(func.count()).select_from(AccessRole)) == 3
+
+
+def test_ensure_builtin_does_not_adopt_custom_role_with_builtin_name(db_session: Any) -> None:
+    custom = AccessRole(name="Аналитик", description="своя", builtin=False)
+    db_session.add(custom)
+    db_session.commit()
+    ensure_builtin(db_session)
+    db_session.expire_all()
+    roles = {r.name: r.builtin for r in db_session.scalars(select(AccessRole))}
+    assert roles == {"Аналитик": False, "Администратор": True, "Аудитор": True}
+    assert db_session.get(AccessRole, custom.id).levels == []
+    # Группа сеется только вместе со своей ролью: для занятого имени её нет.
+    assert {g.name for g in db_session.scalars(select(AccessGroup))} == {"Администраторы", "Аудиторы"}
