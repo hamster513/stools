@@ -24,6 +24,31 @@ export interface RoleInput {
   levels: Access
 }
 
+export interface GroupRow {
+  id: number
+  name: string
+  /** local — участников ведёт администратор; oidc — состав приходит из провайдера при входе. */
+  source: 'local' | 'oidc'
+  external_name: string | null
+  role_id: number
+  role_name: string
+  members: number
+}
+
+export interface GroupInput {
+  name: string
+  source: 'local' | 'oidc'
+  external_name?: string | null
+  role_id: number
+}
+
+export interface MemberRow {
+  user_id: number
+  login: string
+  display_name: string | null
+  auth_source: 'local' | 'oidc'
+}
+
 // --- Роли -------------------------------------------------------------
 
 export function useRoles() {
@@ -66,6 +91,63 @@ export function useDeleteRole() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, number>({
     mutationFn: (id) => api.del(`/api/settings/roles/${id}`),
+    onSuccess: () => invalidateAccess(qc),
+  })
+}
+
+// --- Группы -----------------------------------------------------------
+
+export function useGroups() {
+  return useQuery<GroupRow[], ApiRequestError>({
+    queryKey: ['groups'],
+    queryFn: () => api.get('/api/settings/groups'),
+  })
+}
+
+/** Как и у роли: отдельной ручки нет, группа берётся из списка. */
+export function useGroup(id: number | null) {
+  const q = useGroups()
+  return { ...q, data: q.data?.find((g) => g.id === id) }
+}
+
+export function useCreateGroup() {
+  const qc = useQueryClient()
+  return useMutation<GroupRow, ApiRequestError, GroupInput>({
+    mutationFn: (body) => api.post('/api/settings/groups', body),
+    onSuccess: () => invalidateAccess(qc),
+  })
+}
+
+/** Источник группы после создания не меняется — в теле его нет. */
+export function useUpdateGroup() {
+  const qc = useQueryClient()
+  return useMutation<GroupRow, ApiRequestError, { id: number; body: Omit<GroupInput, 'source'> }>({
+    mutationFn: ({ id, body }) => api.put(`/api/settings/groups/${id}`, body),
+    onSuccess: () => invalidateAccess(qc),
+  })
+}
+
+export function useDeleteGroup() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, number>({
+    mutationFn: (id) => api.del(`/api/settings/groups/${id}`),
+    onSuccess: () => invalidateAccess(qc),
+  })
+}
+
+export function useGroupMembers(id: number | null) {
+  return useQuery<MemberRow[], ApiRequestError>({
+    queryKey: ['groups', id, 'members'],
+    queryFn: () => api.get(`/api/settings/groups/${id}/members`),
+    enabled: id !== null,
+  })
+}
+
+/** Состав local-группы задаётся целиком: список id всех участников после правки. */
+export function useSetGroupMembers(id: number) {
+  const qc = useQueryClient()
+  return useMutation<MemberRow[], ApiRequestError, number[]>({
+    mutationFn: (userIds) => api.put(`/api/settings/groups/${id}/members`, { user_ids: userIds }),
     onSuccess: () => invalidateAccess(qc),
   })
 }

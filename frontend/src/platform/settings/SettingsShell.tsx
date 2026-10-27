@@ -1,10 +1,8 @@
 import type { ComponentType, ReactNode } from 'react'
-import { Construction } from 'lucide-react'
 import { useMe } from '@/api/auth'
 import { matchPath, Redirect, useRouter } from '@/lib/router'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { EmptyState } from '@/components/ui/EmptyState'
 import { atLeast, type Area, type Level } from '@/platform/access/types'
 import { SettingsPage as SiemSettingsPage } from '@/modules/siem/pages/SettingsPage'
 import { SettingsPage as VmSettingsPage } from '@/modules/vm/pages/SettingsPage'
@@ -25,15 +23,8 @@ import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
 import { DataStatusPage } from './pages/DataStatusPage'
 import { RolesPage } from './pages/RolesPage'
 import { RoleEditor } from './pages/RoleEditor'
-
-/** Раздел «Группы» до появления своей страницы: адрес уже есть, экрана ещё нет. */
-function PlannedPage() {
-  return (
-    <div className="p-6">
-      <EmptyState icon={Construction} title="Раздел в разработке" description="Страница появится в следующем выпуске." />
-    </div>
-  )
-}
+import { GroupsPage } from './pages/GroupsPage'
+import { GroupEditor } from './pages/GroupEditor'
 
 /**
  * Раздел → какая область и какой уровень нужны, чтобы его открыть. null —
@@ -44,7 +35,7 @@ const PAGES = new Map<string, { page: ComponentType; detail?: ComponentType; nee
   ['profile', { page: ProfilePage, need: null }],
   ['findings', { page: FindingsSettingsPage, need: null }],
   ['users', { page: UsersPage, need: ['platform', 'read'] }],
-  ['groups', { page: PlannedPage, need: ['platform', 'read'] }],
+  ['groups', { page: GroupsPage, detail: GroupEditor, need: ['platform', 'read'] }],
   ['roles', { page: RolesPage, detail: RoleEditor, need: ['platform', 'read'] }],
   ['security', { page: SecurityPage, need: ['platform', 'read'] }],
   ['oidc', { page: OidcPage, need: ['platform', 'read'] }],

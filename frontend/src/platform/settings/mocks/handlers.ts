@@ -9,7 +9,7 @@
  */
 import { http, HttpResponse } from 'msw'
 import { AREAS, type Access, type Level } from '@/platform/access/types'
-import type { RoleInput, RoleRow } from '@/platform/settings/api/access'
+import type { GroupInput, GroupRow, MemberRow, RoleInput, RoleRow } from '@/platform/settings/api/access'
 import type { Role } from '@/platform/settings/api/types'
 import type { AttackBundleDiff, AttackBundleState, PendingBundle } from '@/modules/attack/api/types'
 import { startMockBundleDownload } from '@/modules/attack/mocks/handlers'
@@ -257,6 +257,7 @@ interface MockGroup {
   member_ids: number[]
 }
 
+let nextGroupId = 5
 const groups: MockGroup[] = [
   { id: 1, name: 'Администраторы', source: 'local', external_name: null, role_id: 1, member_ids: [1] },
   { id: 2, name: 'Аналитики', source: 'local', external_name: null, role_id: 2, member_ids: [2] },
@@ -268,6 +269,42 @@ const roleView = (r: Omit<RoleRow, 'groups'>): RoleRow => ({
   ...r,
   groups: groups.filter((g) => g.role_id === r.id).length,
 })
+
+const groupView = (g: MockGroup): GroupRow => ({
+  id: g.id,
+  name: g.name,
+  source: g.source,
+  external_name: g.external_name,
+  role_id: g.role_id,
+  role_name: roles.find((r) => r.id === g.role_id)?.name ?? '',
+  members: g.member_ids.length,
+})
+
+/** Активные учётки с правами администратора платформы — по ролям их групп. */
+function platformAdmins(all: MockGroup[]): Set<string> {
+  const logins = all
+    .filter((g) => roles.find((r) => r.id === g.role_id)?.levels.platform === 'admin')
+    .flatMap((g) => g.member_ids)
+    .map((id) => users.find((u) => u.id === id))
+    .filter((u) => u?.is_active)
+    .map((u) => u!.login)
+  return new Set(logins)
+}
+
+/** Те же две защиты, что на сервере: правка не должна снять права с самого себя и оставить систему без администратора. */
+function adminGuard(next: MockGroup[]) {
+  const before = platformAdmins(groups)
+  const after = platformAdmins(next)
+  if (before.has(MOCK_ME) && !after.has(MOCK_ME)) return conflict('нельзя снять права с себя')
+  if (before.size > 0 && after.size === 0) return conflict('нельзя оставить систему без администратора')
+  return null
+}
+
+const memberRows = (g: MockGroup): MemberRow[] =>
+  g.member_ids.flatMap((id) => {
+    const u = users.find((x) => x.id === id)
+    return u ? [{ user_id: u.id, login: u.login, display_name: u.display_name, auth_source: u.auth_source }] : []
+  })
 
 /** Проверка тела роли — те же отказы, что у сервера. */
 function roleBodyError(body: RoleInput): ReturnType<typeof unprocessable> | null {
@@ -425,6 +462,88 @@ export const platformHandlers = [
     if (groups.some((g) => g.role_id === row.id)) return conflict('роль назначена группам, удалить её нельзя')
     roles.splice(index, 1)
     return new HttpResponse(null, { status: 204 })
+  }),
+
+  // --- Группы -----------------------------------------------------------
+
+  http.get('/api/settings/groups', () => noSession() ?? HttpResponse.json(groups.map(groupView))),
+
+  http.post('/api/settings/groups', async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const body = (await request.json()) as GroupInput
+    const name = (body.name ?? '').trim()
+    if (name === '') return unprocessable('название группы не может быть пустым')
+    if (body.source === 'oidc' && !(body.external_name ?? '').trim()) {
+      return unprocessable('для группы OIDC нужно имя группы у провайдера')
+    }
+    if (!roles.some((r) => r.id === body.role_id)) return unprocessable('роль не найдена')
+    if (groups.some((g) => g.name === name)) return conflict('группа с таким названием уже есть')
+    const row: MockGroup = {
+      id: nextGroupId++,
+      name,
+      source: body.source,
+      external_name: body.source === 'oidc' ? (body.external_name ?? '').trim() : null,
+      role_id: body.role_id,
+      member_ids: [],
+    }
+    groups.push(row)
+    return HttpResponse.json(groupView(row), { status: 201 })
+  }),
+
+  http.put('/api/settings/groups/:id', async ({ params, request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    const body = (await request.json()) as Omit<GroupInput, 'source'>
+    const name = (body.name ?? '').trim()
+    if (name === '') return unprocessable('название группы не может быть пустым')
+    if (row.source === 'oidc' && !(body.external_name ?? '').trim()) {
+      return unprocessable('для группы OIDC нужно имя группы у провайдера')
+    }
+    if (!roles.some((r) => r.id === body.role_id)) return unprocessable('роль не найдена')
+    if (groups.some((g) => g.id !== row.id && g.name === name)) return conflict('группа с таким названием уже есть')
+    const refused = adminGuard(groups.map((g) => (g === row ? { ...g, role_id: body.role_id } : g)))
+    if (refused) return refused
+    row.name = name
+    row.role_id = body.role_id
+    if (row.source === 'oidc') row.external_name = (body.external_name ?? '').trim()
+    return HttpResponse.json(groupView(row))
+  }),
+
+  http.delete('/api/settings/groups/:id', ({ params }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    const refused = adminGuard(groups.filter((g) => g !== row))
+    if (refused) return refused
+    groups.splice(groups.indexOf(row), 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  http.get('/api/settings/groups/:id/members', ({ params }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    return HttpResponse.json(memberRows(row))
+  }),
+
+  http.put('/api/settings/groups/:id/members', async ({ params, request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    if (row.source === 'oidc') return conflict('состав группы OIDC обновляется при входе, вручную его не поменять')
+    const body = (await request.json()) as { user_ids: number[] }
+    const ids = [...new Set(body.user_ids ?? [])]
+    if (ids.some((id) => !users.some((u) => u.id === id))) return unprocessable('пользователь не найден')
+    const refused = adminGuard(groups.map((g) => (g === row ? { ...g, member_ids: ids } : g)))
+    if (refused) return refused
+    row.member_ids = ids
+    return HttpResponse.json(memberRows(row))
   }),
 
   http.get('/api/settings/security', () => {
