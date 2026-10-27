@@ -1,10 +1,8 @@
 import { useRouter, useSearchParams } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import type { TabDef } from '@/platform/tabs/DrawerTabs'
 
-export interface TabDef {
-  key: string
-  label: string
-}
+export type { TabDef }
 
 /** Ряд вкладок страницы: вкладка — параметр `?tab=`, остальные параметры адреса сохраняются. */
 export function TabBar({ tabs, current, label }: { tabs: TabDef[]; current: string; label: string }) {

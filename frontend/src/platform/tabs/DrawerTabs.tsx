@@ -1,9 +1,14 @@
 import type { KeyboardEvent } from 'react'
 import { cn } from '@/lib/cn'
-import type { TabDef } from '../policies/TabBar'
+
+export interface TabDef {
+  key: string
+  label: string
+}
 
 /**
- * Вкладки боковой панели: текущая — состояние родителя, адрес не трогается (в отличие от `TabBar`).
+ * Ряд вкладок: текущую вкладку задаёт родитель — состоянием (панель хоста) или путём (раздел «Доступ»,
+ * `onSelect` делает переход); сам компонент адрес не трогает, в отличие от `TabBar`.
  * Стрелки ←/→, Home и End переключают вкладку и переводят на неё фокус; фокус по Tab попадает только на текущую.
  */
 export function DrawerTabs({ tabs, current, onSelect, label }: { tabs: TabDef[]; current: string; onSelect: (key: string) => void; label: string }) {

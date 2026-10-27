@@ -93,7 +93,7 @@ export function AuditPage() {
           </div>
           <p className="max-w-2xl text-xs text-text-secondary">
             Изменяющие запросы и отказы по правам. Записи хранятся столько, сколько задано в
-            разделе «Безопасность».
+            разделе «Доступ» → «Вход».
           </p>
         </div>
       </div>

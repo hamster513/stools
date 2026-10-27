@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Redirect, useRouter } from '@/lib/router'
-import { DrawerTabs } from '@/modules/ksc/pages/hosts/DrawerTabs'
+import { DrawerTabs } from '@/platform/tabs/DrawerTabs'
 import { useScrollToAnchor } from '../useScrollToAnchor'
 import { GroupEditor } from './GroupEditor'
 import { GroupsPage } from './GroupsPage'
@@ -55,7 +56,10 @@ export function AccessPage() {
     <div className="flex h-full min-h-0 flex-col">
       <DrawerTabs tabs={TABS} current={tab} onSelect={(key) => navigate(`${ROOT}/${key}`)} label="Разделы доступа" />
       <div role="tabpanel" className="min-h-0 flex-1">
-        {content}
+        {/* Ключ по вкладке: ошибка одной не должна переезжать в следующую; сами вкладки остаются на месте. */}
+        <ErrorBoundary key={tab} resetLabel="Показать снова">
+          {content}
+        </ErrorBoundary>
       </div>
     </div>
   )
