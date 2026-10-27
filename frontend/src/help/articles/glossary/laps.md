@@ -2,6 +2,7 @@
 slug: laps
 title: LAPS
 group: glossary
+module: ad
 routes: []
 concepts: []
 ---

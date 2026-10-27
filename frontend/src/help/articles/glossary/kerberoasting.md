@@ -2,6 +2,7 @@
 slug: kerberoasting
 title: Kerberoasting
 group: glossary
+module: ad
 routes: []
 concepts: []
 ---

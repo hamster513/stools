@@ -2,6 +2,7 @@
 slug: ad-hygiene
 title: Гигиена Active Directory
 group: glossary
+module: ad
 routes: []
 concepts: []
 ---

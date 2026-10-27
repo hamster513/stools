@@ -2,6 +2,7 @@
 slug: domain-score
 title: Оценка домена
 group: glossary
+module: ad
 routes: []
 concepts: []
 ---

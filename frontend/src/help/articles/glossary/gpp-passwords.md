@@ -2,6 +2,7 @@
 slug: gpp-passwords
 title: Пароли в GPP
 group: glossary
+module: ad
 routes: []
 concepts: []
 ---

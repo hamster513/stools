@@ -2,6 +2,7 @@
 slug: delegation
 title: Делегирование Kerberos
 group: glossary
+module: ad
 routes: []
 concepts: []
 ---
