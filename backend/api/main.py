@@ -53,6 +53,7 @@ from api.platform import router as settings_router
 from api.platform.findings.expiry import ensure_platform_schedules
 from api.platform.findings.router import router as findings_router
 from api.platform.scheduler import Scheduler
+from api.platform.services.access import ensure_builtin
 from api.rbac import require_access
 from api.routers import auth, oidc
 from api.settings import get_settings
@@ -67,6 +68,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Потоки задач умерли вместе с прежним процессом: их «идущие» задачи никто не ведёт.
     with get_sessionmaker()() as db:
         fail_interrupted_jobs(db)
+        # Встроенные роли и группы доступа: на чистой базе их ещё нет.
+        ensure_builtin(db)
     # После уборки: расписание не должно упереться в «идущую» задачу, которую никто не ведёт.
     scheduler.start(get_sessionmaker())
     # Расписания самой платформы (истечение принятых рисков) — если их ещё нет.

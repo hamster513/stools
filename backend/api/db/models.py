@@ -86,6 +86,63 @@ class SessionRow(Base):
     last_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+#: Уровни доступа по порядку включения: каждый следующий разрешает всё, что предыдущий.
+LEVELS = ("deny", "read", "write", "admin")
+#: Идентификаторы модулей — они же префиксы `/api/<id>/` (api/modules/__init__.py).
+MODULE_IDS = ("attack", "siem", "vm", "ad", "ksc", "assets", "toolbox")
+#: Области, по которым роль задаёт уровень: модули и платформа (пользователи, настройки).
+AREAS = MODULE_IDS + ("platform",)
+
+
+class AccessRole(Base):
+    """Роль: матрица «область × уровень». Нет строки в `levels` — это `deny`."""
+
+    __tablename__ = "access_role"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: Встроенные роли заводит ensure_builtin (api/platform/services/access.py).
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    levels: Mapped[list[AccessRoleLevel]] = relationship(cascade="all, delete-orphan")
+
+
+class AccessRoleLevel(Base):
+    __tablename__ = "access_role_level"
+
+    role_id: Mapped[int] = mapped_column(ForeignKey("access_role.id", ondelete="CASCADE"), primary_key=True)
+    area: Mapped[str] = mapped_column(String(16), primary_key=True)
+    level: Mapped[str] = mapped_column(String(8))
+
+
+class AccessGroup(Base):
+    """Группа: к ней привязана ровно одна роль, в неё входят пользователи.
+
+    `oidc` — группа, членство в которой выдаётся при входе по claim провайдера
+    (`external_name` — значение claim); `local` — членство назначает человек."""
+
+    __tablename__ = "access_group"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    source: Mapped[str] = mapped_column(String(8), default="local", server_default="local")
+    #: NULL у local; у oidc уникально (в Postgres NULL-ы в UNIQUE не конфликтуют).
+    external_name: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("access_role.id", ondelete="RESTRICT"))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    role: Mapped[AccessRole] = relationship()
+
+
+class AccessMembership(Base):
+    __tablename__ = "access_membership"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"), primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("access_group.id", ondelete="CASCADE"), primary_key=True)
+
+
 class OidcLoginState(Base):
     """Состояние начатого входа через провайдера: живёт 10 минут.
 
