@@ -11,11 +11,18 @@ import json
 from typing import Annotated
 
 import typer
+from sqlalchemy.orm import Session
 
 from api.crypto import reseal
 from api.db.base import get_sessionmaker
-from api.db.models import AccessGroup, AccessMembership, AppSetting, AppUser
-from api.platform.services.access import ensure_builtin
+from api.db.models import AccessGroup, AccessMembership, AccessRole, AppSetting, AppUser
+from api.platform.services.access import (
+    BUILTIN_GROUPS,
+    access_for_groups,
+    active_platform_admins,
+    allows,
+    ensure_builtin,
+)
 from api.security import hash_password
 from api.settings import get_settings
 
@@ -40,12 +47,18 @@ def create_user(
 ) -> None:
     """Создать пользователя. Пароль спрашивается дважды, в открытый вид
     нигде не попадает — ни в аргументы, ни в лог. Группа по умолчанию:
-    «Администраторы» для первого пользователя, «Аналитики» для остальных."""
+    «Администраторы» для первого пользователя, «Аналитики» для остальных.
+
+    Это и выход, когда система осталась без администратора: удалённая
+    встроенная группа заводится заново со своей встроенной ролью, а
+    учётка без `platform = admin` в системе без администратора не
+    создаётся — иначе выход молча не сработал бы."""
     session = get_sessionmaker()()
     try:
         #: CLI работает без старта API, где встроенные роли и группы заводятся.
         ensure_builtin(session)
         names = group or [FIRST_USER_GROUP if session.query(AppUser).count() == 0 else NEXT_USER_GROUP]
+        _restore_builtin_groups(session, names)
         found = {
             g.name: g
             for g in session.query(AccessGroup).filter(AccessGroup.name.in_(names), AccessGroup.source == "local")
@@ -54,6 +67,16 @@ def create_user(
             if name not in found:
                 typer.secho(f"неизвестная локальная группа: {name}", fg=typer.colors.RED, err=True)
                 raise typer.Exit(code=1)
+        if active_platform_admins(session) == 0 and not allows(
+            access_for_groups(session, (g.id for g in found.values())), "platform", "admin",
+        ):
+            given = ", ".join(f"«{n}» (роль «{found[n].role.name}»)" for n in dict.fromkeys(names))
+            typer.secho(
+                f"в системе нет активного администратора платформы, а группы {given} не дают "
+                "platform = admin — учётка не создана; укажите группу с ролью «Администратор»",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(code=1)
         password = getpass.getpass("пароль: ")
         confirm = getpass.getpass("повторите пароль: ")
         if password != confirm:
@@ -73,6 +96,21 @@ def create_user(
         typer.secho(f"пользователь создан: {login} ({', '.join(dict.fromkeys(names))})", fg=typer.colors.GREEN)
     finally:
         session.close()
+
+
+def _restore_builtin_groups(session: Session, names: list[str]) -> None:
+    """Встроенная группа, которой нет, заводится заново со своей встроенной ролью.
+
+    API встроенные группы не возвращает (владелец мог их удалить), но запрос
+    группы по имени в CLI — явное действие оператора на сервере. Без коммита:
+    группа сохраняется вместе с учёткой."""
+    for name in dict.fromkeys(names):
+        if name not in BUILTIN_GROUPS or session.query(AccessGroup).filter_by(name=name).count():
+            continue
+        role = session.query(AccessRole).filter_by(name=BUILTIN_GROUPS[name], builtin=True).one_or_none()
+        if role is not None:
+            session.add(AccessGroup(name=name, source="local", role_id=role.id))
+    session.flush()
 
 
 @app.command("reseal-secrets")

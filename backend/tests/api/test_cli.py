@@ -78,9 +78,59 @@ def test_first_user_is_admin_and_next_is_analyst(
 
 
 def test_group_option_is_repeatable(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _create("root", monkeypatch=monkeypatch).exit_code == 0
     result = _create("x", "--group", "Аудиторы", "--group", "Аналитики", monkeypatch=monkeypatch)
     assert result.exit_code == 0, result.output
-    assert _groups_by_login() == {"x": ["Аналитики", "Аудиторы"]}
+    assert _groups_by_login() == {"root": ["Администраторы"], "x": ["Аналитики", "Аудиторы"]}
+
+
+def test_deleted_admins_group_is_recreated_for_recovery(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Выход из системы без администратора: удалённые «Администраторы» заводятся заново со
+    встроенной ролью, новая учётка — администратор платформы."""
+    from api.db.models import AccessGroup
+    from api.platform.services.access import access_for
+
+    assert _create("root", monkeypatch=monkeypatch).exit_code == 0
+    session = get_sessionmaker()()
+    try:
+        session.delete(session.query(AccessGroup).filter_by(name="Администраторы").one())
+        session.commit()
+    finally:
+        session.close()
+
+    result = _create("rescue", "--group", "Администраторы", monkeypatch=monkeypatch)
+    assert result.exit_code == 0, result.output
+    session = get_sessionmaker()()
+    try:
+        group = session.query(AccessGroup).filter_by(name="Администраторы").one()
+        assert (group.source, group.role.name) == ("local", "Администратор")
+        rescue = session.query(AppUser).filter_by(login="rescue").one()
+        assert access_for(session, rescue.id)["platform"] == "admin"
+    finally:
+        session.close()
+
+
+def test_no_admin_and_groups_without_platform_admin_is_refused(
+    app_settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """«Администраторы» с ролью «Аудитор», администратора в системе нет: учётка не заводится,
+    иначе выход молча оставил бы систему без администратора."""
+    from api.db.models import AccessGroup, AccessRole
+    from api.platform.services.access import ensure_builtin
+
+    session = get_sessionmaker()()
+    try:
+        ensure_builtin(session)
+        auditor = session.query(AccessRole).filter_by(name="Аудитор").one()
+        session.query(AccessGroup).filter_by(name="Администраторы").one().role_id = auditor.id
+        session.commit()
+    finally:
+        session.close()
+
+    result = _create("x", "--group", "Администраторы", monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    assert "«Администраторы» (роль «Аудитор»)" in result.output and "не создана" in result.output
+    assert _groups_by_login() == {}
 
 
 def test_unknown_group_is_refused_with_its_name(app_settings: Any, monkeypatch: pytest.MonkeyPatch) -> None:

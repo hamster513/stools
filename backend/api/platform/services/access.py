@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Literal
 
 from fastapi import HTTPException, status
@@ -62,19 +62,32 @@ def allows(access: Access, area: str, level: str) -> bool:
     return rank(access.get(area, "deny")) >= rank(level)
 
 
-def access_for(db: Session, user_id: int) -> Access:
-    """Максимум по группам пользователя; нет групп — везде `deny`."""
+def _widest(rows: Iterable[tuple[str, str]]) -> Access:
+    """Максимум уровней по строкам «область, уровень»; область без строк — `deny`."""
     access: Access = dict.fromkeys(AREAS, "deny")
-    rows = db.execute(
-        select(AccessRoleLevel.area, AccessRoleLevel.level)
-        .join(AccessGroup, AccessGroup.role_id == AccessRoleLevel.role_id)
-        .join(AccessMembership, AccessMembership.group_id == AccessGroup.id)
-        .where(AccessMembership.user_id == user_id)
-    )
     for area, level in rows:
         if area in access and rank(level) > rank(access[area]):
             access[area] = level
     return access
+
+
+def access_for(db: Session, user_id: int) -> Access:
+    """Максимум по группам пользователя; нет групп — везде `deny`."""
+    return _widest(db.execute(
+        select(AccessRoleLevel.area, AccessRoleLevel.level)
+        .join(AccessGroup, AccessGroup.role_id == AccessRoleLevel.role_id)
+        .join(AccessMembership, AccessMembership.group_id == AccessGroup.id)
+        .where(AccessMembership.user_id == user_id)
+    ).tuples())
+
+
+def access_for_groups(db: Session, group_ids: Iterable[int]) -> Access:
+    """Права, которые дало бы членство в этих группах, — как `access_for`, но до членства."""
+    return _widest(db.execute(
+        select(AccessRoleLevel.area, AccessRoleLevel.level)
+        .join(AccessGroup, AccessGroup.role_id == AccessRoleLevel.role_id)
+        .where(AccessGroup.id.in_(list(group_ids)))
+    ).tuples())
 
 
 class GroupRef(BaseModel):
@@ -145,7 +158,7 @@ def _conflict(detail: str) -> HTTPException:
     return HTTPException(status.HTTP_409_CONFLICT, detail=detail)
 
 
-def _active_platform_admins(db: Session) -> int:
+def active_platform_admins(db: Session) -> int:
     """Активные пользователи, у которых хоть одна группа даёт `platform = admin`."""
     return db.scalar(
         select(func.count(func.distinct(AppUser.id)))
@@ -168,7 +181,7 @@ def guard_last_admin(db: Session, actor_id: int, *, after: Callable[[], None]) -
     try:
         after()
         db.flush()
-        if _active_platform_admins(db) == 0:
+        if active_platform_admins(db) == 0:
             raise _conflict(LAST_ADMIN)
         if not allows(access_for(db, actor_id), "platform", "admin"):
             raise _conflict(SELF_LOCKOUT)
