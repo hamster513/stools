@@ -15,6 +15,11 @@ test('plainText: таблица без разделителя и границ, �
   assert.equal(plainText(body), 'Уровень Что read Смотреть один два')
 })
 
+test('plainText: подчёркивания в идентификаторах сохраняются, в коде и вне него', () => {
+  assert.equal(plainText('Таблица kb_audit_log и `stools_session`.'), 'Таблица kb_audit_log и stools_session.')
+  assert.equal(plainText('**жирный** и `a*b*c`'), 'жирный и a*b*c')
+})
+
 test('plainText: остаток фронтматтера и цитата', () => {
   assert.equal(plainText('---\nslug: a\n---\n> Совет\nТекст'), 'Совет Текст')
 })
