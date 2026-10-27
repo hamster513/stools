@@ -8,6 +8,11 @@ function segments(path: string): string[] {
   return path.split(/[?#]/, 1)[0].split('/').filter(Boolean)
 }
 
+/** Канонический вид шаблона: без query/hash и хвостового «/», каждый `:имя` → `:`. Для поиска дублей. */
+export function canonicalPattern(pattern: string): string {
+  return '/' + segments(pattern).map((s) => (s.startsWith(':') && s.length > 1 ? ':' : s)).join('/')
+}
+
 /** Бросает Error с русским текстом, если шаблон нарушает правила. */
 export function checkPattern(pattern: string): void {
   if (!pattern.startsWith('/')) throw new Error(`шаблон «${pattern}»: должен начинаться с «/»`)

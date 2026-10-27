@@ -76,6 +76,19 @@ test('дубль шаблона routes в разных статьях', () => {
   assert.deepEqual(validate(list, []), ['dup.md: шаблон «/ad» уже указан в статье ad.md'])
 })
 
+test('дубль шаблона: параметры с разными именами — один шаблон', () => {
+  const list = clean()
+  list[1] = { ...list[1], routes: ['/ad', '/ad/:id'] }
+  list.push(art({ slug: 'dup', routes: ['/ad/:domainId'], file: 'dup.md' }))
+  assert.deepEqual(validate(list, []), ['dup.md: шаблон «/ad/:domainId» уже указан в статье ad.md как «/ad/:id»'])
+})
+
+test('дубль шаблона: хвостовой слэш не делает шаблон другим', () => {
+  const list = clean()
+  list.push(art({ slug: 'dup', routes: ['/ad/'], file: 'dup.md' }))
+  assert.deepEqual(validate(list, []), ['dup.md: шаблон «/ad/» уже указан в статье ad.md как «/ad»'])
+})
+
 test('нет ## Как настроить у module', () => {
   const list = clean()
   list[1] = art({ slug: 'ad', routes: ['/ad'], sections: { 'Что это': 'Т', 'Как читать': 'Т' } })

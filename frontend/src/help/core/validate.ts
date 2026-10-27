@@ -2,7 +2,7 @@
 // Возвращает сообщения вида «файл: текст»; пустой список — всё в порядке.
 
 import { isFenceLine } from './frontmatter.ts'
-import { checkPattern, matchRoute } from './match.ts'
+import { canonicalPattern, checkPattern, matchRoute } from './match.ts'
 import type { Article } from './types.ts'
 
 function withoutCodeBlocks(body: string): string {
@@ -22,7 +22,7 @@ function withoutCodeBlocks(body: string): string {
 export function validate(articles: Article[], routes: string[]): string[] {
   const msgs: string[] = []
   const slugOwner = new Map<string, string>()
-  const routeOwner = new Map<string, { file: string; index: number }>()
+  const routeOwner = new Map<string, { file: string; index: number; route: string }>()
   const glossary = new Set(articles.filter((a) => a.group === 'glossary').map((a) => a.slug))
   const allSlugs = new Set(articles.map((a) => a.slug))
   const validPatterns: string[] = []
@@ -55,9 +55,12 @@ export function validate(articles: Article[], routes: string[]): string[] {
         continue
       }
       validPatterns.push(route)
-      const owner = routeOwner.get(route)
-      if (owner && owner.index !== index) err(`шаблон «${route}» уже указан в статье ${owner.file}`)
-      else if (!owner) routeOwner.set(route, { file: a.file, index })
+      // дубль считаем по каноническому виду: `/ad/:id` и `/ad/:domainId`, `/ad/jobs` и `/ad/jobs/` — один адрес
+      const key = canonicalPattern(route)
+      const owner = routeOwner.get(key)
+      if (owner && owner.index !== index) {
+        err(`шаблон «${route}» уже указан в статье ${owner.file}` + (owner.route === route ? '' : ` как «${owner.route}»`))
+      } else if (!owner) routeOwner.set(key, { file: a.file, index, route })
     }
 
     // обязательные разделы
