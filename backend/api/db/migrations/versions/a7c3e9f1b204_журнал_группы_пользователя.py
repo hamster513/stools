@@ -2,7 +2,8 @@
 
 `audit_event.role` теперь хранит группы пользователя через запятую (спека ролей §2), а не
 короткое имя роли: «Администраторы, Аналитики» или «<группа> (OIDC)» в String(16) не влезают,
-а обрезанная строка искажала бы в журнале, какие права были у пользователя.
+а обрезанная строка искажала бы в журнале, какие права были у пользователя. Колонка — Text: имя
+группы до 255 символов, групп у пользователя может быть несколько.
 
 Откат обрезает значения до 16 символов — иначе сужение колонки упало бы на длинных строках.
 
@@ -24,9 +25,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.alter_column("audit_event", "role", type_=sa.String(255), existing_type=sa.String(16), existing_nullable=True)
+    op.alter_column("audit_event", "role", type_=sa.Text(), existing_type=sa.String(16), existing_nullable=True)
 
 
 def downgrade() -> None:
     op.execute("UPDATE audit_event SET role = left(role, 16) WHERE length(role) > 16")
-    op.alter_column("audit_event", "role", type_=sa.String(16), existing_type=sa.String(255), existing_nullable=True)
+    op.alter_column("audit_event", "role", type_=sa.String(16), existing_type=sa.Text(), existing_nullable=True)

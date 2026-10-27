@@ -176,7 +176,7 @@ class AuditEvent(Base):
     )
     login: Mapped[str] = mapped_column(String(255))
     #: Группы пользователя через запятую на момент действия.
-    role: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str | None] = mapped_column(Text, nullable=True)
     method: Mapped[str] = mapped_column(String(8))
     path: Mapped[str] = mapped_column(Text)
     status: Mapped[int] = mapped_column(Integer)
