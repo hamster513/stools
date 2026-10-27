@@ -35,9 +35,20 @@ ARG CADDY_VERSION=v2.11.7
 ARG XNET_VERSION=v0.60.0
 RUN xcaddy build ${CADDY_VERSION} --with golang.org/x/net/http2@${XNET_VERSION} --output /usr/bin/caddy
 
-FROM caddy:2-alpine
+# Финальная стадия — чистый Alpine, а не caddy:2-alpine: тот уже несёт свой
+# бинарник Caddy (50 МБ) в нижнем слое, и копирование собранного поверх него
+# удваивало образ (121 МБ вместо 70). Каталоги, переменные и команда запуска
+# повторяют официальный образ, чтобы Caddyfile и том /data работали как раньше.
+FROM alpine:3.23
 # Пакеты Alpine обновляются при сборке: базовый образ отстаёт от исправлений (zlib).
-RUN apk upgrade --no-cache
+# mailcap даёт /etc/mime.types для file_server.
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates mailcap \
+    && mkdir -p /config/caddy /data/caddy /etc/caddy \
+    && chmod 1777 /config/caddy /data/caddy
+ENV XDG_CONFIG_HOME=/config XDG_DATA_HOME=/data
 COPY --from=caddybuild /usr/bin/caddy /usr/bin/caddy
 COPY --from=build /app/dist /srv
 COPY ops/Caddyfile /etc/caddy/Caddyfile
+WORKDIR /srv
+EXPOSE 80 443 443/udp 2019
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
