@@ -8,6 +8,7 @@ import { FullPageSpinner } from '@/components/ui/Spinner'
 import { LoginPage } from '@/pages/LoginPage'
 import { firstReadableModule } from '@/lib/can'
 import { atLeast, type Area } from '@/platform/access/types'
+import { HelpPage } from '@/help/pages/HelpPage'
 import { findModule } from '@/platform/modules'
 import { Forbidden } from '@/platform/settings/Forbidden'
 import { ModuleStubPage } from '@/platform/ModuleStubPage'
@@ -81,6 +82,14 @@ function Root() {
     return (
       <AppShell>
         <MyFindingsPage />
+      </AppShell>
+    )
+
+  // Справка — тоже над модулями: оглавление вместо сайдбара модуля.
+  if (path === '/help' || path.startsWith('/help/'))
+    return (
+      <AppShell>
+        <HelpPage />
       </AppShell>
     )
 

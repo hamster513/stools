@@ -3,12 +3,11 @@ import { X } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { Link, useRouter } from '@/lib/router'
 import { BY_SLUG, helpFor } from './index'
-import { filledLevels } from './levels'
+import { BLOCK_TITLE, LevelsBlock, WhereWho } from './ArticleBlocks'
 import { Markdown } from './Markdown'
 import { HELP_PANEL_ID } from './layout'
 
 const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
-const BLOCK_TITLE = 'mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase'
 
 /**
  * Панель подсказки справа: короткая часть статьи текущей страницы. Без затемнения, страница под ней
@@ -43,8 +42,6 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
 
   // helpFor пишет предупреждение в dev: считаем один раз на адрес, а не на каждый рендер.
   const article = useMemo(() => (open ? helpFor(path).article : null), [open, path])
-  const levels = article ? filledLevels(article.levels) : []
-  const hasLevels = article !== null && article.group !== 'start' && article.group !== 'glossary'
   const what = article?.sections['Что это']
 
   return (
@@ -62,12 +59,7 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
           <div className="flex items-start justify-between gap-2 border-b border-grid py-3 pr-14 pl-4">
             <div className="min-w-0">
               <h2 ref={headingRef} tabIndex={-1} className="text-sm font-semibold text-text outline-none">{article.title}</h2>
-              {article.where && (
-                <p className="mt-1 text-xs text-text-secondary">
-                  Где: {article.where}
-                  {hasLevels && levels.length > 0 && <> · Кому: {levels[0].label}</>}
-                </p>
-              )}
+              <WhereWho article={article} className="mt-1 text-xs" />
             </div>
             <button type="button" onClick={onClose} aria-label="Закрыть справку" className={cn('rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text', FOCUS)}>
               <X size={16} aria-hidden />
@@ -81,19 +73,7 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
                 <Markdown source={what} />
               </section>
             )}
-            {hasLevels && levels.length > 0 && (
-              <section className="mb-4">
-                <div className={BLOCK_TITLE}>Что здесь можно</div>
-                <dl className="flex flex-col gap-2">
-                  {levels.map((l) => (
-                    <div key={l.label}>
-                      <dt className="font-semibold text-text">{l.label}</dt>
-                      <dd className="leading-relaxed text-text-secondary">{l.text}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            )}
+            <LevelsBlock article={article} />
             {article.concepts.length > 0 && (
               <section className="mb-2">
                 <div className={BLOCK_TITLE}>Понятия</div>

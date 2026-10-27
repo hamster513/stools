@@ -1,4 +1,4 @@
-import { ListChecks, LogOut, Moon, Settings2, Shield, Sun } from 'lucide-react'
+import { CircleHelp, ListChecks, LogOut, Moon, Settings2, Shield, Sun } from 'lucide-react'
 import { useLogout, useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -121,6 +121,20 @@ export function ModuleRail() {
           title="Настройки"
         >
           <Settings2 size={16} aria-hidden />
+        </Link>
+        {/* Справка: раздел со всеми статьями. Вопросик в углу окна открывает подсказку к странице, цель одна. */}
+        <Link
+          to="/help"
+          className={cn(
+            'rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text',
+            FOCUS,
+            (path === '/help' || path.startsWith('/help/')) && 'bg-row-selected text-text',
+          )}
+          aria-label="Справка"
+          aria-current={path === '/help' || path.startsWith('/help/') ? 'page' : undefined}
+          title="Справка"
+        >
+          <CircleHelp size={16} aria-hidden />
         </Link>
         {/* Тема — не настройка администратора: за экраном сидит каждый,
             и менять её надо там, где сидишь, а не через раздел настроек. */}
