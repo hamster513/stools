@@ -42,11 +42,11 @@ export function matchRoute(pattern: string, path: string): number | null {
  * иначе статья корня модуля (`routes` содержит ровно `/<первый сегмент>`), fallback 'module';
  * иначе статья `stools`, fallback 'root'. Нет и её — исключение.
  */
-export function articleForPath(
-  articles: ArticleMeta[],
+export function articleForPath<T extends ArticleMeta>(
+  articles: T[],
   path: string,
-): { article: ArticleMeta; fallback: 'none' | 'module' | 'root' } {
-  let best: { article: ArticleMeta; score: number; wild: boolean } | null = null
+): { article: T; fallback: 'none' | 'module' | 'root' } {
+  let best: { article: T; score: number; wild: boolean } | null = null
   for (const article of articles) {
     for (const route of article.routes) {
       const score = matchRoute(route, path)

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run check:help && tsc -b && vite build",
+    "check:help": "node scripts/check-help.ts --no-coverage",
     "lint": "eslint .",
     "test:help": "node --test \"src/help/core/*.test.ts\"",
     "preview": "vite preview"
@@ -19,7 +20,9 @@
     "lucide-react": "^0.544.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "recharts": "^2.15.4"
+    "react-markdown": "^10.1.0",
+    "recharts": "^2.15.4",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.37.0",
