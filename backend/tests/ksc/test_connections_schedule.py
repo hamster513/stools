@@ -104,7 +104,9 @@ def test_auditor_reads_but_cannot_change_schedule(auth_client: TestClient, clien
     assert auditor.get(url).status_code == 200
     assert auditor.put(url, json=SCHEDULE).status_code == 403
     assert auditor.delete(url).status_code == 403
-    assert client_as("analyst").put(url, json=SCHEDULE).status_code == 200
+    # Расписание подключения — настройка модуля: аналитику нельзя, администратору KSC можно.
+    assert client_as("analyst").put(url, json=SCHEDULE).status_code == 403
+    assert client_as({"ksc": "admin"}).put(url, json=SCHEDULE).status_code == 200
 
 
 def test_scheduler_tick_runs_collect(

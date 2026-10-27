@@ -374,10 +374,10 @@ def test_failing_assets_never_fail_the_import(db_session: Session, app_settings:
 
 
 def test_sync_schedule_routes(db_session: Session, app_settings: Any, client_as: Any) -> None:
-    analyst = client_as("analyst")
+    admin = client_as({"assets": "admin"})
     url = "/api/assets/sync/schedule"
-    assert analyst.get(url).json() is None
-    r = analyst.put(url, json={"interval_hours": 6, "window_from": "01:00", "window_to": "04:00", "enabled": True})
+    assert admin.get(url).json() is None
+    r = admin.put(url, json={"interval_hours": 6, "window_from": "01:00", "window_to": "04:00", "enabled": True})
     assert r.status_code == 200, r.text
     body = r.json()
     assert (body["interval_hours"], body["window_from"], body["window_to"], body["enabled"]) == (6, "01:00", "04:00", True)
@@ -385,13 +385,13 @@ def test_sync_schedule_routes(db_session: Session, app_settings: Any, client_as:
     db_session.expire_all()
     sched = db_session.execute(select(PlatformSchedule)).scalar_one()
     assert (sched.module, sched.kind, sched.target_id) == ("assets", "sync", 0)
-    assert analyst.get(url).json()["id"] == sched.id
-    r = analyst.put(url, json={"interval_hours": 12, "window_from": None, "window_to": None, "enabled": False})
+    assert admin.get(url).json()["id"] == sched.id
+    r = admin.put(url, json={"interval_hours": 12, "window_from": None, "window_to": None, "enabled": False})
     assert r.status_code == 200 and r.json()["id"] == sched.id and r.json()["enabled"] is False
-    assert analyst.put(url, json={"interval_hours": 12, "window_from": "02:00", "window_to": None, "enabled": True}).status_code == 422
-    assert analyst.put(url, json={"interval_hours": 0, "window_from": None, "window_to": None, "enabled": True}).status_code == 422
-    assert analyst.delete(url).status_code == 204
-    assert analyst.get(url).json() is None
+    assert admin.put(url, json={"interval_hours": 12, "window_from": "02:00", "window_to": None, "enabled": True}).status_code == 422
+    assert admin.put(url, json={"interval_hours": 0, "window_from": None, "window_to": None, "enabled": True}).status_code == 422
+    assert admin.delete(url).status_code == 204
+    assert admin.get(url).json() is None
     db_session.expire_all()
     assert db_session.execute(select(PlatformSchedule)).scalars().all() == []
 
@@ -406,7 +406,7 @@ def test_auditor_cannot_change_sync_schedule(db_session: Session, app_settings: 
 
 def test_scheduler_tick_runs_sync(loaded: Session, client_as: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sync_service, "spawn", lambda fn: fn())
-    r = client_as("analyst").put("/api/assets/sync/schedule", json={"interval_hours": 1, "window_from": None, "window_to": None, "enabled": True})
+    r = client_as({"assets": "admin"}).put("/api/assets/sync/schedule", json={"interval_hours": 1, "window_from": None, "window_to": None, "enabled": True})
     assert r.status_code == 200, r.text
     started = tick(loaded, dt.datetime.now(dt.UTC) + dt.timedelta(hours=2))
     assert len(started) == 1

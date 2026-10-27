@@ -165,8 +165,8 @@ def zones(db_session: Session) -> None:
 
 
 @pytest.fixture
-def analyst(zones: None, client_as: Callable[[str], TestClient]) -> TestClient:
-    return client_as("analyst")
+def assets_admin(zones: None, client_as: Callable[..., TestClient]) -> TestClient:
+    return client_as({"assets": "admin"})
 
 
 def add_network(c: TestClient, cidr: str, **extra: Any) -> dict[str, Any]:
@@ -186,129 +186,129 @@ def group(c: TestClient, network_id: int) -> tuple[str | None, str, int | None]:
     return n["zone"], n["zone_source"], n["zone_rule_id"]
 
 
-def test_rule_assigns_group_and_manual_wins(analyst: TestClient) -> None:
-    web = add_network(analyst, "10.10.0.0/24", title="APP_DMZ_WEB", tags=["prod"])
+def test_rule_assigns_group_and_manual_wins(assets_admin: TestClient) -> None:
+    web = add_network(assets_admin, "10.10.0.0/24", title="APP_DMZ_WEB", tags=["prod"])
     assert (web["zone"], web["zone_source"], web["zone_rule_id"]) == (None, "", None)
-    pinned = add_network(analyst, "10.10.1.0/24", title="APP_DMZ_DB", zone="Internal")
+    pinned = add_network(assets_admin, "10.10.1.0/24", title="APP_DMZ_DB", zone="Internal")
     assert pinned["zone_source"] == "manual"
 
-    r = add_rule(analyst, "name_prefix", " APP_DMZ_ ", "DMZ", note="приложения в DMZ")
+    r = add_rule(assets_admin, "name_prefix", " APP_DMZ_ ", "DMZ", note="приложения в DMZ")
     assert (r["position"], r["value"], r["enabled"], r["networks"]) == (1, "APP_DMZ_", True, 1)
-    assert group(analyst, web["id"]) == ("DMZ", "rule", r["id"])
+    assert group(assets_admin, web["id"]) == ("DMZ", "rule", r["id"])
     # Правило не перетирает группу, выбранную человеком.
-    assert group(analyst, pinned["id"]) == ("Internal", "manual", None)
+    assert group(assets_admin, pinned["id"]) == ("Internal", "manual", None)
 
     # Новая сеть под правило попадает сразу при создании.
-    new = add_network(analyst, "10.10.2.0/24", title="app_dmz_mail")
+    new = add_network(assets_admin, "10.10.2.0/24", title="app_dmz_mail")
     assert (new["zone"], new["zone_source"], new["zone_rule_id"]) == ("DMZ", "rule", r["id"])
 
     # Та же группа, присланная формой повторно, — не выбор человека; другая — выбор.
-    assert analyst.put(f"/api/assets/networks/{web['id']}", json={"title": "APP_DMZ_WEB", "zone": "DMZ"}).status_code == 200
-    assert group(analyst, web["id"]) == ("DMZ", "rule", r["id"])
-    assert analyst.put(f"/api/assets/networks/{web['id']}", json={"zone": "Guest"}).status_code == 200
-    assert group(analyst, web["id"]) == ("Guest", "manual", None)
+    assert assets_admin.put(f"/api/assets/networks/{web['id']}", json={"title": "APP_DMZ_WEB", "zone": "DMZ"}).status_code == 200
+    assert group(assets_admin, web["id"]) == ("DMZ", "rule", r["id"])
+    assert assets_admin.put(f"/api/assets/networks/{web['id']}", json={"zone": "Guest"}).status_code == 200
+    assert group(assets_admin, web["id"]) == ("Guest", "manual", None)
     # «По правилам» возвращает сеть под правила.
-    assert analyst.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "rules"}).status_code == 200
-    assert group(analyst, web["id"]) == ("DMZ", "rule", r["id"])
+    assert assets_admin.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "rules"}).status_code == 200
+    assert group(assets_admin, web["id"]) == ("DMZ", "rule", r["id"])
     # «Вручную» закрепляет текущую группу, даже ту же самую.
-    assert analyst.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "manual"}).status_code == 200
-    assert group(analyst, web["id"]) == ("DMZ", "manual", None)
+    assert assets_admin.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "manual"}).status_code == 200
+    assert group(assets_admin, web["id"]) == ("DMZ", "manual", None)
     # Явное «без группы» — тоже выбор человека.
-    assert analyst.put(f"/api/assets/networks/{new['id']}", json={"zone": None}).status_code == 200
-    assert group(analyst, new["id"]) == (None, "manual", None)
+    assert assets_admin.put(f"/api/assets/networks/{new['id']}", json={"zone": None}).status_code == 200
+    assert group(assets_admin, new["id"]) == (None, "manual", None)
 
     # Переименование сети под правилами пересчитывает её группу.
-    other = add_network(analyst, "10.10.3.0/24", title="APP_DMZ_X")
-    assert analyst.put(f"/api/assets/networks/{other['id']}", json={"title": "Office"}).status_code == 200
-    assert group(analyst, other["id"]) == (None, "", None)
+    other = add_network(assets_admin, "10.10.3.0/24", title="APP_DMZ_X")
+    assert assets_admin.put(f"/api/assets/networks/{other['id']}", json={"title": "Office"}).status_code == 200
+    assert group(assets_admin, other["id"]) == (None, "", None)
 
 
-def test_hand_made_public_network_gets_no_external(analyst: TestClient) -> None:
+def test_hand_made_public_network_gets_no_external(assets_admin: TestClient) -> None:
     # Запасной External — только у сетей RackTables (спека §4; см. test_racktables_import_applies_rules).
-    pub = add_network(analyst, "8.8.4.0/29", title="ISP")
+    pub = add_network(assets_admin, "8.8.4.0/29", title="ISP")
     assert (pub["zone"], pub["zone_source"]) == (None, "")
-    assert analyst.post(f"{RULES}/apply").json() == {"changed": 0}
+    assert assets_admin.post(f"{RULES}/apply").json() == {"changed": 0}
     # Правило на описанную вручную публичную сеть действует.
-    r = add_rule(analyst, "cidr", "8.8.4.0/24", "DMZ")
-    assert group(analyst, pub["id"]) == ("DMZ", "rule", r["id"])
+    r = add_rule(assets_admin, "cidr", "8.8.4.0/24", "DMZ")
+    assert group(assets_admin, pub["id"]) == ("DMZ", "rule", r["id"])
 
 
-def test_stored_unknown_match_is_skipped(analyst: TestClient, db_session: Session, caplog: pytest.LogCaptureFixture) -> None:
-    web = add_network(analyst, "10.10.0.0/24", title="APP_DMZ_WEB")
-    good = add_rule(analyst, "name_prefix", "APP_DMZ_", "DMZ")
+def test_stored_unknown_match_is_skipped(assets_admin: TestClient, db_session: Session, caplog: pytest.LogCaptureFixture) -> None:
+    web = add_network(assets_admin, "10.10.0.0/24", title="APP_DMZ_WEB")
+    good = add_rule(assets_admin, "name_prefix", "APP_DMZ_", "DMZ")
     # Правило с видом, которого больше нет, первым по порядку — записано в обход проверки.
     db_session.add(NetworkZoneRule(position=0, enabled=True, zone="Guest", match="name_regex", value=".*", note=""))
     db_session.commit()
-    analyst.put(f"/api/assets/networks/{web['id']}", json={"zone": "Internal"})
-    analyst.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "rules"})
+    assets_admin.put(f"/api/assets/networks/{web['id']}", json={"zone": "Internal"})
+    assets_admin.put(f"/api/assets/networks/{web['id']}", json={"zone_mode": "rules"})
     caplog.clear()
     with caplog.at_level("WARNING", logger="stools.assets"):
-        r = analyst.post(f"{RULES}/apply")
+        r = assets_admin.post(f"{RULES}/apply")
     assert r.status_code == 200
     # Пересчёт дошёл до конца, остальные правила действуют, предупреждение — одно на пересчёт.
-    assert group(analyst, web["id"]) == ("DMZ", "rule", good["id"])
+    assert group(assets_admin, web["id"]) == ("DMZ", "rule", good["id"])
     assert [m for m in caplog.messages if "неизвестным видом" in m] == [
         "правила групп сетей с неизвестным видом пропущены: №0 (id 2, name_regex)",
     ]
-    assert analyst.post(f"{RULES}/preview", json={"match": "name_prefix", "value": "APP_", "zone": "DMZ"}).status_code == 200
+    assert assets_admin.post(f"{RULES}/preview", json={"match": "name_prefix", "value": "APP_", "zone": "DMZ"}).status_code == 200
 
 
-def test_glob_rule_assigns_group(analyst: TestClient) -> None:
-    web = add_network(analyst, "10.10.0.0/24", title="app_dmz_web")
-    mail = add_network(analyst, "10.10.1.0/24", title="Internet_DMZ_01")
-    other = add_network(analyst, "10.10.2.0/24", title="APP_DDMZ_X")
-    r = add_rule(analyst, "name_glob", " APP_?MZ_** ", "DMZ")
+def test_glob_rule_assigns_group(assets_admin: TestClient) -> None:
+    web = add_network(assets_admin, "10.10.0.0/24", title="app_dmz_web")
+    mail = add_network(assets_admin, "10.10.1.0/24", title="Internet_DMZ_01")
+    other = add_network(assets_admin, "10.10.2.0/24", title="APP_DDMZ_X")
+    r = add_rule(assets_admin, "name_glob", " APP_?MZ_** ", "DMZ")
     assert r["value"] == "APP_?MZ_*"
-    assert group(analyst, web["id"]) == ("DMZ", "rule", r["id"])
-    assert group(analyst, mail["id"]) == (None, "", None)
-    assert group(analyst, other["id"]) == (None, "", None)
-    p = analyst.post(f"{RULES}/preview", json={"match": "name_glob", "value": "*DMZ*", "zone": "Guest"}).json()
+    assert group(assets_admin, web["id"]) == ("DMZ", "rule", r["id"])
+    assert group(assets_admin, mail["id"]) == (None, "", None)
+    assert group(assets_admin, other["id"]) == (None, "", None)
+    p = assets_admin.post(f"{RULES}/preview", json={"match": "name_glob", "value": "*DMZ*", "zone": "Guest"}).json()
     assert p["count"] == 2  # web уже забрало правило выше
 
 
-def test_rule_edit_delete_and_order_recompute(analyst: TestClient, db_session: Session) -> None:
-    web = add_network(analyst, "10.10.0.0/24", title="APP_DMZ_WEB", tags=["prod"])
-    lab = add_network(analyst, "10.20.0.0/24", title="lab")
-    by_tag = add_rule(analyst, "tag", "PROD", "Internal")
-    by_name = add_rule(analyst, "name_prefix", "APP_DMZ_", "DMZ")
+def test_rule_edit_delete_and_order_recompute(assets_admin: TestClient, db_session: Session) -> None:
+    web = add_network(assets_admin, "10.10.0.0/24", title="APP_DMZ_WEB", tags=["prod"])
+    lab = add_network(assets_admin, "10.20.0.0/24", title="lab")
+    by_tag = add_rule(assets_admin, "tag", "PROD", "Internal")
+    by_name = add_rule(assets_admin, "name_prefix", "APP_DMZ_", "DMZ")
     assert by_name["position"] == 2
-    assert group(analyst, web["id"]) == ("Internal", "rule", by_tag["id"])
+    assert group(assets_admin, web["id"]) == ("Internal", "rule", by_tag["id"])
 
     # Перестановка меняет итог.
-    r = analyst.put(f"{RULES}/order", json=[by_name["id"], by_tag["id"]])
+    r = assets_admin.put(f"{RULES}/order", json=[by_name["id"], by_tag["id"]])
     assert r.status_code == 200, r.text
     assert [(x["id"], x["position"]) for x in r.json()] == [(by_name["id"], 1), (by_tag["id"], 2)]
-    assert group(analyst, web["id"]) == ("DMZ", "rule", by_name["id"])
-    assert analyst.put(f"{RULES}/order", json=[by_name["id"]]).status_code == 422
-    assert analyst.put(f"{RULES}/order", json=[by_name["id"], by_name["id"]]).status_code == 422
+    assert group(assets_admin, web["id"]) == ("DMZ", "rule", by_name["id"])
+    assert assets_admin.put(f"{RULES}/order", json=[by_name["id"]]).status_code == 422
+    assert assets_admin.put(f"{RULES}/order", json=[by_name["id"], by_name["id"]]).status_code == 422
 
     # Правка правила: выключенное не срабатывает.
-    r = analyst.put(f"{RULES}/{by_name['id']}", json={"match": "name_prefix", "value": "APP_DMZ_", "zone": "DMZ", "enabled": False})
+    r = assets_admin.put(f"{RULES}/{by_name['id']}", json={"match": "name_prefix", "value": "APP_DMZ_", "zone": "DMZ", "enabled": False})
     assert r.status_code == 200 and r.json()["enabled"] is False
-    assert group(analyst, web["id"]) == ("Internal", "rule", by_tag["id"])
-    r = analyst.put(f"{RULES}/{by_tag['id']}", json={"match": "cidr", "value": "10.20.0.0/16", "zone": "Guest"})
+    assert group(assets_admin, web["id"]) == ("Internal", "rule", by_tag["id"])
+    r = assets_admin.put(f"{RULES}/{by_tag['id']}", json={"match": "cidr", "value": "10.20.0.0/16", "zone": "Guest"})
     assert r.status_code == 200 and r.json()["value"] == "10.20.0.0/16"
-    assert group(analyst, web["id"]) == (None, "", None)
-    assert group(analyst, lab["id"]) == ("Guest", "rule", by_tag["id"])
+    assert group(assets_admin, web["id"]) == (None, "", None)
+    assert group(assets_admin, lab["id"]) == ("Guest", "rule", by_tag["id"])
 
     # Удаление правила: его сети пересчитаны, номера остальных — подряд.
-    assert analyst.delete(f"{RULES}/{by_tag['id']}").status_code == 204
-    assert group(analyst, lab["id"]) == (None, "", None)
-    assert [(x["id"], x["position"]) for x in analyst.get(RULES).json()] == [(by_name["id"], 1)]
-    assert analyst.delete(f"{RULES}/{by_tag['id']}").status_code == 404
+    assert assets_admin.delete(f"{RULES}/{by_tag['id']}").status_code == 204
+    assert group(assets_admin, lab["id"]) == (None, "", None)
+    assert [(x["id"], x["position"]) for x in assets_admin.get(RULES).json()] == [(by_name["id"], 1)]
+    assert assets_admin.delete(f"{RULES}/{by_tag['id']}").status_code == 404
 
     # «Применить правила» доводит до правил сети, тронутые в обход ручек.
-    analyst.put(f"{RULES}/{by_name['id']}", json={"match": "name_prefix", "value": "APP_DMZ_", "zone": "DMZ"})
+    assets_admin.put(f"{RULES}/{by_name['id']}", json={"match": "name_prefix", "value": "APP_DMZ_", "zone": "DMZ"})
     row = db_session.get(Network, web["id"])
     assert row is not None
     row.zone, row.zone_rule_id = "Guest", None
     db_session.commit()
-    r = analyst.post(f"{RULES}/apply")
+    r = assets_admin.post(f"{RULES}/apply")
     assert r.status_code == 200 and r.json() == {"changed": 1}
-    assert group(analyst, web["id"]) == ("DMZ", "rule", by_name["id"])
+    assert group(assets_admin, web["id"]) == ("DMZ", "rule", by_name["id"])
 
 
-def test_rule_validation(analyst: TestClient) -> None:
+def test_rule_validation(assets_admin: TestClient) -> None:
     for body in [
         {"match": "name_glob", "value": "a" * 201, "zone": "DMZ"},
         {"match": "name_glob", "value": "  ", "zone": "DMZ"},
@@ -318,73 +318,73 @@ def test_rule_validation(analyst: TestClient) -> None:
         {"match": "tag", "value": "prod", "zone": "Nope"},
         {"match": "tag", "value": "x" * 501, "zone": "DMZ"},
     ]:
-        r = analyst.post(RULES, json=body)
+        r = assets_admin.post(RULES, json=body)
         assert r.status_code == 422, (body, r.text)
-    r = analyst.post(RULES, json={"match": "name_regex", "value": "APP_.*", "zone": "DMZ"})
+    r = assets_admin.post(RULES, json={"match": "name_regex", "value": "APP_.*", "zone": "DMZ"})
     assert r.status_code == 422
     assert r.json()["detail"] == "тип правила name_regex больше не поддерживается — используйте шаблон со звёздочкой"
-    rid = add_rule(analyst, "tag", "prod", "DMZ")["id"]
-    r = analyst.put(f"{RULES}/{rid}", json={"match": "name_regex", "value": "APP_.*", "zone": "DMZ"})
+    rid = add_rule(assets_admin, "tag", "prod", "DMZ")["id"]
+    r = assets_admin.put(f"{RULES}/{rid}", json={"match": "name_regex", "value": "APP_.*", "zone": "DMZ"})
     assert r.status_code == 422 and "name_regex больше не поддерживается" in r.json()["detail"]
-    assert [x["match"] for x in analyst.get(RULES).json()] == ["tag"]
-    assert analyst.put(f"{RULES}/999", json={"match": "tag", "value": "prod", "zone": "DMZ"}).status_code == 404
+    assert [x["match"] for x in assets_admin.get(RULES).json()] == ["tag"]
+    assert assets_admin.put(f"{RULES}/999", json={"match": "tag", "value": "prod", "zone": "DMZ"}).status_code == 404
 
 
-def test_preview_counts_without_writing(analyst: TestClient, db_session: Session) -> None:
-    web = add_network(analyst, "10.10.0.0/24", title="APP_DMZ_WEB", tags=["prod"])
-    add_network(analyst, "10.10.1.0/24", title="APP_DMZ_DB")
-    add_network(analyst, "10.10.2.0/24", title="APP_DMZ_PIN", zone="Internal")  # ручная — не в счёт
-    add_network(analyst, "10.20.0.0/24", title="Internet_DMZ_01")
-    by_tag = add_rule(analyst, "tag", "prod", "Internal")
+def test_preview_counts_without_writing(assets_admin: TestClient, db_session: Session) -> None:
+    web = add_network(assets_admin, "10.10.0.0/24", title="APP_DMZ_WEB", tags=["prod"])
+    add_network(assets_admin, "10.10.1.0/24", title="APP_DMZ_DB")
+    add_network(assets_admin, "10.10.2.0/24", title="APP_DMZ_PIN", zone="Internal")  # ручная — не в счёт
+    add_network(assets_admin, "10.20.0.0/24", title="Internet_DMZ_01")
+    by_tag = add_rule(assets_admin, "tag", "prod", "Internal")
 
     body = {"match": "name_prefix", "value": "APP_DMZ_", "zone": "DMZ"}
-    r = analyst.post(f"{RULES}/preview", json=body)
+    r = assets_admin.post(f"{RULES}/preview", json=body)
     assert r.status_code == 200, r.text
     # В конце списка: сеть с тегом prod забирает правило выше.
     assert r.json() == {"count": 1, "sample": [{"id": web["id"] + 1, "cidr": "10.10.1.0/24", "title": "APP_DMZ_DB", "zone_before": None}]}
     # Первым по порядку — забирает и её.
-    r = analyst.post(f"{RULES}/preview", json={**body, "position": 1})
+    r = assets_admin.post(f"{RULES}/preview", json={**body, "position": 1})
     assert r.json()["count"] == 2
     assert r.json()["sample"][0] == {"id": web["id"], "cidr": "10.10.0.0/24", "title": "APP_DMZ_WEB", "zone_before": "Internal"}
-    assert analyst.post(f"{RULES}/preview", json={**body, "value": "APP_.*", "match": "name_regex"}).status_code == 422
+    assert assets_admin.post(f"{RULES}/preview", json={**body, "value": "APP_.*", "match": "name_regex"}).status_code == 422
 
     # Ничего не записано.
     db_session.expire_all()
-    assert [r["id"] for r in analyst.get(RULES).json()] == [by_tag["id"]]
-    assert group(analyst, web["id"]) == ("Internal", "rule", by_tag["id"])
+    assert [r["id"] for r in assets_admin.get(RULES).json()] == [by_tag["id"]]
+    assert group(assets_admin, web["id"]) == ("Internal", "rule", by_tag["id"])
 
 
-def test_preview_sample_is_capped(analyst: TestClient) -> None:
+def test_preview_sample_is_capped(assets_admin: TestClient) -> None:
     for i in range(25):
-        add_network(analyst, f"10.30.{i}.0/24", title=f"APP_DMZ_{i}")
-    r = analyst.post(f"{RULES}/preview", json={"match": "name_prefix", "value": "app_dmz", "zone": "DMZ"}).json()
+        add_network(assets_admin, f"10.30.{i}.0/24", title=f"APP_DMZ_{i}")
+    r = assets_admin.post(f"{RULES}/preview", json={"match": "name_prefix", "value": "app_dmz", "zone": "DMZ"}).json()
     assert r["count"] == 25 and len(r["sample"]) == 20
 
 
-def test_zone_attributes_and_delete_guard(analyst: TestClient) -> None:
-    listed = {z["name"]: z for z in analyst.get("/api/assets/zones").json()}
+def test_zone_attributes_and_delete_guard(assets_admin: TestClient) -> None:
+    listed = {z["name"]: z for z in assets_admin.get("/api/assets/zones").json()}
     assert {k: listed["DMZ"][k] for k in ("placement", "internet_facing", "confidential")} == {
         "placement": "", "internet_facing": False, "confidential": False,
     }
-    r = analyst.patch("/api/assets/zones/DMZ", json={"title": "Application DMZ", "placement": "dmz", "confidential": True})
+    r = assets_admin.patch("/api/assets/zones/DMZ", json={"title": "Application DMZ", "placement": "dmz", "confidential": True})
     assert r.status_code == 200, r.text
     assert (r.json()["title"], r.json()["placement"], r.json()["confidential"], r.json()["internet_facing"]) == ("Application DMZ", "dmz", True, False)
-    assert {z["name"]: z for z in analyst.get("/api/assets/zones").json()}["DMZ"]["placement"] == "dmz"
-    assert analyst.patch("/api/assets/zones/DMZ", json={"placement": "cloud"}).status_code == 422
-    assert analyst.patch("/api/assets/zones/DMZ", json={"title": None}).status_code == 422
-    assert analyst.patch("/api/assets/zones/Nope", json={"title": "x"}).status_code == 404
+    assert {z["name"]: z for z in assets_admin.get("/api/assets/zones").json()}["DMZ"]["placement"] == "dmz"
+    assert assets_admin.patch("/api/assets/zones/DMZ", json={"placement": "cloud"}).status_code == 422
+    assert assets_admin.patch("/api/assets/zones/DMZ", json={"title": None}).status_code == 422
+    assert assets_admin.patch("/api/assets/zones/Nope", json={"title": "x"}).status_code == 404
 
-    r = analyst.post("/api/assets/zones", json={"name": "Inet", "placement": "external", "internet_facing": True})
+    r = assets_admin.post("/api/assets/zones", json={"name": "Inet", "placement": "external", "internet_facing": True})
     assert r.status_code == 201 and (r.json()["placement"], r.json()["internet_facing"]) == ("external", True)
 
     # Группу, на которую ссылается правило, удалить нельзя.
-    add_rule(analyst, "name_prefix", "Internet_DMZ", "Inet")
-    r = analyst.delete("/api/assets/zones/Inet")
+    add_rule(assets_admin, "name_prefix", "Internet_DMZ", "Inet")
+    r = assets_admin.delete("/api/assets/zones/Inet")
     assert r.status_code == 409 and "правил" in r.json()["detail"]
 
 
 def test_auditor_reads_rules_but_cannot_write(zones: None, client_as: Callable[[str], TestClient]) -> None:
-    add_rule(client_as("analyst"), "tag", "prod", "Internal")
+    add_rule(client_as({"assets": "admin"}), "tag", "prod", "Internal")
     auditor = client_as("auditor")
     assert auditor.get(RULES).status_code == 200
     rid = auditor.get(RULES).json()[0]["id"]
@@ -404,20 +404,20 @@ def inline_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rt_service, "spawn", lambda fn: fn())
 
 
-def test_racktables_import_applies_rules(analyst: TestClient, db_session: Session, inline_spawn: None) -> None:
-    rule_id = add_rule(analyst, "name_prefix", "APP_DMZ_", "DMZ")["id"]
+def test_racktables_import_applies_rules(assets_admin: TestClient, db_session: Session, inline_spawn: None) -> None:
+    rule_id = add_rule(assets_admin, "name_prefix", "APP_DMZ_", "DMZ")["id"]
     with FakeRacktables() as rt:
         rt.add_network("10", "10.10.0.0/24", "APP_DMZ_WEB", tags=["prod"])
         rt.add_network("11", "10.20.0.0/24", "Office")
         rt.add_network("13", "8.8.4.0/29", "ISP: public block")
-        r = analyst.post("/api/assets/racktables", json={
+        r = assets_admin.post("/api/assets/racktables", json={
             "title": "RT", "url": rt.url, "username": rt.username, "password": rt.password, "verify_tls": False, "rate_per_s": 100,
         })
         assert r.status_code == 201, r.text
         conn = r.json()["id"]
 
         def run() -> None:
-            job = analyst.get(f"/api/assets/jobs/{analyst.post(f'/api/assets/racktables/{conn}/run').json()['job_id']}").json()
+            job = assets_admin.get(f"/api/assets/jobs/{assets_admin.post(f'/api/assets/racktables/{conn}/run').json()['job_id']}").json()
             assert job["status"] == "done", job
 
         run()
@@ -428,7 +428,7 @@ def test_racktables_import_applies_rules(analyst: TestClient, db_session: Sessio
 
         # Группа, выбранная человеком у сети RackTables, переживает импорт.
         office = nets["10.20.0.0/24"].id
-        assert analyst.put(f"/api/assets/networks/{office}", json={"zone": "Internal"}).status_code == 200
+        assert assets_admin.put(f"/api/assets/networks/{office}", json={"zone": "Internal"}).status_code == 200
         # Переименование в RackTables пересчитывает группу по правилу.
         rt.add_network("10", "10.10.0.0/24", "WEB")
         run()

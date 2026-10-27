@@ -32,7 +32,7 @@ def test_login_logout_and_failed_login_are_recorded(client: TestClient, test_use
         ("/api/auth/logout", 204),
     ]
     assert events[0].user_id is None and events[0].login == TEST_LOGIN
-    assert events[1].user_id == test_user.id and events[1].role == "admin"
+    assert events[1].user_id == test_user.id and events[1].role == "Администраторы"
 
 
 def test_reads_are_not_recorded_but_writes_and_denials_are(
@@ -46,10 +46,10 @@ def test_reads_are_not_recorded_but_writes_and_denials_are(
     #: Между этими двумя записями ложится ещё одна — вход аудитора внутри
     #: client_as(); ищем по содержимому, а не по хвосту списка.
     events = _events(db_session)
-    admin_write = next(e for e in events if e.path == "/api/settings/security" and e.role == "admin")
+    admin_write = next(e for e in events if e.path == "/api/settings/security" and e.role == "Администраторы")
     denied_write = next(e for e in events if e.path == "/api/settings/security" and e.status == 403)
     assert (admin_write.method, admin_write.path, admin_write.status) == ("PUT", "/api/settings/security", 204)
-    assert (denied_write.status, denied_write.role) == (403, "auditor")
+    assert (denied_write.status, denied_write.role) == (403, "Аудиторы")
 
 
 def test_summary_keeps_query_but_never_body(auth_client: TestClient, db_session: Any) -> None:

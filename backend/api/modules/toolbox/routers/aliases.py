@@ -11,12 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db, get_sessionmaker
-from api.db.models import ROLE_ADMIN, AppUser
-from api.deps import get_current_user
 from api.modules.toolbox.routers.scrub import require_analyst
 from api.modules.toolbox.services.aliases import export_rows, forget_alias, list_aliases
 from api.platform.export import Column, export_response
-from api.rbac import allows
+from api.platform.services.access import Access, allows
+from api.rbac import current_access
 
 router = APIRouter(prefix="/aliases", tags=["toolbox"])
 
@@ -44,12 +43,12 @@ def get_aliases(
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    user: AppUser = Depends(get_current_user),
+    access: Access = Depends(current_access),
 ) -> AliasPage:
     # Сводка — до проверки роли: отказ попадает в журнал, а без своей сводки туда ушла бы строка
     # запроса с настоящим значением из поиска.
     request.state.audit_summary = "таблица соответствий: просмотр"
-    require_analyst(user)
+    require_analyst(access)
     rows, total = list_aliases(db, q=q, kind=kind, limit=limit, offset=offset)
     return AliasPage(items=[AliasView.model_validate(r, from_attributes=True) for r in rows], total=total)
 
@@ -71,12 +70,12 @@ def export(
     fmt: str = Query(default="csv", alias="format"),
     q: str = "",
     kind: str | None = None,
-    user: AppUser = Depends(get_current_user),
+    access: Access = Depends(current_access),
 ) -> StreamingResponse:
     # Сводка — до проверки роли, как у списка: иначе отказ ушёл бы в журнал со строкой запроса,
     # а в `q` — настоящее значение.
     request.state.audit_summary = "таблица соответствий: выгрузка"
-    require_analyst(user)
+    require_analyst(access)
 
     def rows() -> Iterator[dict[str, Any]]:
         # CSV читается после выхода из ручки: у потока своя сессия, сессия запроса к этому времени закрыта.
@@ -87,16 +86,16 @@ def export(
 
 
 @router.get("/export.csv")
-def export_csv(request: Request, user: AppUser = Depends(get_current_user)) -> StreamingResponse:
+def export_csv(request: Request, access: Access = Depends(current_access)) -> StreamingResponse:
     """Старый путь — тот же CSV, что `/export?format=csv` без фильтров."""
-    return export(request, "csv", "", None, user)
+    return export(request, "csv", "", None, access)
 
 
 @router.delete("/{alias_id}", status_code=status.HTTP_204_NO_CONTENT)
-def forget(alias_id: int, request: Request, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> Response:
+def forget(alias_id: int, request: Request, db: Session = Depends(get_db), access: Access = Depends(current_access)) -> Response:
     # Забытый псевдоним может достаться другому значению — старые файлы с ним переведутся иначе.
-    if not allows(user.role, ROLE_ADMIN):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="нужна роль: администратор")
+    if not allows(access, "toolbox", "admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="нет доступа: toolbox, нужен уровень администратор")
     try:
         forget_alias(db, alias_id)
     except LookupError as exc:

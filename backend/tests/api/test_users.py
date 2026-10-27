@@ -7,7 +7,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from api.crypto import hash_token
-from api.db.models import SessionRow
+from api.db.models import AREAS, SessionRow
 from tests.api.conftest import TEST_LOGIN
 
 
@@ -20,11 +20,13 @@ def _create(client: TestClient, login: str, role: str = "analyst") -> dict[str, 
     return response.json()
 
 
-def test_me_has_role_and_name(auth_client: TestClient) -> None:
-    assert auth_client.get("/api/auth/me").json() == {
+def test_me_has_access_groups_and_name(auth_client: TestClient) -> None:
+    body = auth_client.get("/api/auth/me").json()
+    assert [(g["name"], g["source"]) for g in body.pop("groups")] == [("Администраторы", "local")]
+    assert body == {
         "login": TEST_LOGIN,
         "display_name": None,
-        "role": "admin",
+        "access": dict.fromkeys(AREAS, "admin"),
         "theme": "dark",
         "auth_source": "local",
     }

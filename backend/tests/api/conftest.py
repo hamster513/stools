@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select
 
 import api.db.base as db_base
 import api.modules.ad.models
@@ -31,7 +31,8 @@ import api.modules.attack.models
 import api.modules.ksc.models
 import api.modules.siem.hunting.models
 import api.modules.vm.models  # noqa: F401 — модели модулей должны быть в реестре
-from api.db.models import AppUser
+from api.db.models import AccessGroup, AccessMembership, AccessRole, AccessRoleLevel, AppUser
+from api.platform.services.access import ensure_builtin
 from api.security import hash_password
 from tests.api.fake_oidc import FakeProvider
 from tests.conftest import truncate_all
@@ -178,12 +179,31 @@ def db_session(app_settings: Any) -> Iterator[Any]:
         session.close()
 
 
+#: Права пользователя теста: область → уровень (отсутствующая — `deny`).
+Levels = dict[str, str]
+#: Старые имена ролей — встроенные группы (их роли «Администратор», «Аналитик», «Аудитор»).
+BUILTIN_GROUP_OF = {"admin": "Администраторы", "analyst": "Аналитики", "auditor": "Аудиторы"}
+
+
+def _join(db: Any, user: AppUser, group: AccessGroup) -> None:
+    db.add(AccessMembership(user_id=user.id, group_id=group.id))
+    db.commit()
+
+
+def _builtin_group(db: Any, role: str) -> AccessGroup:
+    return db.scalars(select(AccessGroup).where(AccessGroup.name == BUILTIN_GROUP_OF[role])).one()
+
+
 @pytest.fixture
 def test_user(db_session: Any) -> AppUser:
+    """Администратор: член встроенной группы «Администраторы». Сиды групп сносит TRUNCATE
+    между тестами, поэтому они восстанавливаются здесь, до старта клиента."""
+    ensure_builtin(db_session)
     user = AppUser(login=TEST_LOGIN, password_hash=hash_password(TEST_PASSWORD))
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
+    _join(db_session, user, _builtin_group(db_session, "admin"))
     return user
 
 
@@ -206,28 +226,52 @@ def auth_client(client: TestClient, test_user: AppUser) -> TestClient:
 
 
 @pytest.fixture
-def make_user(db_session: Any) -> Callable[[str, str], AppUser]:
-    """Пользователь с заданной ролью; пароль у всех TEST_PASSWORD."""
+def make_user(db_session: Any) -> Callable[[str, Levels | str], AppUser]:
+    """Пользователь с паролем TEST_PASSWORD. `levels` — строка 'admin' | 'analyst' | 'auditor'
+    (член встроенной группы) или словарь «область → уровень» (своя роль и группа с именем логина)."""
 
-    def build(login: str, role: str) -> AppUser:
+    def build(login: str, levels: Levels | str) -> AppUser:
+        ensure_builtin(db_session)
+        if isinstance(levels, str):
+            group = _builtin_group(db_session, levels)
+            role = levels
+        else:
+            access_role = AccessRole(
+                name=login, description="", builtin=False,
+                levels=[AccessRoleLevel(area=a, level=lv) for a, lv in levels.items()],
+            )
+            group = AccessGroup(name=login, source="local", role=access_role)
+            db_session.add(group)
+            # Старая колонка ещё читается находками; права по ней — самые узкие.
+            role = "auditor"
         user = AppUser(login=login, password_hash=hash_password(TEST_PASSWORD), role=role)
         db_session.add(user)
         db_session.commit()
         db_session.refresh(user)
+        _join(db_session, user, group)
         return user
 
     return build
 
 
+def _login_for(levels: Levels | str) -> str:
+    if isinstance(levels, str):
+        return f"user-{levels}"
+    return "user-" + ("-".join(f"{a}-{lv}" for a, lv in sorted(levels.items())) or "none")
+
+
 @pytest.fixture
-def client_as(app_settings: Any, make_user: Callable[[str, str], AppUser]) -> Callable[[str], TestClient]:
-    """Отдельный клиент, вошедший под пользователем указанной роли."""
+def client_as(
+    app_settings: Any, make_user: Callable[[str, Levels | str], AppUser],
+) -> Callable[[Levels | str], TestClient]:
+    """Отдельный клиент, вошедший под новым пользователем с правами `levels` (как у make_user)."""
     from api.main import app
 
-    def login(role: str) -> TestClient:
-        make_user(f"user-{role}", role)
+    def login(levels: Levels | str) -> TestClient:
+        name = _login_for(levels)
+        make_user(name, levels)
         client = TestClient(app)
-        response = client.post("/api/auth/login", json={"login": f"user-{role}", "password": TEST_PASSWORD})
+        response = client.post("/api/auth/login", json={"login": name, "password": TEST_PASSWORD})
         assert response.status_code == 204, response.text
         return client
 

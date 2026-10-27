@@ -18,7 +18,9 @@ from api.crypto import hash_token
 from api.db.base import get_db
 from api.db.models import AppUser, AuditEvent, SessionRow
 from api.deps import get_current_user
+from api.platform.services.access import Access, groups_of
 from api.platform.services.security import load_security
+from api.rbac import current_access
 from api.security import hash_password, new_session_token, session_expiry, verify_password
 from api.settings import Settings, get_settings
 from api.timeutil import utcnow
@@ -64,10 +66,18 @@ class LoginRequest(BaseModel):
     password: str = Field(max_length=1024)
 
 
+class GroupRef(BaseModel):
+    id: int
+    name: str
+    source: str
+
+
 class MeResponse(BaseModel):
     login: str
     display_name: str | None = None
-    role: str
+    #: Область → уровень, по максимуму из групп; есть все области.
+    access: dict[str, str]
+    groups: list[GroupRef]
     theme: str
     auth_source: str
 
@@ -202,10 +212,13 @@ def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-def me(user: AppUser = Depends(get_current_user)) -> MeResponse:
+def me(
+    db: Session = Depends(get_db), user: AppUser = Depends(get_current_user), access: Access = Depends(current_access),
+) -> MeResponse:
     return MeResponse(
-        login=user.login, display_name=user.display_name, role=user.role, theme=user.theme,
-        auth_source=user.auth_source,
+        login=user.login, display_name=user.display_name, access=access,
+        groups=[GroupRef(id=g.id, name=g.name, source=g.source) for g in groups_of(db, user.id)],
+        theme=user.theme, auth_source=user.auth_source,
     )
 
 

@@ -26,13 +26,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db, get_sessionmaker
-from api.db.models import ROLE_ANALYST, AppUser
+from api.db.models import AppUser
 from api.deps import get_current_user
 from api.jobs import make_jobs_router, run_job
 from api.modules.toolbox.models import ToolboxJob
 from api.modules.toolbox.services import scrub
 from api.platform.export import Column, export_response
-from api.rbac import allows
+from api.platform.services.access import Access, allows
+from api.rbac import current_access
 from api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/scrub", tags=["toolbox"])
@@ -41,9 +42,9 @@ router.include_router(make_jobs_router(ToolboxJob, "toolbox"))
 MEDIA = {"report": "text/plain; charset=utf-8", "mapping": "text/csv; charset=utf-8"}
 
 
-def require_analyst(user: AppUser) -> None:
-    if not allows(user.role, ROLE_ANALYST):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="нужна роль: аналитик")
+def require_analyst(access: Access) -> None:
+    if not allows(access, "toolbox", "write"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="нет доступа: toolbox, нужен уровень аналитик")
 
 
 def _http(exc: Exception) -> HTTPException:
@@ -157,11 +158,11 @@ def list_findings(
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    user: AppUser = Depends(get_current_user),
+    access: Access = Depends(current_access),
 ) -> FindingsPage:
     # Контексты — куски исходного текста вокруг значения; аудитору — только сами находки, а значения
     # секретов (пароли, ключи) — и вовсе нет: имена хостов и учёток он читает в снапшотах, пароли — нигде.
-    full = allows(user.role, ROLE_ANALYST)
+    full = allows(access, "toolbox", "write")
     try:
         groups, items, total = scrub.findings_page(db, job_id, kind=kind, q=q, limit=limit, offset=offset,
                                                    secrets_searchable=full)
@@ -197,13 +198,13 @@ def export_findings(
     q: str = "",
     fmt: str = Query(default="csv", alias="format"),
     db: Session = Depends(get_db),
-    user: AppUser = Depends(get_current_user),
+    access: Access = Depends(current_access),
 ) -> StreamingResponse:
     """Находки задания под фильтрами предпросмотра — только аналитику: в файле настоящие значения целиком,
     включая секреты. Сводка журнала — до проверки роли, иначе отказ ушёл бы туда со строкой запроса, а в `q` —
     настоящее значение."""
     request.state.audit_summary = f"задание #{job_id}: выгрузка находок"
-    require_analyst(user)
+    require_analyst(access)
     if db.get(ToolboxJob, job_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="задание не найдено")
 
@@ -252,9 +253,9 @@ def apply_job(
 @router.get("/jobs/{job_id}/{which}")
 def download(
     job_id: int, which: Literal["result", "report", "mapping"], request: Request,
-    db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db), access: Access = Depends(current_access),
 ) -> FileResponse:
-    require_analyst(user)
+    require_analyst(access)
     try:
         path = scrub.result_file(db, job_id, which)
     except (scrub.FilesGone, LookupError) as exc:
@@ -278,9 +279,9 @@ def delete_job(
 
 @router.post("/reverse", response_model=ReverseOut)
 def reverse(
-    payload: ReverseIn, request: Request, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+    payload: ReverseIn, request: Request, db: Session = Depends(get_db), access: Access = Depends(current_access),
 ) -> ReverseOut:
-    require_analyst(user)
+    require_analyst(access)
     try:
         text, replaced = scrub.reverse_text(db, payload.text)
     except scrub.ScrubError as exc:

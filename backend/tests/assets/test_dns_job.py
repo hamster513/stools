@@ -54,12 +54,12 @@ def fake_dns(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeDnsServer]:
 
 
 @pytest.fixture
-def analyst(db_session: Session, client_as: Callable[[str], TestClient]) -> TestClient:
+def assets_admin(db_session: Session, client_as: Callable[..., TestClient]) -> TestClient:
     for name in DEFAULT_ZONES:
         if db_session.get(AssetZone, name) is None:
             db_session.add(AssetZone(name=name, title=name, description=""))
     db_session.commit()
-    return client_as("analyst")
+    return client_as({"assets": "admin"})
 
 
 @pytest.fixture
@@ -110,13 +110,13 @@ def dns_rows(db: Session) -> dict[str, AssetObservation]:
 # ---- Прямые запросы ---------------------------------------------------------
 
 
-def test_forward_moves_ip_and_old_sources_become_stale(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
+def test_forward_moves_ip_and_old_sources_become_stale(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
     asset_id = add(db_session, "vm", "msk1.corp.local|10.10.0.20", name="msk1.corp.local", ip="10.10.0.20", seen=OLD)
     assert add(db_session, "ksc", "1:77", name="msk1", fqdn="msk1.corp.local", ip="10.10.0.20", seen=OLD) == asset_id
     fake_dns.add("msk1.corp.local", "A", "10.10.0.21")
 
-    dns_id = direct(analyst)
-    job = run(analyst, dns_id, db_session)
+    dns_id = direct(assets_admin)
+    job = run(assets_admin, dns_id, db_session)
     assert job.status == "done", job.error
     assert "прямых 1" in job.message and "найдено 1" in job.message
 
@@ -125,26 +125,26 @@ def test_forward_moves_ip_and_old_sources_become_stale(analyst: TestClient, db_s
     row = dns_rows(db_session)["msk1.corp.local"]
     assert row.asset_id == asset_id and (row.name, row.fqdn, row.domain, row.ip) == ("msk1", "msk1.corp.local", "corp.local", "10.10.0.21")
     assert row.extra == {"record_type": "A", "ttl": 300, "record_timestamp": None, "server": "127.0.0.1"}
-    assert codes(analyst, "stale") == {"10.10.0.21"}
-    stale = {d["source"] for d in analyst.get(f"/api/assets/assets/{asset_id}").json()["discrepancies"] if d["code"] == "stale"}
+    assert codes(assets_admin, "stale") == {"10.10.0.21"}
+    stale = {d["source"] for d in assets_admin.get(f"/api/assets/assets/{asset_id}").json()["discrepancies"] if d["code"] == "stale"}
     assert stale == {"vm", "ksc"}
-    listed = analyst.get("/api/assets/dns").json()
+    listed = assets_admin.get("/api/assets/dns").json()
     assert listed[0]["last_run_at"] is not None
 
 
-def test_forward_name_gone_and_timeout_kept(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
+def test_forward_name_gone_and_timeout_kept(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
     add(db_session, "ksc", "1:2", name="srv02", fqdn="srv02.corp.local", ip="10.10.0.6")
     add(db_session, "ksc", "1:3", name="slow", fqdn="slow.corp.local", ip="10.10.0.7")
     fake_dns.add("srv02.corp.local", "A", "10.10.0.6")
     fake_dns.add("slow.corp.local", "A", "10.10.0.7")
-    dns_id = direct(analyst, timeout_ms=300)
-    assert run(analyst, dns_id, db_session).status == "done"
+    dns_id = direct(assets_admin, timeout_ms=300)
+    assert run(assets_admin, dns_id, db_session).status == "done"
     rows = dns_rows(db_session)
     assert set(rows) == {"srv02.corp.local", "slow.corp.local"} and all(r.gone_at is None for r in rows.values())
 
     del fake_dns.records[("srv02.corp.local", "A")]
     fake_dns.silent.add("slow.corp.local")
-    job = run(analyst, dns_id, db_session)
+    job = run(assets_admin, dns_id, db_session)
     assert job.status == "done", job.error
     assert "пропало 1" in job.message and "ошибок 1" in job.message
     rows = dns_rows(db_session)
@@ -153,29 +153,29 @@ def test_forward_name_gone_and_timeout_kept(analyst: TestClient, db_session: Ses
     assert rows["slow.corp.local"].gone_at is None
 
 
-def test_cancel_during_queries_writes_nothing(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer,
+def test_cancel_during_queries_writes_nothing(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     add(db_session, "ksc", "1:1", name="srv01", fqdn="srv01.corp.local", ip="10.10.0.5")
     fake_dns.add("srv01.corp.local", "A", "10.10.0.5")
     monkeypatch.setattr(JobHandle, "cancelled", lambda _self: True)
-    job = run(analyst, direct(analyst), db_session)
+    job = run(assets_admin, direct(assets_admin), db_session)
     assert job.status == "cancelled"
     assert dns_rows(db_session) == {}
-    assert analyst.get("/api/assets/dns").json()[0]["last_run_at"] is None
+    assert assets_admin.get("/api/assets/dns").json()[0]["last_run_at"] is None
 
 
-def test_dead_server_fails_job(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
+def test_dead_server_fails_job(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
     for i in range(7):
         add(db_session, "ksc", f"1:{i}", name=f"h{i}", fqdn=f"h{i}.corp.local", ip=f"10.10.0.{40 + i}")
         fake_dns.silent.add(f"h{i}.corp.local")
-    job = run(analyst, direct(analyst, timeout_ms=100), db_session)
+    job = run(assets_admin, direct(assets_admin, timeout_ms=100), db_session)
     assert job.status == "failed" and "не отвечает" in (job.error or "")
 
 
 # ---- Обратные запросы -------------------------------------------------------
 
 
-def test_reverse_names_nameless_host(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
+def test_reverse_names_nameless_host(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
     srv01 = add(db_session, "ksc", "1:1", name="srv01", fqdn="srv01.corp.local", ip="10.10.0.30")
     # Адреса RackTables без имени: обратная запись даёт им имя.
     known_addr = add(db_session, "rt", "10.10.0.5", ip="10.10.0.5")
@@ -183,7 +183,7 @@ def test_reverse_names_nameless_host(analyst: TestClient, db_session: Session, f
     fake_dns.ptr("10.10.0.5", "srv01.corp.local")
     fake_dns.ptr("10.10.0.7", "ws07.corp.local")
 
-    job = run(analyst, direct(analyst, forward=False, reverse=True), db_session)
+    job = run(assets_admin, direct(assets_admin, forward=False, reverse=True), db_session)
     assert job.status == "done", job.error
     assert "обратных 3" in job.message
     rows = dns_rows(db_session)
@@ -197,14 +197,14 @@ def test_reverse_names_nameless_host(analyst: TestClient, db_session: Session, f
     assert asset is not None and (asset.name, asset.fqdn) == ("ws07", "ws07.corp.local")
 
     fake_dns.records.pop(("7.0.10.10.in-addr.arpa", "PTR"))
-    run(analyst, direct(analyst, forward=False, reverse=True), db_session)
+    run(assets_admin, direct(assets_admin, forward=False, reverse=True), db_session)
     assert dns_rows(db_session)["10.10.0.7"].gone_at is not None
 
 
 # ---- Зона AD ----------------------------------------------------------------
 
 
-def test_zone_read(analyst: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
+def test_zone_read(assets_admin: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
     ldap, conn = zone_ldap
     ldap.zones["corp.local"] = {
         "@": [a_record("10.10.0.2")],
@@ -213,11 +213,11 @@ def test_zone_read(analyst: TestClient, db_session: Session, zone_ldap: tuple[Fa
         "srv01": [a_record("10.10.0.5")],
         "web": [cname_record("srv01.corp.local")],
     }
-    r = analyst.post("/api/assets/dns", json={"title": "AD", "mode": "ad", "ad_connection_id": conn.id,
+    r = assets_admin.post("/api/assets/dns", json={"title": "AD", "mode": "ad", "ad_connection_id": conn.id,
                                               "zones": ["corp.local", "lab.local"], "zone_read": True})
     assert r.status_code == 201, r.text
     dns_id = r.json()["id"]
-    job = run(analyst, dns_id, db_session)
+    job = run(assets_admin, dns_id, db_session)
     assert job.status == "done", job.error
     assert "из зон 2" in job.message
 
@@ -229,25 +229,25 @@ def test_zone_read(analyst: TestClient, db_session: Session, zone_ldap: tuple[Fa
     assert rows["srv01.corp.local"].extra["record_timestamp"] is None
 
     del ldap.zones["corp.local"]["srv09"]
-    assert run(analyst, dns_id, db_session).status == "done"
+    assert run(assets_admin, dns_id, db_session).status == "done"
     rows = dns_rows(db_session)
     assert rows["srv09.corp.local"].gone_at is not None and rows["srv01.corp.local"].gone_at is None
 
 
-def test_zone_ldap_error_fails_job(analyst: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
+def test_zone_ldap_error_fails_job(assets_admin: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
     ldap, conn = zone_ldap
     ldap.failing.add("corp.local")
-    r = analyst.post("/api/assets/dns", json={"mode": "ad", "ad_connection_id": conn.id, "zones": ["corp.local"], "zone_read": True})
-    job = run(analyst, r.json()["id"], db_session)
+    r = assets_admin.post("/api/assets/dns", json={"mode": "ad", "ad_connection_id": conn.id, "zones": ["corp.local"], "zone_read": True})
+    job = run(assets_admin, r.json()["id"], db_session)
     assert job.status == "failed" and "контроллер ответил" in (job.error or "")
 
 
 # ---- Ручки ------------------------------------------------------------------
 
 
-def test_crud_and_validation(analyst: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
+def test_crud_and_validation(assets_admin: TestClient, db_session: Session, zone_ldap: tuple[FakeZoneLdap, AdConnection]) -> None:
     _ldap, conn = zone_ldap
-    assert analyst.get("/api/assets/dns").json() == []
+    assert assets_admin.get("/api/assets/dns").json() == []
     bad = [
         {"mode": "direct", "forward": False, "reverse": False},
         {"mode": "direct", "server": "bad host!"},
@@ -260,61 +260,61 @@ def test_crud_and_validation(analyst: TestClient, db_session: Session, zone_ldap
         {"mode": "direct", "rate_per_s": 0},
     ]
     for body in bad:
-        assert analyst.post("/api/assets/dns", json=body).status_code == 422, body
+        assert assets_admin.post("/api/assets/dns", json=body).status_code == 422, body
 
-    r = analyst.post("/api/assets/dns", json={"title": "DC", "mode": "direct", "server": "dc01.corp.local"})
+    r = assets_admin.post("/api/assets/dns", json={"title": "DC", "mode": "direct", "server": "dc01.corp.local"})
     assert r.status_code == 201, r.text
     body = r.json()
     assert (body["forward"], body["reverse"], body["zone_read"], body["rate_per_s"], body["timeout_ms"], body["enabled"]) == (True, True, False, 50, 3000, True)
     assert body["schedule"] is None and body["last_run_at"] is None
     dns_id = body["id"]
 
-    r = analyst.put(f"/api/assets/dns/{dns_id}", json={"title": "AD", "mode": "ad", "ad_connection_id": conn.id,
+    r = assets_admin.put(f"/api/assets/dns/{dns_id}", json={"title": "AD", "mode": "ad", "ad_connection_id": conn.id,
                                                        "zones": ["Corp.Local.", "corp.local"], "zone_read": True, "enabled": False})
     assert r.status_code == 200, r.text
     assert r.json()["zones"] == ["corp.local"] and r.json()["enabled"] is False
-    assert analyst.put("/api/assets/dns/999999", json={"mode": "direct"}).status_code == 404
+    assert assets_admin.put("/api/assets/dns/999999", json={"mode": "direct"}).status_code == 404
     # Выключенный сервер вручную не запускается.
-    assert analyst.post(f"/api/assets/dns/{dns_id}/run").status_code == 409
+    assert assets_admin.post(f"/api/assets/dns/{dns_id}/run").status_code == 409
 
     url = f"/api/assets/dns/{dns_id}/schedule"
-    r = analyst.put(url, json={"interval_hours": 24, "window_from": "02:00", "window_to": "05:00", "enabled": True})
+    r = assets_admin.put(url, json={"interval_hours": 24, "window_from": "02:00", "window_to": "05:00", "enabled": True})
     assert r.status_code == 200, r.text
     db_session.expire_all()
     sched = db_session.execute(select(PlatformSchedule)).scalar_one()
     assert (sched.module, sched.kind, sched.target_id) == ("assets", "dns", dns_id)
-    assert analyst.get("/api/assets/dns").json()[0]["schedule"]["window_from"] == "02:00"
-    assert analyst.put(url, json={"interval_hours": 0, "enabled": True}).status_code == 422
-    assert analyst.delete(url).status_code == 204
+    assert assets_admin.get("/api/assets/dns").json()[0]["schedule"]["window_from"] == "02:00"
+    assert assets_admin.put(url, json={"interval_hours": 0, "enabled": True}).status_code == 422
+    assert assets_admin.delete(url).status_code == 204
     db_session.expire_all()
     assert db_session.execute(select(PlatformSchedule)).scalars().all() == []
 
-    analyst.put(url, json={"interval_hours": 24, "enabled": True})
-    assert analyst.delete(f"/api/assets/dns/{dns_id}").status_code == 204
+    assets_admin.put(url, json={"interval_hours": 24, "enabled": True})
+    assert assets_admin.delete(f"/api/assets/dns/{dns_id}").status_code == 204
     db_session.expire_all()
-    assert analyst.get("/api/assets/dns").json() == []
+    assert assets_admin.get("/api/assets/dns").json() == []
     assert db_session.execute(select(PlatformSchedule)).scalars().all() == []
-    assert analyst.delete(f"/api/assets/dns/{dns_id}").status_code == 404
+    assert assets_admin.delete(f"/api/assets/dns/{dns_id}").status_code == 404
 
 
-def test_one_dns_job_at_a_time(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
-    dns_id = direct(analyst)
+def test_one_dns_job_at_a_time(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
+    dns_id = direct(assets_admin)
     start_job(db_session, AssetJob, "dns", "tester")
     row = db_session.get(AssetDns, dns_id)
     assert row is not None
     with pytest.raises(DnsBusy):
         start_dns(db_session, row, "tester")
-    r = analyst.post(f"/api/assets/dns/{dns_id}/run")
+    r = assets_admin.post(f"/api/assets/dns/{dns_id}/run")
     assert r.status_code == 409 and "DNS" in r.json()["detail"]
     sched = PlatformSchedule(module="assets", kind="dns", target_id=dns_id, interval_hours=24, enabled=True)
     assert schedule_handler(db_session, sched) is None
 
 
-def test_scheduler_tick_runs_dns(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
+def test_scheduler_tick_runs_dns(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer) -> None:
     add(db_session, "ksc", "1:1", name="srv01", fqdn="srv01.corp.local", ip="10.10.0.5")
     fake_dns.add("srv01.corp.local", "A", "10.10.0.5")
-    dns_id = direct(analyst)
-    r = analyst.put(f"/api/assets/dns/{dns_id}/schedule", json={"interval_hours": 1, "enabled": True})
+    dns_id = direct(assets_admin)
+    r = assets_admin.put(f"/api/assets/dns/{dns_id}/schedule", json={"interval_hours": 1, "enabled": True})
     assert r.status_code == 200, r.text
     started = tick(db_session, NOW + dt.timedelta(hours=2))
     assert len(started) == 1
@@ -325,10 +325,10 @@ def test_scheduler_tick_runs_dns(analyst: TestClient, db_session: Session, fake_
     assert "srv01.corp.local" in dns_rows(db_session)
 
 
-def test_schedule_of_disabled_server_is_skipped_quietly(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer,
+def test_schedule_of_disabled_server_is_skipped_quietly(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer,
                                                         caplog: pytest.LogCaptureFixture) -> None:
-    dns_id = direct(analyst, enabled=False)
-    r = analyst.put(f"/api/assets/dns/{dns_id}/schedule", json={"interval_hours": 1, "enabled": True})
+    dns_id = direct(assets_admin, enabled=False)
+    r = assets_admin.put(f"/api/assets/dns/{dns_id}/schedule", json={"interval_hours": 1, "enabled": True})
     assert r.status_code == 200, r.text
     with caplog.at_level(logging.WARNING):
         assert tick(db_session, NOW + dt.timedelta(hours=2)) == []
@@ -338,7 +338,7 @@ def test_schedule_of_disabled_server_is_skipped_quietly(analyst: TestClient, db_
     assert db_session.execute(select(AssetJob)).scalars().all() == []
 
 
-def test_rate_counts_queries_not_names(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer,
+def test_rate_counts_queries_not_names(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer,
                                        monkeypatch: pytest.MonkeyPatch) -> None:
     """Темп — запросы: A и AAAA на имя — два, PTR на адрес — один; оценка в сообщении задачи."""
     for i in range(3):
@@ -360,7 +360,7 @@ def test_rate_counts_queries_not_names(analyst: TestClient, db_session: Session,
         real_stage(self, name, total, message)
 
     monkeypatch.setattr(JobHandle, "stage", stage)
-    job = run(analyst, direct(analyst, reverse=True, rate_per_s=1000), db_session)
+    job = run(assets_admin, direct(assets_admin, reverse=True, rate_per_s=1000), db_session)
     assert job.status == "done", job.error
     assert len(waits) == len(fake_dns.queries) == 3 * 2 + 3
     assert any("~9 запросов при 1000/с ≈ 1 мин" in m for m in messages), messages
@@ -372,8 +372,8 @@ def test_estimate_text() -> None:
     assert dns_service.estimate(30001, 50) == "~30001 запросов при 50/с ≈ 11 мин"
 
 
-def test_auditor_cannot_write(analyst: TestClient, db_session: Session, fake_dns: FakeDnsServer, client_as: Callable[[str], TestClient]) -> None:
-    dns_id = direct(analyst)
+def test_auditor_cannot_write(assets_admin: TestClient, db_session: Session, fake_dns: FakeDnsServer, client_as: Callable[[str], TestClient]) -> None:
+    dns_id = direct(assets_admin)
     auditor = client_as("auditor")
     assert auditor.get("/api/assets/dns").status_code == 200
     assert auditor.post("/api/assets/dns", json={"mode": "direct"}).status_code == 403

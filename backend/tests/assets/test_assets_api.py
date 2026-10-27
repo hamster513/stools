@@ -182,14 +182,14 @@ def test_cluster_filter_and_facet(analyst: TestClient, db_session: Session, app_
     assert analyst.get("/api/assets/assets", params={"cluster": "host"}).status_code == 422
 
 
-def test_placement_filter_facet_and_network_view(analyst: TestClient) -> None:
+def test_placement_filter_facet_and_network_view(analyst: TestClient, assets_admin: TestClient) -> None:
     """Расположение хоста — признак группы его сети (актив → сеть → группа → placement); вне сети или в сети
     без группы — «не задано» (`-`). Признаки группы видны у сети актива в списке и карточке."""
-    assert analyst.post("/api/assets/zones", json={"name": "dmz", "title": "Демилитаризованная", "placement": "dmz", "internet_facing": True}).status_code == 201
-    assert analyst.post("/api/assets/zones", json={"name": "prod", "placement": "internal", "confidential": True}).status_code == 201
+    assert assets_admin.post("/api/assets/zones", json={"name": "dmz", "title": "Демилитаризованная", "placement": "dmz", "internet_facing": True}).status_code == 201
+    assert assets_admin.post("/api/assets/zones", json={"name": "prod", "placement": "internal", "confidential": True}).status_code == 201
     nets = []
     for cidr, zone in (("10.91.0.0/24", "dmz"), ("10.92.0.0/24", "prod")):
-        r = analyst.post("/api/assets/networks", json={"cidr": cidr, "zone": zone})
+        r = assets_admin.post("/api/assets/networks", json={"cidr": cidr, "zone": zone})
         assert r.status_code == 201, r.text
         nets.append(r.json()["id"])
     for name, net in (("msk1", nets[0]), ("ws01", nets[1]), ("srv01", nets[1])):

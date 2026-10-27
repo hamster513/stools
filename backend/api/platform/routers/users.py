@@ -10,9 +10,10 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.platform.export import Column, export_response
 from api.platform.services import users as svc
-from api.rbac import ROLE_TITLES
 
 router = APIRouter(prefix="/users", tags=["settings"])
+#: Подпись старой роли в выгрузке — пока учётки не переведены на группы.
+_ROLE_TITLES = {"admin": "администратор", "analyst": "аналитик", "auditor": "аудитор"}
 
 
 @router.get("", response_model=list[svc.UserView])
@@ -30,9 +31,9 @@ EXPORT_COLUMNS = [
 def export_users(
     fmt: str = Query(default="csv", alias="format"), db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    """Учётки, как в таблице на экране; только администратору — как и сам список (`ADMIN_READ_PREFIXES`)."""
+    """Учётки, как в таблице на экране; права — как на сам список (платформа, чтение)."""
     rows = [
-        {"login": u.login, "name": u.display_name, "role": ROLE_TITLES.get(u.role, u.role),
+        {"login": u.login, "name": u.display_name, "role": _ROLE_TITLES.get(u.role, u.role),
          "auth": "FAM" if u.auth_source == "oidc" else "пароль", "state": "активен" if u.is_active else "заблокирован",
          "last_login": u.last_login_at}
         for u in svc.list_users(db)

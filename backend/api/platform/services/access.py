@@ -68,6 +68,16 @@ def access_for(db: Session, user_id: int) -> Access:
     return access
 
 
+def groups_of(db: Session, user_id: int) -> list[AccessGroup]:
+    """Группы пользователя по имени."""
+    return list(db.scalars(
+        select(AccessGroup)
+        .join(AccessMembership, AccessMembership.group_id == AccessGroup.id)
+        .where(AccessMembership.user_id == user_id)
+        .order_by(AccessGroup.name)
+    ))
+
+
 def ensure_builtin(db: Session) -> None:
     """Три встроенные роли и три группы — идемпотентно, при каждом старте API.
 

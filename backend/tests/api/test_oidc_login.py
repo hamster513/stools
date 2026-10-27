@@ -41,6 +41,12 @@ def _login(
     )
 
 
+def _role(db: Any, login: str) -> str:
+    """Роль, выданная по группам провайдера (до перевода входа на группы доступа — в старой колонке)."""
+    db.expire_all()
+    return str(db.query(AppUser).filter_by(login=login).one().role)
+
+
 def test_status_is_public_and_reflects_settings(
     client: TestClient, oidc_enabled: FakeProvider
 ) -> None:
@@ -68,16 +74,10 @@ def test_first_login_creates_user_with_mapped_role(
     assert response.status_code == 302 and response.headers["location"] == "/attack"
     assert "stools_session" in fresh.cookies
     me = fresh.get("/api/auth/me").json()
-    assert me == {
-        "login": "ann",
-        "display_name": "Ann",
-        "role": "analyst",
-        "theme": "dark",
-        "auth_source": "oidc",
-    }
+    assert (me["login"], me["display_name"], me["theme"], me["auth_source"]) == ("ann", "Ann", "dark", "oidc")
     db_session.expire_all()
     user = db_session.query(AppUser).filter_by(login="ann").one()
-    assert user.oidc_subject == "sub-1" and user.password_hash is None
+    assert user.oidc_subject == "sub-1" and user.password_hash is None and user.role == "analyst"
     #: Успешный вход попадает в журнал, но код авторизации и state — нет.
     last = db_session.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
     assert last.path == "/api/auth/oidc/callback" and last.login == "ann"
@@ -85,14 +85,12 @@ def test_first_login_creates_user_with_mapped_role(
 
 
 def test_widest_role_wins_and_role_is_recomputed_each_login(
-    client: TestClient, oidc_enabled: FakeProvider
+    client: TestClient, oidc_enabled: FakeProvider, db_session: Any
 ) -> None:
-    first = TestClient(app)
-    _login(first, oidc_enabled, "sub-1", "ann", ["stools-auditors", "stools-admins"])
-    assert first.get("/api/auth/me").json()["role"] == "admin"
-    second = TestClient(app)
-    _login(second, oidc_enabled, "sub-1", "ann", ["stools-auditors"])
-    assert second.get("/api/auth/me").json()["role"] == "auditor"
+    _login(TestClient(app), oidc_enabled, "sub-1", "ann", ["stools-auditors", "stools-admins"])
+    assert _role(db_session, "ann") == "admin"
+    _login(TestClient(app), oidc_enabled, "sub-1", "ann", ["stools-auditors"])
+    assert _role(db_session, "ann") == "auditor"
 
 
 def test_no_mapped_group_is_refused_without_creating_user(
@@ -140,11 +138,11 @@ def test_blocked_user_is_refused(
 
 
 def test_groups_from_userinfo_when_absent_in_id_token(
-    client: TestClient, oidc_enabled: FakeProvider
+    client: TestClient, oidc_enabled: FakeProvider, db_session: Any
 ) -> None:
     fresh = TestClient(app)
     _login(fresh, oidc_enabled, "sub-1", "ann", ["stools-analysts"], in_id_token=False)
-    assert fresh.get("/api/auth/me").json()["role"] == "analyst"
+    assert _role(db_session, "ann") == "analyst"
     assert any(path.endswith("/userinfo") for path in oidc_enabled.calls)
 
 
