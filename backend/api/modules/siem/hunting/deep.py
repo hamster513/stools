@@ -271,7 +271,10 @@ def _execute(
 
 
 def _append(db: Session, deep: ThDeepHunt, found: list[dict[str, Any]], fields: list[str], labels: list[str]) -> None:
-    """События куска — в находку ханта; она заводится на первом куске и одна на весь период."""
+    """События куска — в находку ханта; она заводится на первом куске с событиями и одна на весь период.
+    Пустой кусок находки не заводит: как у ночного прогона, хант без событий кончается без находки."""
+    if not found:
+        return
     finding = _finding(db, deep)
     if finding is None:
         hunt = db.get(ThHunt, deep.hunt_id) if deep.hunt_id is not None else None
