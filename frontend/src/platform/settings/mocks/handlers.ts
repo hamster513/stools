@@ -8,7 +8,7 @@
  * не бывает.
  */
 import { http, HttpResponse } from 'msw'
-import type { Role } from '@/api/auth'
+import type { Role } from '@/platform/settings/api/types'
 import type { AttackBundleDiff, AttackBundleState, PendingBundle } from '@/modules/attack/api/types'
 import { startMockBundleDownload } from '@/modules/attack/mocks/handlers'
 import { LLM_SETTINGS } from '@/modules/siem/mocks/data'

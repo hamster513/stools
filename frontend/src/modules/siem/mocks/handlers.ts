@@ -25,7 +25,8 @@ import type {
   CloneCompare,
   DiffLine,
 } from '@/modules/siem/api/types'
-import type { MeResponse, Role } from '@/api/auth'
+import type { MeGroup, MeResponse } from '@/api/auth'
+import { AREAS, type Access, type Level } from '@/platform/access/types'
 import { readStoredTheme } from '@/lib/theme'
 import {
   affectedRulesFor,
@@ -55,15 +56,24 @@ let sessionActive = false
 let displayName: string | null = 'Аналитик'
 
 /**
- * Роль текущего пользователя в макете. Читается на каждый запрос, а не
- * при загрузке модуля: так экраны проверяются под тремя ролями правкой
- * localStorage и перезагрузкой, без пересборки.
+ * Права текущего пользователя в макете. Читаются на каждый запрос, а не
+ * при загрузке модуля: так экраны проверяются под тремя наборами прав
+ * правкой localStorage и перезагрузкой, без пересборки.
  *
  *   localStorage.setItem('stools-mock-role', 'auditor')
+ *
+ * admin — всё на уровне «администратор»; analyst — модули «аналитик»,
+ * платформа закрыта; auditor — модули «аудитор», платформа закрыта.
  */
-function currentRole(): Role {
+function currentAccess(): { access: Access; groups: MeGroup[] } {
   const stored = window.localStorage.getItem('stools-mock-role') ?? 'admin'
-  return stored === 'analyst' || stored === 'auditor' ? stored : 'admin'
+  const matrix = (module: Level, platform: Level) =>
+    Object.fromEntries(AREAS.map((a) => [a, a === 'platform' ? platform : module])) as Access
+  if (stored === 'analyst')
+    return { access: matrix('write', 'deny'), groups: [{ id: 2, name: 'Аналитики', source: 'local' }] }
+  if (stored === 'auditor')
+    return { access: matrix('read', 'deny'), groups: [{ id: 3, name: 'Аудиторы', source: 'local' }] }
+  return { access: matrix('admin', 'admin'), groups: [{ id: 1, name: 'Администраторы', source: 'local' }] }
 }
 
 /** Имя из профиля: его меняет обработчик PATCH /api/auth/me платформенного мока. */
@@ -283,7 +293,7 @@ export const handlers = [
     return HttpResponse.json<MeResponse>({
       login: 'analyst',
       display_name: displayName,
-      role: currentRole(),
+      ...currentAccess(),
       // Профиля за моком нет, поэтому «сервер» помнит тему там же, где её
       // держит сам интерфейс, — иначе выбор сбрасывался бы на перезагрузке.
       theme: readStoredTheme() ?? 'dark',

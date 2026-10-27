@@ -1,4 +1,7 @@
-import type { AuthSource, Role } from '@/api/auth'
+import type { AuthSource } from '@/api/auth'
+
+/** Роль учётки в прежней модели прав; уходит вместе со страницей пользователей на группы. */
+export type Role = 'admin' | 'analyst' | 'auditor'
 
 /** Названия ролей для показа человеку: в API роль — код, на экране — слово. */
 export const ROLE_TITLES: Record<Role, string> = {

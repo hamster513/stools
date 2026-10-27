@@ -1,8 +1,11 @@
 import type { ComponentType, ReactNode } from 'react'
+import { Construction } from 'lucide-react'
+import { useMe } from '@/api/auth'
 import { matchPath, Redirect, useRouter } from '@/lib/router'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { useCan } from '@/lib/can'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { atLeast, type Area, type Level } from '@/platform/access/types'
 import { SettingsPage as SiemSettingsPage } from '@/modules/siem/pages/SettingsPage'
 import { SettingsPage as VmSettingsPage } from '@/modules/vm/pages/SettingsPage'
 import { SettingsPage as AdSettingsPage } from '@/modules/ad/pages/SettingsPage'
@@ -21,56 +24,63 @@ import { AttackSettingsPage } from './pages/AttackSettingsPage'
 import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
 import { DataStatusPage } from './pages/DataStatusPage'
 
-/**
- * Разделы, открытые всем ролям. Статусы находок: от них зависят подсчёты,
- * которые видит каждый. Модули: что загружено и как настроено, видят все;
- * менять или загружать — по правам, их проверяет сама страница модуля.
- */
-const OPEN_PAGES = new Map<string, ComponentType>([
-  ['profile', ProfilePage],
-  ['findings', FindingsSettingsPage],
-  ['attack', AttackSettingsPage],
-  ['siem', SiemSettingsPage],
-  ['vm', VmSettingsPage],
-  ['ad', AdSettingsPage],
-  ['ksc', KscSettingsPage],
-  ['assets', AssetsSettingsPage],
-  ['toolbox', ToolboxSettingsPage],
-])
+/** Разделы «Группы» и «Роли» до появления своих страниц: адрес уже есть, экрана ещё нет. */
+function PlannedPage() {
+  return (
+    <div className="p-6">
+      <EmptyState icon={Construction} title="Раздел в разработке" description="Страница появится в следующем выпуске." />
+    </div>
+  )
+}
 
-/** Разделы платформы — только администратору. */
-const ADMIN_PAGES = new Map<string, ComponentType>([
-  ['users', UsersPage],
-  ['security', SecurityPage],
-  ['oidc', OidcPage],
-  ['audit', AuditPage],
-  ['llm', LlmPage],
+/**
+ * Раздел → какая область и какой уровень нужны, чтобы его открыть. null —
+ * открыт всем: профиль и статусы находок (сохранить их может только
+ * администратор платформы — это проверяет сама страница).
+ */
+const PAGES = new Map<string, { page: ComponentType; need: [Area, Level] | null }>([
+  ['profile', { page: ProfilePage, need: null }],
+  ['findings', { page: FindingsSettingsPage, need: null }],
+  ['users', { page: UsersPage, need: ['platform', 'read'] }],
+  ['groups', { page: PlannedPage, need: ['platform', 'read'] }],
+  ['roles', { page: PlannedPage, need: ['platform', 'read'] }],
+  ['security', { page: SecurityPage, need: ['platform', 'read'] }],
+  ['oidc', { page: OidcPage, need: ['platform', 'read'] }],
+  ['audit', { page: AuditPage, need: ['platform', 'read'] }],
+  ['llm', { page: LlmPage, need: ['platform', 'admin'] }],
+  ['attack', { page: AttackSettingsPage, need: ['attack', 'admin'] }],
+  // Настройки модуля — его подключения, расписания и справочники: администратору модуля.
+  ['siem', { page: SiemSettingsPage, need: ['siem', 'admin'] }],
+  ['vm', { page: VmSettingsPage, need: ['vm', 'admin'] }],
+  ['ad', { page: AdSettingsPage, need: ['ad', 'admin'] }],
+  ['ksc', { page: KscSettingsPage, need: ['ksc', 'admin'] }],
+  ['assets', { page: AssetsSettingsPage, need: ['assets', 'admin'] }],
+  ['toolbox', { page: ToolboxSettingsPage, need: ['toolbox', 'admin'] }],
 ])
 
 /**
  * Маршруты общих настроек — всё под /settings: разделы платформы и
  * страницы модулей /settings/<модуль>. Права проверяет сервер; здесь
- * разделы администратора закрыты экраном отказа, чтобы аудитор не
+ * недоступные разделы закрыты экраном отказа, чтобы пользователь не
  * упирался в 403 после перехода по чужой ссылке.
  */
 export function SettingsShell() {
   const { path } = useRouter()
-  const { admin } = useCan()
+  const { data: me } = useMe()
   // /settings/ с хвостовым слэшем — тот же корень, что и /settings.
   const base = path.length > 1 ? path.replace(/\/+$/, '') : path
   const section = matchPath('/settings/:section', base)?.section ?? null
-  const Open = section ? OPEN_PAGES.get(section) : undefined
-  const Admin = section ? ADMIN_PAGES.get(section) : undefined
+  const entry = section ? PAGES.get(section) : undefined
 
-  // Голый /settings — сводка «Данные», её видят все роли. Неизвестные
-  // разделы уводят на первый раздел, а не показывают его на чужом адресе:
-  // иначе в сайдбаре не подсвечен ни один пункт, и непонятно, что открыто.
+  // Голый /settings — сводка «Данные», её видят все: строки сервер отбирает
+  // по модулям пользователя. Неизвестные разделы уводят на сводку, а не
+  // показывают её на чужом адресе: иначе в сайдбаре не подсвечен ни один
+  // пункт, и непонятно, что открыто.
   let page: ReactNode
   if (base === '/settings') page = <DataStatusPage />
-  else if (Open) page = <Open />
-  else if (!admin) page = <Forbidden />
-  else if (Admin) page = <Admin />
-  else page = <Redirect to="/settings/users" />
+  else if (!entry) page = <Redirect to="/settings" />
+  else if (entry.need && !(me && atLeast(me.access, ...entry.need))) page = <Forbidden kind="settings" />
+  else page = <entry.page />
 
   return (
     <AppShell sidebar={<SettingsSidebar />}>

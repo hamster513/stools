@@ -6,7 +6,10 @@ import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { LoginPage } from '@/pages/LoginPage'
+import { firstReadableModule } from '@/lib/can'
+import { atLeast, type Area } from '@/platform/access/types'
 import { findModule } from '@/platform/modules'
+import { Forbidden } from '@/platform/settings/Forbidden'
 import { ModuleStubPage } from '@/platform/ModuleStubPage'
 import { SettingsShell } from '@/platform/settings/SettingsShell'
 import { MyFindingsPage } from '@/platform/findings/MyFindingsPage'
@@ -75,10 +78,23 @@ function Root() {
       </AppShell>
     )
 
-  // Первый сегмент пути — модуль. Корень и неизвестные пути ведут в SIEM:
-  // это единственный работающий модуль, а пустой экран хуже любого выбора.
+  // Первый сегмент пути — модуль. Корень и неизвестные пути ведут в первый
+  // открытый пользователю модуль, а без модулей — в профиль: пустой экран
+  // хуже любого выбора.
   const module = findModule(path.split('/')[1] ?? '')
-  if (!module) return <Redirect to="/siem" />
+  if (!module) {
+    const home = firstReadableModule(me.access)
+    return <Redirect to={home ? `/${home}` : '/settings/profile'} />
+  }
+
+  // Закрытый модуль по прямой ссылке — отказ в оболочке, а не 403 на каждом
+  // запросе. У заглушек «в разработке» области прав нет — их видят все.
+  if (module.status === 'available' && !atLeast(me.access, module.id as Area, 'read'))
+    return (
+      <AppShell>
+        <Forbidden kind="module" />
+      </AppShell>
+    )
 
   if (module.id === 'attack') return <AttackModule />
   if (module.id === 'siem') return <SiemModule />

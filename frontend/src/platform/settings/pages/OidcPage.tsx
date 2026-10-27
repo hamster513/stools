@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Copy, PlugZap, Save, Trash2, XCircle } from 'lucide-react'
-import type { Role } from '@/api/auth'
+import type { Role } from '@/platform/settings/api/types'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'

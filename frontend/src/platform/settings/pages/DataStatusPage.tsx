@@ -1,4 +1,6 @@
 import { ArrowRight } from 'lucide-react'
+import { useMe } from '@/api/auth'
+import { atLeast, type Area } from '@/platform/access/types'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
@@ -45,6 +47,7 @@ function updated(iso: string): string {
  */
 export function DataStatusPage() {
   const status = useDataStatus()
+  const me = useMe()
   const cols = useColumnWidths('settings-data-status', COLUMNS)
 
   if (status.isLoading) return <FullPageSpinner />
@@ -110,14 +113,17 @@ export function DataStatusPage() {
                     {item.source ?? ''}
                   </td>
                   <td className="py-1.5 text-right">
-                    <Link
-                      to={`/settings/${item.module}#${item.anchor}`}
-                      className="inline-flex rounded p-0.5 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
-                      aria-label={`К настройке: ${item.title}`}
-                      title="к настройке модуля"
-                    >
-                      <ArrowRight size={14} aria-hidden />
-                    </Link>
+                    {/* Страница настроек модуля — его администратору; остальным стрелка вела бы в отказ. */}
+                    {me.data && atLeast(me.data.access, item.module as Area, 'admin') && (
+                      <Link
+                        to={`/settings/${item.module}#${item.anchor}`}
+                        className="inline-flex rounded p-0.5 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                        aria-label={`К настройке: ${item.title}`}
+                        title="к настройке модуля"
+                      >
+                        <ArrowRight size={14} aria-hidden />
+                      </Link>
+                    )}
                   </td>
                 </tr>
               )

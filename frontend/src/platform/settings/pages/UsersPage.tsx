@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react'
 import { CheckCircle2, KeyRound, Lock, LockOpen, Trash2, UserPlus } from 'lucide-react'
-import type { Role } from '@/api/auth'
+import type { Role } from '@/platform/settings/api/types'
 import { useMe } from '@/api/auth'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
