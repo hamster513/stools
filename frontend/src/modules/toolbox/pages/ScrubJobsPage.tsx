@@ -7,6 +7,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
+import { HELP_SAFE } from '@/help/layout'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useRouter } from '@/lib/router'
@@ -66,7 +67,7 @@ export function ScrubJobsPage() {
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+      <div className={cn('mb-4 flex flex-wrap items-start justify-between gap-4', HELP_SAFE)}>
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-base font-semibold text-text">Очистка файлов</h1>

@@ -5,15 +5,15 @@ import { Link, useRouter } from '@/lib/router'
 import { BY_SLUG, helpFor } from './index'
 import { filledLevels } from './levels'
 import { Markdown } from './Markdown'
-import { HELP_PANEL_ID } from './panelId'
+import { HELP_PANEL_ID } from './layout'
 
 const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const BLOCK_TITLE = 'mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase'
 
 /**
  * Панель подсказки справа: короткая часть статьи текущей страницы. Без затемнения, страница под ней
- * кликабельна; содержимое следует за адресом. Выше модальных дроверов (z-40), поэтому Esc ловится в
- * capture-фазе и закрывает сначала её.
+ * кликабельна; содержимое следует за адресом. Выше модальных дроверов (z-40 и портала KSC z-50), поэтому
+ * Esc ловится в capture-фазе окна и закрывает сначала её.
  */
 export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose: () => void; buttonRef: RefObject<HTMLButtonElement | null> }) {
   const { path } = useRouter()
@@ -32,11 +32,13 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
     if (!open) return
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
-      e.stopPropagation()
+      // Панель закрывается первой, остальным (дровер, меню «Экспорт») нужен второй Esc. Слушатель на window
+      // в capture-фазе стоит раньше любых слушателей document, сколько бы ни было открыто до панели.
+      e.stopImmediatePropagation()
       onClose()
     }
-    document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [open, onClose])
 
   // helpFor пишет предупреждение в dev: считаем один раз на адрес, а не на каждый рендер.
@@ -52,7 +54,7 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
       aria-label="Справка"
       aria-hidden={!open}
       inert={!open}
-      className={cn('fixed top-0 right-0 z-50 flex h-full w-[400px] flex-col border-l border-grid bg-surface transition-transform duration-200', open ? 'translate-x-0' : 'translate-x-full')}
+      className={cn('fixed top-0 right-0 z-[60] flex h-full w-[400px] flex-col border-l border-grid bg-surface transition-transform duration-200', open ? 'translate-x-0' : 'translate-x-full')}
     >
       {article && (
         <>

@@ -19,7 +19,7 @@ export function AppShell({ sidebar, children }: AppShellProps) {
       <ModuleRail />
       {sidebar}
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
-      {/* Кнопка после панели: при равном z-50 она лежит поверх угла панели. */}
+      {/* Панель и открытая кнопка на z-[60]: кнопка после панели в DOM, поэтому лежит поверх её угла. */}
       <HelpPanel open={help.open} onClose={help.close} buttonRef={helpButton} />
       <HelpButton open={help.open} onToggle={help.toggle} buttonRef={helpButton} />
     </div>
