@@ -7,7 +7,7 @@ import { helpCheck } from './vite-plugins/helpCheck.ts'
 // https://vite.dev/config/
 export default defineConfig({
   // Справка: ошибки статей роняют сборку. Покрытие адресов включит Task 5, когда статьи закроют все routes.json.
-  plugins: [react(), tailwindcss(), helpCheck({ coverage: false })],
+  plugins: [react(), tailwindcss(), helpCheck({ coverage: true })],
   // Хешированные файлы сборки — в /static/, не в /assets/: путь /assets/* занят модулем Assets
   // (прямой заход на /assets/list иначе отдавал бы 404 из file_server Caddy).
   build: { assetsDir: 'static' },
