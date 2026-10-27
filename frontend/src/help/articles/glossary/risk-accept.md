@@ -24,4 +24,4 @@ concepts: []
 
 - [Статусы находок](help:findings-settings) — предельный срок и кто может принимать риск.
 - [Мои находки](help:my-findings) — колонка «Риск принят до».
-- [Находки Active Directory](help:ad-findings) — фильтр «риск истекает».
+- Фильтр «риск истекает» в списках находок: [AD](help:ad-findings), [Антивирус](help:ksc-findings), [SIEM](help:siem-hygiene), [VM](help:vm-vulns).

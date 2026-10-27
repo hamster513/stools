@@ -5,7 +5,7 @@ group: module
 module: ksc
 order: 12
 routes: ["/ksc/jobs"]
-where: Модуль «Антивирус» → «Задачи»
+where: Модуль AV → «Задачи»
 levels:
   read: Смотреть ход и итог всех фоновых задач модуля.
   write: Снимать идущую задачу.
