@@ -219,6 +219,20 @@ def test_group_validation(auth_client: TestClient) -> None:
     assert clash.status_code == 409
 
 
+def test_group_name_fits_the_column(auth_client: TestClient) -> None:
+    """Имя группы — до 255 символов, как столбец: перенесённые из OIDC длинные имена можно править."""
+    role_id = _role_id(auth_client, "Аналитик")
+    long_name = "г" * 255
+    created = auth_client.post("/api/settings/groups", json={"name": long_name, "source": "local", "role_id": role_id})
+    assert created.status_code == 201, created.text
+    renamed = auth_client.put(
+        f"/api/settings/groups/{created.json()['id']}", json={"name": "д" * 255, "external_name": None, "role_id": role_id},
+    )
+    assert renamed.status_code == 200, renamed.text
+    too_long = {"name": "г" * 256, "source": "local", "role_id": role_id}
+    assert auth_client.post("/api/settings/groups", json=too_long).status_code == 422
+
+
 def test_oidc_group_members_are_not_editable(auth_client: TestClient, test_user: AppUser) -> None:
     role_id = _role_id(auth_client, "Аналитик")
     group = auth_client.post(

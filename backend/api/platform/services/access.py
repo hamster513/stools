@@ -149,6 +149,10 @@ def ensure_builtin(db: Session) -> None:
 
 # --- защита от самоблокировки --------------------------------------------------------
 
+#: Ключ транзакционной advisory-блокировки проверки последнего администратора: два
+#: администратора, снимающие права друг с друга одновременно, проходят её по очереди.
+LAST_ADMIN_LOCK = 0x5354_4C41  # «STLA»
+
 LAST_ADMIN = "нельзя оставить систему без администратора"
 SELF_LOCKOUT = "нельзя снять права с себя"
 BUILTIN_RENAME = "встроенную роль нельзя переименовать"
@@ -174,11 +178,13 @@ def guard_last_admin(db: Session, actor_id: int, *, after: Callable[[], None]) -
 
     Правки идут в той же транзакции и сбрасываются на сервер (flush), но не
     фиксируются: не прошла проверка — rollback и 409, иначе коммит за
-    вызывающим. Две проверки: в системе остался хоть один активный
+    вызывающим. Проверки сериализуются блокировкой `LAST_ADMIN_LOCK` до конца
+    транзакции. Две проверки: в системе остался хоть один активный
     пользователь с `platform = admin`, и сам актор не опустил себя ниже него
     (даже когда другие администраторы есть). Любая другая ошибка тоже
     откатывает транзакцию."""
     try:
+        db.execute(select(func.pg_advisory_xact_lock(LAST_ADMIN_LOCK)))
         after()
         db.flush()
         if active_platform_admins(db) == 0:
@@ -197,7 +203,7 @@ def guard_last_admin(db: Session, actor_id: int, *, after: Callable[[], None]) -
 
 
 class RoleIn(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
     description: str = ""
     #: область → уровень; отсутствующая область — `deny`.
     levels: dict[str, str]
@@ -315,7 +321,7 @@ def _check_external(source: str, external_name: str | None) -> None:
 
 
 class GroupIn(BaseModel):
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
     source: Literal["local", "oidc"]
     #: Значение claim провайдера; только у oidc-группы, и там обязательно.
     external_name: str | None = Field(default=None, max_length=255)
@@ -330,7 +336,7 @@ class GroupIn(BaseModel):
 class GroupPatch(BaseModel):
     """Источник группы не меняется: `external_name` сверяется в сервисе с сохранённым источником."""
 
-    name: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=255)
     external_name: str | None = Field(default=None, max_length=255)
     role_id: int
 

@@ -65,7 +65,7 @@ export function useRole(id: number | null) {
 }
 
 /** Права пользователей считаются из ролей их групп: после правки ролей и групп они устаревают. */
-function invalidateAccess(qc: QueryClient) {
+export function invalidateAccess(qc: QueryClient) {
   return Promise.all(
     [['roles'], ['groups'], ['settings-users'], ['me']].map((queryKey) => qc.invalidateQueries({ queryKey })),
   )
