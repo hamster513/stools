@@ -131,7 +131,7 @@ POST /api/auth/logout     -> 204
 ```
 GET /api/auth/oidc/status    -> {enabled, display_name}
 GET /api/auth/oidc/start     -> 302 на провайдера | 404, если вход выключен
-GET /api/auth/oidc/callback  ?code=&state=&error= -> 302 /attack + cookie сессии
+GET /api/auth/oidc/callback  ?code=&state=&error= -> 302 / + cookie сессии (фронтенд открывает первый доступный модуль)
                               | 302 /login?error=<код>
 ```
 

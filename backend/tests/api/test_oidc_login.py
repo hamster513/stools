@@ -45,7 +45,7 @@ def _me(fam: FakeProvider, sub: str, login: str, groups: list[str], **kw: Any) -
     """Вход новым браузером и его `/api/auth/me`: права и группы после пересчёта членства."""
     fresh = TestClient(app)
     response = _login(fresh, fam, sub, login, groups, **kw)
-    assert response.status_code == 302 and response.headers["location"] == "/attack", response.headers
+    assert response.status_code == 302 and response.headers["location"] == "/", response.headers
     me: dict[str, Any] = fresh.get("/api/auth/me").json()
     return me
 
@@ -441,7 +441,7 @@ def test_legacy_plaintext_client_secret_still_logs_in_and_is_reencrypted(
 
     fresh = TestClient(app)
     response = _login(fresh, oidc_enabled, "sub-9", "zoe", ["stools-analysts"])
-    assert response.status_code == 302 and response.headers["location"] == "/attack"
+    assert response.status_code == 302 and response.headers["location"] == "/"
 
     body = {k: v for k, v in auth_client.get("/api/settings/oidc").json().items() if k not in ("has_secret", "redirect_uri")}
     assert auth_client.put("/api/settings/oidc", json=body).status_code == 204
