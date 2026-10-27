@@ -16,13 +16,21 @@ FULL = {
     "groups_claim": "groups",
     "login_claim": "preferred_username",
     "name_claim": "name",
-    "group_roles": [{"group": "stools-admins", "role": "admin"}],
 }
+
+
+def _add_oidc_group(client: TestClient) -> None:
+    role_id = next(r["id"] for r in client.get("/api/settings/roles").json() if r["name"] == "Аналитик")
+    response = client.post(
+        "/api/settings/groups",
+        json={"name": "stools-analysts", "source": "oidc", "external_name": "stools-analysts", "role_id": role_id},
+    )
+    assert response.status_code == 201, response.text
 
 
 def test_defaults_and_redirect_uri(auth_client: TestClient) -> None:
     body = auth_client.get("/api/settings/oidc").json()
-    assert body["enabled"] is False and body["client_secret"] == "" and body["group_roles"] == []
+    assert body["enabled"] is False and body["client_secret"] == "" and "group_roles" not in body
     assert auth_client.put("/api/settings/oidc", json=FULL).status_code == 204
     body = auth_client.get("/api/settings/oidc").json()
     assert body["client_secret"] == "••••"
@@ -54,13 +62,16 @@ def test_client_secret_is_encrypted_at_rest(auth_client: TestClient) -> None:
     assert stored["client_secret"].startswith("enc:v1:") and "s3cr3t" not in stored["client_secret"]
 
 
-def test_enabling_requires_complete_settings(auth_client: TestClient) -> None:
+def test_enabling_requires_complete_settings_and_an_oidc_group(auth_client: TestClient) -> None:
     response = auth_client.put("/api/settings/oidc", json={**FULL, "enabled": True, "issuer_url": ""})
     assert response.status_code == 422
     assert "issuer_url" in response.json()["detail"]
-    response = auth_client.put("/api/settings/oidc", json={**FULL, "enabled": True, "group_roles": []})
+    response = auth_client.put("/api/settings/oidc", json={**FULL, "enabled": True})
     assert response.status_code == 422
+    assert "нет ни одной группы из OIDC" in response.json()["detail"]
+    _add_oidc_group(auth_client)
     assert auth_client.put("/api/settings/oidc", json={**FULL, "enabled": True}).status_code == 204
+    assert auth_client.get("/api/auth/oidc/status").json()["enabled"] is True
 
 
 def test_plain_http_is_rejected_outside_localhost(auth_client: TestClient) -> None:
@@ -70,9 +81,11 @@ def test_plain_http_is_rejected_outside_localhost(auth_client: TestClient) -> No
     assert auth_client.put("/api/settings/oidc", json=local).status_code == 204
 
 
-def test_bad_role_in_mapping_is_422(auth_client: TestClient) -> None:
-    bad = {**FULL, "group_roles": [{"group": "x", "role": "boss"}]}
-    assert auth_client.put("/api/settings/oidc", json=bad).status_code == 422
+def test_old_group_roles_in_the_body_are_ignored(auth_client: TestClient) -> None:
+    """Сопоставление «группа → роль» заменено группами из OIDC: старое поле в теле не ошибка и не хранится."""
+    old = {**FULL, "group_roles": [{"group": "x", "role": "boss"}]}
+    assert auth_client.put("/api/settings/oidc", json=old).status_code == 204
+    assert "group_roles" not in auth_client.get("/api/settings/oidc").json()
 
 
 def test_only_admin_reads_and_writes(client_as) -> None:  # type: ignore[no-untyped-def]

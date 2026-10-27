@@ -1,9 +1,10 @@
-"""Вход через провайдера: состояние, роль из групп, поиск или создание учётки.
+"""Вход через провайдера: состояние, членство в группах из OIDC, поиск или создание учётки.
 
-Роль не хранится за пользователем навсегда: она пересчитывается из групп на
-каждом входе, иначе перевод человека из аналитиков в аудиторы в FAM не дошёл
-бы до STools. Учётка заводится сама, но только если хотя бы одна группа
-сопоставлена роли, — вход без права доступа не должен плодить пустые записи.
+Членство в группах `source='oidc'` пересчитывается из claim на каждом входе,
+иначе перевод человека из аналитиков в аудиторы в FAM не дошёл бы до STools.
+Локальные группы, назначенные в STools, вход не трогает. Учётка заводится
+сама, но только если claim совпал хотя бы с одной группой, — вход без права
+доступа не должен плодить пустые записи.
 """
 from __future__ import annotations
 
@@ -16,11 +17,12 @@ from typing import cast as typing_cast
 from urllib.parse import urlencode
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from api.db.models import ROLE_ADMIN, ROLE_ANALYST, ROLE_AUDITOR, AppUser, OidcLoginState
+from api.db.models import AccessGroup, AccessMembership, AppUser, OidcLoginState
 from api.oidc.provider import Discovery, HttpFactory
 from api.oidc.settings import OidcSettings
 from api.timeutil import as_aware_utc, utcnow
@@ -34,9 +36,6 @@ MAX_FIELD = 255
 #: Подменяется в тестах поддельным провайдером.
 http_factory: HttpFactory | None = None
 
-#: Ширина роли: из нескольких сопоставленных групп берётся самая широкая.
-_WIDTH = {ROLE_ADMIN: 2, ROLE_ANALYST: 1, ROLE_AUDITOR: 0}
-
 
 class LoginRefused(Exception):
     """Провайдер ответил как надо, но входить этому человеку нельзя."""
@@ -47,11 +46,32 @@ class LoginRefused(Exception):
         self.login = login
 
 
-def role_for_groups(settings: OidcSettings, groups: list[str]) -> str | None:
-    """Самая широкая роль среди сопоставленных групп; None — ни одной."""
-    present = set(groups)
-    roles = [pair.role for pair in settings.group_roles if pair.group in present]
-    return max(roles, key=lambda role: _WIDTH[role]) if roles else None
+def groups_for_claim(db: Session, names: list[str]) -> list[AccessGroup]:
+    """Группы из OIDC, чьё имя в claim точно совпало с одним из присланных."""
+    if not names:
+        return []
+    return list(db.scalars(
+        select(AccessGroup).where(AccessGroup.source == "oidc", AccessGroup.external_name.in_(set(names)))
+    ))
+
+
+def _sync_oidc_membership(db: Session, user_id: int, groups: list[AccessGroup]) -> bool:
+    """Заменить членство пользователя в группах из OIDC на `groups`; есть ли у него теперь хоть одна группа.
+
+    Локальные группы не трогаются и тоже считаются: одних их хватает для входа.
+    Последнего администратора здесь не держат (владелец, 19.10): убрали группу
+    в каталоге — человек больше не администратор.
+    """
+    oidc_ids = select(AccessGroup.id).where(AccessGroup.source == "oidc")
+    db.execute(delete(AccessMembership).where(
+        AccessMembership.user_id == user_id, AccessMembership.group_id.in_(oidc_ids)
+    ))
+    if groups:
+        #: Двойное нажатие «войти»: соседний вход вставляет те же строки — не ошибка.
+        db.execute(pg_insert(AccessMembership).values(
+            [{"user_id": user_id, "group_id": g.id} for g in groups]
+        ).on_conflict_do_nothing())
+    return db.scalar(select(AccessMembership.group_id).where(AccessMembership.user_id == user_id).limit(1)) is not None
 
 
 def begin_login(db: Session, settings: OidcSettings, disco: Discovery) -> tuple[str, str]:
@@ -119,8 +139,8 @@ def claim_list(claims: dict[str, Any], name: str) -> list[str]:
     """Claim со списком строк: провайдеры отдают его и одной строкой.
 
     Avanpost FAM отдаёт группы объектами `{"id": …, "name": …}`: из объекта
-    берутся имя и идентификатор, чтобы в соответствии групп ролям можно было
-    указать любое — имя читаемо, идентификатор не меняется при переименовании.
+    берутся имя и идентификатор, чтобы в группе из OIDC можно было указать
+    любое — имя читаемо, идентификатор не меняется при переименовании.
     """
     value = claims.get(name)
     if isinstance(value, str):
@@ -148,26 +168,29 @@ def resolve_user(
     login = str(claims.get(settings.login_claim) or sub)[:MAX_FIELD]
     raw_name = claims.get(settings.name_claim)
     name = str(raw_name)[:MAX_FIELD] if raw_name else None
-    role = role_for_groups(settings, groups)
-    if role is None:
-        raise LoginRefused("oidc_no_role", login)
+    matched = groups_for_claim(db, groups)
     user = db.query(AppUser).filter_by(oidc_subject=sub).one_or_none()
     if user is None:
+        #: Новичку нечем войти, кроме групп из claim: без них учётка не заводится.
+        if not matched:
+            raise LoginRefused("oidc_no_role", login)
         #: Логин занят локальной учёткой — молча присвоить её провайдеру
         #: значило бы отдать чужие права тому, кто завёл такое же имя в FAM.
         if db.query(AppUser).filter_by(login=login).one_or_none() is not None:
             raise LoginRefused("oidc_login_taken", login)
         user = AppUser(
-            login=login, password_hash=None, auth_source="oidc", oidc_subject=sub,
-            role=role, display_name=name,
+            login=login, password_hash=None, auth_source="oidc", oidc_subject=sub, display_name=name,
         )
         db.add(user)
         try:
+            db.flush()
+            _sync_oidc_membership(db, user.id, matched)
             db.commit()
         except IntegrityError as exc:
             #: Тот же человек нажал «войти» дважды: учётку успел завести
             #: соседний запрос. Уникальны только login и oidc_subject —
-            #: если по sub теперь есть строка, это она и есть.
+            #: если по sub теперь есть строка, это она и есть; её членство
+            #: пересчитал тот запрос.
             db.rollback()
             twin = db.query(AppUser).filter_by(oidc_subject=sub).one_or_none()
             if twin is None:
@@ -179,7 +202,11 @@ def resolve_user(
     #: Переименование в FAM — тот же sub: логин следует за ним, если свободен.
     if user.login != login and db.query(AppUser).filter_by(login=login).one_or_none() is None:
         user.login = login
-    user.role = role
     user.display_name = name or user.display_name
+    has_groups = _sync_oidc_membership(db, user.id, matched)
+    #: Пересчёт фиксируется и при отказе: членство от прежнего входа давало бы
+    #: права уже открытым сессиям этого человека.
     db.commit()
+    if not has_groups:
+        raise LoginRefused("oidc_no_role", login)
     return user

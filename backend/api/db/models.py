@@ -42,13 +42,6 @@ def _utcnow() -> dt.datetime:
 # --------------------------------------------------------------------------
 
 
-#: Роли платформы. Порядок — от широкой к узкой, им пользуется api/rbac.py.
-ROLE_ADMIN = "admin"
-ROLE_ANALYST = "analyst"
-ROLE_AUDITOR = "auditor"
-ROLES = (ROLE_ADMIN, ROLE_ANALYST, ROLE_AUDITOR)
-
-
 class AppUser(Base):
     __tablename__ = "app_user"
 
@@ -56,8 +49,6 @@ class AppUser(Base):
     login: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     #: NULL у пользователей из OIDC — пароля в этой базе для них нет.
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    #: admin — всё; analyst — чтение и запись в модулях; auditor — только чтение.
-    role: Mapped[str] = mapped_column(String(16), default=ROLE_ADMIN)
     #: local — пароль в этой базе; oidc — вход через провайдера, пароля нет.
     auth_source: Mapped[str] = mapped_column(String(8), default="local", server_default="local")
     #: claim `sub` провайдера: логин в FAM могут переименовать, sub — нет.

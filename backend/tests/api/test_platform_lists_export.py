@@ -15,7 +15,7 @@ from tests.api.conftest import TEST_LOGIN
 from tests.export_check import check_export
 
 MINE = ["Модуль", "Находка", "Тяжесть", "Статус", "Срок", "Риск принят до"]
-USERS = ["Логин", "Имя", "Роль", "Вход", "Состояние", "Последний вход"]
+USERS = ["Логин", "Имя", "Группы", "Вход", "Состояние", "Последний вход"]
 
 
 def test_mine(auth_client: TestClient, db_session: Any, client_as: Callable[[str], TestClient]) -> None:
@@ -39,8 +39,8 @@ def test_users_only_for_admin(auth_client: TestClient, client_as: Callable[[str]
     analyst = client_as("analyst")
     rows = check_export(auth_client, "/api/settings/users/export", USERS)
     by_login = {r[0]: r for r in rows[1:]}
-    assert by_login["user-analyst"][2:5] == ["аналитик", "пароль", "активен"]
-    assert by_login[TEST_LOGIN][2] == "администратор" and by_login[TEST_LOGIN][5]
+    assert by_login["user-analyst"][2:5] == ["Аналитики", "пароль", "активен"]
+    assert by_login[TEST_LOGIN][2] == "Администраторы" and by_login[TEST_LOGIN][5]
     assert analyst.get("/api/settings/users/export").status_code == 403
     assert client_as("auditor").get("/api/settings/users/export").status_code == 403
 

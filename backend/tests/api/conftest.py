@@ -234,7 +234,6 @@ def make_user(db_session: Any) -> Callable[[str, Levels | str], AppUser]:
         ensure_builtin(db_session)
         if isinstance(levels, str):
             group = _builtin_group(db_session, levels)
-            role = levels
         else:
             access_role = AccessRole(
                 name=login, description="", builtin=False,
@@ -242,9 +241,7 @@ def make_user(db_session: Any) -> Callable[[str, Levels | str], AppUser]:
             )
             group = AccessGroup(name=login, source="local", role=access_role)
             db_session.add(group)
-            # Старая колонка ещё читается находками; права по ней — самые узкие.
-            role = "auditor"
-        user = AppUser(login=login, password_hash=hash_password(TEST_PASSWORD), role=role)
+        user = AppUser(login=login, password_hash=hash_password(TEST_PASSWORD))
         db_session.add(user)
         db_session.commit()
         db_session.refresh(user)
@@ -291,11 +288,23 @@ def fam(monkeypatch: pytest.MonkeyPatch) -> FakeProvider:
     return fake
 
 
+#: Группы из OIDC фикстуры `oidc_enabled`: значение claim (оно же имя группы) → встроенная роль.
+OIDC_GROUPS = {"stools-admins": "Администратор", "stools-analysts": "Аналитик", "stools-auditors": "Аудитор"}
+
+
 @pytest.fixture
 def oidc_enabled(auth_client: TestClient, fam: FakeProvider) -> FakeProvider:
-    """Включённый вход через провайдера. Публичный адрес — https: по http
-    настройки пускают только localhost, а TestClient зовётся testserver."""
+    """Включённый вход через провайдера и три группы из OIDC со встроенными ролями.
+    Публичный адрес — https: по http настройки пускают только localhost, а
+    TestClient зовётся testserver."""
     fam.redirect_uri = "https://testserver/api/auth/oidc/callback"
+    roles = {r["name"]: r["id"] for r in auth_client.get("/api/settings/roles").json()}
+    for name, role in OIDC_GROUPS.items():
+        response = auth_client.post(
+            "/api/settings/groups",
+            json={"name": name, "source": "oidc", "external_name": name, "role_id": roles[role]},
+        )
+        assert response.status_code == 201, response.text
     body = {
         "enabled": True,
         "display_name": "FAM",
@@ -307,11 +316,6 @@ def oidc_enabled(auth_client: TestClient, fam: FakeProvider) -> FakeProvider:
         "groups_claim": "groups",
         "login_claim": "preferred_username",
         "name_claim": "name",
-        "group_roles": [
-            {"group": "stools-admins", "role": "admin"},
-            {"group": "stools-analysts", "role": "analyst"},
-            {"group": "stools-auditors", "role": "auditor"},
-        ],
     }
     assert auth_client.put("/api/settings/oidc", json=body).status_code == 204
     return fam

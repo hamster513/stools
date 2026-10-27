@@ -308,7 +308,7 @@ def test_reconcile_asks_first_seen_once_for_many_rows(
 
 
 def test_safe_reconcile_failure_keeps_callers_pending_work(db_session: Any, adapter: FakeAdapter) -> None:
-    db_session.add(AppUser(login="pending1", password_hash="x", role="analyst"))
+    db_session.add(AppUser(login="pending1", password_hash="x"))
     adapter.fail = True
     safe_reconcile(db_session, "test", 1, "импорт")
     db_session.commit()
