@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react'
 import { useMe } from '@/api/auth'
-import { matchPath, Redirect, useRouter } from '@/lib/router'
+import { Redirect, useRouter } from '@/lib/router'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { atLeast, type Area, type Level } from '@/platform/access/types'
@@ -13,32 +13,23 @@ import { SettingsPage as ToolboxSettingsPage } from '@/modules/toolbox/pages/Set
 import { SettingsSidebar } from './SettingsSidebar'
 import { Forbidden } from './Forbidden'
 import { ProfilePage } from './pages/ProfilePage'
-import { UsersPage } from './pages/UsersPage'
-import { SecurityPage } from './pages/SecurityPage'
-import { OidcPage } from './pages/OidcPage'
+import { AccessPage } from './pages/AccessPage'
 import { AuditPage } from './pages/AuditPage'
 import { LlmPage } from './pages/LlmPage'
 import { AttackSettingsPage } from './pages/AttackSettingsPage'
 import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
 import { DataStatusPage } from './pages/DataStatusPage'
-import { RolesPage } from './pages/RolesPage'
-import { RoleEditor } from './pages/RoleEditor'
-import { GroupsPage } from './pages/GroupsPage'
-import { GroupEditor } from './pages/GroupEditor'
 
 /**
  * Раздел → какая область и какой уровень нужны, чтобы его открыть. null —
  * открыт всем: профиль и статусы находок (сохранить их может только
  * администратор платформы — это проверяет сама страница).
  */
-const PAGES = new Map<string, { page: ComponentType; detail?: ComponentType; need: [Area, Level] | null }>([
+const PAGES = new Map<string, { page: ComponentType; nested?: boolean; need: [Area, Level] | null }>([
   ['profile', { page: ProfilePage, need: null }],
   ['findings', { page: FindingsSettingsPage, need: null }],
-  ['users', { page: UsersPage, need: ['platform', 'read'] }],
-  ['groups', { page: GroupsPage, detail: GroupEditor, need: ['platform', 'read'] }],
-  ['roles', { page: RolesPage, detail: RoleEditor, need: ['platform', 'read'] }],
-  ['security', { page: SecurityPage, need: ['platform', 'read'] }],
-  ['oidc', { page: OidcPage, need: ['platform', 'read'] }],
+  // «Доступ» сам разбирает хвост пути: вкладки и карточки групп и ролей.
+  ['access', { page: AccessPage, nested: true, need: ['platform', 'read'] }],
   ['audit', { page: AuditPage, need: ['platform', 'read'] }],
   ['llm', { page: LlmPage, need: ['platform', 'admin'] }],
   ['attack', { page: AttackSettingsPage, need: ['attack', 'write'] }],
@@ -63,9 +54,8 @@ export function SettingsShell() {
   const { data: me } = useMe()
   // /settings/ с хвостовым слэшем — тот же корень, что и /settings.
   const base = path.length > 1 ? path.replace(/\/+$/, '') : path
-  // /settings/<раздел> и карточка внутри раздела /settings/<раздел>/<id | new>.
-  const card = matchPath('/settings/:section/:id', base)
-  const section = (card ?? matchPath('/settings/:section', base))?.section ?? null
+  // /settings/<раздел>; у вложенных разделов (nested) дальше идёт их собственный путь.
+  const [, section = null, ...rest] = base.split('/').filter(Boolean)
   const entry = section ? PAGES.get(section) : undefined
 
   // Голый /settings — сводка «Данные», её видят все: строки сервер отбирает
@@ -74,9 +64,9 @@ export function SettingsShell() {
   // пункт, и непонятно, что открыто.
   let page: ReactNode
   if (base === '/settings') page = <DataStatusPage />
-  else if (!entry || (card && !entry.detail)) page = <Redirect to="/settings" />
+  else if (!entry || (rest.length > 0 && !entry.nested)) page = <Redirect to="/settings" />
   else if (entry.need && !(me && atLeast(me.access, ...entry.need))) page = <Forbidden kind="settings" />
-  else page = card && entry.detail ? <entry.detail /> : <entry.page />
+  else page = <entry.page />
 
   return (
     <AppShell sidebar={<SettingsSidebar />}>

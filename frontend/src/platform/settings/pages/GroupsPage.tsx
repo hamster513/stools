@@ -74,7 +74,7 @@ export function GroupsPage() {
           </p>
         </div>
         {can.platform.admin && (
-          <Button variant="primary" className="shrink-0 whitespace-nowrap" onClick={() => navigate('/settings/groups/new')}>
+          <Button variant="primary" className="shrink-0 whitespace-nowrap" onClick={() => navigate('/settings/access/groups/new')}>
             <Plus size={14} aria-hidden />
             Новая группа
           </Button>
@@ -129,7 +129,7 @@ export function GroupsPage() {
               {rows.map((g) => (
                 <tr
                   key={g.id}
-                  {...clickableRow(() => navigate(`/settings/groups/${g.id}`))}
+                  {...clickableRow(() => navigate(`/settings/access/groups/${g.id}`))}
                   className={cn(ROW_FOCUS, 'cursor-pointer border-b border-grid hover:bg-row-hover')}
                 >
                   <td className={`${CELL} break-words font-medium text-text`}>{g.name}</td>

@@ -3,7 +3,7 @@ import { CheckCircle2, Copy, PlugZap, Save, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
-import { FullPageSpinner } from '@/components/ui/Spinner'
+import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
@@ -29,7 +29,9 @@ function payload(form: OidcSettings): OidcSettingsInput {
 }
 
 /**
- * Вход через провайдера OpenID Connect — Avanpost FAM или любой другой.
+ * Блок «Вход по OIDC» вкладки «Вход» (якорь `#oidc`): вход через
+ * провайдера OpenID Connect — Avanpost FAM или любой другой. Прокрутку и
+ * отступы задаёт вкладка.
  *
  * Права вошедшего задают группы с источником OIDC: их заводят на странице
  * «Группы», здесь остаётся только подключение к провайдеру. Без единой
@@ -58,15 +60,13 @@ export function OidcPage() {
 
   if (oidc.isError) {
     return (
-      <div className="p-6">
-        <ErrorState
-          message={oidc.error?.message ?? 'Не удалось загрузить настройки входа'}
-          onRetry={() => oidc.refetch()}
-        />
-      </div>
+      <ErrorState
+        message={oidc.error?.message ?? 'Не удалось загрузить настройки входа'}
+        onRetry={() => oidc.refetch()}
+      />
     )
   }
-  if (!form) return <FullPageSpinner />
+  if (!form) return <Spinner className="mx-auto my-8" />
 
   function edit(update: (prev: OidcSettings) => OidcSettings) {
     setDirty(true)
@@ -109,10 +109,10 @@ export function OidcPage() {
   const result = test.data
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <section id="oidc" className="scroll-mt-6">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">Вход по OIDC</h1>
+          <h2 className="text-base font-semibold text-text">Вход по OIDC</h2>
           <p className="max-w-2xl text-xs text-text-secondary">
             Вход через Avanpost FAM или другого провайдера OpenID Connect. Вход по паролю при этом
             остаётся: он нужен, пока провайдер настраивается, и на случай, когда он недоступен.
@@ -264,14 +264,14 @@ export function OidcPage() {
 
         <p className="text-xs text-text-secondary">
           Группы из OIDC настраиваются в разделе{' '}
-          <Link to="/settings/groups" className="text-primary hover:underline">
+          <Link to="/settings/access/groups" className="text-primary hover:underline">
             Группы
           </Link>{' '}
           — сейчас их {groups.data ? groups.data.filter((g) => g.source === 'oidc').length : '…'}
         </p>
 
         <section className="rounded border border-grid bg-surface p-4">
-          <h2 className="mb-1 text-sm font-semibold text-text">Claim'ы и scope</h2>
+          <h3 className="mb-1 text-sm font-semibold text-text">Claim'ы и scope</h3>
           <p className="mb-4 text-xs text-text-secondary">
             Что запрашивать у провайдера и из каких полей ответа брать группы, логин и имя.
             Значения по умолчанию подходят для FAM.
@@ -315,6 +315,6 @@ export function OidcPage() {
           </div>
         </section>
       </fieldset>
-    </div>
+    </section>
   )
 }

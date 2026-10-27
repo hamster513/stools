@@ -24,10 +24,10 @@ function person(login: string, displayName: string | null): string {
   return displayName ? `${displayName} (${login})` : login
 }
 
-/** Карточка группы: `/settings/groups/{id}` и `/settings/groups/new`. */
+/** Карточка группы: `/settings/access/groups/{id}` и `/settings/access/groups/new`. */
 export function GroupEditor() {
   const { path } = useRouter()
-  const rawId = matchPath('/settings/groups/:id', path)?.id
+  const rawId = matchPath('/settings/access/groups/:id', path)?.id
   const isNew = rawId === 'new'
   const group = useGroup(isNew ? null : Number(rawId))
   const roles = useRoles()
@@ -54,7 +54,7 @@ export function GroupEditor() {
           icon={UsersRound}
           title="Группа не найдена"
           description="Возможно, её уже удалили."
-          action={<Link to="/settings/groups" className="text-sm text-primary hover:underline">К списку групп</Link>}
+          action={<Link to="/settings/access/groups" className="text-sm text-primary hover:underline">К списку групп</Link>}
         />
       </div>
     )
@@ -91,7 +91,7 @@ function GroupForm({ group, roles }: { group?: GroupRow; roles: RoleRow[] }) {
     else {
       create.mutate(
         { ...common, source },
-        { onSuccess: (created) => navigate(`/settings/groups/${created.id}`, { replace: true }) },
+        { onSuccess: (created) => navigate(`/settings/access/groups/${created.id}`, { replace: true }) },
       )
     }
   }
@@ -99,12 +99,12 @@ function GroupForm({ group, roles }: { group?: GroupRow; roles: RoleRow[] }) {
   function removeGroup() {
     if (!group) return
     if (!window.confirm(`Удалить группу «${group.name}»? Её участники потеряют права, которые давала эта роль.`)) return
-    remove.mutate(group.id, { onSuccess: () => navigate('/settings/groups') })
+    remove.mutate(group.id, { onSuccess: () => navigate('/settings/access/groups') })
   }
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <Link to="/settings/groups" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text">
+      <Link to="/settings/access/groups" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text">
         <ArrowLeft size={13} aria-hidden />
         Группы
       </Link>

@@ -4,11 +4,7 @@ import {
   KeyRound,
   ListChecks,
   ScrollText,
-  ShieldCheck,
-  UserCog,
   UserRound,
-  Users,
-  UsersRound,
   type LucideIcon,
 } from 'lucide-react'
 import { useMe } from '@/api/auth'
@@ -19,11 +15,7 @@ import { MODULES } from '@/platform/modules'
 
 /** Разделы платформы: видны при чтении платформы, «Модель LLM» — её администратору. */
 const PLATFORM_ITEMS = [
-  { key: 'users', label: 'Пользователи', icon: Users, admin: false },
-  { key: 'groups', label: 'Группы', icon: UsersRound, admin: false },
-  { key: 'roles', label: 'Роли', icon: UserCog, admin: false },
-  { key: 'security', label: 'Безопасность', icon: ShieldCheck, admin: false },
-  { key: 'oidc', label: 'Вход по OIDC', icon: KeyRound, admin: false },
+  { key: 'access', label: 'Доступ', icon: KeyRound, admin: false },
   { key: 'audit', label: 'Журнал действий', icon: ScrollText, admin: false },
   { key: 'llm', label: 'Модель LLM', icon: Bot, admin: true },
 ] as const
@@ -52,7 +44,7 @@ function NavItem({
   className?: string
 }) {
   const { path } = useRouter()
-  // Карточка внутри раздела (/settings/roles/3) подсвечивает свой раздел.
+  // Карточка внутри раздела (/settings/access/roles/3) подсвечивает свой раздел.
   const active = path === to || (to !== '/settings' && path.startsWith(`${to}/`))
   return (
     <Link

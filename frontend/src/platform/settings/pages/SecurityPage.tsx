@@ -3,15 +3,16 @@ import { CheckCircle2, Save } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
-import { FullPageSpinner } from '@/components/ui/Spinner'
+import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { useSaveSecurity, useSecurity } from '@/platform/settings/api/queries'
 import type { SecuritySettings } from '@/platform/settings/api/types'
 
 /**
- * Срок сессии, таймаут бездействия и хранение журнала. Три числа, от
- * которых зависит, как быстро уходит забытая на чужом мониторе сессия и
- * как долго остаётся след действий.
+ * Блок «Пароли и сессии» вкладки «Вход»: срок сессии, таймаут
+ * бездействия и хранение журнала. Три числа, от которых зависит, как
+ * быстро уходит забытая на чужом мониторе сессия и как долго остаётся
+ * след действий. Прокрутку и отступы задаёт вкладка.
  */
 export function SecurityPage() {
   const security = useSecurity()
@@ -29,15 +30,13 @@ export function SecurityPage() {
 
   if (security.isError) {
     return (
-      <div className="p-6">
-        <ErrorState
-          message={security.error?.message ?? 'Не удалось загрузить настройки безопасности'}
-          onRetry={() => security.refetch()}
-        />
-      </div>
+      <ErrorState
+        message={security.error?.message ?? 'Не удалось загрузить настройки безопасности'}
+        onRetry={() => security.refetch()}
+      />
     )
   }
-  if (!form) return <FullPageSpinner />
+  if (!form) return <Spinner className="mx-auto my-8" />
 
   function patch(change: Partial<SecuritySettings>) {
     setDirty(true)
@@ -56,10 +55,10 @@ export function SecurityPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <section>
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">Безопасность</h1>
+          <h2 className="text-base font-semibold text-text">Пароли и сессии</h2>
           <p className="max-w-2xl text-xs text-text-secondary">
             Правила для всех учёток сразу. Изменения действуют на сессии, которые начнутся после
             сохранения.
@@ -126,6 +125,6 @@ export function SecurityPage() {
           />
         </Field>
       </section>
-    </div>
+    </section>
   )
 }

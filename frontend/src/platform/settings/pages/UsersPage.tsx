@@ -77,7 +77,7 @@ function GroupPicker({
     return (
       <p className="text-xs text-text-secondary">
         Локальных групп нет — создайте их в разделе{' '}
-        <Link to="/settings/groups" className="text-primary hover:underline">
+        <Link to="/settings/access/groups" className="text-primary hover:underline">
           Группы
         </Link>
         .

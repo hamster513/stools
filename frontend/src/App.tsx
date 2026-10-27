@@ -26,7 +26,8 @@ const MOVED_SETTINGS = new Set(['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', '
 
 /**
  * Прежние адреса: /snapshots/…, /upload (до появления модулей), /siem/upload
- * и /<модуль>/settings (до переезда настроек в /settings/<модуль>). На них ведут
+ * и /<модуль>/settings (до переезда настроек в /settings/<модуль>), а также
+ * /settings/users|groups|roles|security|oidc (до объединения в «Доступ»). На них ведут
  * закладки и ссылки в чужих инструкциях — переводим на новые, а не ломаем.
  */
 function legacyPath(path: string, tail: string): string | null {
@@ -34,6 +35,11 @@ function legacyPath(path: string, tail: string): string | null {
   if (path === '/upload' || path === '/siem/upload') return `/settings/siem${tail}`
   const m = /^\/([a-z]+)\/settings$/.exec(path)
   if (m && MOVED_SETTINGS.has(m[1])) return `/settings/${m[1]}${tail}`
+  const access = /^\/settings\/(users|groups|roles)(\/.*)?$/.exec(path)
+  if (access) return `/settings/access/${access[1]}${access[2] ?? ''}${tail}`
+  if (/^\/settings\/security\/?$/.test(path)) return `/settings/access/login${tail}`
+  // Свой якорь заменяет прежний: OIDC теперь блок вкладки «Вход», а не отдельная страница.
+  if (/^\/settings\/oidc\/?$/.test(path)) return `/settings/access/login${tail.split('#')[0]}#oidc`
   return null
 }
 

@@ -87,7 +87,7 @@ function LevelRadios({
 }
 
 /**
- * Карточка роли: `/settings/roles/{id}` и `/settings/roles/new`.
+ * Карточка роли: `/settings/access/roles/{id}` и `/settings/access/roles/new`.
  * Предзаполнение для «Скопировать как новую» передаётся параметром адреса
  * `?copy=<id роли>`: роутер состояния истории не несёт, а адрес переживает
  * перезагрузку страницы.
@@ -97,7 +97,7 @@ export function RoleEditor() {
   const params = useSearchParams()
   const roles = useRoles()
 
-  const rawId = matchPath('/settings/roles/:id', path)?.id
+  const rawId = matchPath('/settings/access/roles/:id', path)?.id
   const isNew = rawId === 'new'
   const copyOf = params.get('copy')
 
@@ -118,7 +118,7 @@ export function RoleEditor() {
           icon={UserCog}
           title="Роль не найдена"
           description="Возможно, её уже удалили."
-          action={<Link to="/settings/roles" className="text-sm text-primary hover:underline">К списку ролей</Link>}
+          action={<Link to="/settings/access/roles" className="text-sm text-primary hover:underline">К списку ролей</Link>}
         />
       </div>
     )
@@ -156,13 +156,13 @@ function RoleForm({ role, template }: { role?: RoleRow; template?: RoleRow }) {
   function submit() {
     const body = { name: name.trim(), description: description.trim(), levels }
     if (role) update.mutate({ id: role.id, body })
-    else create.mutate(body, { onSuccess: (created) => navigate(`/settings/roles/${created.id}`, { replace: true }) })
+    else create.mutate(body, { onSuccess: (created) => navigate(`/settings/access/roles/${created.id}`, { replace: true }) })
   }
 
   function removeRole() {
     if (!role) return
     if (!window.confirm(`Удалить роль «${role.name}»?`)) return
-    remove.mutate(role.id, { onSuccess: () => navigate('/settings/roles') })
+    remove.mutate(role.id, { onSuccess: () => navigate('/settings/access/roles') })
   }
 
   const deleteWhy = !role
@@ -175,7 +175,7 @@ function RoleForm({ role, template }: { role?: RoleRow; template?: RoleRow }) {
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <Link to="/settings/roles" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text">
+      <Link to="/settings/access/roles" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text">
         <ArrowLeft size={13} aria-hidden />
         Роли
       </Link>
@@ -250,7 +250,7 @@ function RoleForm({ role, template }: { role?: RoleRow; template?: RoleRow }) {
             </Button>
           )}
           {role && (
-            <Button onClick={() => navigate(`/settings/roles/new?copy=${role.id}`)}>
+            <Button onClick={() => navigate(`/settings/access/roles/new?copy=${role.id}`)}>
               <Copy size={14} aria-hidden />
               Скопировать как новую
             </Button>

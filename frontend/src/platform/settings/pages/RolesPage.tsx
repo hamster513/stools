@@ -50,7 +50,7 @@ export function RolesPage() {
           </p>
         </div>
         {can.platform.admin && (
-          <Button variant="primary" className="shrink-0 whitespace-nowrap" onClick={() => navigate('/settings/roles/new')}>
+          <Button variant="primary" className="shrink-0 whitespace-nowrap" onClick={() => navigate('/settings/access/roles/new')}>
             <Plus size={14} aria-hidden />
             Новая роль
           </Button>
@@ -72,7 +72,7 @@ export function RolesPage() {
               {roles.data.map((r) => (
                 <tr
                   key={r.id}
-                  {...clickableRow(() => navigate(`/settings/roles/${r.id}`))}
+                  {...clickableRow(() => navigate(`/settings/access/roles/${r.id}`))}
                   className={cn(ROW_FOCUS, 'cursor-pointer border-b border-grid hover:bg-row-hover')}
                 >
                   <td className={`${CELL} break-words font-medium text-text`}>{r.name}</td>
