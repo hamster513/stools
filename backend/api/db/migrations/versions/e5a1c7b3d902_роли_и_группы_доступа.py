@@ -5,7 +5,7 @@ Revises: 8aacd2621120
 Create Date: 2026-10-27 12:00:00.000000
 
 Спека ролей §2 «Миграция», шаги 1–4: четыре таблицы; три встроенные роли и три локальные группы;
-членство по `app_user.role`; OIDC `group_roles` из настроек становятся группами `source='oidc'`, а ключ
+членство локальных учёток по `app_user.role` (учётки OIDC получают его при входе); OIDC `group_roles` из настроек становятся группами `source='oidc'`, а ключ
 `group_roles` из JSON уходит. Колонку `app_user.role` эта миграция не трогает — её удаляет вторая
 (миграция B), когда код перестанет её читать.
 
@@ -88,9 +88,12 @@ def upgrade() -> None:
             sa.text("INSERT INTO access_group (name, source, role_id) VALUES (:n, 'local', :r)"),
             {"n": group_name, "r": role_ids[old]},
         )
+        # Только локальные учётки: локальную группу вход по OIDC не снимает, и учётка OIDC
+        # сохранила бы права вопреки каталогу. Учётки OIDC получат членство при следующем входе.
         conn.execute(sa.text(
             "INSERT INTO access_membership (user_id, group_id) "
-            "SELECT u.id, g.id FROM app_user u, access_group g WHERE u.role = :old AND g.name = :n"
+            "SELECT u.id, g.id FROM app_user u, access_group g "
+            "WHERE u.role = :old AND u.auth_source = 'local' AND g.name = :n"
         ), {"old": old, "n": group_name})
 
     row = conn.execute(sa.text("SELECT value_json FROM app_setting WHERE key = :k"), {"k": OIDC_KEY}).first()

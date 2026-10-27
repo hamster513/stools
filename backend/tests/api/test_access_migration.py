@@ -61,6 +61,11 @@ def test_roles_groups_and_membership_move_and_come_back(scratch: tuple[Engine, C
                 "INSERT INTO app_user (login, role, is_active, auth_source, created_at) "
                 "VALUES (:l, :r, true, 'local', now())"
             ), {"l": login, "r": role})
+        # Учётка OIDC с прежней ролью: локальной группы не получает — членство придёт при входе из каталога.
+        conn.execute(text(
+            "INSERT INTO app_user (login, role, is_active, auth_source, oidc_subject, created_at) "
+            "VALUES ('sso', 'admin', true, 'oidc', 'sub-sso', now())"
+        ))
         conn.execute(text("INSERT INTO app_setting (key, value_json, updated_at) VALUES ('oidc', :v, now())"), {
             "v": json.dumps({"enabled": True, "client_id": "c", "group_roles": GROUP_ROLES}, ensure_ascii=False),
         })
@@ -95,6 +100,9 @@ def test_roles_groups_and_membership_move_and_come_back(scratch: tuple[Engine, C
         "SELECT u.login, g.name FROM access_membership m JOIN app_user u ON u.id = m.user_id "
         "JOIN access_group g ON g.id = m.group_id ORDER BY u.login"
     )) == [("adm", "Администраторы"), ("ana", "Аналитики"), ("aud", "Аудиторы")]
+    assert _rows(engine, (
+        "SELECT count(*) FROM access_membership m JOIN app_user u ON u.id = m.user_id WHERE u.login = 'sso'"
+    )) == [(0,)]
     settings = json.loads(str(_rows(engine, "SELECT value_json FROM app_setting WHERE key = 'oidc'")[0][0]))
     assert "group_roles" not in settings and settings["client_id"] == "c"
     # Миграция A колонку app_user.role не трогает.
@@ -115,7 +123,7 @@ def test_roles_groups_and_membership_move_and_come_back(scratch: tuple[Engine, C
     command.downgrade(cfg, BEFORE)
     assert not {"access_role", "access_group", "access_membership"} & set(inspect(engine).get_table_names())
     assert _rows(engine, "SELECT login, role FROM app_user ORDER BY login") == [
-        ("adm", "admin"), ("alone", "auditor"), ("ana", "analyst"), ("aud", "admin"),
+        ("adm", "admin"), ("alone", "auditor"), ("ana", "analyst"), ("aud", "admin"), ("sso", "auditor"),
     ]
     restored = json.loads(str(_rows(engine, "SELECT value_json FROM app_setting WHERE key = 'oidc'")[0][0]))
     assert sorted((p["group"], p["role"]) for p in restored["group_roles"]) == [
