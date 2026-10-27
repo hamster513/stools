@@ -323,7 +323,7 @@ def _platform_need(method: str, path: str) -> tuple[str, str] | None:
     """Спека ролей §1.2 — независимо от api/rbac.py."""
     read = method == "GET"
     if path.startswith("/api/settings/attack"):
-        return ("attack", "read") if read else ("attack", "admin")
+        return None if read else ("attack", "admin")
     if read and path in ("/api/settings/llm", "/api/settings/findings", "/api/settings/data-status"):
         return None
     return ("platform", "read") if read else ("platform", "admin")
@@ -370,6 +370,8 @@ def test_attack_settings_belong_to_attack_module(monkeypatch: pytest.MonkeyPatch
     denied = platform_admin.post("/api/settings/attack")
     assert denied.status_code == 403
     assert denied.json()["detail"] == "нет доступа: attack, нужен уровень администратор"
+    # Состояние матрицы читает любой вошедший, даже без групп.
+    assert client_as({}).get("/api/settings/attack").status_code != 403
 
 
 def test_no_groups_user(client_as: Any) -> None:

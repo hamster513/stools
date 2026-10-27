@@ -54,14 +54,13 @@ def changes_summary(fields: list[str]) -> str:
 
 
 def _groups_label(db: Session, user: AppUser | None) -> str | None:
-    """Группы пользователя через запятую. Колонка String(16): длинный список обрезается,
-    иначе Postgres отверг бы вставку и событие пропало бы из журнала целиком."""
+    """Группы пользователя через запятую — что у него было на момент действия."""
     if user is None:
         return None
     # Лениво: пакет api.platform тянет роутеры модулей, а они импортируют этот модуль.
     from api.platform.services.access import groups_of
 
-    return ", ".join(g.name for g in groups_of(db, user.id))[:16].rstrip(", ") or None
+    return ", ".join(g.name for g in groups_of(db, user.id)) or None
 
 
 def record(

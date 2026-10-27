@@ -175,7 +175,8 @@ class AuditEvent(Base):
         ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True, index=True
     )
     login: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: Группы пользователя через запятую на момент действия.
+    role: Mapped[str | None] = mapped_column(String(255), nullable=True)
     method: Mapped[str] = mapped_column(String(8))
     path: Mapped[str] = mapped_column(Text)
     status: Mapped[int] = mapped_column(Integer)

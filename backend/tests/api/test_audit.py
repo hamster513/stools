@@ -8,9 +8,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 import api.audit as audit_module
-from api.db.models import AuditEvent
+from api.db.models import AccessGroup, AccessMembership, AccessRole, AppUser, AuditEvent
 from api.platform.routers.audit import CSV_HEADER
 from kbaudit.attack.reference import rows_from_xlsx
 from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
@@ -33,6 +34,23 @@ def test_login_logout_and_failed_login_are_recorded(client: TestClient, test_use
     ]
     assert events[0].user_id is None and events[0].login == TEST_LOGIN
     assert events[1].user_id == test_user.id and events[1].role == "Администраторы"
+
+
+def test_role_holds_every_group_in_full(client_as: Callable[..., TestClient], db_session: Any) -> None:
+    """Группы пишутся целиком: строка длиннее старой колонки String(16) не обрезается."""
+    long_name = "Аналитики SIEM и VM (OIDC)"
+    client = client_as("analyst")
+    user = db_session.query(AppUser).filter_by(login="user-analyst").one()
+    role = db_session.scalars(select(AccessRole).where(AccessRole.name == "Аудитор")).one()
+    group = AccessGroup(name=long_name, source="local", role_id=role.id)
+    db_session.add(group)
+    db_session.flush()
+    db_session.add(AccessMembership(user_id=user.id, group_id=group.id))
+    db_session.commit()
+    assert client.post("/api/auth/logout").status_code == 204
+    event = _events(db_session)[-1]
+    assert event.path == "/api/auth/logout"
+    assert event.role is not None and sorted(event.role.split(", ")) == sorted(["Аналитики", long_name])
 
 
 def test_reads_are_not_recorded_but_writes_and_denials_are(

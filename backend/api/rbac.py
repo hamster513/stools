@@ -4,8 +4,8 @@
 (спека ролей §1). Под /api/<модуль>/ чтение требует `read`, запись —
 `write`, а настройка модуля (шаблоны `MODULE_ADMIN_WRITES`) — `admin`.
 Под /api/settings/ — область `platform` (чтение — `read`, запись — `admin`),
-кроме матрицы ATT&CK: она настройка модуля `attack`. Свой профиль
-(/api/auth/*), состояние модели и правила находок открыты любому вошедшему;
+кроме матрицы ATT&CK: её запись — настройка модуля `attack`. Свой профиль
+(/api/auth/*), состояние модели, матрицы и правила находок открыты любому вошедшему;
 находки и справочник исполнителей проверяют уровень в модуле находки сами.
 
 Зависимость монтируется в api/main.py на каждый роутер, поэтому новая
@@ -64,7 +64,8 @@ def needed(method: str, path: str) -> tuple[str, str] | None:
         line = f"{method} {path}"
         return parts[2], "admin" if any(p.fullmatch(line) for p in MODULE_ADMIN_WRITES) else "write"
     if path.startswith("/api/settings/attack"):
-        return "attack", "read" if read else "admin"
+        # Состояние базы ATT&CK показывают страницы всех модулей; меняет его администратор модуля ATT&CK.
+        return None if read else ("attack", "admin")
     if read and path in OPEN_SETTINGS_READS:
         return None
     if path.startswith("/api/settings/"):
