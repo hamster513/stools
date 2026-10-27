@@ -10,7 +10,7 @@ import { ExportButton } from '@/platform/filters/ExportButton'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
 import { toggleValue, valueChips } from '@/platform/findings/facets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
-import { ROLE_TITLES, type AuditFilters } from '@/platform/settings/api/types'
+import type { AuditFilters } from '@/platform/settings/api/types'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
@@ -172,7 +172,7 @@ export function AuditPage() {
                     <td className={CELL}>
                       <div className="truncate text-text" title={e.login}>{e.login}</div>
                       {e.role && (
-                        <div className="text-[11px] text-text-secondary">{ROLE_TITLES[e.role]}</div>
+                        <div className="text-[11px] text-text-secondary">{e.role}</div>
                       )}
                     </td>
                     <td className={`${CELL} font-mono break-all text-text`}>

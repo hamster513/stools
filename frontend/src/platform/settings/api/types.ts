@@ -1,14 +1,5 @@
-import type { AuthSource } from '@/api/auth'
-
-/** Роль учётки в прежней модели прав; уходит вместе со страницей пользователей на группы. */
-export type Role = 'admin' | 'analyst' | 'auditor'
-
-/** Названия ролей для показа человеку: в API роль — код, на экране — слово. */
-export const ROLE_TITLES: Record<Role, string> = {
-  admin: 'администратор',
-  analyst: 'аналитик',
-  auditor: 'аудитор',
-}
+import type { AuthSource, MeGroup } from '@/api/auth'
+import type { Access } from '@/platform/access/types'
 
 /** Минимальная длина пароля — та же, что проверяет сервер. */
 export const MIN_PASSWORD = 8
@@ -17,7 +8,10 @@ export interface UserRow {
   id: number
   login: string
   display_name: string | null
-  role: Role
+  /** Группы учётки: local ведёт администратор, oidc приходят из провайдера при входе. */
+  groups: MeGroup[]
+  /** Итоговые права: сервер свёл роли всех групп, побеждает старший уровень. */
+  access: Access
   is_active: boolean
   last_login_at: string | null
   created_at: string
@@ -27,14 +21,16 @@ export interface UserRow {
 export interface CreateUserRequest {
   login: string
   display_name: string | null
-  role: Role
+  /** Только локальные группы. */
+  group_ids: number[]
   password: string
 }
 
 /** Любое поле можно опустить: PATCH меняет только присланное. */
 export interface PatchUserRequest {
   display_name?: string | null
-  role?: Role
+  /** Полный список локальных групп; oidc-группы не трогаются. */
+  group_ids?: number[]
   is_active?: boolean
 }
 
@@ -67,12 +63,6 @@ export interface TestLlmResponse {
   error: string | null
 }
 
-/** Группа провайдера и роль, которую она даёт в STools. */
-export interface GroupRole {
-  group: string
-  role: Role
-}
-
 /** Настройки входа через провайдера. Секрет наружу не отдаётся: в ответе
  *  на его месте маска, а `has_secret` говорит, задан ли он на самом деле. */
 export interface OidcSettings {
@@ -88,7 +78,6 @@ export interface OidcSettings {
   groups_claim: string
   login_claim: string
   name_claim: string
-  group_roles: GroupRole[]
 }
 
 /** То же, но на запись: маску и собранный адрес возврата сервер не ждёт. */
@@ -112,7 +101,8 @@ export interface AuditItem {
   at: string
   user_id: number | null
   login: string
-  role: Role | null
+  /** Названия групп пользователя на момент действия. */
+  role: string | null
   method: string
   path: string
   status: number
