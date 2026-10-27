@@ -5,7 +5,7 @@ group: module
 module: siem
 order: 1
 routes: ["/siem", "/siem/*", "/settings/siem", "/settings/siem/*"]
-where: Модуль SIEM
+where: Модуль SIEM → «Обзор»
 levels:
   read: Смотреть правила, клоны, разметку ATT&CK, профиль инсталляции и находки, выгружать таблицы.
   write: Загружать выгрузку базы знаний, менять статусы находок.

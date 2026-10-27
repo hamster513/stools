@@ -7,7 +7,7 @@ order: 8
 routes: ["/settings/profile"]
 where: Настройки → «Мой профиль»
 levels:
-  read: Доступно всем вошедшим.
+  any: Менять своё имя, тему оформления и пароль.
 concepts: [group]
 ---
 

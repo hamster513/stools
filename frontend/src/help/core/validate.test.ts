@@ -173,6 +173,12 @@ test('levels без единого уровня и where из пробелов �
   ])
 })
 
+test('levels только с any (страница открыта всем) считается заполненным', () => {
+  const list = clean()
+  list[2] = { ...list[2], levels: { any: 'Доступно всем вошедшим.' } }
+  assert.deepEqual(validate(list, []), [])
+})
+
 test('нет slug / title у любой статьи', () => {
   const list = clean()
   list[2] = { ...list[2], slug: '', title: '' }

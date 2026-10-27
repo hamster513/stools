@@ -3,6 +3,7 @@ slug: access-login
 title: Вход: сессии и OIDC
 group: settings
 module: platform
+section: Доступ
 order: 4
 routes: ["/settings/access/login"]
 where: Настройки → Доступ → «Вход»

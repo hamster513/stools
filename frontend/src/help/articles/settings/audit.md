@@ -3,9 +3,9 @@ slug: audit
 title: Журнал действий
 group: settings
 module: platform
-order: 7
+order: 5
 routes: ["/settings/audit"]
-where: Настройки → Платформа → «Журнал действий»
+where: Настройки → «Журнал действий»
 levels:
   read: Смотреть журнал, фильтровать и выгружать его в CSV или XLSX.
   admin: То же; срок хранения записей задаётся на вкладке «Доступ → Вход».

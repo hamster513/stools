@@ -69,7 +69,8 @@ export function HelpToc({ active }: { active: string | null }) {
                     >
                       <ChevronRight size={14} aria-hidden className={cn('transition-transform', open && 'rotate-90')} />
                     </button>
-                    <Leaf item={item} active={item.slug === active} />
+                    {/* Узел раздела («Доступ») ведёт на свою первую статью, а она есть и среди детей: подсвечен ребёнок. */}
+                    <Leaf item={item} active={item.slug === active && !item.children.some((c) => c.slug === item.slug)} />
                   </div>
                   {open && (
                     <ul className="mt-0.5 flex flex-col gap-0.5">

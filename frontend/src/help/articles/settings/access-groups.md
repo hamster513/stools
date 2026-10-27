@@ -3,6 +3,7 @@ slug: access-groups
 title: Группы
 group: settings
 module: platform
+section: Доступ
 order: 2
 routes: ["/settings/access/groups", "/settings/access/groups/*"]
 where: Настройки → Доступ → «Группы»

@@ -18,9 +18,9 @@ export class HelpParseError extends Error {
 }
 
 const GROUPS: readonly string[] = ['start', 'module', 'settings', 'glossary']
-const STRING_KEYS = ['slug', 'title', 'group', 'module', 'where'] as const
+const STRING_KEYS = ['slug', 'title', 'group', 'module', 'where', 'section'] as const
 const LIST_KEYS = ['routes', 'concepts'] as const
-const LEVEL_KEYS = ['read', 'write', 'admin'] as const
+const LEVEL_KEYS = ['read', 'write', 'admin', 'any'] as const
 
 /** Строка-ограждение кодового блока (``` или ~~~): внутри него `## ` не заголовок. */
 export function isFenceLine(line: string): boolean {
@@ -160,7 +160,7 @@ export function parseArticle(file: string, raw: string): Article {
 
       if (indent === 2) {
         if (!inLevels) throw new Error('вложенная строка допустима только внутри блока «levels:»')
-        if (!(LEVEL_KEYS as readonly string[]).includes(key)) throw new Error(`неизвестный уровень «${key}» (read, write, admin)`)
+        if (!(LEVEL_KEYS as readonly string[]).includes(key)) throw new Error(`неизвестный уровень «${key}» (read, write, admin, any)`)
         if (seenLevels.has(key)) throw new Error(`уровень «${key}» указан дважды`)
         seenLevels.add(key)
         if (!value) throw new Error(`пустое значение уровня «${key}»`)
@@ -172,7 +172,7 @@ export function parseArticle(file: string, raw: string): Article {
       if (seen.has(key)) throw new Error(`ключ «${key}» указан дважды`)
       seen.add(key)
       if (key === 'levels') {
-        if (value) throw new Error('«levels» — блок: read/write/admin пишутся ниже с отступом в два пробела')
+        if (value) throw new Error('«levels» — блок: read/write/admin/any пишутся ниже с отступом в два пробела')
         hasLevels = inLevels = true
       } else if ((STRING_KEYS as readonly string[]).includes(key)) {
         if (!value) throw new Error(`пустое значение «${key}»`)
@@ -212,6 +212,7 @@ export function parseArticle(file: string, raw: string): Article {
     levels: hasLevels ? levels : undefined,
     concepts: lists.concepts ?? [],
     order,
+    section: strings.section,
     body,
     file,
     sections: splitSections(body),

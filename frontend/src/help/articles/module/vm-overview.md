@@ -5,7 +5,7 @@ group: module
 module: vm
 order: 1
 routes: ["/vm", "/vm/*", "/settings/vm", "/settings/vm/*"]
-where: Модуль VM
+where: Модуль VM → «Обзор»
 levels:
   read: Смотреть обзор, уязвимости и задачи, выгружать таблицы.
   write: Импортировать уязвимости, менять статусы находок.

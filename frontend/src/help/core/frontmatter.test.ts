@@ -136,6 +136,15 @@ test('вложенность вне levels и неверный отступ — 
   assert.equal(parseError('---\nslug: a\ntitle: Т\ngroup: start\nlevels:\n    read: x\n---\n').line, 6)
 })
 
+test('levels.any и section разбираются', () => {
+  const a = parseArticle(
+    'p.md',
+    '---\nslug: p\ntitle: Т\ngroup: settings\nsection: Доступ\nlevels:\n  any: Доступно всем вошедшим.\n---\n## Что это\nТекст.\n',
+  )
+  assert.deepEqual(a.levels, { any: 'Доступно всем вошедшим.' })
+  assert.equal(a.section, 'Доступ')
+})
+
 test('levels: неизвестный уровень, пустое значение, дубль', () => {
   const head = '---\nslug: a\ntitle: Т\ngroup: module\n'
   assert.equal(parseError(head + 'levels:\n  owner: x\n---\n').line, 6)

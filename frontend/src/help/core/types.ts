@@ -12,11 +12,19 @@ export interface ArticleMeta {
   /** шаблоны адресов, для которых статья — «статья страницы» */
   routes: string[]
   where?: string
-  /** «Кому» и блок «Что здесь можно» */
-  levels?: { read?: string; write?: string; admin?: string }
+  /** «Кому» и блок «Что здесь можно»; `any` — страница открыта всем вошедшим, одна строка вместо уровней */
+  levels?: { read?: string; write?: string; admin?: string; any?: string }
   /** slug'и статей словаря */
   concepts: string[]
   order?: number
+  /** узел оглавления внутри группы «Настройки» (например, «Доступ»): статьи с одним section идут под ним */
+  section?: string
+}
+
+export interface TocItem {
+  slug: string
+  title: string
+  children?: TocItem[]
 }
 
 export interface Article extends ArticleMeta {

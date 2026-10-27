@@ -5,13 +5,10 @@ import { MODULES } from '@/platform/modules'
 import { HelpParseError, parseArticle } from './core/frontmatter.ts'
 import { articleForPath } from './core/match.ts'
 import { plainText } from './core/plain.ts'
-import type { Article } from './core/types.ts'
+import { nestSections } from './core/toc.ts'
+import type { Article, TocItem } from './core/types.ts'
 
-export interface TocItem {
-  slug: string
-  title: string
-  children?: TocItem[]
-}
+export type { TocItem }
 
 export interface TocGroup {
   key: 'start' | 'modules' | 'settings' | 'glossary'
@@ -117,7 +114,8 @@ export function toc(): TocGroup[] {
   return [
     { key: 'start', title: 'Начало', items: start.map(item) },
     { key: 'modules', title: 'Модули', items: modules },
-    { key: 'settings', title: 'Настройки', items: platform.map(item) },
+    // Статьи с общим `section` (вкладки «Доступа») — под одним узлом, как в меню настроек.
+    { key: 'settings', title: 'Настройки', items: nestSections(platform) },
     { key: 'glossary', title: 'Словарь', items: glossary.map(item) },
   ]
 }

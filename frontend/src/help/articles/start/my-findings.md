@@ -4,7 +4,7 @@ title: Мои находки
 group: start
 order: 3
 routes: ["/findings"]
-where: Рейка → значок «Мои находки» внизу
+where: Рейка → «Мои находки»
 concepts: [finding, finding-status, risk-accept]
 ---
 

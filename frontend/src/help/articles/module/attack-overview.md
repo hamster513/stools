@@ -5,7 +5,7 @@ group: module
 module: attack
 order: 1
 routes: ["/attack", "/attack/*", "/settings/attack", "/settings/attack/*"]
-where: Модуль ATT&CK
+where: Модуль ATT&CK → «Матрица»
 levels:
   read: Смотреть матрицу, цепочки кампаний и применяемость техник в России.
   write: Загружать применяемость техник в России в «Настройки → Матрица ATT&CK».

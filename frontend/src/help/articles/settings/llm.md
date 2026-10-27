@@ -3,9 +3,9 @@ slug: llm
 title: Модель LLM
 group: settings
 module: platform
-order: 5
+order: 6
 routes: ["/settings/llm"]
-where: Настройки → Платформа → «Модель LLM»
+where: Настройки → «Модель LLM»
 levels:
   admin: Задавать адрес и модели, проверять доступность, разрешать и запрещать обращения к модели.
 concepts: []

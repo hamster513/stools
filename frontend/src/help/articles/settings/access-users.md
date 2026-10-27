@@ -3,6 +3,7 @@ slug: access-users
 title: Пользователи
 group: settings
 module: platform
+section: Доступ
 order: 1
 routes: ["/settings/access/users"]
 where: Настройки → Доступ → «Пользователи»

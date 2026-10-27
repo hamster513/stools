@@ -5,7 +5,7 @@ group: module
 module: ad
 order: 1
 routes: ["/ad", "/ad/*", "/settings/ad", "/settings/ad/*"]
-where: Модуль AD
+where: Модуль AD → домен → «Обзор»
 levels:
   read: Смотреть обзор, сводку, находки и снапшоты доменов, выгружать таблицы.
   write: Загружать выгрузки, запускать сбор, менять статусы находок.

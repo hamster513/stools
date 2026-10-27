@@ -3,6 +3,7 @@ slug: access-roles
 title: Роли и уровни доступа
 group: settings
 module: platform
+section: Доступ
 order: 3
 routes: ["/settings/access/roles", "/settings/access/roles/*"]
 where: Настройки → Доступ → «Роли»

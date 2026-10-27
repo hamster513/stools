@@ -7,7 +7,7 @@ export const BLOCK_TITLE = 'mb-1 text-[11px] font-semibold tracking-wide text-te
 
 /** Уровни есть у страниц модулей и настроек; у «Начала» и словаря их нет. */
 function levelsOf(article: Article) {
-  return article.group !== 'start' && article.group !== 'glossary' ? filledLevels(article.levels) : []
+  return article.group !== 'start' && article.group !== 'glossary' ? filledLevels(article.levels, article.module) : []
 }
 
 /** Строка «Где: … · Кому: …»: «Кому» — наименьший уровень, с которого статья применима. */
@@ -17,7 +17,7 @@ export function WhereWho({ article, className }: { article: Article; className?:
   return (
     <p className={cn('text-text-secondary', className)}>
       Где: {article.where}
-      {levels.length > 0 && <> · Кому: {levels[0].label}</>}
+      {levels.length > 0 && <> · Кому: {levels[0].who}</>}
     </p>
   )
 }

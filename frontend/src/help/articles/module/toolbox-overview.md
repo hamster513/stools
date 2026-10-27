@@ -5,7 +5,7 @@ group: module
 module: toolbox
 order: 1
 routes: ["/toolbox", "/toolbox/*", "/settings/toolbox", "/settings/toolbox/*"]
-where: Модуль TBX
+where: Модуль TBX → «Очистка файлов»
 levels:
   read: Смотреть задания очистки и соответствия; полные значения в очистке скрыты.
   write: Запускать задания очистки и обратный перевод, видеть полные значения.
