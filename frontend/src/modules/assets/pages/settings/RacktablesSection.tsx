@@ -46,7 +46,7 @@ function scheduleText(s: NetworkSchedule | null): string {
 }
 
 /** «Проверить» — версия API сохранёнными учётными данными; «запустить» — проход с номером задачи и итогом. */
-function Actions({ rt }: { rt: Racktables }) {
+function Actions({ rt, admin }: { rt: Racktables; admin: boolean }) {
   const qc = useQueryClient()
   const check = useCheckRacktables()
   const run = useRunRacktables()
@@ -62,7 +62,7 @@ function Actions({ rt }: { rt: Racktables }) {
   return (
     <div className="flex flex-col items-end gap-0.5">
       <div className="flex gap-1">
-        <Button variant="ghost" loading={check.isPending} onClick={() => check.mutate(rt.id)}>проверить</Button>
+        {admin && <Button variant="ghost" loading={check.isPending} onClick={() => check.mutate(rt.id)}>проверить</Button>}
         <Button variant="ghost" loading={running} disabled={running || !rt.enabled} title={rt.enabled ? undefined : 'Подключение выключено — включите его в форме'}
           onClick={() => run.mutate(rt.id, { onSuccess: (r) => setJobId(r.job_id) })}>
           <Play size={13} aria-hidden /> запустить
@@ -134,12 +134,13 @@ function RacktablesForm({ rt, onDone }: { rt: Racktables | null; onDone: () => v
 
 /** RackTables: сети с названиями и VLAN становятся сетями Assets, имена адресов — наблюдениями источника RT. */
 export function RacktablesSection() {
-  const { admin } = useCan()
+  // Запустить проход — работа аналитика; проверить, добавить, изменить, удалить — администратора модуля.
+  const { write, admin } = useCan()
   const rows = useRacktables()
   const remove = useDeleteRacktables()
   // undefined — форма закрыта, null — новое подключение.
   const [editing, setEditing] = useState<Racktables | null | undefined>(undefined)
-  const cols = useColumnWidths('assets-racktables-columns', admin ? WRITE_COLUMNS : COLUMNS)
+  const cols = useColumnWidths('assets-racktables-columns', write ? WRITE_COLUMNS : COLUMNS)
 
   return (
     <Section id="racktables" title="RackTables" about="Проход по JSON API RackTables: все сети (listCells) создаются или обновляются в Assets с названием, VLAN и тегами, затем по каждой сети читаются адреса (getIPAddressList). Адрес с именем становится наблюдением источника RT и сопоставляется с активами по имени и IP; адрес только с IP не переносится. Сеть, описанная вручную с тем же CIDR, остаётся вашей.">
@@ -162,14 +163,18 @@ export function RacktablesSection() {
                   <td className="py-2 pr-3 break-all text-text-secondary">{d.url}{d.username && <span> · {d.username}</span>}{!d.password_set && <span className="text-kind-1"> · пароль не задан</span>}</td>
                   <td className="py-2 pr-3 text-text-secondary">{when(d.last_run_at)}</td>
                   <td className="py-2 pr-3 break-words text-text-secondary">{scheduleText(d.schedule)}</td>
-                  {admin && (
+                  {write && (
                     <td className="py-2">
                       <div className="flex items-start justify-end gap-1 whitespace-nowrap">
-                        <Actions rt={d} />
-                        <Button variant="ghost" onClick={() => setEditing(d)}>изменить</Button>
-                        <Button variant="ghost" loading={remove.isPending && remove.variables === d.id} onClick={() => remove.mutate(d.id)} aria-label={`Удалить подключение RackTables ${d.title || d.id}`}>
-                          <Trash2 size={13} aria-hidden />
-                        </Button>
+                        <Actions rt={d} admin={admin} />
+                        {admin && (
+                          <>
+                            <Button variant="ghost" onClick={() => setEditing(d)}>изменить</Button>
+                            <Button variant="ghost" loading={remove.isPending && remove.variables === d.id} onClick={() => remove.mutate(d.id)} aria-label={`Удалить подключение RackTables ${d.title || d.id}`}>
+                              <Trash2 size={13} aria-hidden />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </td>
                   )}

@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useOidcSettings, useSaveOidc, useTestOidc } from '@/platform/settings/api/queries'
 import { ROLE_TITLES, type OidcSettings, type OidcSettingsInput } from '@/platform/settings/api/types'
@@ -41,6 +42,8 @@ export function OidcPage() {
   const oidc = useOidcSettings()
   const save = useSaveOidc()
   const test = useTestOidc()
+  // Читать раздел может и тот, кому платформа открыта на чтение; менять и проверять — её администратор.
+  const admin = useCan().platform.admin
 
   const [form, setForm] = useState<OidcSettings | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -125,9 +128,11 @@ export function OidcPage() {
             остаётся: он нужен, пока провайдер настраивается, и на случай, когда он недоступен.
           </p>
         </div>
+        {!admin && <span className="text-xs text-text-secondary">только чтение</span>}
       </div>
 
-      <div className="grid max-w-2xl gap-5">
+      {/* Без права менять форма целиком закрыта: поля, кнопки проверки и сохранения. */}
+      <fieldset disabled={!admin} className="grid min-w-0 max-w-2xl gap-5">
         <section className="rounded border border-grid bg-surface p-4">
           <div className="grid gap-3">
             <label className="flex items-center gap-2 text-xs text-text">
@@ -418,7 +423,7 @@ export function OidcPage() {
             </div>
           </div>
         </section>
-      </div>
+      </fieldset>
     </div>
   )
 }

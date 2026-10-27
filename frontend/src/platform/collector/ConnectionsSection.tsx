@@ -113,13 +113,14 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
   storageKey: string
 }) {
   // Подключения аудитор видит списком — адрес и учётная запись нужны,
-  // чтобы понимать, откуда снапшот; править, проверять и собирать не может.
-  const { admin } = useCan()
+  // чтобы понимать, откуда снапшот. Собрать — работа аналитика; править,
+  // проверять и ставить расписание — администратора модуля.
+  const { write, admin } = useCan()
   const [editing, setEditing] = useState<Editing<CI> | null>(null)
   const [testResult, setTestResult] = useState<{ id: number; ok: boolean; message: string } | null>(null)
   // Подключение, под строкой которого раскрыт блок расписания.
   const [scheduleFor, setScheduleFor] = useState<number | null>(null)
-  const cols = useColumnWidths(storageKey, admin ? WRITE_COLUMNS : COLUMNS)
+  const cols = useColumnWidths(storageKey, write ? WRITE_COLUMNS : COLUMNS)
 
   return (
     <Section id="connections" title={title} about={about}>
@@ -136,14 +137,18 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
                     <td className="py-2 pr-3 font-mono break-all text-text-secondary">{address(c)}</td>
                     <td className="py-2 pr-3 font-mono break-all text-text-secondary">{account(c)}{c.password_set ? '' : ' (нет пароля)'}</td>
                     <td className="py-2 pr-3 break-words text-text-secondary">{scheduleText(c.schedule)}</td>
-                    {admin && (
+                    {write && (
                       <td className="py-2 text-right">
                         <div className="flex flex-wrap justify-end gap-1 whitespace-nowrap">
-                          <Button variant="ghost" onClick={() => test.mutate(c.id, { onSuccess: (r) => setTestResult({ id: c.id, ...r }) })} loading={test.isPending}><PlugZap size={13} aria-hidden /> проверить</Button>
+                          {admin && <Button variant="ghost" onClick={() => test.mutate(c.id, { onSuccess: (r) => setTestResult({ id: c.id, ...r }) })} loading={test.isPending}><PlugZap size={13} aria-hidden /> проверить</Button>}
                           <Button variant="ghost" onClick={() => collect.mutate(c.id)} loading={collect.isPending} disabled={!c.password_set}><ServerCog size={13} aria-hidden /> собрать</Button>
-                          <Button variant="ghost" onClick={() => setScheduleFor(scheduleFor === c.id ? null : c.id)} aria-expanded={scheduleFor === c.id}><CalendarClock size={13} aria-hidden /> расписание</Button>
-                          <Button variant="ghost" onClick={() => setEditing(toForm(c))}>изменить</Button>
-                          <Button variant="ghost" onClick={() => remove.mutate(c.id)} aria-label="Удалить подключение"><Trash2 size={13} aria-hidden /></Button>
+                          {admin && (
+                            <>
+                              <Button variant="ghost" onClick={() => setScheduleFor(scheduleFor === c.id ? null : c.id)} aria-expanded={scheduleFor === c.id}><CalendarClock size={13} aria-hidden /> расписание</Button>
+                              <Button variant="ghost" onClick={() => setEditing(toForm(c))}>изменить</Button>
+                              <Button variant="ghost" onClick={() => remove.mutate(c.id)} aria-label="Удалить подключение"><Trash2 size={13} aria-hidden /></Button>
+                            </>
+                          )}
                         </div>
                         {/* Результат проверки — отдельной строкой под кнопками: длинный DN
                             домена или текст ошибки переносится, а не вылезает за блок. */}

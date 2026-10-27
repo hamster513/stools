@@ -14,7 +14,7 @@ import {
 import { useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
-import { atLeast, type Area } from '@/platform/access/types'
+import { atLeast, type Area, type Level } from '@/platform/access/types'
 import { MODULES } from '@/platform/modules'
 
 /** Разделы платформы: видны при чтении платформы, «Модель LLM» — её администратору. */
@@ -79,9 +79,9 @@ function NavItem({
  */
 export function SettingsSidebar() {
   const { data: me } = useMe()
-  const has = (area: Area, level: 'read' | 'admin') => !!me && atLeast(me.access, area, level)
+  const has = (area: Area, level: Level) => !!me && atLeast(me.access, area, level)
   const platformItems = PLATFORM_ITEMS.filter((i) => has('platform', i.admin ? 'admin' : 'read'))
-  const moduleItems = MODULE_ITEMS.filter((i) => has(i.key, 'admin'))
+  const moduleItems = MODULE_ITEMS.filter((i) => has(i.key, 'write'))
   const anyPlatform = platformItems.length > 0
 
   return (
@@ -105,7 +105,7 @@ export function SettingsSidebar() {
           icon={UserRound}
           className={anyPlatform ? 'mt-2 border-t border-grid pt-3' : undefined}
         />
-        {/* Настройки модуля — подключения, расписания, справочники — его администратору. */}
+        {/* Страницы модулей — с уровня «аналитик»: загрузки и сбор; настройку внутри меняет администратор. */}
         {moduleItems.length > 0 && <div className={cn(GROUP, 'mt-2 border-t border-grid pt-3')}>Модули</div>}
         {moduleItems.map(({ key, label, icon }) => (
           <NavItem key={key} to={`/settings/${key}`} label={label} icon={icon} />

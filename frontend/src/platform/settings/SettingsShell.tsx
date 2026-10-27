@@ -48,14 +48,15 @@ const PAGES = new Map<string, { page: ComponentType; need: [Area, Level] | null 
   ['oidc', { page: OidcPage, need: ['platform', 'read'] }],
   ['audit', { page: AuditPage, need: ['platform', 'read'] }],
   ['llm', { page: LlmPage, need: ['platform', 'admin'] }],
-  ['attack', { page: AttackSettingsPage, need: ['attack', 'admin'] }],
-  // Настройки модуля — его подключения, расписания и справочники: администратору модуля.
-  ['siem', { page: SiemSettingsPage, need: ['siem', 'admin'] }],
-  ['vm', { page: VmSettingsPage, need: ['vm', 'admin'] }],
-  ['ad', { page: AdSettingsPage, need: ['ad', 'admin'] }],
-  ['ksc', { page: KscSettingsPage, need: ['ksc', 'admin'] }],
-  ['assets', { page: AssetsSettingsPage, need: ['assets', 'admin'] }],
-  ['toolbox', { page: ToolboxSettingsPage, need: ['toolbox', 'admin'] }],
+  ['attack', { page: AttackSettingsPage, need: ['attack', 'write'] }],
+  // Страница модуля открыта аналитику: загрузки и сбор — его работа. Настройку модуля
+  // (подключения, расписания, справочники) сама страница оставляет администратору.
+  ['siem', { page: SiemSettingsPage, need: ['siem', 'write'] }],
+  ['vm', { page: VmSettingsPage, need: ['vm', 'write'] }],
+  ['ad', { page: AdSettingsPage, need: ['ad', 'write'] }],
+  ['ksc', { page: KscSettingsPage, need: ['ksc', 'write'] }],
+  ['assets', { page: AssetsSettingsPage, need: ['assets', 'write'] }],
+  ['toolbox', { page: ToolboxSettingsPage, need: ['toolbox', 'write'] }],
 ])
 
 /**

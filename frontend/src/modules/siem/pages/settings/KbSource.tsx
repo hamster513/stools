@@ -42,8 +42,9 @@ export function KbSource() {
 }
 
 function KbForm({ c }: { c: KbConnectionView }) {
-  // Аудитору поля видны, но закрыты, а кнопок нет: сервер ответит 403.
-  const { admin } = useCan()
+  // Аудитору поля видны, но закрыты, а кнопок нет: сервер ответит 403. Сбор
+  // правил — работа аналитика; сохранение и проверка — администратора модуля.
+  const { write, admin } = useCan()
   const { navigate } = useRouter()
   const save = useSaveKbConnection()
   const test = useTestKb()
@@ -104,20 +105,24 @@ function KbForm({ c }: { c: KbConnectionView }) {
         </div>
       </div>
 
-      {admin && (
+      {write && (
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
-          <Button variant="primary" onClick={() => save.mutate(form, {
-              // Токен после сохранения не держим в состоянии: подсказка снова скажет «задан».
-              onSuccess: () => {
-                setDirty(false)
-                setForm((f) => ({ ...f, api_token: '' }))
-              },
-            })} loading={save.isPending} disabled={!dirty || !form.host}>
-            <Save size={13} aria-hidden /> Сохранить
-          </Button>
-          <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!c.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
-            <PlugZap size={13} aria-hidden /> Проверить
-          </Button>
+          {admin && (
+            <>
+              <Button variant="primary" onClick={() => save.mutate(form, {
+                  // Токен после сохранения не держим в состоянии: подсказка снова скажет «задан».
+                  onSuccess: () => {
+                    setDirty(false)
+                    setForm((f) => ({ ...f, api_token: '' }))
+                  },
+                })} loading={save.isPending} disabled={!dirty || !form.host}>
+                <Save size={13} aria-hidden /> Сохранить
+              </Button>
+              <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!c.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
+                <PlugZap size={13} aria-hidden /> Проверить
+              </Button>
+            </>
+          )}
           <Button onClick={() => start.mutate(undefined, { onSuccess: (res) => setJobId(res.job_id) })} loading={start.isPending} disabled={!c.configured || dirty || running}>
             <ServerCog size={13} aria-hidden /> Собрать правила
           </Button>

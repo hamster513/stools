@@ -113,8 +113,8 @@ export function DataStatusPage() {
                     {item.source ?? ''}
                   </td>
                   <td className="py-1.5 text-right">
-                    {/* Страница настроек модуля — его администратору; остальным стрелка вела бы в отказ. */}
-                    {me.data && atLeast(me.data.access, item.module as Area, 'admin') && (
+                    {/* Страница модуля открыта с уровня «аналитик»; остальным стрелка вела бы в отказ. */}
+                    {me.data && atLeast(me.data.access, item.module as Area, 'write') && (
                       <Link
                         to={`/settings/${item.module}#${item.anchor}`}
                         className="inline-flex rounded p-0.5 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"

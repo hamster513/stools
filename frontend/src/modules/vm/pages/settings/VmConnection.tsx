@@ -10,9 +10,9 @@ import { Field, FIELD, Section } from '@/platform/collector/ui'
 
 /** Подключение к MaxPatrol VM: то, что сохранено, и запуск импорта. */
 export function VmConnection({ settings }: { settings: SettingsView }) {
-  // Аудитору настройки видны целиком, но поля закрыты, а кнопок нет:
-  // сервер ответит 403 и на сохранение, и на проверку, и на импорт.
-  const { admin } = useCan()
+  // Аудитору настройки видны целиком, но поля закрыты, а кнопок нет: сервер
+  // ответит 403. Импорт — работа аналитика; сохранение и проверка — администратора модуля.
+  const { write, admin } = useCan()
   const save = useSaveVmSettings()
   const test = useTestVm()
   const start = useStartVmImport()
@@ -84,14 +84,18 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
         </div>
       </div>
 
-      {admin && (
+      {write && (
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
-        <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
-          <Save size={13} aria-hidden /> Сохранить
-        </Button>
-        <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!c.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
-          <PlugZap size={13} aria-hidden /> Проверить подключение
-        </Button>
+        {admin && (
+          <>
+            <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
+              <Save size={13} aria-hidden /> Сохранить
+            </Button>
+            <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!c.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
+              <PlugZap size={13} aria-hidden /> Проверить подключение
+            </Button>
+          </>
+        )}
         <Button onClick={() => start.mutate()} loading={start.isPending} disabled={!c.configured || dirty || active !== null}>
           <ServerCog size={13} aria-hidden /> Импортировать из VM
         </Button>
