@@ -45,8 +45,9 @@ export function HelpToc({ active }: { active: string | null }) {
   return (
     <nav aria-label="Оглавление справки" className="flex-1 overflow-y-auto px-2 pb-4">
       {groups.map((g) => (
-        <section key={g.key} className="mt-3 first:mt-1">
-          <h2 className="px-2 pb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{g.title}</h2>
+        <section key={g.key} className={cn(g.title ? 'mt-4 border-t border-grid pt-3' : 'mt-1')}>
+          {/* Заголовок группы: заглавными, ярче и с линией сверху, чтобы не сливался с пунктами. */}
+          {g.title && <h2 className="px-2 pb-1.5 text-xs font-bold tracking-widest text-text uppercase">{g.title}</h2>}
           <ul className="flex flex-col gap-0.5">
             {g.items.map((item) => {
               if (!item.children) {
