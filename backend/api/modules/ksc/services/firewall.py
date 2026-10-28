@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+import threading
+from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
@@ -97,6 +98,29 @@ def load_host_firewall(db: Session, snapshot_id: int, host_id: str) -> HostFirew
     return fw
 
 
+#: Тень наборов между запросами: ключ — `id` строк набора по порядку и хеш всего, что читает `shadows` (одинаковые `id` в
+#: разных базах не должны подменять друг друга), значение — результат `shadows`. Расчёт квадратичный по длине набора, сводка
+#: секций считает все наборы снапшота; набор остаётся в кэше, пока не вытеснен более новыми (по числу наборов).
+_SHADOW_CACHE_SETS = 4096
+_shadow_cache: OrderedDict[tuple[tuple[int, ...], int], dict[int, Shadow]] = OrderedDict()
+_shadow_lock = threading.Lock()
+
+
+def _cached_shadows(members: Sequence[KscNetRule]) -> dict[int, Shadow]:
+    key = (tuple(m.id for m in members),
+           hash(tuple((m.policy_id, m.profile, m.layer, m.position, m.name, m.action, m.enabled, m.scope_json) for m in members)))
+    with _shadow_lock:
+        if (hit := _shadow_cache.get(key)) is not None:
+            _shadow_cache.move_to_end(key)
+            return hit
+    found = shadows([rule_view(m) for m in members])
+    with _shadow_lock:
+        _shadow_cache[key] = found
+        while len(_shadow_cache) > _SHADOW_CACHE_SETS:
+            _shadow_cache.popitem(last=False)
+    return found
+
+
 def shadow_lookup(rows: Sequence[KscNetRule]) -> Callable[[KscNetRule], Shadow | None]:
     """Строка → более раннее правило её набора (политика, профиль, слой), покрывающее её (спека §4.6). Набор считается по
     всем своим строкам при первом обращении к его строке — фильтры списка тень не меняют. Строки без `scope_json` (снапшот
@@ -112,7 +136,7 @@ def shadow_lookup(rows: Sequence[KscNetRule]) -> Callable[[KscNetRule], Shadow |
             return None
         key = (r.policy_id, r.profile, r.layer)
         if key not in done:
-            done[key] = shadows([rule_view(m) for m in sorted(groups[key], key=lambda m: (m.position, m.id))])
+            done[key] = _cached_shadows(sorted(groups[key], key=lambda m: (m.position, m.id)))
         return done[key].get(r.id)
 
     return of

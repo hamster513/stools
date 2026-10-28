@@ -286,32 +286,34 @@ def _maybe(ctx: _Ctx, path: _Path, rules: tuple[RuleView, ...], j: int, reply: b
 
 
 def _walk(ctx: _Ctx, path: _Path, rules: tuple[RuleView, ...], start: int, reply: bool, steps: tuple[Step, ...]) -> list[Branch]:
-    """Обход списка с `start`: первое подошедшее решает; «возможно» — две ветви."""
+    """Обход списка с `start`: первое подошедшее решает; «возможно» — две ветви. Шаги копятся в списке: дописывание к кортежу
+    на каждом правиле было бы квадратичным по длине списка."""
+    acc = list(steps)
     for j in range(start, len(rules)):
         rule = rules[j]
         m = ctx.match(rule, reply)
         if not rule.enabled:
-            steps += (Step(m, "disabled"),)
+            acc.append(Step(m, "disabled"))
             continue
         if reply and rule.scope.direction in _STREAM:
-            steps += (Step(m, "skipped"),)
+            acc.append(Step(m, "skipped"))
             continue
         if m.result is Tri.NO:
-            steps += (Step(m, "no"),)
+            acc.append(Step(m, "no"))
             continue
         if m.result is Tri.YES:
-            return _decide(ctx, path, rules, j, reply, steps + (Step(m, "hit"),))
+            return _decide(ctx, path, rules, j, reply, (*acc, Step(m, "hit")))
         key = (id(rule), m.assumption)
         known = dict(path.resolved).get(key)
         if known is not None:
             if known:
-                return _decide(ctx, path, rules, j, reply, steps + (Step(m, "hit"),))
-            steps += (Step(m, "maybe"),)
+                return _decide(ctx, path, rules, j, reply, (*acc, Step(m, "hit")))
+            acc.append(Step(m, "maybe"))
             continue
-        return _maybe(ctx, path, rules, j, reply, steps, m)
+        return _maybe(ctx, path, rules, j, reply, tuple(acc), m)
     if reply:
-        return _app(ctx, path, "reply", None, steps, note=NOTE_REPLY_APP)
-    return _app(ctx, path, "app", None, steps)
+        return _app(ctx, path, "reply", None, tuple(acc), note=NOTE_REPLY_APP)
+    return _app(ctx, path, "app", None, tuple(acc))
 
 
 def _profiles(ctx: _Ctx, path: _Path, names: tuple[str, ...]) -> list[Branch]:

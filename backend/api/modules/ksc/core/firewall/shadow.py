@@ -73,7 +73,15 @@ def _ports_cover(outer: tuple[PortRange, ...], inner: tuple[PortRange, ...]) -> 
     """Пустой `outer` — любой порт; иначе каждая пара `inner` внутри какой-то пары `outer` (пустой `inner` — не внутри)."""
     if not outer:
         return True
-    return bool(inner) and all(any(ob <= ib and ie <= oe for ob, oe in outer) for ib, ie in inner)
+    if not inner:
+        return False
+    for ib, ie in inner:
+        for ob, oe in outer:
+            if ob <= ib and ie <= oe:
+                break
+        else:
+            return False
+    return True
 
 
 def _covers(outer: _Footprint, inner: _Footprint) -> bool:
@@ -112,11 +120,15 @@ def shadows(rules: Sequence[RuleView]) -> dict[int, Shadow]:
     """`row_id` правила → первое более раннее включённое правило того же слоя, покрывающее его. `rules` — правила одного
     набора (политика или профиль) уже в порядке позиций: функция не сортирует, «раньше» — раньше в последовательности.
     Выключенные правила тени не дают, но сами бывают в тени. O(n²) на список, адреса разбираются один раз на правило."""
-    footprints = [_footprint(r) for r in rules]
     found: dict[int, Shadow] = {}
-    for k, inner in enumerate(footprints):
-        outer = next((f for f in footprints[:k] if f.rule.enabled and _covers(f, inner)), None)
+    #: Более ранние включённые правила: срез списка на каждом правиле был бы ещё одним квадратичным копированием.
+    earlier: list[_Footprint] = []
+    for rule in rules:
+        inner = _footprint(rule)
+        outer = next((f for f in earlier if _covers(f, inner)), None)
         if outer is not None:
             s = outer.rule
-            found[inner.rule.row_id] = Shadow(s.row_id, s.position, s.name, s.action == inner.rule.action)
+            found[rule.row_id] = Shadow(s.row_id, s.position, s.name, s.action == rule.action)
+        if rule.enabled:
+            earlier.append(inner)
     return found
