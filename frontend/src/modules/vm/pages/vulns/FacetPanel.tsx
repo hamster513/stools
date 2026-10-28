@@ -27,7 +27,8 @@ export function Row({ active, count, onClick, children }: { active: boolean; cou
       aria-pressed={active}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      <span className="font-mono text-[11px] tabular-nums text-text-secondary">{(count ?? 0).toLocaleString('ru-RU')}</span>
+      {/* Без счётчика (фильтр без фасета на сервере, как «Trivy» у образов) число не рисуется. */}
+      {count !== undefined && <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count.toLocaleString('ru-RU')}</span>}
     </button>
   )
 }
