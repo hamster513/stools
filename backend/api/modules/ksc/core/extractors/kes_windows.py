@@ -26,6 +26,7 @@ from api.modules.ksc.core.policy_contents import (
 )
 from api.modules.ksc.core.policy_model import (
     OBJECT,
+    UNREAD,
     AccessRule,
     Address,
     AppGroupDefault,
@@ -216,12 +217,43 @@ def _addresses(items: Any) -> tuple[Address, ...]:
     return tuple(a for a in map(_address, _items(items)) if a is not None)
 
 
-def _scope(proto: dict[str, Any], scope: dict[str, Any]) -> Scope:
-    networks = scope.get("networks")
+def _port_pairs(value: Any) -> tuple[tuple[tuple[int, int], ...], bool]:
+    """Пары begin/end (только int, не bool) в порядке выгрузки и признак «что-то пропущено»: пара не из int, элемент не словарь
+    или значение не список (нет значения — не пропуск)."""
+    if value is None:
+        return (), False
+    if not isinstance(value, list):
+        return (), True
+    pairs = tuple((p["begin"], p["end"]) for p in value if isinstance(p, dict) and _int(p.get("begin")) is not None and _int(p.get("end")) is not None)
+    return pairs, len(pairs) != len(value)
+
+
+def _mask_unread(item: dict[str, Any]) -> bool:
+    """Адрес читается из `octets` (как в `_address`), а маска есть, но не int (или bool)."""
+    return not _text(item.get("hostName")) and "octets" in item and item.get("mask") is not None and _int(item.get("mask")) is None
+
+
+def _scope(item: dict[str, Any], proto: dict[str, Any]) -> Scope:
+    """Критерии правила и маркеры нечитаемого (`UNREAD`): значение есть (не null), но не прочиталось."""
+    scope = _dict(item.get("scope"))
+    direction, uid, networks = item.get("packetDirection"), proto.get("unique_id"), scope.get("networks")
+    label = _code(_PROTOCOLS, uid)
+    icmp_type = _icmp_type(proto, label)
+    local_ports, local_skipped = _port_pairs(proto.get("localPorts"))
+    remote_ports, remote_skipped = _port_pairs(proto.get("remotePorts"))
+    addresses = _items(scope.get("remoteAddresses")) + _items(scope.get("localAddresses"))
+    unread = {
+        "direction": direction is not None and _int(direction) is None,
+        "protocol": uid is not None and _int(uid) is None,
+        "networks": networks is not None and _int(networks) is None,
+        "mask": any(map(_mask_unread, addresses)),
+        "ports": local_skipped or remote_skipped,
+        "icmp_type": label in ("ICMP", "ICMPv6") and proto.get("type") is not None and icmp_type is None,
+    }
     return Scope(
-        networks=networks if isinstance(networks, int) and not isinstance(networks, bool) else None,
-        remote=_addresses(scope.get("remoteAddresses")), local=_addresses(scope.get("localAddresses")),
-        icmp_type=_icmp_type(proto, _code(_PROTOCOLS, proto.get("unique_id"))),
+        networks=_int(networks), remote=_addresses(scope.get("remoteAddresses")), local=_addresses(scope.get("localAddresses")),
+        icmp_type=icmp_type, direction=_int(direction), protocol=_int(uid), local_ports=local_ports, remote_ports=remote_ports,
+        unread=tuple(name for name in UNREAD if unread[name]),
     )
 
 
@@ -257,7 +289,7 @@ def _net_rule(item: dict[str, Any], layer: str, position: int, owner: str = "") 
     if not isinstance(name, str) or "action" not in item:
         return None
     proto = _dict(item.get("protocol"))
-    scope = _scope(proto, _dict(item.get("scope")))
+    scope = _scope(item, proto)
     return NetRule(
         layer=layer, position=position, name=f"{owner}: {name}" if owner else name, action=_code(_ACTIONS, item["action"]),
         direction=_code(_DIRECTIONS, item.get("packetDirection")), protocol=_protocol(proto), local_ports=_ports(proto.get("localPorts")),

@@ -20,7 +20,7 @@ from api.modules.ksc.core.policy_model import (
 from api.modules.ksc.core.policy_model import covered_by as policy_model_covered_by
 from api.modules.ksc.models import KscExclusion, KscPolicy
 from api.modules.ksc.routers import policy_objects
-from tests.ksc.kes11 import exclusion, kes11_export
+from tests.ksc.kes11 import TCP, exclusion, kes11_export
 from tests.ksc.synthetic import activation, build_export, condition_group
 from tests.ksc.test_api import upload
 
@@ -394,9 +394,12 @@ def test_net_rules_expose_scope(auth_client: TestClient) -> None:
     assert upload(auth_client, kes11_export())["status"] == "done"
     sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
     items = _net_rules(auth_client, sid)["items"]
-    assert items[0]["scope"] == {"networks": None, "remote": [], "local": [], "icmp_type": None}  # правило программы без области
+    no_ports = {"local_ports": [], "remote_ports": [], "unread": []}
+    # Правило программы без области и протокола.
+    assert items[0]["scope"] == {"networks": None, "remote": [], "local": [], "icmp_type": None, "direction": 2, "protocol": None, **no_ports}
     rdp = next(i for i in items if i["scope"]["networks"] == 2)
-    assert rdp["scope"] == {"networks": 2, "remote": [], "local": [], "icmp_type": None}
+    assert rdp["scope"] == {"networks": 2, "remote": [], "local": [], "icmp_type": None, "direction": 3, "protocol": TCP,
+                            "local_ports": [[3389, 3389]], "remote_ports": [], "unread": []}
     dns = next(i for i in items if i["scope"]["remote"])
     assert dns["scope"]["remote"][0]["ip"] == "192.0.2.53" and dns["scope"]["remote"][0]["mask"] == 32
     card = auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules/{dns['id']}").json()

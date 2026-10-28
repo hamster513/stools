@@ -15,7 +15,7 @@ from api.modules.ksc.core.policy_model import Scope, firewall_to_json, scope_fro
 from api.modules.ksc.models import KscNetRule, KscPolicyFirewall, KscSnapshot
 from api.modules.ksc.services.policy_store import POLICY_STORE_VERSION
 from api.modules.ksc.services.snapshots import snapshot_path
-from tests.ksc.kes11 import _APP_GROUPS, kes11_export, kes11_sections
+from tests.ksc.kes11 import _APP_GROUPS, TCP, kes11_export, kes11_sections
 from tests.ksc.test_api import upload
 from tests.ksc.test_firewall_settings import _APP, _NETWORKS, _PACKET, _set_lock
 
@@ -73,7 +73,7 @@ def test_upload_writes_scope_and_firewall(auth_client: TestClient, db_session: S
     sid = _upload(auth_client)
     scopes = _scopes(db_session, sid)
     assert scopes and all(scopes)
-    assert scope_from_json(scopes[0]) == Scope(networks=2)
+    assert scope_from_json(scopes[0]) == Scope(networks=2, direction=3, protocol=TCP, local_ports=((3389, 3389),))
     assert _version(db_session, sid) == POLICY_STORE_VERSION
     fw = _firewall(db_session, sid)
     assert [(f.policy_id, f.profile) for f in fw] == PAIRS

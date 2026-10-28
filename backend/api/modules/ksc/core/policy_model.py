@@ -49,15 +49,35 @@ class Address:
     hidden: str = ""
 
 
+#: Пара портов (begin, end) как в выгрузке.
+PortRange = tuple[int, int]
+
+
 @dataclass(frozen=True)
 class Scope:
-    """Адреса правила в виде, пригодном для проверки пакета (рядом с текстом `NetRule.addresses`)."""
+    """Критерии правила в виде, пригодном для проверки пакета (рядом с текстом `NetRule.addresses`, `direction`, `protocol`,
+    `local_ports`, `remote_ports`, которые строятся из тех же данных). Коды — только int, не bool."""
     #: Код зоны 0/1/2 как в выгрузке; None — зоны нет.
     networks: int | None = None
     remote: tuple[Address, ...] = ()
     local: tuple[Address, ...] = ()
     #: Вид ICMP-сообщения; только у протоколов ICMP и ICMPv6.
     icmp_type: int | None = None
+    #: Код направления (`packetDirection`) как в выгрузке; None — нет.
+    direction: int | None = None
+    #: `unique_id` протокола как в выгрузке; None — любой протокол.
+    protocol: int | None = None
+    #: Пары портов в порядке выгрузки; пусто — портов нет (любой).
+    local_ports: tuple[PortRange, ...] = ()
+    remote_ports: tuple[PortRange, ...] = ()
+    #: Критерии, которые есть в выгрузке, но не прочитались как ожидается (`UNREAD`); пусто — прочитано всё.
+    unread: tuple[str, ...] = ()
+
+
+#: Маркеры `Scope.unread` в порядке проверки: значение не int (`direction`, `protocol` — `unique_id`, `networks`, `icmp_type` у
+#: ICMP и ICMPv6), маска bool или не int у адреса из `octets` (`mask`), пропущенная пара портов (`ports`). Движок по ним
+#: ветвится, а не считает критерий «любым».
+UNREAD = ("direction", "protocol", "networks", "mask", "ports", "icmp_type")
 
 
 @dataclass(frozen=True)
@@ -210,19 +230,28 @@ def _addresses_from_list(value: Any) -> tuple[Address, ...]:
     return tuple(_address_from_dict(item) for item in value)
 
 
+def _ports_from_list(value: Any) -> tuple[PortRange, ...]:
+    if not isinstance(value, list) or not all(isinstance(p, list) and len(p) == 2 and all(map(_is_int, p)) for p in value):
+        raise TypeError("порты не список пар int")
+    return tuple((p[0], p[1]) for p in value)
+
+
 def scope_from_json(text: str | None) -> Scope | None:
-    """Структура адресов из JSON `scope_to_json`; None — текста нет, он не JSON или форма не та (не бросает)."""
+    """Структура правила из JSON `scope_to_json`; None — текста нет, он не JSON или форма не та (не бросает). Нет ключа —
+    значение по умолчанию."""
     if not text:
         return None
     try:
         data = json.loads(text)
         if not isinstance(data, dict):
             return None
-        networks, icmp_type = data.get("networks"), data.get("icmp_type")
-        if not all(v is None or _is_int(v) for v in (networks, icmp_type)):
+        codes = {key: data.get(key) for key in ("networks", "icmp_type", "direction", "protocol")}
+        unread = data.get("unread", [])
+        if not all(v is None or _is_int(v) for v in codes.values()) or not (isinstance(unread, list) and all(isinstance(u, str) for u in unread)):
             return None
-        return Scope(networks=networks, remote=_addresses_from_list(data.get("remote", [])),
-                     local=_addresses_from_list(data.get("local", [])), icmp_type=icmp_type)
+        return Scope(remote=_addresses_from_list(data.get("remote", [])), local=_addresses_from_list(data.get("local", [])),
+                     local_ports=_ports_from_list(data.get("local_ports", [])), remote_ports=_ports_from_list(data.get("remote_ports", [])),
+                     unread=tuple(unread), **codes)
     except (TypeError, ValueError, RecursionError):  # ValueError — битый JSON, RecursionError — слишком глубокая вложенность
         return None
 

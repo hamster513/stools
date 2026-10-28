@@ -183,7 +183,8 @@ def test_packet_rule_tcp_rdp_public_networks() -> None:
     rule = _objects().net_rules[0]
     assert rule == NetRule(
         layer="packet", position=0, name="Тестовое правило: удалённый рабочий стол", action="запретить", direction="входящий (поток)",
-        protocol="TCP", local_ports="3389", remote_ports="", addresses="публичные сети", enabled=True, scope=Scope(networks=2),
+        protocol="TCP", local_ports="3389", remote_ports="", addresses="публичные сети", enabled=True,
+        scope=Scope(networks=2, direction=3, protocol=TCP, local_ports=((3389, 3389),)),
     )
 
 
