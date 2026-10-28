@@ -187,6 +187,8 @@ BUCKET: dict[tuple[str, str], str] = {
     ("PUT", "/api/ksc/settings"): "admin",
     ("POST", "/api/ksc/snapshots/file"): "write",
     ("DELETE", "/api/ksc/snapshots/{snapshot_id}"): "write",
+    ("POST", "/api/ksc/snapshots/{snapshot_id}/firewall/check"): "write",
+    ("POST", "/api/ksc/snapshots/{snapshot_id}/firewall/check/batch"): "write",
     ("POST", "/api/ksc/snapshots/{snapshot_id}/reanalyze"): "write",
     ("POST", "/api/siem/attack/confirm"): "write",
     ("DELETE", "/api/siem/attack/reference"): "admin",
