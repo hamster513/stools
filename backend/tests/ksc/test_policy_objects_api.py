@@ -387,3 +387,17 @@ def test_objects_by_host_keep_undetermined_profiles(auth_client: TestClient, mon
     assert sid2 != sid
     body = _exclusions(auth_client, sid2, "host_id=h-ws01")
     assert body["total"] == 4 and body["undetermined"] == undetermined
+
+
+def test_net_rules_expose_scope(auth_client: TestClient) -> None:
+    """Список и карточка сетевого правила отдают разобранную область действия: сети, адреса, тип ICMP."""
+    assert upload(auth_client, kes11_export())["status"] == "done"
+    sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    items = _net_rules(auth_client, sid)["items"]
+    assert items[0]["scope"] == {"networks": None, "remote": [], "local": [], "icmp_type": None}  # правило программы без области
+    rdp = next(i for i in items if i["scope"]["networks"] == 2)
+    assert rdp["scope"] == {"networks": 2, "remote": [], "local": [], "icmp_type": None}
+    dns = next(i for i in items if i["scope"]["remote"])
+    assert dns["scope"]["remote"][0]["ip"] == "192.0.2.53" and dns["scope"]["remote"][0]["mask"] == 32
+    card = auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules/{dns['id']}").json()
+    assert card["scope"] == dns["scope"]

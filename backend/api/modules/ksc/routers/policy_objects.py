@@ -310,6 +310,7 @@ def _net_rule_item(r: KscNetRule, name: str) -> dict[str, Any]:
         "id": r.id, "policy_id": r.policy_id, "policy_name": name, "profile": r.profile, "layer": r.layer, "position": r.position, "name": r.name,
         "action": r.action, "direction": r.direction, "protocol": r.protocol, "local_ports": r.local_ports, "remote_ports": r.remote_ports,
         "addresses": r.addresses, "enabled": r.enabled, "key": r.key,
+        "scope": json.loads(r.scope_json) if r.scope_json else None,
     }
 
 
