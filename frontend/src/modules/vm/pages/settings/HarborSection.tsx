@@ -28,10 +28,11 @@ const validTags = (n: number) => Number.isInteger(n) && n >= 1 && n <= 100
 /** Подключение к Harbor, проверка, синхронизация образов сейчас и по расписанию. */
 export function HarborSection() {
   const harbor = useHarbor()
+  const loadError = errorText(harbor.error, 'Не удалось загрузить настройки Harbor')
   return (
     <Section id="harbor" title="Harbor: образы контейнеров" about={ABOUT}>
       {harbor.isLoading && <Spinner />}
-      {harbor.isError && <ErrorState message={harbor.error.message} onRetry={() => harbor.refetch()} />}
+      {loadError && <ErrorState message={loadError} onRetry={() => harbor.refetch()} />}
       {harbor.data && <HarborForm h={harbor.data} />}
     </Section>
   )
@@ -141,7 +142,7 @@ function HarborForm({ h }: { h: HarborView }) {
         </div>
       )}
 
-      <HarborSyncStatus state={harborSync} className="mt-2 text-xs" />
+      <HarborSyncStatus state={harborSync} className="mt-2" />
 
       <p className="mt-3 text-xs text-text-secondary">
         {ls ? (
