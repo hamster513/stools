@@ -15,7 +15,12 @@ const ITEM = 'block rounded px-2 py-1.5 text-xs text-text hover:bg-row-hover foc
  * браузер скачивает файл, страница остаётся на месте. Пока список грузится,
  * фильтр ещё не применён — кнопка неактивна.
  */
-export function ExportButton({ href, total, disabled }: { href: (fmt: 'csv' | 'xlsx') => string; total?: number | null; disabled?: boolean }) {
+export function ExportButton({ href, total, disabled, title = 'Выгрузить список с текущими фильтрами' }: {
+  href: (fmt: 'csv' | 'xlsx') => string
+  total?: number | null
+  disabled?: boolean
+  title?: string
+}) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
 
@@ -36,7 +41,7 @@ export function ExportButton({ href, total, disabled }: { href: (fmt: 'csv' | 'x
   return (
     <div ref={root} className="relative">
       <button type="button" onClick={() => setOpen((v) => !v)} disabled={disabled} aria-haspopup="menu" aria-expanded={open}
-        title="Выгрузить список с текущими фильтрами"
+        title={title}
         className={cn('flex items-center gap-1.5 rounded border border-border px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50', open ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover hover:text-text')}>
         <Download size={13} aria-hidden /> Экспорт <ChevronDown size={12} aria-hidden />
       </button>

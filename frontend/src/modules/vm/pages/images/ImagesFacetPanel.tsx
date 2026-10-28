@@ -7,6 +7,11 @@ import { Row, Section } from '../vulns/FacetPanel'
 
 export type ImageFilters = Pick<ImagesQuery, 'project' | 'scan_status' | 'level' | 'trivy'>
 
+const TRIVY_OPTIONS = [
+  { value: 'critical', label: 'есть критические' },
+  { value: 'high', label: 'есть высокие' },
+] as const
+
 const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
 
 interface Props {
@@ -18,7 +23,7 @@ interface Props {
 }
 
 /**
- * Фасеты образов: проект, статус скана, уровень риска. Счётчики — по всей выборке
+ * Фасеты образов: проект, статус скана, оценка Trivy, уровень риска. Счётчики — по всей выборке
  * с фильтрами (сервер), ушедшие в ноль значения помнит страница (useRememberedFacets).
  */
 export function ImagesFacetPanel({ facets, remembered, filters, onToggle, total }: Props) {
@@ -26,7 +31,7 @@ export function ImagesFacetPanel({ facets, remembered, filters, onToggle, total 
   // Статусы — в своём порядке; показываются виденные хоть раз и выбранные.
   const seen = new Set((remembered.scan_status ?? []).map((s) => s.value))
   const statuses = SCAN_STATUSES.filter((s) => seen.has(s) || has(filters.scan_status, s))
-  const pick = <K extends 'project' | 'scan_status' | 'level'>(key: K, value: string) =>
+  const pick = <K extends 'project' | 'scan_status' | 'level' | 'trivy'>(key: K, value: string) =>
     onToggle(key, toggleValue(filters[key] as string[] | undefined, value) as ImageFilters[K])
 
   return (
@@ -48,6 +53,12 @@ export function ImagesFacetPanel({ facets, remembered, filters, onToggle, total 
           <Row key={s} active={has(filters.scan_status, s)} count={facets?.scan_status[s] ?? 0} onClick={() => pick('scan_status', s)}>
             {SCAN_STATUS_LABELS[s]}
           </Row>
+        ))}
+      </Section>
+
+      <Section title="Trivy" hint="оценка сканера в отчёте образа">
+        {TRIVY_OPTIONS.map(({ value, label }) => (
+          <Row key={value} active={has(filters.trivy, value)} count={undefined} onClick={() => pick('trivy', value)}>{label}</Row>
         ))}
       </Section>
 

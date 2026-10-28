@@ -3,7 +3,7 @@ slug: vm-settings
 title: Настройки Vulnerability Management
 group: module
 module: vm
-order: 4
+order: 5
 routes: ["/settings/vm", "/settings/vm/*"]
 where: Настройки → «Vulnerability Management»
 levels:

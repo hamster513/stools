@@ -69,7 +69,7 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
       <div className="sticky top-0 z-10 grid items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
         {cols.columns.map((c) => c.key === 'check'
           ? <div key={c.key} className="pl-3"><input type="checkbox" aria-label="Отметить все загруженные" checked={allChecked} onChange={(e) => onCheckAll?.(e.target.checked)} /></div>
-          : <SortableTh key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort}>{c.label}</SortableTh>)}
+          : <SortableTh key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} ascending={c.key === 'host' || c.key === 'cve'} sort={sort} onSort={onSort}>{c.label}</SortableTh>)}
       </div>
 
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>

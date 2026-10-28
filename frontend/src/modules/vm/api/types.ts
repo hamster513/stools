@@ -373,7 +373,7 @@ export const IMAGE_LEVELS: ImageLevel[] = [...LEVELS, 'none']
 export const IMAGE_LEVEL_LABELS: Record<ImageLevel, string> = { ...LEVEL_LABELS, none: 'нет оценки' }
 
 /** Подсказка к «—» вместо риска образа: почему балла нет. */
-export const NO_RISK_TITLE = 'нет оценённых пар: не сканировался, нет CVE или пусты справочники'
+export const NO_RISK_TITLE = 'нет оценённых пар: образ не сканировался, в отчёте нет CVE или строки витрины нет. Если справочники (NVD, EPSS, KEV) не загружены, риск показывается как 0, а не «—»'
 
 export interface ImageItem {
   id: number

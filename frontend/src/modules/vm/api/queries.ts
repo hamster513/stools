@@ -130,13 +130,7 @@ export function useSyncHarbor() {
   })
 }
 
-// Расписание — под ключом `vm-harbor`: оно же лежит в HarborView и сбрасывается вместе с ним.
-const HARBOR_SCHEDULE_KEY = ['vm-harbor', 'schedule']
-
-export function useHarborSchedule() {
-  return useQuery<ScheduleView | null, ApiRequestError>({ queryKey: HARBOR_SCHEDULE_KEY, queryFn: () => api.get('/api/vm/harbor/schedule') })
-}
-
+// Расписание читается из HarborView (`schedule`), отдельного запроса нет; запись сбрасывает `vm-harbor`.
 export function useSaveHarborSchedule() {
   const qc = useQueryClient()
   return useMutation<ScheduleView, ApiRequestError, ScheduleIn>({

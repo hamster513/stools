@@ -193,6 +193,8 @@ export function ImagePage({ id }: { id: number }) {
         return
       }
       if (isTypingTarget(e.target)) return
+      // Enter на кнопке или ссылке нажимает её (копирование digest, экспорт), а не открывает карточку расчёта.
+      if (e.key === 'Enter' && e.target instanceof HTMLElement && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A')) return
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
       if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
       if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
@@ -233,7 +235,7 @@ export function ImagePage({ id }: { id: number }) {
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         {/* Выгрузка — все находки образа: ручка фильтрует по образу, а не по находкам. */}
-        <ExportButton href={exportHref('/api/vm/images/export', { image_id: id })} total={image.data.trivy.total} disabled={query.isLoading} />
+        <ExportButton href={exportHref('/api/vm/images/export', { image_id: id })} total={image.data.trivy.total} disabled={query.isLoading} title="Выгрузить все находки образа" />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input
