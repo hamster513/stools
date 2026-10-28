@@ -89,18 +89,24 @@ class NetworkZone:
 
 
 @dataclass(frozen=True)
+class AccessRule:
+    """Правило доступа группы доверия к сети (`networkAccessRules[]`); None — значение неверного типа."""
+    #: Код сети как в выгрузке (-1, 0, 1, 2); только int, не bool.
+    networks: int | None
+    allow: bool | None
+    inherited: bool | None
+
+
+@dataclass(frozen=True)
 class AppGroupDefault:
-    """Группа доверия (`hips.appGroups`) без программ: место в дереве и правило доступа к сети."""
+    """Группа доверия (`hips.appGroups`) без программ: место в дереве и правила доступа к сети."""
     name: str
     #: `parent` как в выгрузке; None — не int.
     parent: int | None
     #: 0 — верхний уровень; вложенность по `parent`, если её удаётся восстановить, иначе 0.
     depth: int
-    #: Поля первого правила `networkAccessRules` группы; None — правила нет или значение неверного типа.
-    allow: bool | None
-    #: Код сети как в выгрузке (-1 как есть).
-    networks: int | None
-    inherited: bool | None
+    #: Все правила `networkAccessRules` группы в порядке выгрузки.
+    access: tuple[AccessRule, ...]
 
 
 @dataclass(frozen=True)

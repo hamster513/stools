@@ -20,6 +20,7 @@ from typing import Any
 from api.modules.ksc.core.policy_contents import bare_sections, find_setting, truncate_value
 from api.modules.ksc.core.policy_model import (
     OBJECT,
+    AccessRule,
     Address,
     AppGroupDefault,
     Exclusion,
@@ -278,18 +279,20 @@ def _zone(item: dict[str, Any]) -> NetworkZone:
 def _app_groups(groups: list[dict[str, Any]]) -> tuple[AppGroupDefault, ...]:
     """Группы доверия в порядке выгрузки. `parent` — номер родителя в том же списке с 1, 0 — корень (прочтение по разведке
     `recon.md` задачи 1: у групп нет id, стандартные идут цепочкой `parent` 0,1,2,3, своя группа — с `parent` 0); ссылка вне
-    списка или не int — верхний уровень. Правило доступа к сети — первое из `networkAccessRules`."""
+    списка или не int — верхний уровень. Правила доступа к сети — все из `networkAccessRules` в порядке выгрузки."""
     parents = [_int(g.get("parent")) for g in groups]
     out: list[AppGroupDefault] = []
     for group, parent in zip(groups, parents, strict=True):
         depth, seen, node = 0, set(), parent
-        while node is not None and 1 <= node <= len(groups) and node not in seen:  # seen — защита от цикла
+        # Обход итеративный, не рекурсивный: каждая позиция посещается не больше раза, поэтому цикл в `parent` (и самоссылка —
+        # глубина 1) обход не зацикливает, глубина не больше длины списка.
+        while node is not None and 1 <= node <= len(groups) and node not in seen:
             seen.add(node)
             depth += 1
             node = parents[node - 1]
-        rule = next(iter(_items(group.get("networkAccessRules"))), {})
-        out.append(AppGroupDefault(name=_text(group.get("name")), parent=parent, depth=depth, allow=_bool(rule.get("allow")),
-                                   networks=_int(rule.get("networks")), inherited=_bool(rule.get("inherited"))))
+        access = tuple(AccessRule(networks=_int(r.get("networks")), allow=_bool(r.get("allow")), inherited=_bool(r.get("inherited")))
+                       for r in _items(group.get("networkAccessRules")))
+        out.append(AppGroupDefault(name=_text(group.get("name")), parent=parent, depth=depth, access=access))
     return tuple(out)
 
 
