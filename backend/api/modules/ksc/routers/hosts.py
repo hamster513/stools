@@ -18,12 +18,6 @@ from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.checks.hosts import COMPONENT_OFF_STATES
 from api.modules.ksc.core.dictionary.components import component_title
 from api.modules.ksc.core.export import status_reasons
-from api.modules.ksc.core.profile_activation import (
-    REASON_DISABLED,
-    Activation,
-    evaluate,
-    parse_condition,
-)
 from api.modules.ksc.models import (
     KscExclusion,
     KscFinding,
@@ -31,8 +25,14 @@ from api.modules.ksc.models import (
     KscNetRule,
     KscPolicy,
     KscPolicyScope,
-    KscProfile,
     KscSnapshot,
+)
+from api.modules.ksc.services.host_scope import (
+    find_host,
+    host_scope,
+    host_tags,
+    scope_policies,
+    tags_collected_db,
 )
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.settings import load_config
@@ -91,13 +91,6 @@ def _component_rows(h: KscHost) -> list[tuple[str, int]]:
         if title not in worst or _COMPONENT_RANK[_component_state(code)] > _COMPONENT_RANK[_component_state(worst[title][1])]:
             worst[title] = (title, code)
     return list(worst.values())
-
-
-def _tags(h: KscHost, collected: bool) -> list[str] | None:
-    """Теги хоста; None — сборщик секцию тегов не присылал (не собрано, а не «без тегов»)."""
-    if not collected:
-        return None
-    return list(json.loads(h.extra_json or "{}").get("tags", []))
 
 
 def _tags_collected(rows: list[KscHost]) -> bool:
@@ -187,63 +180,9 @@ def _findings_per_host(db: Session, snap: KscSnapshot) -> dict[str, int]:
     return per_host
 
 
-def _scope_policies(db: Session, snapshot_id: int, h: KscHost) -> list[tuple[KscPolicy, bool]]:
-    """Политики, действующие на группу хоста, по имени; bool — политика создана в этой группе, а не унаследована."""
-    if h.group_id is None:
-        return []
-    rows = db.execute(
-        select(KscPolicy, KscPolicyScope.own)
-        .join(KscPolicyScope, (KscPolicyScope.snapshot_id == KscPolicy.snapshot_id) & (KscPolicyScope.policy_id == KscPolicy.policy_id))
-        .where(KscPolicy.snapshot_id == snapshot_id, KscPolicyScope.group_id == h.group_id)
-    ).all()
-    return sorted(((p, own) for p, own in rows), key=lambda r: (r[0].name.lower(), r[0].policy_id))
-
-
 def _host_policies(db: Session, snapshot_id: int, h: KscHost) -> list[dict[str, Any]]:
     """Политики, действующие на группу хоста; `own` — политика создана в этой группе, а не унаследована."""
-    return [{"id": p.policy_id, "name": p.name, "product": p.product, "active": p.active, "own": own} for p, own in _scope_policies(db, snapshot_id, h)]
-
-
-def _host(db: Session, snapshot_id: int, host_id: str) -> KscHost:
-    h = db.execute(select(KscHost).where(KscHost.snapshot_id == snapshot_id, KscHost.host_id == host_id)).scalars().first()
-    if h is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="хост не найден")
-    return h
-
-
-def _tags_collected_db(db: Session, snapshot_id: int) -> bool:
-    """Секция тегов была в выгрузке, если ключ `tags` есть хотя бы у одного хоста снапшота (поиск по тексту, без разбора JSON всех хостов)."""
-    has_tags = select(KscHost.id).where(KscHost.snapshot_id == snapshot_id, KscHost.extra_json.like('%"tags"%')).limit(1)
-    return db.scalar(has_tags) is not None
-
-
-@dataclass(frozen=True)
-class HostScope:
-    """Что действует на хост: политики его группы и активация каждого их профиля по тегам хоста."""
-
-    host: KscHost
-    #: None — теги не собраны.
-    tags: list[str] | None
-    policies: list[tuple[KscPolicy, bool]]
-    #: По политикам в порядке `policies`, внутри — по приоритету; выключенный профиль — не активен, «профиль выключен».
-    profiles: list[tuple[KscProfile, Activation]]
-
-
-def host_scope(db: Session, snapshot_id: int, host_id: str) -> HostScope:
-    """404 — хоста нет в снапшоте. Таблицы политик снапшота должны быть заполнены (`_snapshot`)."""
-    h = _host(db, snapshot_id, host_id)
-    tags = _tags(h, _tags_collected_db(db, snapshot_id))
-    policies = _scope_policies(db, snapshot_id, h)
-    order = {p.policy_id: n for n, (p, _) in enumerate(policies)}
-    rows: list[KscProfile] = []
-    if order:
-        rows = list(db.execute(select(KscProfile).where(KscProfile.snapshot_id == snapshot_id, KscProfile.policy_id.in_(list(order)))).scalars())
-    profiles: list[tuple[KscProfile, Activation]] = []
-    for r in sorted(rows, key=lambda r: (order[r.policy_id], r.priority, r.id)):
-        groups = parse_condition(json.loads(r.condition_json or "{}"))
-        a = evaluate(groups, tags) if r.enabled else Activation(False, (), groups, REASON_DISABLED)
-        profiles.append((r, a))
-    return HostScope(h, tags, policies, profiles)
+    return [{"id": p.policy_id, "name": p.name, "product": p.product, "active": p.active, "own": own} for p, own in scope_policies(db, snapshot_id, h)]
 
 
 def _object_counts(db: Session, model: type[KscExclusion | KscNetRule], snapshot_id: int, policy_ids: list[int]) -> dict[tuple[int, str], int]:
@@ -307,7 +246,7 @@ def list_hosts(
     per_host = _findings_per_host(db, snap)
     rows = list(db.execute(select(KscHost).where(KscHost.snapshot_id == snapshot_id)).scalars())
     tags_collected = _tags_collected(rows)
-    tags = {h.id: _tags(h, tags_collected) for h in rows}
+    tags = {h.id: host_tags(h, tags_collected) for h in rows}
     comps = {h.id: _components(h) for h in rows}
     reasons = {h.id: _status_reasons(h) or [] for h in rows}
     people = {h.id: _host_users(h) for h in rows}
@@ -458,7 +397,7 @@ def host_detail(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     snap = _snapshot(db, snapshot_id, settings)
-    h = _host(db, snapshot_id, host_id)
+    h = find_host(db, snapshot_id, host_id)
     cfg = load_config(db)
     findings = list(db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.host_key == _host_key(h))).scalars())
     states = finding_svc.state_map(db, "ksc", snap.server_id, [f.key for f in findings])
@@ -471,7 +410,7 @@ def host_detail(
     # `findings` — все находки хоста со статусами; `findings_counted` — по тому же правилу, что счётчик в списке хостов.
     n_counted = sum(1 for i in items if i["status"] in counted)
     agent, bases = _agent(h, snap.collected_at, cfg.agent_silent_days), _bases(h, snap.collected_at, cfg.bases_old_days)
-    return {**_item(h, agent, bases, n_counted, _tags(h, _tags_collected_db(db, snapshot_id))),
+    return {**_item(h, agent, bases, n_counted, host_tags(h, tags_collected_db(db, snapshot_id))),
             "findings": items, "findings_counted": n_counted, "policies": _host_policies(db, snapshot_id, h)}
 
 

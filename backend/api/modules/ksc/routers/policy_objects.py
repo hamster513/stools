@@ -21,7 +21,7 @@ from api.deps import get_current_user
 from api.modules.ksc.core.exclusion_risks import RISKS
 from api.modules.ksc.core.policy_model import Exclusion, covered_by
 from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy, KscSnapshot
-from api.modules.ksc.routers.hosts import host_scope
+from api.modules.ksc.services.host_scope import host_scope
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.platform.export import Column, export_response
 from api.platform.filters import QueryInts, QueryList, matches, multi, multi_int
