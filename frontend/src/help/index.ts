@@ -4,7 +4,7 @@
 import { MODULES } from '@/platform/modules'
 import { HelpParseError, parseArticle } from './core/frontmatter.ts'
 import { articleForPath } from './core/match.ts'
-import { plainText } from './core/plain.ts'
+import { fold, plainText } from './core/plain.ts'
 import { nestSections } from './core/toc.ts'
 import type { Article, TocItem } from './core/types.ts'
 
@@ -59,16 +59,16 @@ function snippetAround(text: string, at: number, length: number): string {
   return `${from > 0 ? '…' : ''}${oneLine(text.slice(from, to))}${to < text.length ? '…' : ''}`
 }
 
-/** Регистронезависимое вхождение в заголовок и текст без разметки; совпадения в заголовке — первыми. */
+/** Вхождение в заголовок и текст без разметки без учёта регистра и ё/е; совпадения в заголовке — первыми. */
 export function search(q: string): { article: Article; snippet: string }[] {
-  const needle = q.trim().toLowerCase()
+  const needle = fold(q.trim())
   if (!needle) return []
   const inTitle: { article: Article; snippet: string }[] = []
   const inBody: { article: Article; snippet: string }[] = []
   for (const article of ARTICLES) {
     const plain = PLAIN.get(article.slug) ?? ''
-    const bodyAt = plain.toLowerCase().indexOf(needle)
-    const titleHit = article.title.toLowerCase().includes(needle)
+    const bodyAt = fold(plain).indexOf(needle)
+    const titleHit = fold(article.title).includes(needle)
     if (bodyAt >= 0) {
       const hit = { article, snippet: snippetAround(plain, bodyAt, needle.length) }
       if (titleHit) inTitle.push(hit)
@@ -91,7 +91,8 @@ const item = (a: Article): TocItem => ({ slug: a.slug, title: a.title })
 /**
  * Оглавление: «Начало», «Модули» (доступные, в порядке рейки), «Настройки», «Словарь».
  * Узел модуля ведёт на статью его корня (`/<модуль>`); без неё — на первую статью модуля.
- * Внутри узла: статьи модуля по `order` и названию, затем настройки модуля, затем его понятия.
+ * Внутри узла: статьи модуля (и страница его настроек — она тоже `group: module`) по `order` и названию,
+ * затем его понятия.
  */
 export function toc(): TocGroup[] {
   const start = ARTICLES.filter((a) => a.group === 'start').sort(byOrderThenTitle)
@@ -102,9 +103,8 @@ export function toc(): TocGroup[] {
   for (const m of MODULES) {
     if (m.status !== 'available') continue
     const pages = ARTICLES.filter((a) => a.group === 'module' && a.module === m.id).sort(byOrderThenTitle)
-    const settings = ARTICLES.filter((a) => a.group === 'settings' && a.module === m.id).sort(byOrderThenTitle)
     const concepts = glossary.filter((a) => a.module === m.id)
-    const all = [...pages, ...settings, ...concepts]
+    const all = [...pages, ...concepts]
     if (all.length === 0) continue
     const head = pages.find((a) => a.routes.includes(`/${m.id}`)) ?? all[0]
     const children = all.filter((a) => a !== head).map(item)

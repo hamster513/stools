@@ -17,3 +17,8 @@ export function plainText(body: string): string {
     .replace(/\s+/g, ' ')
     .trim()
 }
+
+/** Строка для сравнения при поиске: строчные буквы, «ё» как «е». Длина та же, индексы годятся для исходной строки. */
+export function fold(s: string): string {
+  return s.toLowerCase().replace(/ё/g, 'е')
+}

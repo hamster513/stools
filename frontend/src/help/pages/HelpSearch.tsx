@@ -1,13 +1,14 @@
 import { useMemo } from 'react'
 import { cn } from '@/lib/cn'
 import { Link, useRouter } from '@/lib/router'
+import { fold } from '../core/plain.ts'
 import { search } from '../index'
 
 const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 
-/** Текст с первым совпадением в `<mark>`; регистр не важен. */
+/** Текст с первым совпадением в `<mark>`; регистр и ё/е не важны (fold не меняет длину). */
 function Marked({ text, needle }: { text: string; needle: string }) {
-  const at = text.toLowerCase().indexOf(needle.toLowerCase())
+  const at = fold(text).indexOf(fold(needle))
   if (!needle || at < 0) return <>{text}</>
   return (
     <>

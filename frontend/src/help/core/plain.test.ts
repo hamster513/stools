@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { plainText } from './plain.ts'
+import { fold, plainText } from './plain.ts'
 
 test('plainText: заголовки, жирный, курсив и код теряют маркеры', () => {
   assert.equal(plainText('## Что это\n\nЭто **важно**, *очень* и `так`.'), 'Что это Это важно, очень и так.')
@@ -22,4 +22,11 @@ test('plainText: подчёркивания в идентификаторах с
 
 test('plainText: остаток фронтматтера и цитата', () => {
   assert.equal(plainText('---\nslug: a\n---\n> Совет\nТекст'), 'Совет Текст')
+})
+
+test('fold: регистр и ё не различаются, длина сохраняется', () => {
+  assert.equal(fold('Учётная Запись'), 'учетная запись')
+  assert.equal(fold('ЁЖ').length, 2)
+  assert.ok(fold('Проверьте учётную запись.').includes(fold('учетную')))
+  assert.ok(fold('Учетная запись').includes(fold('учётная')))
 })
