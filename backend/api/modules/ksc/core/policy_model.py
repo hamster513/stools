@@ -143,7 +143,8 @@ class PolicyObjects:
     net_rules: list[NetRule] = field(default_factory=list)
     #: (секция, путь) настроек, из которых получены записи: журнал изменений их как `setting` не считает.
     consumed: set[tuple[str, str]] = field(default_factory=set)
-    #: Сетевой экран и HIPS; None — секции HIPS в политике или профиле нет.
+    #: Сетевой экран и HIPS; None — секции HIPS в политике или профиле нет. У результата `policy_index.policy_objects`
+    #: всегда None — там данные в `firewall_by_profile`.
     firewall: FirewallSettings | None = None
     #: Заполняет `policy_index.policy_objects`: профиль ("" — сама политика) → `firewall` его секций, без тех, где он None.
     firewall_by_profile: dict[str, FirewallSettings] = field(default_factory=dict)

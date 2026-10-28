@@ -57,6 +57,8 @@ class KscSnapshot(Base):
     #: {"checks": {code: {severity: n}}, "coverage": {...}}
     stats_json: Mapped[str] = mapped_column(Text, default="{}")
     analyzer_version: Mapped[str] = mapped_column(String(16), default="")
+    #: Версия таблиц политик (services/policy_store.POLICY_STORE_VERSION), с которой они записаны; 0 — до её появления.
+    policy_store_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class KscHost(Base):
