@@ -1,6 +1,8 @@
 """Пороги и списки проверок модуля KSC (`app_setting['ksc']`)."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -73,6 +75,10 @@ class KscConfig(BaseModel):
     #: Коды компонентов словаря продукта, выключение которых в политике — POLICY_COMPONENT_OFF, а признак «включён» без
     #: замка — POLICY_KEY_UNLOCKED.
     policy_key_components: list[str] = Field(default_factory=_default_policy_key_components)
+    #: Как список правил профиля (под замком) накладывается на список политики в движке сетевого экрана: `merge` —
+    #: дополняет (политика, затем профили по приоритету), `replace` — заменяет (действует профиль с наивысшим приоритетом),
+    #: `auto` — способ не известен, движок считает оба и при расхождении отвечает «зависит от способа наложения».
+    firewall_profile_mode: Literal["auto", "merge", "replace"] = "auto"
 
     @field_validator("exclusion_user_writable", "exclusion_exec_extensions", "exclusion_interpreters")
     @classmethod
