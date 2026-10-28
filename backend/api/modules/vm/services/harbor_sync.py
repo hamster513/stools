@@ -39,7 +39,7 @@ from api.modules.vm.core.harbor import (
     make_harbor_client,
 )
 from api.modules.vm.core.weights import Weights
-from api.modules.vm.models import VmImage, VmImageCve, VmImageSync
+from api.modules.vm.models import VmCve, VmImage, VmImageCve, VmImageSync
 from api.modules.vm.services.harbor_settings import HarborConnection, load_harbor
 from api.modules.vm.services.jobs import (
     DATA_KINDS,
@@ -150,7 +150,8 @@ def public_netloc(url: str) -> str | None:
 
 
 def newest_tagged(artifacts: Iterable[HarborArtifact], limit: int) -> list[HarborArtifact]:
-    """Тегированные артефакты, `limit` самых свежих по `push_time`; без времени — последними."""
+    """Тегированные артефакты, `limit` самых свежих по `push_time`; без времени — последними.
+    Один digest — один образ: push посреди постраничного чтения может вернуть артефакт дважды."""
     epoch = dt.datetime.min.replace(tzinfo=dt.UTC)
 
     def pushed(a: HarborArtifact) -> dt.datetime:
@@ -159,7 +160,22 @@ def newest_tagged(artifacts: Iterable[HarborArtifact], limit: int) -> list[Harbo
             return epoch
         return t if t.tzinfo else t.replace(tzinfo=dt.UTC)
 
-    return sorted((a for a in artifacts if a.tags), key=pushed, reverse=True)[: max(limit, 0)]
+    unique: dict[str, HarborArtifact] = {}
+    for a in sorted((a for a in artifacts if a.tags), key=pushed, reverse=True):
+        unique.setdefault(a.digest, a)
+    return list(unique.values())[: max(limit, 0)]
+
+
+def join_platforms(platforms: Iterable[str]) -> str | None:
+    """Платформы индекса через «, » в пределах столбца: лишние отбрасываются целиком, не обрезаются."""
+    limit = getattr(IMAGE_T.c.platform.type, "length", None) or 255
+    out = ""
+    for name in platforms:
+        candidate = f"{out}, {name}" if out else name
+        if len(candidate) > limit:
+            break
+        out = candidate
+    return out or None
 
 
 def collapse(vulns: Iterable[HarborVuln]) -> list[dict[str, Any]]:
@@ -290,12 +306,12 @@ class _Sync:
             for art in newest_tagged(repo.artifacts, self.conn.tags_per_repo)
         ]
         skipped = self._read_reports(planned, known)
-        cve_ids = self._write(planned, known)
+        self._write(planned, known)
 
         self.handle.stage("enriching", message="витрина CVE")
-        fresh = ensure_cves(self.db, cve_ids)
-        self.handle.stage("enriching", total=len(fresh) or 1, message=f"новых CVE {len(fresh)}")
-        rebuild_cves(self.db, weights, fresh, self.handle if fresh else None)
+        pending = self._unbuilt_cves()
+        self.handle.stage("enriching", total=len(pending) or 1, message=f"новых CVE {len(pending)}")
+        rebuild_cves(self.db, weights, pending, self.handle if pending else None)
         self.handle.stage("scoring", message="риск пар")
         rescore_image_pairs(self.db, weights)
 
@@ -386,9 +402,8 @@ class _Sync:
 
     # -- writing ---------------------------------------------------------------
 
-    def _write(self, planned: list[_Planned], known: Known) -> list[str]:
-        """Одной транзакцией: upsert образов, отметка непрочитанных, удаление пропавших,
-        замена пар. Возвращает CVE записанных пар — для витрины."""
+    def _write(self, planned: list[_Planned], known: Known) -> None:
+        """Одной транзакцией: upsert образов, отметка непрочитанных, удаление пропавших, замена пар."""
         self.handle.stage("writing", message=f"образов: {len(planned)}")
         ids = self._upsert(planned)
         self._mark_failed()
@@ -402,7 +417,25 @@ class _Sync:
         self.db.commit()
         if dropped or replaced:
             drop_orphan_cves(self.db)
-        return sorted({r["cve_id"] for r in rows if is_cve(r["cve_id"]) and len(r["cve_id"]) <= _CVE_ID_MAX})
+
+    def _unbuilt_cves(self) -> list[str]:
+        """CVE пар образов, которых нет в витрине или чьи поля ещё не собраны из справочников.
+        По базе, а не по только что записанным парам: прогон, прерванный между записью пар и
+        сборкой витрины, иначе оставил бы их без риска навсегда — неизменный отчёт второй раз
+        не читается. Несобранная строка `vm_cve` — та, что завела `ensure_cves`: вероятность 0,
+        ни CVSS, ни EPSS (`rebuild_cves` даёт вероятности хотя бы априорное значение)."""
+        ids = sorted(
+            c for c in self.db.execute(select(PAIR_T.c.cve_id).distinct()).scalars()
+            if is_cve(c) and len(c) <= _CVE_ID_MAX
+        )
+        unbuilt = set(ensure_cves(self.db, ids))
+        for chunk in batched(ids, UPSERT_CHUNK):
+            unbuilt.update(self.db.execute(
+                select(VmCve.cve_id).where(
+                    VmCve.cve_id.in_(chunk), VmCve.likelihood == 0, VmCve.cvss.is_(None), VmCve.epss.is_(None),
+                )
+            ).scalars())
+        return sorted(unbuilt)
 
     def _upsert(self, planned: list[_Planned]) -> dict[Key, int]:
         ids: dict[Key, int] = {}
@@ -423,7 +456,7 @@ class _Sync:
             "project": project,
             "repository": repository,
             "digest": digest,
-            "platform": _cut(", ".join(a.platforms), "platform", IMAGE_T) or None,
+            "platform": join_platforms(a.platforms),
             "tags": json.dumps(list(a.tags), ensure_ascii=False),
             "size": a.size,
             "pushed_at": a.push_time,

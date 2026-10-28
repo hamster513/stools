@@ -25,6 +25,7 @@ from api.modules.vm.models import (
     VmRefEpss,
     VmRefNvd,
 )
+from api.modules.vm.services import harbor_sync
 from api.modules.vm.services.harbor_settings import HarborConnection
 from api.modules.vm.services.harbor_sync import (
     SCHEDULE_KIND,
@@ -32,9 +33,11 @@ from api.modules.vm.services.harbor_sync import (
     SYNC_KIND,
     SyncResult,
     harbor_schedule_handler,
+    join_platforms,
+    newest_tagged,
     run_harbor_sync,
 )
-from api.modules.vm.services.jobs import JobHandle, run_job, start_job
+from api.modules.vm.services.jobs import JobCancelled, JobHandle, run_job, start_job
 from api.platform.data_status import collect
 from api.platform.scheduler import PlatformSchedule, upsert_schedule
 
@@ -262,6 +265,86 @@ def test_report_error_keeps_pairs_and_retries(db_session: Any) -> None:
     assert debian.scanned_at == scanned
 
 
+def test_project_listing_error_keeps_rows(db_session: Any) -> None:
+    fake = fake_harbor()
+    assert _sync(fake)[0].status == "done"
+    before = _images(db_session)
+
+    fake.routes[LIB] = 500
+    job, result = _sync(fake)
+    assert job.status == "done", job.error
+    assert result is not None and result.errors == ["library"]
+    after = _images(db_session)
+    assert {k: v.id for k, v in after.items()} == {k: v.id for k, v in before.items()}
+    assert all(after[k].sync_error for k in after if k.startswith("library/"))
+    assert after["stools/stools-web"].sync_error is None
+
+
+def test_project_out_of_scope_is_dropped(db_session: Any) -> None:
+    fake = fake_harbor()
+    assert _sync(fake)[0].status == "done"
+    web_id = _images(db_session)["stools/stools-web"].id
+
+    fake.calls.clear()
+    job, result = _sync(fake, CONN.model_copy(update={"projects": ["stools"]}))
+    assert job.status == "done", job.error
+    assert result is not None and result.images == 1
+    after = _images(db_session)
+    assert list(after) == ["stools/stools-web"] and after["stools/stools-web"].id == web_id
+    assert not any(c.startswith(f"{API}/projects/library") for c in fake.calls)
+
+
+def test_cancel_during_enriching_recovers_on_next_sync(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Прогон, снятый между записью пар и сборкой витрины, не оставляет пары без риска:
+    следующий с неизменными отчётами собирает витрину по базе."""
+    _seed_refs(db_session)
+    real = harbor_sync.rebuild_cves
+    calls = 0
+
+    def cancelled_once(*args: Any, **kwargs: Any) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise JobCancelled()
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(harbor_sync, "rebuild_cves", cancelled_once)
+    fake = fake_harbor()
+    assert _sync(fake)[0].status == "cancelled"
+    web = _images(db_session)["stools/stools-web"]
+    assert not any(p.risk for p in _pairs(db_session, web.id))
+
+    fake.calls.clear()
+    assert _sync(fake)[0].status == "done"
+    assert not any(c.startswith(f"{STOOLS}/stools-web/artifacts/") for c in fake.calls)
+    pairs = {(p.cve_id, p.package): p for p in _pairs(db_session, web.id)}
+    scored = pairs[(SCORED, "github.com/go-chi/chi/v5")]
+    assert scored.risk is not None and scored.risk > 0
+    assert db_session.get(VmCve, SCORED).epss == pytest.approx(0.9)
+
+
+def test_duplicate_digest_in_listing_is_one_image(db_session: Any) -> None:
+    arts = fixture("artifacts_library_debian.json")
+    assert _sync(fake_harbor({f"{LIB}/debian/artifacts": arts + copy.deepcopy(arts)}))[0].status == "done"
+    db_session.expire_all()
+    assert db_session.execute(select(func.count()).select_from(VmImage).where(VmImage.repository == "debian")).scalar() == 1
+
+
+def test_newest_tagged_dedupes_digest() -> None:
+    from api.modules.vm.core.harbor import HarborClient as Client
+
+    art = Client._artifact(fixture("artifacts_library_debian.json")[0])
+    assert newest_tagged([art, art], 10) == [art]
+
+
+def test_join_platforms_drops_whole_names() -> None:
+    names = [f"linux/arch{i:03d}" for i in range(30)]
+    joined = join_platforms(names)
+    assert joined is not None and len(joined) <= 255
+    assert joined.split(", ") == names[: len(joined.split(", "))]
+    assert join_platforms([]) is None
+
+
 def test_probe_failure_fails_job_untouched(db_session: Any) -> None:
     fake = fake_harbor()
     assert _sync(fake)[0].status == "done"
@@ -394,11 +477,16 @@ def test_schedule_handler_disables_when_unconfigured(db_session: Any) -> None:
 
 def test_schedule_handler_starts_job(auth_client: TestClient, db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned: list[Any] = []
+    ran: list[tuple[int, Any]] = []
     monkeypatch.setattr(collector_routes, "spawn", spawned.append)
+    monkeypatch.setattr(harbor_sync, "run_job", lambda job_id, fn: ran.append((job_id, fn)))
     assert auth_client.put("/api/vm/harbor", json=SETTINGS).status_code == 200
     sched = _schedule(db_session)
     job_id = harbor_schedule_handler(db_session, sched)
     assert job_id is not None and len(spawned) == 1
+    # В spawn уходит вызов без аргументов, который запускает задачу с её работой.
+    spawned[0]()
+    assert len(ran) == 1 and ran[0][0] == job_id and callable(ran[0][1])
     job = db_session.get(VmJob, job_id)
     assert (job.kind, job.started_by, job.message) == (SYNC_KIND, collector_routes.SCHEDULE_STARTED_BY, "http://harbor.example.test:8082")
     # Идёт своя задача — повтор на следующем тике.

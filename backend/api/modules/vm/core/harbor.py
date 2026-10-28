@@ -185,7 +185,7 @@ class HarborClient:
 
     def _pages(self, path: str, params: dict[str, Any] | None = None) -> list[Any]:
         """Все элементы списка: `page=1..`, пока `page * page_size < X-Total-Count`;
-        без заголовка — пока страница полная. Сервер, игнорирующий `page`, отдаёт одну и ту же
+        без заголовка — пока страница полная. Больше `MAX_PAGES` страниц — `BAD_FORMAT`. Сервер, игнорирующий `page`, отдаёт одну и ту же
         страницу: первый элемент страницы повторил первый элемент предыдущей — конец списка."""
         items: list[Any] = []
         previous_first: Any = None
@@ -201,6 +201,10 @@ class HarborClient:
             if not more or not data:
                 break
             previous_first = data[0]
+        else:
+            # Страницы кончились раньше списка: усечённый список не должен сойти за полный —
+            # по нему синхронизация удаляет пропавшее.
+            raise HarborError(BAD_FORMAT)
         return items
 
     def probe(self) -> HarborInfo:

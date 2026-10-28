@@ -11,6 +11,8 @@ import pytest
 
 from api.hosts import LOGIN_REJECTED, NO_LINK, NO_RIGHTS, TLS_FAILED, server_error
 from api.modules.vm.core.harbor import (
+    BAD_FORMAT,
+    MAX_PAGES,
     REPORT_MIME,
     REPORT_MIME_OLD,
     HarborArtifact,
@@ -93,6 +95,19 @@ def test_pagination_stops_when_server_ignores_page() -> None:
     names = client_for(handler, calls).projects()
     assert len(calls) == 2
     assert names == [f"p{i}" for i in range(100)]
+
+
+def test_pagination_beyond_max_pages_is_error() -> None:
+    """Список длиннее предохранителя — ошибка, а не усечённый список: по нему удаляют пропавшее."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["page"])
+        return httpx.Response(200, json=[{"name": f"p{page}-{i}"} for i in range(100)], headers={"X-Total-Count": "1000000"})
+
+    with pytest.raises(HarborError) as err:
+        client_for(handler, calls).projects()
+    assert err.value.kind == BAD_FORMAT and len(calls) == MAX_PAGES
 
 
 def test_pagination_ignores_non_ascii_total_count() -> None:

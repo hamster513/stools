@@ -354,7 +354,8 @@ class VmStagePair(Base):
 
 
 class VmImage(Base):
-    """Образ контейнера из Harbor: один манифест (у мультиархитектурного — дочерний).
+    """Образ контейнера из Harbor: один тегированный артефакт. Мультиархитектурный индекс —
+    одна строка (отчёт Trivy Harbor хранит на самом индексе), его платформы — в `platform`.
 
     `id` стабилен между синхронизациями: запись — upsert по (проект, репозиторий, digest),
     чтобы ссылки на карточку образа жили.
@@ -372,8 +373,8 @@ class VmImage(Base):
     #: Путь внутри проекта, например `web`.
     repository: Mapped[str] = mapped_column(String(255))
     digest: Mapped[str] = mapped_column(String(80))
-    #: Платформы мультиархитектурного индекса через запятую (`linux/amd64, linux/arm64`);
-    #: у обычного образа — NULL.
+    #: Платформы мультиархитектурного индекса через «, » (`linux/amd64, linux/arm64`), в пределах
+    #: столбца — лишние платформы отбрасываются целиком; у обычного образа — NULL.
     platform: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: JSON-список тегов.
     tags: Mapped[str] = mapped_column(Text, default="[]")
@@ -413,7 +414,7 @@ class VmImageCve(Base):
     #: Пустая строка, если в отчёте версии нет: часть ключа не бывает NULL.
     installed_version: Mapped[str] = mapped_column(String(128), primary_key=True, default="")
     fixed_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    #: Critical | High | Medium | Low | Unknown — оценка Trivy, в риск не входит.
+    #: critical | high | medium | low | unknown (строчными) — оценка Trivy, в риск не входит.
     trivy_severity: Mapped[str] = mapped_column(String(16))
     trivy_cvss: Mapped[float | None] = mapped_column(Float, nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
