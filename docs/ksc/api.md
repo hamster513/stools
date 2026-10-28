@@ -516,12 +516,19 @@ GET  /snapshots/{id}/exclusions/{row_id}  {…элемент списка (вк�
                                         risk_details: [{code, severity, title, detail, recommendations: [str]}],
                                         same_in: [{row_id, policy_id, policy_name, profile, enabled}],
                                         policy_hosts, policy_partial}
-GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&host_id=&limit=200&offset=0
+GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&layer=&action=&direction=&enabled=&host_id=&limit=200&offset=0
                                         {total, items: [{id, policy_id, policy_name, profile, layer, position, name, action,
                                                          direction, protocol, local_ports, remote_ports, addresses, enabled, key,
-                                                         scope}],
+                                                         scope, shadowed_by: {row_id, position, name, same_action}|null,
+                                                         overridden — только с host_id}],
                                         facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта],
-                                        partial: [policy_id], undetermined: [{policy_id, policy_name, profile}] — только с host_id}
+                                        partial: [policy_id], undetermined: [{policy_id, policy_name, profile}] — только с host_id,
+                                        effective: {packet: [{policy_id, profile}], app: [{policy_id, profile}],
+                                                    networks: {policy_id, profile}|null, mode} — только с host_id}
+GET  /snapshots/{id}/net-rules/sections?<те же фильтры, без limit/offset>
+                                        [{layer, policy_id, policy_name, profile, priority|null, rules, shadowed, hosts,
+                                          hosts_kind: "policy", locked: bool|null, overridden, overridden_by,
+                                          overlay: "auto"|"merge"|"replace"|null — только с host_id}]
 GET  /snapshots/{id}/net-rules/{row_id}   {…элемент списка, same_in: [{row_id, policy_id, policy_name, profile, enabled}],
                                         policy_hosts, policy_partial}
 GET  /servers/{id}/changes?kind=&action=&policy_id=&snapshot_id=&limit=200&offset=0
@@ -536,7 +543,8 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
 
 Многозначные (повторением ключа, внутри фасета — «или», `all` — не задан): у исключений — `policy_id`, `kind`, `dup`
 (`?policy_id=12&policy_id=15&dup=multi`), у сетевых правил — `policy_id`, `action`, `direction`, у изменений —
-`kind`, `action`, `policy_id`, `snapshot_id`; `policy_id` и `snapshot_id` — числа. Остальные параметры однозначные.
+`kind`, `action`, `policy_id`, `snapshot_id`; `policy_id` и `snapshot_id` — числа. Остальные параметры однозначные;
+`layer` сетевых правил — `packet` | `app` (у списка, выгрузки и сводки секций).
 Выгрузки — все записи под фильтрами списка без `limit`/`offset`, в его порядке, любой роли; формат — общая
 «Выгрузка списков» (`docs/api-contract.md`: CSV — UTF-8 с BOM, `;`, CRLF, потоком; XLSX — не больше 100 000 строк и
 строка-предупреждение).
@@ -605,7 +613,8 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
   int, маска bool или не int у адреса из `octets`, пара портов не из int (или элемент не словарь, значение не список),
   `protocol.type.value` у ICMP задан, но не int (пустой `type: {}` — вид любой, не маркер); такой критерий в структуре пуст, и пустое значение тогда значит «не прочитано», а не «любой».
   Текстовые поля (`direction`, `protocol`, порты, `addresses`) и `key` от структуры не зависят.
-- Сетевой экран и HIPS политики или профиля — таблица `ksc_policy_firewall` (API её пока не отдаёт; читает этап движка):
+- Сетевой экран и HIPS политики или профиля — таблица `ksc_policy_firewall` (API отдаёт из неё только замки — `locked`
+  сводки секций; остальное читает движок проверки пакета):
   строка на пару (политика, профиль; `""` — сама политика), у которой есть секция `cf9370d5` или флаг компонента
   Firewall в `KLPRSS_Components` (профиль, который только выключает компонент, — строка с пустыми зонами и группами).
   Колонки: `enabled`, `notify_only` (`firewall.*`), `hips_enabled`, `hips_notify_only` (`hips.*`), `component_enabled`,
@@ -682,6 +691,72 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
 записей может совпасть (один путь с разными именами объекта, одноимённые правила программ). По одной записи с каждой
 стороны — `changed`, иначе записи без пары — `removed` / `added`; `path` — `key`. `position` правила не сравнивается
 (вставка или удаление правила сдвигает номера всех ниже — это не их изменение), но остаётся в `before` / `after`. Тот же свод последнего снапшота — `changes` в обзоре сервера (`null`, если снапшотов нет).
+
+### Сетевые правила: тень, действующие наборы, сводка секций
+
+`shadowed_by` (список и карточка) — первое более раннее включённое правило того же набора (политика, профиль, слой),
+которое покрывает строку целиком (`core/firewall/shadow.py`, спека §4.6): `same_action` true — дубль, false — строка
+никогда не сработает. Тень считается по всем строкам набора, фильтры её не меняют; строки без `scope` не покрывают и не
+покрываются (`null`).
+
+С `host_id` — действующие у хоста наборы при способе наложения профиля из настроек модуля (`firewall_profile_mode`):
+`effective.packet` / `app` — источники в порядке применения (`profile` `""` — сама политика): `merge` — политика и
+активные профили с замком списка по приоритету, `replace` — профиль с наивысшим приоритетом, у которого есть правила,
+иначе политика, `auto` — объединение обоих (как `merge`); `networks` — чьи зоны сетей действуют (профиль с замком зон
+или политика; `null` — политики KES у хоста нет, тогда и списки пусты); `mode` — настройка. Профили с неопределённой
+активацией (`undetermined`) в `effective` не входят. `overridden` у элемента — набор у хоста не действует: в режиме
+`replace` его заменил профиль; в любом режиме — список активного профиля без замка (копия политики). Строки чужой
+политики и неопределённых профилей не помечаются.
+
+`net-rules/sections` — сводка секций без строк для страницы «Сетевые правила»: секция — (слой, политика, профиль), под
+теми же фильтрами, что список (секция без отобранных правил не показывается). Порядок: слой (`packet`, затем `app`),
+политика по имени, сама политика, затем профили по `priority` и имени. `rules` — отобранных правил, `shadowed` — из них
+в тени; `priority` — приоритет профиля (`null` у политики); `hosts` — хостов под политикой и у профиля тоже
+(`hosts_kind: "policy"`: число хостов с активным профилем не считается); `locked` — замок листа секции
+(`packet` / `app` из `ksc_policy_firewall.locks_json` этой пары, `null` — признака или строки нет). Без `host_id`
+`overridden` false, `overridden_by` `""`, ключа `overlay` нет. С `host_id`: `overridden` — как у элемента списка,
+`overridden_by` — профиль, который действует вместо (`""` — не перекрыт или список профиля без замка); `overlay` у
+списка самой политики хоста, на который накладываются профили с замком и правилами (активные или с неопределённой
+активацией), — режим из настроек (`auto` / `merge` / `replace`: «дополняется / заменяется профилем»), иначе `null`.
+
+## Сетевой экран: проверка пакета
+
+```
+POST /snapshots/{id}/firewall/check        {source_host_id, destination: {host_id}|{address}, protocol: "tcp"|"udp"|"icmp"|"icmpv6"|"any",
+                                            port: 0..65535|null, icmp_type: 0..255|null}
+                                        → {source: Side, destination: Side|null, destination_hosts: [{host_id, name, ip}],
+                                           overall: Verdict, depends_on: [str], notes: [str]}
+POST /snapshots/{id}/firewall/check/batch  {sources: [host_id] (≤ 50), destination, protocol, port, icmp_type}
+                                        → [{host_id, name, verdict, decided_by: Rule|null, depends_on, error — у неизвестного хоста}]
+Side   = {host: {host_id, name, ip}, direction: "out"|"in", verdict: Verdict, depends_on: [str], mode: ""|"notify_only",
+          notes: [str], effective_sources: [str], branches: [Branch]}
+Branch = {assumptions: [str], verdict, decided_by: Rule|null, layer: "packet"|"reply"|"app"|"state", note,
+          steps: [Step], reply_steps: [Step], app_candidates: [Rule], trust_groups: [{name, allow: bool|null}]}
+Step   = {rule: Rule, status: "hit"|"no"|"maybe"|"disabled"|"skipped"|"not_checked", result: "yes"|"no"|"maybe",
+          criteria: [{name, result, text}], almost: {name, text}|null, assumption}
+Rule   = {row_id, position, name, policy_id, profile, action, enabled, layer}
+Verdict = "allow"|"deny"|"app"|"depends"|"not_applied"|"undetermined"
+```
+
+Движок — `core/firewall/evaluate.py` (спека §4.2–4.5), набор правил хоста — `services/firewall.load_host_firewall`
+(политика KES хоста, профили по активации и замкам). Способ наложения списка профиля на список политики —
+`firewall_profile_mode` из настроек модуля: в `auto` движок считает оба способа и при расхождении отвечает `depends`
+с точкой «способ наложения профиля на список политики».
+
+Сторона источника — исходящий пакет: удалённый порт — `port`, удалённый адрес — адрес назначения (у хоста — его `ip`),
+имя — FQDN или имя хоста назначения. Сторона назначения — входящий пакет с того же источника: локальный порт — `port`,
+удалённый адрес и имя — источника. Сторона назначения считается, если назначение — хост снапшота: `host_id` или адрес,
+совпавший с `ip` ровно одного хоста. `destination_hosts` — хосты, которыми назначение может быть (при `host_id` — он
+сам; при адресе — все хосты снапшота с этим `ip`, по имени); если их нет или больше одного — `destination: null` и строка
+в `notes` («назначение не из хостов снапшота…» / «адрес совпал с N хостами…»). `overall`: `allow`, если все посчитанные
+стороны разрешают (`not_applied` — правила не применяются — блокировкой не считается); иначе `deny`, если хоть одна
+запрещает; иначе `depends`, иначе `app`, иначе `undetermined`. `depends_on` — точки ветвления обеих сторон без повторов.
+Вердикт стороны `depends` с пустым `depends_on` — ветви обрезаны пределом, причина в `notes`.
+
+`decided_by` в пакетной проверке — решающее правило, если оно одно на все ветви, иначе `null`. Ошибки: `404` — снапшот,
+хост-источник или хост назначения (`destination.host_id`) не найден («хост не найден»; в пакетной проверке неизвестный
+источник — строка с `verdict: "undetermined"` и `error`); `422` — в назначении не ровно одно из `host_id` / `address`,
+адрес не разобран, порт вне 0..65535, протокол не из списка, источников больше 50. Любая роль.
 
 ## Сервер KSC
 
@@ -788,7 +863,9 @@ High), `task_stale_days` (7 — `TASK_STALE`), `reboot_pending_days` (7 —
 `javaw.exe`, `msbuild.exe`, `installutil.exe`, `certutil.exe`, `bitsadmin.exe`, `wmic.exe`) — см. «Исключения»,
 `policy_key_components` (коды компонентов словаря, выключение которых — `POLICY_COMPONENT_OFF`, а незамкнутый признак
 «включён» — `POLICY_KEY_UNLOCKED`; по умолчанию все десять: `file_threat`, `behavior`, `exploit`, `network_threat`,
-`remediation`, `web_threat`, `mail_threat`, `amsi`, `firewall`, `hips`).
+`remediation`, `web_threat`, `mail_threat`, `amsi`, `firewall`, `hips`), `firewall_profile_mode` (`auto` — как список
+пакетных правил и правил программ профиля под замком накладывается на список политики в проверке пакета: `merge` —
+дополняет, `replace` — заменяет, `auto` — не известно, считаются оба; см. «Сетевой экран: проверка пакета»).
 
 Границы порогов: `cert_days` — находка есть, когда дней до истечения
 **меньше или равно** порогу (60 дней → находка); `reboot_pending_days`,
