@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
@@ -12,7 +13,8 @@ from sqlalchemy.orm import Session
 from api.modules.ksc.core.export import load_export
 from api.modules.ksc.core.policy_index import extract, policy_objects
 from api.modules.ksc.core.policy_model import Scope, firewall_to_json, scope_from_json
-from api.modules.ksc.models import KscNetRule, KscPolicyFirewall, KscSnapshot
+from api.modules.ksc.models import KscNetRule, KscPolicy, KscPolicyFirewall, KscSnapshot
+from api.modules.ksc.services import policy_store
 from api.modules.ksc.services.policy_store import POLICY_STORE_VERSION
 from api.modules.ksc.services.snapshots import snapshot_path
 from tests.ksc.kes11 import _APP_GROUPS, TCP, kes11_export, kes11_sections
@@ -157,8 +159,42 @@ def test_scope_backfill_without_file_is_noop(auth_client: TestClient, db_session
     sid = _upload(auth_client)
     _forget(db_session, sid)
     snapshot_path(app_settings.data_dir, sid).unlink()
-    assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules").status_code == 200
+    r = auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules")
+    assert r.status_code == 200
+    assert r.json()["items"] and all(i["scope"] is None for i in r.json()["items"])
     scopes = _scopes(db_session, sid)
     assert scopes and all(s is None for s in scopes)
     assert _pairs(db_session, sid) == []
     assert _version(db_session, sid) == 0
+
+
+def _boom(*args: Any, **kwargs: Any) -> None:
+    raise RuntimeError("сбой записи таблиц")
+
+
+def test_failed_rewrite_keeps_old_tables(auth_client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Таблицы есть, версия ниже текущей, перезапись упала не на файле и не на базе: чтение не падает, старые строки и версия
+    остаются (следующее чтение попробует снова)."""
+    sid = _upload(auth_client)
+    rules = [r.id for r in db_session.execute(select(KscNetRule).where(KscNetRule.snapshot_id == sid)).scalars()]
+    firewall = [f.id for f in _firewall(db_session, sid)]
+    db_session.execute(update(KscSnapshot).where(KscSnapshot.id == sid).values(policy_store_version=0))
+    db_session.commit()
+    monkeypatch.setattr(policy_store, "store_policies", _boom)
+    r = auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules")
+    assert r.status_code == 200 and r.json()["total"] == len(rules)
+    db_session.expire_all()
+    assert [r.id for r in db_session.execute(select(KscNetRule).where(KscNetRule.snapshot_id == sid)).scalars()] == rules
+    assert [f.id for f in _firewall(db_session, sid)] == firewall
+    assert _version(db_session, sid) == 0
+
+
+def test_failed_first_fill_still_raises(auth_client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Таблиц нет (снапшот до их появления): неожиданный сбой записи, как и раньше, не глушится."""
+    sid = _upload(auth_client)
+    db_session.execute(delete(KscPolicy).where(KscPolicy.snapshot_id == sid))
+    db_session.execute(update(KscSnapshot).where(KscSnapshot.id == sid).values(policy_store_version=0))
+    db_session.commit()
+    monkeypatch.setattr(policy_store, "store_policies", _boom)
+    with pytest.raises(RuntimeError):
+        auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules")

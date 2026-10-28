@@ -153,7 +153,8 @@ def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> 
     Дозаполнение, как пересчёт, заново считает `risks_json` исключений по текущим правилам и меняет id строк.
     Находки, сводка и журнал изменений не трогаются. True — дозаполнено сейчас (версия у `snapshot` — текущая);
     False — таблицы уже текущей версии, файла нет или он не разобран/не записан (тогда экраны остаются пустыми или
-    со старыми таблицами, как раньше, версия не меняется; причина — в журнале API: чтение не должно падать из-за дозаполнения)."""
+    со старыми таблицами, как раньше, версия не меняется; причина — в журнале API: чтение не должно падать из-за дозаполнения).
+    Перезапись таблиц старой версии откатывается при любом сбое; первое заполнение глушит только сбои файла и базы."""
     from api.modules.ksc.services.snapshots import snapshot_path
 
     if _filled(db, snapshot):
@@ -167,6 +168,7 @@ def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> 
     if _filled(db, snapshot):
         db.commit()
         return False
+    sid, rewrite = snapshot.id, _has_policies(db, snapshot.id)
     try:
         idx = ExportIndex(load_export_path(path))
         store_policies(db, snapshot, idx, load_config(db))
@@ -178,6 +180,13 @@ def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> 
         db.commit()
     except (ExportFormatError, OSError, SQLAlchemyError):
         db.rollback()
-        log.exception("таблицы политик снапшота KSC #%s не дозаполнены", snapshot.id)
+        log.exception("таблицы политик снапшота KSC #%s не дозаполнены", sid)
+        return False
+    except Exception:
+        # Таблицы старой версии есть: любой сбой перезаписи оставляет их, чтобы экраны не падали на каждом заходе.
+        if not rewrite:
+            raise
+        db.rollback()
+        log.exception("таблицы политик снапшота KSC #%s не переписаны до версии %s — остаются старые", sid, POLICY_STORE_VERSION)
         return False
     return True
