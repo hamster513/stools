@@ -46,16 +46,12 @@ export function useVulns(query: Omit<VulnsQuery, 'limit' | 'offset'>) {
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
       api.get(`/api/vm/vulns${buildQuery({ ...query, limit: VULNS_PAGE_SIZE, offset: pageParam as number })}`),
-    getNextPageParam: (last, pages) => {
-      // Число пар — только у первой страницы: следующие его не пересчитывают.
-      const loaded = pages.reduce((sum, page) => sum + page.items.length, 0)
-      return last.items.length > 0 && loaded < (pages[0].total ?? 0) ? loaded : undefined
-    },
+    getNextPageParam: nextOffset,
     placeholderData: (prev) => prev,
   })
 }
 
-/** Следующая страница по offset: число строк — только у первой страницы. */
+/** Следующая страница по offset: число строк (пар) — только у первой страницы, следующие его не пересчитывают. */
 function nextOffset(last: { items: unknown[] }, pages: { items: unknown[]; total: number | null }[]): number | undefined {
   const loaded = pages.reduce((sum, page) => sum + page.items.length, 0)
   return last.items.length > 0 && loaded < (pages[0].total ?? 0) ? loaded : undefined

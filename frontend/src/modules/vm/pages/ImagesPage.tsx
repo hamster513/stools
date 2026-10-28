@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Container, FilterX, RefreshCw, Search, X } from 'lucide-react'
-import { ApiRequestError, buildQuery } from '@/api/client'
-import { useHarbor, useImages, useJob, useSyncHarbor } from '@/modules/vm/api/queries'
+import { Container, FilterX, RefreshCw, Search } from 'lucide-react'
+import { buildQuery, errorText } from '@/api/client'
+import { useHarbor, useImages } from '@/modules/vm/api/queries'
 import {
-  IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES, STAGE_LABELS, TRIVY_SEVERITY_LABELS,
+  IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES,
   type ImageItem, type ImageLevel, type ImageScanStatus, type ImageSort,
 } from '@/modules/vm/api/types'
 import { ExportButton } from '@/platform/filters/ExportButton'
@@ -14,14 +14,15 @@ import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { listFrom, valueChips } from '@/platform/findings/facets'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useCan } from '@/lib/can'
-import { cn } from '@/lib/cn'
 import { Link, useRouter, useSearchParams } from '@/lib/router'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
-import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
+import { FullPageSpinner } from '@/components/ui/Spinner'
 import { ImagesFacetPanel, type ImageFilters } from './images/ImagesFacetPanel'
 import { ImagesTable } from './images/ImagesTable'
+import { HarborSyncStatus } from './images/HarborSyncStatus'
+import { useHarborSync } from './images/useHarborSync'
 
 function isTypingTarget(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
@@ -30,6 +31,7 @@ function isTypingTarget(el: EventTarget | null): boolean {
 const SORTS: ImageSort[] = ['risk_desc', 'name', 'pushed_desc', 'trivy_desc']
 const DEFAULT_SORT: ImageSort = 'risk_desc'
 const TRIVY_FLAGS = ['critical', 'high'] as const
+const TRIVY_CHIP_LABELS = { critical: 'есть критические', high: 'есть высокие' } as const
 
 /**
  * Образы контейнеров из Harbor: список с фасетами, наибольшим риском находок,
@@ -52,13 +54,11 @@ export function ImagesPage() {
   const [searchInput, setSearchInput] = useState(() => params.get('q') ?? '')
   const q = useDebouncedValue(searchInput, 250)
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [jobId, setJobId] = useState<number | undefined>(undefined)
   const searchRef = useRef<HTMLInputElement>(null)
   const filtersPanel = useFiltersPanel('vm-images')
   const { write } = useCan()
   const harbor = useHarbor()
-  const sync = useSyncHarbor()
-  const job = useJob(jobId)
+  const harborSync = useHarborSync()
 
   const queryArgs = useMemo(() => ({ ...filters, q: q || undefined, sort }), [filters, q, sort])
   const query = useImages(queryArgs)
@@ -87,17 +87,13 @@ export function ImagesPage() {
     setFilters({})
     setSearchInput('')
   }
-  function startSync() {
-    setJobId(undefined)
-    sync.mutate(undefined, { onSuccess: (r) => setJobId(r.job_id) })
-  }
 
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
   const chips: FilterChip[] = [
     ...valueChips('Проект', filters.project, (p) => p, (v) => toggle('project', v)),
     ...valueChips('Скан', filters.scan_status, (s) => SCAN_STATUS_LABELS[s], (v) => toggle('scan_status', v)),
     ...valueChips('Риск', filters.level, (l) => IMAGE_LEVEL_LABELS[l], (v) => toggle('level', v)),
-    ...valueChips('Есть по Trivy', filters.trivy, (t) => TRIVY_SEVERITY_LABELS[t], (v) => toggle('trivy', v)),
+    ...valueChips('Trivy', filters.trivy, (t) => TRIVY_CHIP_LABELS[t], (v) => toggle('trivy', v)),
   ]
 
   useEffect(() => {
@@ -107,6 +103,8 @@ export function ImagesPage() {
         return
       }
       if (isTypingTarget(e.target)) return
+      // Enter на кнопке или ссылке нажимает её, а не открывает выбранный образ.
+      if (e.key === 'Enter' && e.target instanceof HTMLElement && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A')) return
       if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
       if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
       if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
@@ -118,12 +116,14 @@ export function ImagesPage() {
 
   const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== ''
   const configured = harbor.data?.configured ?? false
-  const running = job.data?.status === 'running' ? job.data : null
-  // Между 202 и первым ответом о задаче кнопка тоже занята: второй запуск получил бы 409.
-  const syncBusy = running !== null || (jobId !== undefined && !job.data)
   // Пустой список ждёт и подключения: от него зависит, какое пустое состояние показать.
   const loading = query.isLoading || (items.length === 0 && harbor.isLoading)
-  const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить образы' : null
+  // Без списка и без настроек подключения пустое состояние было бы ложным: показываем ошибку.
+  const harborFailed = items.length === 0 && !query.isError && harbor.isError
+  const errorMessage = query.isError
+    ? errorText(query.error, 'Не удалось загрузить образы')
+    : harborFailed ? errorText(harbor.error, 'Не удалось загрузить настройки Harbor') : null
+  const retry = () => { if (query.isError) query.refetch(); else harbor.refetch() }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -151,46 +151,21 @@ export function ImagesPage() {
           {query.data ? (items.length < total ? `${items.length.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}` : total.toLocaleString('ru-RU')) : '…'}
         </div>
         {write && configured && (
-          <Button className="ml-auto px-2 py-1 text-xs" onClick={startSync} loading={sync.isPending} disabled={syncBusy}>
-            {!sync.isPending && <RefreshCw size={13} className={syncBusy ? 'animate-spin' : undefined} aria-hidden />}
+          <Button className="ml-auto px-2 py-1 text-xs" onClick={harborSync.start} loading={harborSync.sync.isPending} disabled={harborSync.busy}>
+            {!harborSync.sync.isPending && <RefreshCw size={13} className={harborSync.busy ? 'animate-spin' : undefined} aria-hidden />}
             Синхронизировать
           </Button>
         )}
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
 
-      {(job.data || sync.error) && (
-        <div className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text-secondary" role="status">
-          {sync.error && !job.data && <span className="text-kind-1">Синхронизация не запущена: {sync.error.message}</span>}
-          {job.data && (
-            <>
-              {running && <Spinner size={12} />}
-              <span className="text-text">Синхронизация Harbor, задача #{job.data.id}:</span>
-              {(() => {
-                const j = job.data
-                const text = running
-                  ? [STAGE_LABELS[j.stage] ?? j.stage, j.message].filter(Boolean).join(' · ')
-                  : j.status === 'done' ? `готово: ${j.message}`
-                  : j.status === 'cancelled' ? `остановлена: ${j.message}`
-                  : `ошибка: ${j.error ?? j.message}`
-                return <span className={cn('min-w-0 truncate', j.status === 'failed' && 'text-kind-1')} title={text}>{text}</span>
-              })()}
-              <Link to="/vm/jobs" className="shrink-0 underline underline-offset-2 hover:text-text">Задачи</Link>
-            </>
-          )}
-          {!running && (
-            <button type="button" onClick={() => { setJobId(undefined); sync.reset() }} aria-label="Скрыть" className="ml-auto text-text-secondary hover:text-text">
-              <X size={12} aria-hidden />
-            </button>
-          )}
-        </div>
-      )}
+      <HarborSyncStatus state={harborSync} className="shrink-0 border-b border-grid bg-surface px-4 py-1.5" />
 
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && <ImagesFacetPanel facets={facets} remembered={remembered} filters={filters} onToggle={toggle} total={total} />}
         <div className="min-w-0 flex-1 bg-app-bg">
           {loading && <FullPageSpinner />}
-          {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
+          {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={retry} /></div>}
           {!loading && !errorMessage && items.length === 0 && (
             <div className="p-6">
               {hasFilters ? (

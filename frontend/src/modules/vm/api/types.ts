@@ -298,7 +298,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   ref_bundle: 'Архив справочников',
   recalculate: 'Пересчёт риска',
   bulk_status: 'Массовая смена статусов',
-  harbor_sync: 'синхронизация Harbor',
+  harbor_sync: 'Синхронизация Harbor',
 }
 
 export const STAGE_LABELS: Record<string, string> = {

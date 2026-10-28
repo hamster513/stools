@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, PlugZap, RefreshCw, Save, XCircle } from 'lucide-react'
-import { ApiRequestError } from '@/api/client'
-import {
-  useHarbor, useJob, useRemoveHarborSchedule, useSaveHarbor, useSaveHarborSchedule, useSyncHarbor, useTestHarbor,
-} from '@/modules/vm/api/queries'
-import { STAGE_LABELS, type HarborView } from '@/modules/vm/api/types'
+import { errorText } from '@/api/client'
+import { useHarbor, useRemoveHarborSchedule, useSaveHarbor, useSaveHarborSchedule, useTestHarbor } from '@/modules/vm/api/queries'
+import type { HarborView } from '@/modules/vm/api/types'
+import { HarborSyncStatus } from '../images/HarborSyncStatus'
+import { useHarborSync } from '../images/useHarborSync'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { Link } from '@/lib/router'
 import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
 
@@ -19,7 +18,12 @@ const ABOUT =
 
 const when = (iso: string) => new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 const splitList = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
-const errText = (e: unknown, fallback: string) => (e instanceof ApiRequestError ? e.message : e ? fallback : null)
+
+/** Ответ API на смену адреса без нового секрета (`SECRETS_AGAIN`); по тексту, а не по состоянию формы: такой же 422 дают и другие поля. */
+const SECRETS_AGAIN = 'при смене адреса секрет робота нужно ввести заново'
+const isSecretsAgain = (message: string) => message === SECRETS_AGAIN || /секрет/i.test(message)
+
+const validTags = (n: number) => Number.isInteger(n) && n >= 1 && n <= 100
 
 /** Подключение к Harbor, проверка, синхронизация образов сейчас и по расписанию. */
 export function HarborSection() {
@@ -27,7 +31,7 @@ export function HarborSection() {
   return (
     <Section id="harbor" title="Harbor: образы контейнеров" about={ABOUT}>
       {harbor.isLoading && <Spinner />}
-      {harbor.isError && <ErrorState message={errText(harbor.error, 'Не удалось загрузить настройки Harbor') ?? ''} onRetry={() => harbor.refetch()} />}
+      {harbor.isError && <ErrorState message={harbor.error.message} onRetry={() => harbor.refetch()} />}
       {harbor.data && <HarborForm h={harbor.data} />}
     </Section>
   )
@@ -39,7 +43,7 @@ function HarborForm({ h }: { h: HarborView }) {
   const { write, admin } = useCan()
   const save = useSaveHarbor()
   const test = useTestHarbor()
-  const sync = useSyncHarbor()
+  const harborSync = useHarborSync()
   const saveSchedule = useSaveHarborSchedule()
   const removeSchedule = useRemoveHarborSchedule()
 
@@ -55,30 +59,24 @@ function HarborForm({ h }: { h: HarborView }) {
 
   function patch(p: Partial<typeof form>) {
     setDirty(true)
+    // Результат проверки и прежняя ошибка сохранения относились к другим значениям.
+    test.reset()
+    save.reset()
     setForm((f) => ({ ...f, ...p }))
   }
 
   function submit() {
     save.mutate(
-      { ...form, projects: splitList(form.projects), tags_per_repo: form.tags_per_repo },
+      { ...form, projects: splitList(form.projects) },
       // Секрет после сохранения не держим в состоянии: иначе он уйдёт с любым следующим сохранением.
-      { onSuccess: () => { setDirty(false); setForm((f) => ({ ...f, robot_secret: '' })) } },
+      { onSuccess: () => { setDirty(false); test.reset(); setForm((f) => ({ ...f, robot_secret: '' })) } },
     )
   }
 
-  const [jobId, setJobId] = useState<number | undefined>(undefined)
-  const job = useJob(jobId)
-  const running = job.data?.status === 'running' ? job.data : null
-  // Между 202 и первым ответом о задаче кнопка тоже занята: второй запуск получил бы 409.
-  const syncBusy = sync.isPending || running !== null || (jobId !== undefined && !job.data)
-  function startSync() {
-    setJobId(undefined)
-    sync.mutate(undefined, { onSuccess: (r) => setJobId(r.job_id) })
-  }
-
-  // 422 после смены адреса без нового секрета — подсказка к полю секрета, остальные ошибки — у кнопок.
-  const secretAgain = save.error?.status === 422 && form.robot_secret === '' && form.url !== h.url ? save.error.message : null
-  const rowError = (secretAgain ? null : errText(save.error, 'Не удалось сохранить')) ?? errText(test.error, 'Проверка не удалась')
+  // Требование ввести секрет заново — подсказка у поля секрета, остальные ошибки — у кнопок.
+  const secretAgain = save.error && isSecretsAgain(save.error.message) ? save.error.message : null
+  const rowError = (secretAgain ? null : errorText(save.error, 'Не удалось сохранить')) ?? errorText(test.error, 'Проверка не удалась')
+  const tagsOk = validTags(form.tags_per_repo)
   const ls = h.last_sync
 
   return (
@@ -101,11 +99,13 @@ function HarborForm({ h }: { h: HarborView }) {
         <Field label="Проекты" hint="Через запятую; пусто — все проекты, доступные роботу">
           <input className={FIELD} value={form.projects} onChange={(e) => patch({ projects: e.target.value })} placeholder="library, prod" spellCheck={false} disabled={!admin} />
         </Field>
-        <Field label="Тегов на репозиторий" hint="1–100; берутся последние по времени загрузки">
+        <Field label="Тегов на репозиторий" hint={tagsOk ? '1–100; берутся последние по времени загрузки' : undefined}>
           <input
             className={FIELD} type="number" min={1} max={100} value={Number.isNaN(form.tags_per_repo) ? '' : form.tags_per_repo}
             onChange={(e) => patch({ tags_per_repo: e.target.value === '' ? NaN : Number(e.target.value) })} disabled={!admin}
+            aria-invalid={tagsOk ? undefined : true}
           />
+          {!tagsOk && <span className="mt-1 block text-xs text-kind-1" role="alert">Введите целое число от 1 до 100</span>}
         </Field>
         <div className="flex flex-col justify-end pb-1">
           <label className="flex items-center gap-2 text-xs text-text">
@@ -120,7 +120,7 @@ function HarborForm({ h }: { h: HarborView }) {
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
           {admin && (
             <>
-              <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
+              <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty || !tagsOk}>
                 <Save size={13} aria-hidden /> Сохранить
               </Button>
               <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!h.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
@@ -128,7 +128,7 @@ function HarborForm({ h }: { h: HarborView }) {
               </Button>
             </>
           )}
-          <Button onClick={startSync} loading={syncBusy} disabled={!h.configured || dirty || syncBusy} title={dirty ? 'Сначала сохраните' : !h.configured ? 'Сначала задайте адрес, имя и секрет робота' : undefined}>
+          <Button onClick={harborSync.start} loading={harborSync.busy} disabled={!h.configured || dirty || harborSync.busy} title={dirty ? 'Сначала сохраните' : !h.configured ? 'Сначала задайте адрес, имя и секрет робота' : undefined}>
             <RefreshCw size={13} aria-hidden /> Синхронизировать сейчас
           </Button>
           {test.data && (
@@ -141,27 +141,7 @@ function HarborForm({ h }: { h: HarborView }) {
         </div>
       )}
 
-      {(job.data || sync.error) && (
-        <div className="mt-2 flex items-center gap-3 text-xs text-text-secondary" role="status">
-          {sync.error && !job.data && <span className="text-kind-1">Синхронизация не запущена: {sync.error.message}</span>}
-          {job.data && (
-            <>
-              {running && <Spinner size={12} />}
-              <span className="text-text">Синхронизация Harbor, задача #{job.data.id}:</span>
-              {(() => {
-                const j = job.data
-                const text = running
-                  ? [STAGE_LABELS[j.stage] ?? j.stage, j.message].filter(Boolean).join(' · ')
-                  : j.status === 'done' ? `готово: ${j.message}`
-                  : j.status === 'cancelled' ? `остановлена: ${j.message}`
-                  : `ошибка: ${j.error ?? j.message}`
-                return <span className={cn('min-w-0 truncate', j.status === 'failed' && 'text-kind-1')} title={text}>{text}</span>
-              })()}
-              <Link to="/vm/jobs" className="shrink-0 underline underline-offset-2 hover:text-text">Задачи</Link>
-            </>
-          )}
-        </div>
-      )}
+      <HarborSyncStatus state={harborSync} className="mt-2 text-xs" />
 
       <p className="mt-3 text-xs text-text-secondary">
         {ls ? (

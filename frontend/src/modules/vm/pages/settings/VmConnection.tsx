@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, PlugZap, Save, ServerCog, XCircle } from 'lucide-react'
-import { ApiRequestError } from '@/api/client'
+import { errorText } from '@/api/client'
 import { useImportState, useSaveVmSettings, useStartVmImport, useTestVm } from '@/modules/vm/api/queries'
 import type { SettingsView } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
@@ -51,7 +51,6 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
   }
 
   const active = importState.data?.active ?? null
-  const err = (e: unknown, fallback: string) => (e instanceof ApiRequestError ? e.message : e ? fallback : null)
 
   return (
     <Section
@@ -105,8 +104,8 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
             {test.data.message}
           </span>
         )}
-        {(err(save.error, 'Не удалось сохранить') || err(test.error, 'Проверка не удалась') || err(start.error, 'Импорт не запущен')) && (
-          <span className="text-xs text-kind-1">{err(save.error, 'Не удалось сохранить') ?? err(test.error, 'Проверка не удалась') ?? err(start.error, 'Импорт не запущен')}</span>
+        {(errorText(save.error, 'Не удалось сохранить') || errorText(test.error, 'Проверка не удалась') || errorText(start.error, 'Импорт не запущен')) && (
+          <span className="text-xs text-kind-1">{errorText(save.error, 'Не удалось сохранить') ?? errorText(test.error, 'Проверка не удалась') ?? errorText(start.error, 'Импорт не запущен')}</span>
         )}
         {start.data && !start.error && <span className="text-xs text-text-secondary">задача #{start.data.job_id} запущена, прогресс — на экране «Задачи»</span>}
       </div>
