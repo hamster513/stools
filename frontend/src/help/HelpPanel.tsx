@@ -58,8 +58,8 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
     >
       {article && (
         <>
-          {/* Справа от заголовка остаётся место под вопросик: он лежит поверх угла панели. */}
-          <div className="flex items-start justify-between gap-2 border-b border-grid py-3 pr-14 pl-4">
+          {/* Заголовок, строка «Где · Кому» и крестик закрытия. */}
+          <div className="flex items-start justify-between gap-2 border-b border-grid px-4 py-3">
             <div className="min-w-0">
               <h2 ref={headingRef} tabIndex={-1} className="text-sm font-semibold text-text outline-none">{article.title}</h2>
               <WhereWho article={article} className="mt-1 text-xs" />

@@ -1,12 +1,13 @@
-import { CircleHelp, ListChecks, LogOut, Moon, Settings2, Shield, Sun } from 'lucide-react'
-import { useLogout, useMe } from '@/api/auth'
+import type { Ref } from 'react'
+import { ListChecks, Settings2, Shield } from 'lucide-react'
+import { useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { firstReadableModule, useCan } from '@/lib/can'
 import { atLeast, type Area } from '@/platform/access/types'
-import { useThemeChoice } from '@/lib/useThemeChoice'
 import { useMyFindingsCount } from './findings/queries'
 import { MODULES } from './modules'
+import { UserMenu } from './UserMenu'
 
 const FOCUS =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset'
@@ -16,12 +17,18 @@ const FOCUS =
  * каждой иконкой код модуля, иначе пять похожих значков не различить.
  * Полное имя — в title и для скринридера.
  */
-export function ModuleRail() {
-  const { path, navigate } = useRouter()
+export function ModuleRail({
+  helpOpen,
+  onHelp,
+  helpButtonRef,
+}: {
+  helpOpen: boolean
+  onHelp: () => void
+  helpButtonRef: Ref<HTMLButtonElement>
+}) {
+  const { path } = useRouter()
   const { data: me } = useMe()
   const can = useCan()
-  const logout = useLogout()
-  const appearance = useThemeChoice()
   // Модули, закрытые группам пользователя, в рейке не показываются.
   // Заглушки «в разработке» прав не имеют — их видят все.
   const modules = MODULES.filter((m) => m.status === 'planned' || (me && atLeast(me.access, m.id as Area, 'read')))
@@ -122,51 +129,14 @@ export function ModuleRail() {
         >
           <Settings2 size={16} aria-hidden />
         </Link>
-        {/* Справка: раздел со всеми статьями. Вопросик в углу окна открывает подсказку к странице, цель одна. */}
-        <Link
-          to="/help"
-          className={cn(
-            'rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text',
-            FOCUS,
-            (path === '/help' || path.startsWith('/help/')) && 'bg-row-selected text-text',
-          )}
-          aria-label="Справка"
-          aria-current={path === '/help' || path.startsWith('/help/') ? 'page' : undefined}
-          title="Справка"
-        >
-          <CircleHelp size={16} aria-hidden />
-        </Link>
-        {/* Тема — не настройка администратора: за экраном сидит каждый,
-            и менять её надо там, где сидишь, а не через раздел настроек. */}
-        <button
-          type="button"
-          onClick={() => appearance.choose(appearance.theme === 'dark' ? 'light' : 'dark')}
-          className={cn('rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text', FOCUS)}
-          aria-label={appearance.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-          title={appearance.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-        >
-          {appearance.theme === 'dark' ? <Sun size={16} aria-hidden /> : <Moon size={16} aria-hidden />}
-        </button>
-        <span
-          className="max-w-full truncate font-mono text-[10px] text-text-secondary"
-          title={me?.display_name ?? me?.login}
-        >
-          {me?.login ?? '—'}
-        </span>
+        {/* Логин — кнопка меню пользователя: подсказка по странице, тема, выход.
+            Раздел справки /help открывается из панели подсказки («Вся справка →»). */}
+        <UserMenu helpOpen={helpOpen} onHelp={onHelp} helpButtonRef={helpButtonRef} />
         {!can.anyWrite && (
           <span className="text-[9px] text-text-secondary" title="Ни в одном модуле нет права на изменения">
             только чтение
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => logout.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }) })}
-          className={cn('rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text', FOCUS)}
-          aria-label="Выйти"
-          title="Выйти"
-        >
-          <LogOut size={16} aria-hidden />
-        </button>
       </div>
     </nav>
   )

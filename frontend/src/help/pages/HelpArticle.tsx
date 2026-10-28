@@ -10,7 +10,6 @@ import { LevelsBlock, WhereWho } from '../ArticleBlocks'
 import { openRule } from '../core/open.ts'
 import type { Article } from '../core/types.ts'
 import { toc } from '../index'
-import { HELP_SAFE } from '../layout'
 import { Markdown } from '../Markdown'
 
 const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
@@ -41,7 +40,7 @@ export function HelpArticle({ article }: { article: Article }) {
         </span>
       </nav>
 
-      <div className={cn('mt-2 flex items-start justify-between gap-4', HELP_SAFE)}>
+      <div className="mt-2 flex items-start justify-between gap-4">
         <h1 className="text-xl font-semibold text-text">{article.title}</h1>
         {target && (
           <Link to={target} className={cn('shrink-0 rounded border border-border px-3 py-1.5 text-sm text-text hover:bg-row-hover', FOCUS)}>

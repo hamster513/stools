@@ -6,7 +6,6 @@ import { CODE_LABELS, CODES, SOURCE_LABELS, SOURCES, type DiscrepancyCode } from
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
-import { HELP_SAFE } from '@/help/layout'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
@@ -65,7 +64,7 @@ export function OverviewPage() {
   const noZone = o.by_zone[''] ?? 0
 
   const header = (
-    <div className={cn('mb-4 flex items-start justify-between gap-4', HELP_SAFE)}>
+    <div className="mb-4 flex items-start justify-between gap-4">
       <div>
         <h1 className="text-base font-semibold text-text">Обзор</h1>
         <p className="max-w-2xl text-xs text-text-secondary">
