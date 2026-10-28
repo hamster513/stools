@@ -3,18 +3,22 @@ import { CheckCircle2, Save } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
-import { FullPageSpinner } from '@/components/ui/Spinner'
+import { Spinner } from '@/components/ui/Spinner'
+import { useCan } from '@/lib/can'
 import { useSaveSecurity, useSecurity } from '@/platform/settings/api/queries'
 import type { SecuritySettings } from '@/platform/settings/api/types'
 
 /**
- * Срок сессии, таймаут бездействия и хранение журнала. Три числа, от
- * которых зависит, как быстро уходит забытая на чужом мониторе сессия и
- * как долго остаётся след действий.
+ * Блок «Пароли и сессии» вкладки «Вход»: срок сессии, таймаут
+ * бездействия и хранение журнала. Три числа, от которых зависит, как
+ * быстро уходит забытая на чужом мониторе сессия и как долго остаётся
+ * след действий. Прокрутку и отступы задаёт вкладка.
  */
 export function SecurityPage() {
   const security = useSecurity()
   const save = useSaveSecurity()
+  // Читать раздел может и тот, кому платформа открыта на чтение; менять — её администратор.
+  const admin = useCan().platform.admin
 
   const [form, setForm] = useState<SecuritySettings | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -26,15 +30,13 @@ export function SecurityPage() {
 
   if (security.isError) {
     return (
-      <div className="p-6">
-        <ErrorState
-          message={security.error?.message ?? 'Не удалось загрузить настройки безопасности'}
-          onRetry={() => security.refetch()}
-        />
-      </div>
+      <ErrorState
+        message={security.error?.message ?? 'Не удалось загрузить настройки безопасности'}
+        onRetry={() => security.refetch()}
+      />
     )
   }
-  if (!form) return <FullPageSpinner />
+  if (!form) return <Spinner className="mx-auto my-8" />
 
   function patch(change: Partial<SecuritySettings>) {
     setDirty(true)
@@ -53,10 +55,10 @@ export function SecurityPage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <section>
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">Безопасность</h1>
+          <h2 className="text-base font-semibold text-text">Пароли и сессии</h2>
           <p className="max-w-2xl text-xs text-text-secondary">
             Правила для всех учёток сразу. Изменения действуют на сессии, которые начнутся после
             сохранения.
@@ -69,10 +71,14 @@ export function SecurityPage() {
               сохранено
             </span>
           )}
-          <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
-            <Save size={14} aria-hidden />
-            Сохранить
-          </Button>
+          {admin ? (
+            <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
+              <Save size={14} aria-hidden />
+              Сохранить
+            </Button>
+          ) : (
+            <span className="text-xs text-text-secondary">только чтение</span>
+          )}
         </div>
       </div>
 
@@ -86,6 +92,7 @@ export function SecurityPage() {
             min={1}
             max={720}
             value={form.session_ttl_hours}
+            disabled={!admin}
             onChange={(e) => patch({ session_ttl_hours: Number(e.target.value) })}
           />
         </Field>
@@ -99,6 +106,7 @@ export function SecurityPage() {
             min={0}
             max={1440}
             value={form.idle_timeout_minutes}
+            disabled={!admin}
             onChange={(e) => patch({ idle_timeout_minutes: Number(e.target.value) })}
           />
         </Field>
@@ -112,10 +120,11 @@ export function SecurityPage() {
             min={1}
             max={3650}
             value={form.audit_retention_days}
+            disabled={!admin}
             onChange={(e) => patch({ audit_retention_days: Number(e.target.value) })}
           />
         </Field>
       </section>
-    </div>
+    </section>
   )
 }

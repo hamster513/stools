@@ -3,18 +3,22 @@
 Секрет клиента наружу не отдаётся: в ответах он заменён маской, а PUT с
 маской или пустым значением оставляет сохранённый — иначе любая правка
 формы стирала бы секрет. В базе он зашифрован (api/crypto.py) и
-расшифровывается только для обмена кода на токены."""
+расшифровывается только для обмена кода на токены.
+
+Права вошедшим дают группы `source='oidc'` (api/platform/services/access.py),
+а не поле настроек: включить вход можно, только когда такая группа есть."""
 from __future__ import annotations
 
 import json
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.crypto import encrypt, reseal
-from api.db.models import ROLES, AppSetting
+from api.db.models import AccessGroup, AppSetting
 from api.llm_settings import read_setting
 
 OIDC_KEY = "oidc"
@@ -23,6 +27,7 @@ CALLBACK_PATH = "/api/auth/oidc/callback"
 #: По http пускаем только разработку на своей машине: по этим адресам ходят
 #: id_token, код авторизации и сессионная кука.
 LOCAL_HOSTS = ("localhost", "127.0.0.1")
+NO_OIDC_GROUPS = "нет ни одной группы из OIDC"
 
 
 def require_secure_url(value: str) -> str:
@@ -39,19 +44,10 @@ def require_secure_url(value: str) -> str:
     raise ValueError("адрес должен начинаться с https:// (http:// — только для localhost)")
 
 
-class GroupRole(BaseModel):
-    group: str = Field(min_length=1, max_length=255)
-    role: str
-
-    @field_validator("role")
-    @classmethod
-    def _role(cls, value: str) -> str:
-        if value not in ROLES:
-            raise ValueError(f"роль должна быть одной из: {', '.join(ROLES)}")
-        return value
-
-
 class OidcSettings(BaseModel):
+    #: Лишние ключи отбрасываются: прежняя форма присылает `group_roles`.
+    model_config = ConfigDict(extra="ignore")
+
     enabled: bool = False
     display_name: str = "Avanpost"
     public_url: str = ""
@@ -62,7 +58,6 @@ class OidcSettings(BaseModel):
     groups_claim: str = "groups"
     login_claim: str = "preferred_username"
     name_claim: str = "name"
-    group_roles: list[GroupRole] = Field(default_factory=list)
 
     @field_validator("public_url", "issuer_url")
     @classmethod
@@ -75,13 +70,18 @@ class OidcSettings(BaseModel):
 
     @property
     def configured(self) -> bool:
-        return bool(self.public_url and self.issuer_url and self.client_id and self.client_secret and self.group_roles)
+        return bool(self.public_url and self.issuer_url and self.client_id and self.client_secret)
 
-    def missing(self) -> list[str]:
+    def missing(self, has_groups: bool) -> list[str]:
+        """Чего не хватает для включения: незаполненные поля и группы из OIDC."""
         out = [name for name in ("public_url", "issuer_url", "client_id", "client_secret") if not getattr(self, name)]
-        if not self.group_roles:
-            out.append("group_roles")
+        if not has_groups:
+            out.append(NO_OIDC_GROUPS)
         return out
+
+
+def has_oidc_groups(db: Session) -> bool:
+    return db.scalar(select(AccessGroup.id).where(AccessGroup.source == "oidc").limit(1)) is not None
 
 
 class OidcSettingsIn(OidcSettings):
@@ -108,11 +108,9 @@ def save_oidc(db: Session, payload: OidcSettingsIn, login: str | None) -> OidcSe
         merged.client_secret = reseal(current.client_secret)
     else:
         merged.client_secret = encrypt(merged.client_secret)
-    if merged.enabled and merged.missing():
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="нельзя включить OIDC без полей: " + ", ".join(merged.missing()),
-        )
+    missing = merged.missing(has_oidc_groups(db)) if merged.enabled else []
+    if missing:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="нельзя включить OIDC: " + ", ".join(missing))
     row = db.get(AppSetting, OIDC_KEY) or AppSetting(key=OIDC_KEY)
     row.value_json = json.dumps(merged.model_dump(), ensure_ascii=False)
     row.updated_by = login

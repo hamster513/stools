@@ -5,6 +5,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Theme } from '@/lib/theme'
+import type { Access } from '@/platform/access/types'
 import { api, ApiRequestError } from './client'
 
 export interface LoginRequest {
@@ -12,19 +13,25 @@ export interface LoginRequest {
   password: string
 }
 
-/** Роль в платформе: администратор, аналитик, аудитор (только чтение). */
-export type Role = 'admin' | 'analyst' | 'auditor'
-
 /** Откуда учётка: пароль в STools или провайдер входа. У второй пароля
  *  нет — сменить его на своём профиле невозможно. */
 export type AuthSource = 'local' | 'oidc'
 
+/** Группа, через которую пользователь получил права. */
+export interface MeGroup {
+  id: number
+  name: string
+  source: 'local' | 'oidc'
+}
+
 export interface MeResponse {
   login: string
   display_name: string | null
-  role: Role
   theme: Theme
   auth_source: AuthSource
+  /** Итоговый уровень в каждой области — сервер свёл роли всех групп. */
+  access: Access
+  groups: MeGroup[]
 }
 
 export function useMe() {

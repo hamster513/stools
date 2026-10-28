@@ -38,7 +38,7 @@ Management — `/api/vm/…` (см. `docs/vm/api.md`), у модуля Анти�
     `413 {"detail": "файл больше N МБ"}`.
   - `401` (`нет сессии` / `сессия не найдена` / `сессия истекла`) — запрос к
     ручке загрузки с лимитом выше 2 МБ без живой сессии: отказ до чтения
-    тела, роль здесь не проверяется (её проверяет `require_access`).
+    тела, права здесь не проверяются (их проверяет `require_access`).
   - `403 {"detail": "запрос с другого сайта"}` — POST/PUT/PATCH/DELETE под
     `/api/` (кроме `/api/auth/oidc/`) не прошёл проверку источника
     (`backend/api/origin.py`). `Sec-Fetch-Site` должен быть `same-origin` или
@@ -80,9 +80,10 @@ Management — `/api/vm/…` (см. `docs/vm/api.md`), у модуля Анти�
 - **Выгрузка списков** (`backend/api/platform/export.py`).
   `GET <ручка списка>/export?format=csv|xlsx&<те же фильтры>` — весь отбор
   списка без страницы и в его порядке (`sort`, `order` — у тех списков, где
-  они есть), колонки и подписи — как в таблице на экране. Роль — как у
-  чтения самого списка: в модулях любая, под `/api/settings/users`
-  и `/api/settings/audit` — администратор, в ToolBox — аналитик. `format`
+  они есть), колонки и подписи — как в таблице на экране. Права — как у
+  чтения самого списка: в модулях уровень `read` в модуле, под
+  `/api/settings/users` и `/api/settings/audit` — `read` в `platform`,
+  в ToolBox — `write`. `format`
   по умолчанию `csv`, другое значение — `422`. CSV — UTF-8 с BOM,
   разделитель `;`, строки CRLF, отдаётся потоком без ограничения числа
   строк; текст, начинающийся с `= + - @` или таба, — с ведущим апострофом.
@@ -98,16 +99,21 @@ Management — `/api/vm/…` (см. `docs/vm/api.md`), у модуля Анти�
   имена хостов и учётные записи, — наружу отдаётся только класс ошибки.
 - **Значения находок не отдаются в списках.** Никогда. Только в
   `GET /api/siem/findings/{id}/detail` по явному запросу.
-- **Три роли**: `admin`, `analyst`, `auditor`. Чтение (`GET`/`HEAD`/`OPTIONS`)
-  в ручках модулей (`/api/siem/…`, `/api/vm/…`) доступно любой роли, запись
-  там требует `analyst` или выше. Под `/api/settings/…` роль `admin` нужна
-  и на запись, и на чтение `/api/settings/users…`, `/api/settings/audit…`,
-  `/api/settings/security`: учётки, журнал и правила сессий модулей не
-  касаются. Чтение `/api/settings/llm…` и `/api/settings/attack…` открыто
-  любой роли — состояние модели и матрицы показывают страницы самих
-  модулей. Исключение — свой профиль и сессия: `POST /api/auth/logout`,
-  `POST /api/auth/password`, `PATCH /api/auth/me` доступны любой роли.
-  Отказ — `403 {"detail": "нужна роль: <название по-русски>"}`.
+- **Права — уровни по областям** (`backend/api/rbac.py`). Области — модули
+  (`attack`, `siem`, `vm`, `ad`, `ksc`, `assets`, `toolbox`) и `platform`;
+  уровни — `deny` < `read` < `write` < `admin`. Уровни задаёт роль, роль
+  назначена группе, пользователь получает права через свои группы —
+  в каждой области максимум по ним; без групп — везде `deny`. Под
+  `/api/<модуль>/…` чтение (`GET`/`HEAD`/`OPTIONS`) требует `read`, запись —
+  `write`, а настройка модуля (подключения, источники, расписания,
+  справочники — `MODULE_ADMIN_WRITES`) — `admin`. Под `/api/settings/…` —
+  область `platform`: чтение `read`, запись `admin`; запись
+  `/api/settings/attack…` — `admin` в `attack`. Чтение `/api/settings/llm`,
+  `/api/settings/findings`, `/api/settings/data-status` и
+  `/api/settings/attack…` открыто любому вошедшему — их показывают
+  страницы самих модулей. Свой профиль и сессия (`/api/auth/…`) доступны
+  любому вошедшему. Отказ —
+  `403 {"detail": "нет доступа: <область>, нужен уровень <название по-русски>"}`.
 
 ## Аутентификация
 
@@ -125,7 +131,7 @@ POST /api/auth/logout     -> 204
 ```
 GET /api/auth/oidc/status    -> {enabled, display_name}
 GET /api/auth/oidc/start     -> 302 на провайдера | 404, если вход выключен
-GET /api/auth/oidc/callback  ?code=&state=&error= -> 302 /attack + cookie сессии
+GET /api/auth/oidc/callback  ?code=&state=&error= -> 302 / + cookie сессии (фронтенд открывает первый доступный модуль)
                               | 302 /login?error=<код>
 ```
 
@@ -147,48 +153,96 @@ GET /api/auth/oidc/callback  ?code=&state=&error= -> 302 /attack + cookie сес
 - `oidc_denied` — провайдер вернул `error=` или не вернул `code`;
 - `oidc_token` — обмен кода или проверка `id_token` отклонены: подпись,
   издатель, аудитория, срок действия, `nonce` или `code_verifier` не сошлись;
-- `oidc_no_role` — ни одна группа из claim'а не сопоставлена роли —
-  учётка при этом не заводится;
+- `oidc_no_role` — после пересчёта членства у учётки нет ни одной группы:
+  claim не совпал ни с одной группой из OIDC, а локальных групп нет.
+  Новая учётка при этом не заводится, существующая остаётся;
 - `oidc_login_taken` — логин из claim'а уже занят другой (локальной)
   учёткой;
 - `blocked` — учётка найдена по `sub`, но заблокирована администратором.
+
+Права вошедшему дают группы `source='oidc'` (см. «Группы» ниже): значение
+из claim'а групп (`groups_claim`) точно сравнивается с `external_name`
+группы. Членство в таких группах пересчитывается при каждом входе — прежнее
+удаляется, совпавшее вставляется, даже если вход затем отклонён. Локальные
+группы, назначенные учётке в STools, вход не трогает, и одних их хватает
+для входа. Пересчёт не держит последнего администратора: убрали группу в
+каталоге — человек больше не администратор, даже последний; вернуть
+администратора — `python -m api.cli create-user <логин> --group Администраторы` на сервере;
+команда заводит **нового** локального администратора, права существующему логину
+она не возвращает. Подробно — `docs/platform/access.md`.
 
 `GET /api/auth/me` (ниже) отдаёт `auth_source`: `local` или `oidc` — по
 нему фронтенд решает, показывать ли форму смены пароля.
 
 ## Общие настройки
 
-Ручки под `/api/settings/…` — панель администратора; и запись, и чтение
-там требуют роль `admin`, кроме состояния модели и матрицы
-(см. «Общие правила») и сводки свежести данных (`data-status`, ниже). `GET /api/auth/me`, `PATCH /api/auth/me`
-и `POST /api/auth/password` — своя учётка, доступны любой роли.
+Ручки под `/api/settings/…` — панель администратора: чтение требует `read`
+в `platform`, запись — `admin`, кроме состояния модели и матрицы
+(см. «Общие правила») и сводки свежести данных (`data-status`, ниже). Уровни, корзины
+ручек и самоблокировка — `docs/platform/access.md`. `GET /api/auth/me`, `PATCH /api/auth/me`
+и `POST /api/auth/password` — своя учётка, доступны любому вошедшему.
 
 ```
-GET   /api/auth/me         -> {login, display_name, role, theme, auth_source} | 401
+GET   /api/auth/me         -> {login, display_name, access, groups, theme, auth_source} | 401
 PATCH /api/auth/me         {display_name?, theme?} -> 204
 POST  /api/auth/password   {current, new} -> 204 | 400 «текущий пароль неверен»
 ```
 
-`PATCH /api/auth/me` меняет отображаемое имя и тему оформления — логин
-и роль себе не назначают. `theme` — `dark` (по умолчанию) или `light`,
+`access` — `{область: уровень}` по всем областям, `groups` —
+`[{id, name, source}]`. `PATCH /api/auth/me` меняет отображаемое имя и тему
+оформления — логин и группы себе не назначают. `theme` — `dark` (по умолчанию) или `light`,
 другое значение отвечает `422`. `POST /api/auth/password` требует текущий пароль и обрывает
 остальные сессии этого пользователя, кроме той, из которой пришёл запрос.
 
 ```
-GET    /api/settings/users              -> [{id, login, display_name, role,
-                                        is_active, last_login_at, created_at}]
-POST   /api/settings/users              {login, display_name?, role, password}
+GET    /api/settings/users              -> [{id, login, display_name, groups,
+                                        access, is_active, last_login_at,
+                                        created_at, auth_source}]
+POST   /api/settings/users              {login, display_name?, group_ids?, password}
                                     -> 201 UserView
-PATCH  /api/settings/users/{id}         {display_name?, role?, is_active?}
+PATCH  /api/settings/users/{id}         {display_name?, group_ids?, is_active?}
                                     -> UserView
 DELETE /api/settings/users/{id}         -> 204
 POST   /api/settings/users/{id}/password {password} -> 204
 GET    /api/settings/users/export?format=csv|xlsx -> файл (см. «Выгрузка списков»)
 ```
 
-Нельзя понизить, заблокировать или удалить себя, и нельзя оставить систему
-без активного администратора — обе проверки отвечают `409`. Смена пароля
-и блокировка обрывают все сессии пользователя.
+`groups` и `access` — как в `GET /api/auth/me`. `group_ids` — полная замена
+локальных групп пользователя; членство в группах из OIDC не трогается, а
+группа из OIDC в `group_ids` — `422`. В выгрузке вместо роли — колонка
+«Группы» (имена через запятую). Нельзя снять права с себя, заблокировать
+или удалить себя, и нельзя оставить систему без активного пользователя с
+`admin` в `platform` — проверки отвечают `409`. Смена пароля и блокировка
+обрывают все сессии пользователя.
+
+```
+GET    /api/settings/roles              -> [{id, name, description, builtin,
+                                        levels: {область: уровень}, groups}]
+POST   /api/settings/roles              {name, description?, levels} -> 201 RoleView
+PUT    /api/settings/roles/{id}         {name, description?, levels} -> RoleView
+DELETE /api/settings/roles/{id}         -> 204
+GET    /api/settings/groups             -> [{id, name, source, external_name,
+                                        role_id, role_name, members}]
+POST   /api/settings/groups             {name, source, external_name?, role_id}
+                                    -> 201 GroupView
+PUT    /api/settings/groups/{id}        {name, external_name?, role_id} -> GroupView
+DELETE /api/settings/groups/{id}        -> 204
+GET    /api/settings/groups/{id}/members -> [{user_id, login, display_name,
+                                        auth_source}]
+PUT    /api/settings/groups/{id}/members {user_ids: [...]} -> [MemberView]
+```
+
+Роль — матрица `levels` (отсутствующая область — `deny`; для `platform`
+уровня `write` нет). Встроенные роли «Администратор», «Аналитик» и
+«Аудитор» не удаляются и не переименовываются, «Администратор» не
+меняется вовсе; роль, назначенная группе, не удаляется — `409`. Группа —
+`source` `local` (членов назначает администратор STools) или `oidc` (члены
+приходят из claim'а при входе, `external_name` — значение claim'а,
+обязательно и уникально); `source` после создания не меняется, у группы
+из OIDC `PUT …/members` отвечает `409`. `PUT …/members` — полная замена
+членов. Любая правка роли, группы или членства, после которой в системе
+нет активного пользователя с `admin` в `platform` или актор снял
+`platform=admin` с себя, отвечает `409`.
 
 ```
 GET /api/settings/security  -> {session_ttl_hours, idle_timeout_minutes,
@@ -236,7 +290,7 @@ POST /api/settings/llm/test  {base_url, model, timeout} -> {ok, latency_ms,
 GET  /api/settings/oidc       -> {enabled, display_name, public_url, issuer_url,
                                    client_id, client_secret, has_secret, scopes,
                                    groups_claim, login_claim, name_claim,
-                                   group_roles, redirect_uri}
+                                   redirect_uri}
 PUT  /api/settings/oidc       {то же, без has_secret и redirect_uri} -> 204
 POST /api/settings/oidc/test  {issuer_url} -> {ok, issuer, endpoints, keys, error}
 ```
@@ -247,8 +301,10 @@ POST /api/settings/oidc/test  {issuer_url} -> {ok, issuer, endpoints, keys, erro
 секрет — только явное новое значение его меняет. `redirect_uri` в `GET`
 собран из `public_url` — его нужно зарегистрировать в FAM как адрес
 возврата. Включить вход (`enabled: true`) нельзя, не заполнив
-`public_url`, `issuer_url`, `client_id`, `client_secret` и хотя бы одно
-сопоставление в `group_roles` — иначе `422` со списком недостающих полей.
+`public_url`, `issuer_url`, `client_id`, `client_secret` и не заведя хотя
+бы одну группу из OIDC (`/api/settings/groups`, `source: "oidc"`) — иначе
+`422` со списком недостающего («нет ни одной группы из OIDC»). Прежнее
+поле `group_roles` в теле `PUT` игнорируется.
 `public_url` и `issuer_url` обязаны быть `https://`, кроме `localhost`
 и `127.0.0.1`, — иначе `422`: по этим адресам идут `id_token`, код
 авторизации и сессионная cookie.

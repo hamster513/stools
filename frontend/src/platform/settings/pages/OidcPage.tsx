@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Copy, PlugZap, Save, Trash2, XCircle } from 'lucide-react'
-import type { Role } from '@/api/auth'
+import { CheckCircle2, Copy, PlugZap, Save, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
-import { FullPageSpinner } from '@/components/ui/Spinner'
+import { Spinner } from '@/components/ui/Spinner'
+import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
+import { Link } from '@/lib/router'
+import { useGroups } from '@/platform/settings/api/access'
 import { useOidcSettings, useSaveOidc, useTestOidc } from '@/platform/settings/api/queries'
-import { ROLE_TITLES, type OidcSettings, type OidcSettingsInput } from '@/platform/settings/api/types'
-
-const ROLES: Role[] = ['admin', 'analyst', 'auditor']
+import type { OidcSettings, OidcSettingsInput } from '@/platform/settings/api/types'
 
 /** Что уходит на сервер: маска секрета и собранный им же адрес возврата
  *  ему не нужны. */
@@ -25,28 +25,30 @@ function payload(form: OidcSettings): OidcSettingsInput {
     groups_claim: form.groups_claim,
     login_claim: form.login_claim,
     name_claim: form.name_claim,
-    group_roles: form.group_roles,
   }
 }
 
 /**
- * Вход через провайдера OpenID Connect — Avanpost FAM или любой другой.
+ * Блок «Вход по OIDC» вкладки «Вход» (якорь `#oidc`): вход через
+ * провайдера OpenID Connect — Avanpost FAM или любой другой. Прокрутку и
+ * отступы задаёт вкладка.
  *
- * Роль за учёткой не хранится: её задаёт таблица «группа → роль», по
- * которой роль пересчитывается на каждом входе. Поэтому таблица здесь
- * не второстепенная настройка, а главное: без единой строки вход
- * включить нельзя — иначе вошедшему нечего было бы разрешить.
+ * Права вошедшего задают группы с источником OIDC: их заводят на странице
+ * «Группы», здесь остаётся только подключение к провайдеру. Без единой
+ * такой группы вход включить нельзя — иначе вошедшему нечего было бы
+ * разрешить; отказ приходит от сервера и показывается как есть.
  */
 export function OidcPage() {
   const oidc = useOidcSettings()
   const save = useSaveOidc()
   const test = useTestOidc()
+  const groups = useGroups()
+  // Читать раздел может и тот, кому платформа открыта на чтение; менять и проверять — её администратор.
+  const admin = useCan().platform.admin
 
   const [form, setForm] = useState<OidcSettings | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [group, setGroup] = useState('')
-  const [role, setRole] = useState<Role>('analyst')
   const [copied, setCopied] = useState(false)
   const redirect = useRef<HTMLInputElement>(null)
 
@@ -58,15 +60,13 @@ export function OidcPage() {
 
   if (oidc.isError) {
     return (
-      <div className="p-6">
-        <ErrorState
-          message={oidc.error?.message ?? 'Не удалось загрузить настройки входа'}
-          onRetry={() => oidc.refetch()}
-        />
-      </div>
+      <ErrorState
+        message={oidc.error?.message ?? 'Не удалось загрузить настройки входа'}
+        onRetry={() => oidc.refetch()}
+      />
     )
   }
-  if (!form) return <FullPageSpinner />
+  if (!form) return <Spinner className="mx-auto my-8" />
 
   function edit(update: (prev: OidcSettings) => OidcSettings) {
     setDirty(true)
@@ -79,13 +79,6 @@ export function OidcPage() {
 
   function patch(change: Partial<OidcSettings>) {
     edit((prev) => ({ ...prev, ...change }))
-  }
-
-  function addMapping() {
-    const name = group.trim()
-    if (name === '') return
-    edit((prev) => ({ ...prev, group_roles: [...prev.group_roles, { group: name, role }] }))
-    setGroup('')
   }
 
   function submit() {
@@ -116,18 +109,20 @@ export function OidcPage() {
   const result = test.data
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <section id="oidc" className="scroll-mt-6">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">Вход по OIDC</h1>
+          <h2 className="text-base font-semibold text-text">Вход по OIDC</h2>
           <p className="max-w-2xl text-xs text-text-secondary">
             Вход через Avanpost FAM или другого провайдера OpenID Connect. Вход по паролю при этом
             остаётся: он нужен, пока провайдер настраивается, и на случай, когда он недоступен.
           </p>
         </div>
+        {!admin && <span className="text-xs text-text-secondary">только чтение</span>}
       </div>
 
-      <div className="grid max-w-2xl gap-5">
+      {/* Без права менять форма целиком закрыта: поля, кнопки проверки и сохранения. */}
+      <fieldset disabled={!admin} className="grid min-w-0 max-w-2xl gap-5">
         <section className="rounded border border-grid bg-surface p-4">
           <div className="grid gap-3">
             <label className="flex items-center gap-2 text-xs text-text">
@@ -140,7 +135,7 @@ export function OidcPage() {
             </label>
             <p className="text-xs text-text-secondary">
               Включить не выйдет, пока не заполнены адрес STools, адрес провайдера, идентификатор
-              и секрет клиента и хотя бы одно соответствие групп ролям.
+              и секрет клиента и не заведена хотя бы одна группа из OIDC.
             </p>
 
             <Field label="Название провайдера" hint="Так подписана кнопка на странице входа">
@@ -267,115 +262,16 @@ export function OidcPage() {
           </div>
         </section>
 
-        <section className="rounded border border-grid bg-surface p-4">
-          <h2 className="mb-1 text-sm font-semibold text-text">Группы и роли</h2>
-          <p className="mb-4 text-xs text-text-secondary">
-            Роль не хранится за учёткой — она пересчитывается из групп провайдера на каждом входе.
-            Если групп несколько, побеждает старшая роль. Не попавший ни в одно соответствие войти
-            не сможет.
-          </p>
-
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-grid text-left text-[11px] tracking-wide text-text-secondary uppercase">
-                <th className="py-1.5 pr-3 font-medium">Группа в провайдере</th>
-                <th className="py-1.5 pr-3 font-medium">Роль в STools</th>
-                <th className="py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {form.group_roles.map((mapping, index) => (
-                <tr key={index} className="border-b border-grid">
-                  <td className="py-1.5 pr-3">
-                    <input
-                      className={FIELD}
-                      value={mapping.group}
-                      spellCheck={false}
-                      aria-label={`Группа ${index + 1}`}
-                      onChange={(e) =>
-                        edit((prev) => ({
-                          ...prev,
-                          group_roles: prev.group_roles.map((g, i) =>
-                            i === index ? { ...g, group: e.target.value } : g,
-                          ),
-                        }))
-                      }
-                    />
-                  </td>
-                  <td className="py-1.5 pr-3">
-                    <select
-                      className={FIELD}
-                      value={mapping.role}
-                      aria-label={`Роль для группы ${mapping.group}`}
-                      onChange={(e) =>
-                        edit((prev) => ({
-                          ...prev,
-                          group_roles: prev.group_roles.map((g, i) =>
-                            i === index ? { ...g, role: e.target.value as Role } : g,
-                          ),
-                        }))
-                      }
-                    >
-                      {ROLES.map((r) => (
-                        <option key={r} value={r}>
-                          {ROLE_TITLES[r]}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="py-1.5 text-right">
-                    <Button
-                      variant="ghost"
-                      onClick={() =>
-                        edit((prev) => ({
-                          ...prev,
-                          group_roles: prev.group_roles.filter((_, i) => i !== index),
-                        }))
-                      }
-                    >
-                      <Trash2 size={14} aria-hidden />
-                      удалить
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-              <tr>
-                <td className="py-1.5 pr-3">
-                  <input
-                    className={FIELD}
-                    value={group}
-                    onChange={(e) => setGroup(e.target.value)}
-                    placeholder="stools-analysts"
-                    spellCheck={false}
-                    aria-label="Новая группа"
-                  />
-                </td>
-                <td className="py-1.5 pr-3">
-                  <select
-                    className={FIELD}
-                    value={role}
-                    aria-label="Роль для новой группы"
-                    onChange={(e) => setRole(e.target.value as Role)}
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r} value={r}>
-                        {ROLE_TITLES[r]}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="py-1.5 text-right">
-                  <Button onClick={addMapping} disabled={group.trim() === ''}>
-                    Добавить
-                  </Button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
+        <p className="text-xs text-text-secondary">
+          Группы из OIDC настраиваются в разделе{' '}
+          <Link to="/settings/access/groups" className="text-primary hover:underline">
+            Группы
+          </Link>{' '}
+          — сейчас их {groups.data ? groups.data.filter((g) => g.source === 'oidc').length : '…'}
+        </p>
 
         <section className="rounded border border-grid bg-surface p-4">
-          <h2 className="mb-1 text-sm font-semibold text-text">Claim'ы и scope</h2>
+          <h3 className="mb-1 text-sm font-semibold text-text">Claim'ы и scope</h3>
           <p className="mb-4 text-xs text-text-secondary">
             Что запрашивать у провайдера и из каких полей ответа брать группы, логин и имя.
             Значения по умолчанию подходят для FAM.
@@ -418,7 +314,7 @@ export function OidcPage() {
             </div>
           </div>
         </section>
-      </div>
-    </div>
+      </fieldset>
+    </section>
   )
 }

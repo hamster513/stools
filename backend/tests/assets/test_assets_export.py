@@ -21,10 +21,10 @@ def test_assets(analyst: TestClient, client_as: Callable[[str], TestClient]) -> 
     assert client_as("auditor").get("/api/assets/assets/export").status_code == 200
 
 
-def test_networks(analyst: TestClient, client_as: Callable[[str], TestClient]) -> None:  # noqa: F811
-    r = analyst.post("/api/assets/networks", json={"cidr": "10.91.0.0/24", "title": "Офис", "vlan": 294, "tags": ["prod", "dmz"]})
+def test_networks(analyst: TestClient, assets_admin: TestClient, client_as: Callable[[str], TestClient]) -> None:  # noqa: F811
+    r = assets_admin.post("/api/assets/networks", json={"cidr": "10.91.0.0/24", "title": "Офис", "vlan": 294, "tags": ["prod", "dmz"]})
     assert r.status_code == 201
-    assert analyst.post("/api/assets/networks", json={"cidr": "10.92.0.0/24"}).status_code == 201
+    assert assets_admin.post("/api/assets/networks", json={"cidr": "10.92.0.0/24"}).status_code == 201
     # Фильтры — как у списка: поиск сужает выгрузку.
     rows = check_export(analyst, "/api/assets/networks/export", NETWORKS, narrow={"q": "Офис"})
     assert [r[0] for r in rows[1:]] == ["10.91.0.0/24", "10.92.0.0/24"]

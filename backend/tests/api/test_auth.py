@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from api.db.models import AREAS
 from tests.api.conftest import TEST_LOGIN, TEST_PASSWORD
 
 
@@ -14,10 +15,12 @@ def test_login_sets_cookie_and_allows_me(client: TestClient, test_user: Any) -> 
 
     me = client.get("/api/auth/me")
     assert me.status_code == 200
-    assert me.json() == {
+    body = me.json()
+    assert [(g["name"], g["source"]) for g in body.pop("groups")] == [("Администраторы", "local")]
+    assert body == {
         "login": TEST_LOGIN,
         "display_name": None,
-        "role": "admin",
+        "access": dict.fromkeys(AREAS, "admin"),
         "theme": "dark",
         "auth_source": "local",
     }

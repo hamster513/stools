@@ -10,9 +10,9 @@ import { Field, FIELD, Section } from '@/platform/collector/ui'
 
 /** Подключение к MaxPatrol VM: то, что сохранено, и запуск импорта. */
 export function VmConnection({ settings }: { settings: SettingsView }) {
-  // Аудитору настройки видны целиком, но поля закрыты, а кнопок нет:
-  // сервер ответит 403 и на сохранение, и на проверку, и на импорт.
-  const { write } = useCan()
+  // Аудитору настройки видны целиком, но поля закрыты, а кнопок нет: сервер
+  // ответит 403. Импорт — работа аналитика; сохранение и проверка — администратора модуля.
+  const { write, admin } = useCan()
   const save = useSaveVmSettings()
   const test = useTestVm()
   const start = useStartVmImport()
@@ -61,23 +61,23 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Хост" hint="Имя или адрес без https://">
-          <input className={FIELD} value={form.host} onChange={(e) => patch({ host: e.target.value })} placeholder="vm.corp.local" spellCheck={false} disabled={!write} />
+          <input className={FIELD} value={form.host} onChange={(e) => patch({ host: e.target.value })} placeholder="vm.corp.local" spellCheck={false} disabled={!admin} />
         </Field>
         <Field label="API-токен" hint={c.api_token_set ? 'задан; введите, чтобы заменить' : 'не задан. Персональный токен доступа MaxPatrol (pat_…); выпускается в консоли управления'}>
-          <input className={FIELD} type="password" value={form.api_token} onChange={(e) => patch({ api_token: e.target.value })} autoComplete="new-password" spellCheck={false} disabled={!write} />
+          <input className={FIELD} type="password" value={form.api_token} onChange={(e) => patch({ api_token: e.target.value })} autoComplete="new-password" spellCheck={false} disabled={!admin} />
         </Field>
         <Field label="Исключить ОС" hint="Через запятую; попадают в filter(Host.OsName != …)">
-          <input className={FIELD} value={form.os_exclude} onChange={(e) => patch({ os_exclude: e.target.value })} spellCheck={false} disabled={!write} />
+          <input className={FIELD} value={form.os_exclude} onChange={(e) => patch({ os_exclude: e.target.value })} spellCheck={false} disabled={!admin} />
         </Field>
         <Field label="Дополнение фильтра PDQL" hint="Добавляется через and, например Host.UF_Zone = 'DMZ'">
-          <input className={FIELD} value={form.pdql_extra} onChange={(e) => patch({ pdql_extra: e.target.value })} spellCheck={false} disabled={!write} />
+          <input className={FIELD} value={form.pdql_extra} onChange={(e) => patch({ pdql_extra: e.target.value })} spellCheck={false} disabled={!admin} />
         </Field>
         <Field label="Лимит записей" hint="0 — без ограничения; для пробы удобно 1000">
-          <input className={FIELD} type="number" min={0} value={form.limit} onChange={(e) => patch({ limit: Number(e.target.value) })} disabled={!write} />
+          <input className={FIELD} type="number" min={0} value={form.limit} onChange={(e) => patch({ limit: Number(e.target.value) })} disabled={!admin} />
         </Field>
         <div className="flex flex-col justify-end pb-1">
           <label className="flex items-center gap-2 text-xs text-text">
-            <input type="checkbox" checked={form.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} className="accent-primary" disabled={!write} />
+            <input type="checkbox" checked={form.verify_tls} onChange={(e) => patch({ verify_tls: e.target.checked })} className="accent-primary" disabled={!admin} />
             <span>Проверять TLS-сертификат</span>
           </label>
           <span className="mt-1 text-[11px] text-text-secondary">Выключено — сертификат VM не проверяется, как в первой итерации; включите за доверенным CA.</span>
@@ -86,12 +86,16 @@ export function VmConnection({ settings }: { settings: SettingsView }) {
 
       {write && (
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-grid pt-3">
-        <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
-          <Save size={13} aria-hidden /> Сохранить
-        </Button>
-        <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!c.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
-          <PlugZap size={13} aria-hidden /> Проверить подключение
-        </Button>
+        {admin && (
+          <>
+            <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty}>
+              <Save size={13} aria-hidden /> Сохранить
+            </Button>
+            <Button onClick={() => test.mutate()} loading={test.isPending} disabled={!c.configured || dirty} title={dirty ? 'Сначала сохраните' : undefined}>
+              <PlugZap size={13} aria-hidden /> Проверить подключение
+            </Button>
+          </>
+        )}
         <Button onClick={() => start.mutate()} loading={start.isPending} disabled={!c.configured || dirty || active !== null}>
           <ServerCog size={13} aria-hidden /> Импортировать из VM
         </Button>

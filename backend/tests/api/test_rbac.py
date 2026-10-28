@@ -1,26 +1,18 @@
-"""Роли: чтение всем, запись в модулях аналитику и администратору,
-общие настройки только администратору."""
+"""Встроенные группы: аудитор читает модули, аналитик в них пишет,
+общие настройки — только администратору."""
 from __future__ import annotations
 
 from collections.abc import Callable
 
 from fastapi.testclient import TestClient
 
-from api.rbac import allows
-
-
-def test_roles_nest() -> None:
-    assert allows("admin", "admin") and allows("admin", "analyst") and allows("admin", "auditor")
-    assert not allows("analyst", "admin") and allows("analyst", "analyst") and allows("analyst", "auditor")
-    assert not allows("auditor", "analyst") and allows("auditor", "auditor")
-
 
 def test_auditor_reads_but_cannot_write(client_as: Callable[[str], TestClient]) -> None:
     auditor = client_as("auditor")
     assert auditor.get("/api/siem/snapshots").status_code == 200
-    denied = auditor.put("/api/findings/state", json={"module": "siem", "scope_id": 0, "key": "k", "status": "in_work"})
+    denied = auditor.post("/api/vm/recalculate")
     assert denied.status_code == 403
-    assert "аналитик" in denied.json()["detail"]
+    assert denied.json()["detail"] == "нет доступа: vm, нужен уровень аналитик"
 
 
 def test_analyst_writes_in_modules_but_not_settings(client_as: Callable[[str], TestClient]) -> None:

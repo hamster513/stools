@@ -59,9 +59,9 @@ export function FieldRolesSection({
   const [search, setSearch] = useState('')
   const [onlyUnknown, setOnlyUnknown] = useState(true)
   const query = useDebouncedValue(search, 200)
-  // Роль поля — решение о профиле. Аудитору остаётся её читать: сама
+  // Роль поля — решение о профиле, его принимает администратор SIEM. Остальным — читать: сама
   // роль и её источник в строке названы словами.
-  const { write } = useCan()
+  const { admin } = useCan()
 
   const builtin = profile.field_roles_default
 
@@ -164,7 +164,7 @@ export function FieldRolesSection({
               <span className="w-28 shrink-0 text-right text-[11px] text-text-secondary">
                 {SOURCE_LABEL[i.source]}
               </span>
-              {write && (
+              {admin && (
               <div className="flex w-56 shrink-0 justify-end gap-1">
                 {(['environmental', 'technical'] as const).map((role) => (
                   <button

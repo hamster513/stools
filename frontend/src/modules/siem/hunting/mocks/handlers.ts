@@ -912,7 +912,7 @@ export const huntingHandlers = [
     const denied = noSession()
     if (denied) return denied
     const counted = Object.fromEntries(ALL_STATUSES.map((s) => [s, OPEN.includes(s)])) as Record<FindingStatus, boolean>
-    return HttpResponse.json({ counted, risk_max_days: null, risk_accept_role: 'analyst' })
+    return HttpResponse.json({ counted, risk_max_days: null, risk_accept_role: 'write' })
   }),
 
   http.get('/api/users/directory', () => {

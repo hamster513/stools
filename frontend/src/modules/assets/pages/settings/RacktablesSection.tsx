@@ -46,7 +46,7 @@ function scheduleText(s: NetworkSchedule | null): string {
 }
 
 /** «Проверить» — версия API сохранёнными учётными данными; «запустить» — проход с номером задачи и итогом. */
-function Actions({ rt }: { rt: Racktables }) {
+function Actions({ rt, admin }: { rt: Racktables; admin: boolean }) {
   const qc = useQueryClient()
   const check = useCheckRacktables()
   const run = useRunRacktables()
@@ -62,7 +62,7 @@ function Actions({ rt }: { rt: Racktables }) {
   return (
     <div className="flex flex-col items-end gap-0.5">
       <div className="flex gap-1">
-        <Button variant="ghost" loading={check.isPending} onClick={() => check.mutate(rt.id)}>проверить</Button>
+        {admin && <Button variant="ghost" loading={check.isPending} onClick={() => check.mutate(rt.id)}>проверить</Button>}
         <Button variant="ghost" loading={running} disabled={running || !rt.enabled} title={rt.enabled ? undefined : 'Подключение выключено — включите его в форме'}
           onClick={() => run.mutate(rt.id, { onSuccess: (r) => setJobId(r.job_id) })}>
           <Play size={13} aria-hidden /> запустить
@@ -134,7 +134,8 @@ function RacktablesForm({ rt, onDone }: { rt: Racktables | null; onDone: () => v
 
 /** RackTables: сети с названиями и VLAN становятся сетями Assets, имена адресов — наблюдениями источника RT. */
 export function RacktablesSection() {
-  const { write } = useCan()
+  // Запустить проход — работа аналитика; проверить, добавить, изменить, удалить — администратора модуля.
+  const { write, admin } = useCan()
   const rows = useRacktables()
   const remove = useDeleteRacktables()
   // undefined — форма закрыта, null — новое подключение.
@@ -165,11 +166,15 @@ export function RacktablesSection() {
                   {write && (
                     <td className="py-2">
                       <div className="flex items-start justify-end gap-1 whitespace-nowrap">
-                        <Actions rt={d} />
-                        <Button variant="ghost" onClick={() => setEditing(d)}>изменить</Button>
-                        <Button variant="ghost" loading={remove.isPending && remove.variables === d.id} onClick={() => remove.mutate(d.id)} aria-label={`Удалить подключение RackTables ${d.title || d.id}`}>
-                          <Trash2 size={13} aria-hidden />
-                        </Button>
+                        <Actions rt={d} admin={admin} />
+                        {admin && (
+                          <>
+                            <Button variant="ghost" onClick={() => setEditing(d)}>изменить</Button>
+                            <Button variant="ghost" loading={remove.isPending && remove.variables === d.id} onClick={() => remove.mutate(d.id)} aria-label={`Удалить подключение RackTables ${d.title || d.id}`}>
+                              <Trash2 size={13} aria-hidden />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </td>
                   )}
@@ -181,7 +186,7 @@ export function RacktablesSection() {
       )}
       {rows.data?.length === 0 && editing === undefined && <p className="mb-3 text-xs text-text-secondary">Подключений RackTables ещё нет.</p>}
       {remove.error && <p className="mb-2 text-xs text-kind-1">{message(remove.error, 'Подключение не удалено')}</p>}
-      {write && editing === undefined && <Button onClick={() => setEditing(null)}><Plus size={13} aria-hidden /> Добавить подключение</Button>}
+      {admin && editing === undefined && <Button onClick={() => setEditing(null)}><Plus size={13} aria-hidden /> Добавить подключение</Button>}
     </Section>
   )
 }

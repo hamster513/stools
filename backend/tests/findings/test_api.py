@@ -114,17 +114,18 @@ def test_summary(app_settings: Any, adapter: FakeAdapter, users: dict[str, AppUs
 
 
 def test_users_directory(app_settings: Any, users: dict[str, AppUser]) -> None:
-    body = _as("auditor1").get("/api/users/directory").json()
+    body = _as("analyst1").get("/api/users/directory", params={"module": "vm"}).json()
     assert body == [
         {"login": "admin1", "display_name": None},
         {"login": "analyst1", "display_name": "Аналитик Один"},
         {"login": "analyst2", "display_name": None},
     ]
+    assert _as("auditor1").get("/api/users/directory", params={"module": "vm"}).status_code == 403
 
 
 def test_settings_read_all_write_admin(app_settings: Any, users: dict[str, AppUser], db_session: Any) -> None:
     body = _as("auditor1").get("/api/settings/findings").json()
-    assert body["counted"]["resolved"] is False and body["risk_max_days"] is None and body["risk_accept_role"] == "analyst"
+    assert body["counted"]["resolved"] is False and body["risk_max_days"] is None and body["risk_accept_role"] == "write"
     assert _as("analyst1").put("/api/settings/findings", json={"risk_max_days": 90}).status_code == 403
     r = _as("admin1").put("/api/settings/findings", json={"risk_max_days": 90})
     assert r.status_code == 200 and r.json()["risk_max_days"] == 90

@@ -51,11 +51,6 @@ def rt() -> Iterator[FakeRacktables]:
         yield fake
 
 
-@pytest.fixture
-def analyst(client_as: Callable[[str], TestClient]) -> TestClient:
-    return client_as("analyst")
-
-
 def connect(c: TestClient, rt: FakeRacktables, **over: Any) -> dict[str, Any]:
     body = {"title": "RT", "url": rt.url, "username": rt.username, "password": rt.password, "verify_tls": False, "rate_per_s": 100, **over}
     r = c.post("/api/assets/racktables", json=body)
@@ -110,13 +105,13 @@ def test_parse_networks_keeps_explicit_and_implicit_apart() -> None:
 # ---- Задача ---------------------------------------------------------------
 
 
-def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:
+def test_run_creates_networks_and_named_addresses(assets_admin: TestClient, rt: FakeRacktables, db_session: Session) -> None:
     if db_session.get(AssetZone, EXTERNAL_ZONE) is None:
         db_session.add(AssetZone(name=EXTERNAL_ZONE, title=EXTERNAL_ZONE, description=""))
         db_session.commit()
-    conn = connect(analyst, rt)
-    assert analyst.post(f"/api/assets/racktables/{conn['id']}/check").json() == {"version": "1.3.3"}
-    job = run(analyst, conn["id"])
+    conn = connect(assets_admin, rt)
+    assert assets_admin.post(f"/api/assets/racktables/{conn['id']}/check").json() == {"version": "1.3.3"}
+    job = run(assets_admin, conn["id"])
     assert job["status"] == "done", job
     assert "сетей 4 · новых 4" in job["message"] and "имён адресов 4" in job["message"] and "шире /16 без запроса адресов 1" in job["message"]
     # По одному запросу на сеть; у контейнера /8 адреса не запрашиваются, но сама сеть заводится (объемлющая).
@@ -131,7 +126,7 @@ def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeR
     assert n24.implicit_tags == ["dmz"] and nets["8.8.4.0/29"].implicit_tags == []
     # Дата импорта, давшего сеть, — начало прохода.
     assert n24.origin_seen_at is not None and n24.origin_seen_at == nets["8.8.4.0/29"].origin_seen_at
-    assert [n["origin"] for n in analyst.get("/api/assets/networks").json()["items"]] == ["racktables"] * 4
+    assert [n["origin"] for n in assets_admin.get("/api/assets/networks").json()["items"]] == ["racktables"] * 4
 
     obs = {o.source_key: o for o in db_session.execute(select(AssetObservation).where(AssetObservation.source == "rt")).scalars()}
     assert set(obs) == {"10.10.0.11", "10.10.0.12", "10.10.5.5", "8.8.4.2"}
@@ -140,19 +135,19 @@ def test_run_creates_networks_and_named_addresses(analyst: TestClient, rt: FakeR
     # Адрес из /16, которого нет в /24, относится к /16.
     assert obs["10.10.5.5"].extra["network"] == "10.10.0.0/16"
     # Актив привязан к самой узкой сети, источник rt виден в списке.
-    items = analyst.get("/api/assets/assets", params={"q": "srv01"}).json()["items"]
+    items = assets_admin.get("/api/assets/assets", params={"q": "srv01"}).json()["items"]
     assert items[0]["network"]["cidr"] == "10.10.0.0/24" and [s["source"] for s in items[0]["sources"]] == ["rt"]
     assert "no_av" not in items[0]["codes"]
     # Внешний адрес srv01 сошёлся с тем же активом по имени и не стал расхождением по IP.
     assert items[0]["ip"] == "10.10.0.11" and "conflict" not in items[0]["codes"] and len(items) == 1
 
 
-def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:
+def test_rerun_updates_networks_keeps_manual_and_marks_gone(assets_admin: TestClient, rt: FakeRacktables, db_session: Session) -> None:
     # Сеть, описанная вручную с тем же CIDR, остаётся своей.
-    r = analyst.post("/api/assets/networks", json={"cidr": "10.10.0.0/24", "title": "своя", "site": "МСК"})
+    r = assets_admin.post("/api/assets/networks", json={"cidr": "10.10.0.0/24", "title": "своя", "site": "МСК"})
     assert r.status_code == 201, r.text
-    conn = connect(analyst, rt)
-    job = run(analyst, conn["id"])
+    conn = connect(assets_admin, rt)
+    job = run(assets_admin, conn["id"])
     assert "описаны вручную 1" in job["message"]
     mine = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/24")).scalar_one()
     assert mine.title == "своя" and mine.origin == "" and mine.site == "МСК"
@@ -162,7 +157,7 @@ def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient,
     rt.add_network("11", "10.10.0.0/16", "MSK1: campus", vlan="10")
     rt.add_address("10.10.0.12")
     rt.addresses = [a for a in rt.addresses if a["ip_address"] != "10.10.0.11"]
-    job = run(analyst, conn["id"])
+    job = run(assets_admin, conn["id"])
     assert job["status"] == "done" and "обновлено 3" in job["message"] and "пропало 2" in job["message"], job
     db_session.expire_all()
     wide = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/16")).scalar_one()
@@ -172,46 +167,46 @@ def test_rerun_updates_networks_keeps_manual_and_marks_gone(analyst: TestClient,
     assert db_session.execute(select(AssetRacktables)).scalar_one().last_run_at is not None
 
 
-def test_rerun_replaces_tag_ids_with_names(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:
+def test_rerun_replaces_tag_ids_with_names(assets_admin: TestClient, rt: FakeRacktables, db_session: Session) -> None:
     # Прежний разбор записывал номера тегов; следующий импорт перезаписывает их именами.
-    conn = connect(analyst, rt)
-    assert run(analyst, conn["id"])["status"] == "done"
+    conn = connect(assets_admin, rt)
+    assert run(assets_admin, conn["id"])["status"] == "done"
     row = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/24")).scalar_one()
     first_seen = row.origin_seen_at
     row.tags, row.implicit_tags, row.origin_seen_at = ["100"], ["200"], None
     db_session.commit()
-    assert run(analyst, conn["id"])["status"] == "done"
+    assert run(assets_admin, conn["id"])["status"] == "done"
     db_session.expire_all()
     row = db_session.execute(select(Network).where(Network.cidr == "10.10.0.0/24")).scalar_one()
     assert (row.tags, row.implicit_tags) == (["prod"], ["dmz"])
     assert row.origin_seen_at is not None and first_seen is not None and row.origin_seen_at > first_seen
 
 
-def test_wrong_password_and_dead_api(analyst: TestClient, rt: FakeRacktables, db_session: Session) -> None:
-    conn = connect(analyst, rt, password="wrong")
-    r = analyst.post(f"/api/assets/racktables/{conn['id']}/check")
+def test_wrong_password_and_dead_api(assets_admin: TestClient, rt: FakeRacktables, db_session: Session) -> None:
+    conn = connect(assets_admin, rt, password="wrong")
+    r = assets_admin.post(f"/api/assets/racktables/{conn['id']}/check")
     assert r.status_code == 502 and "401" in r.json()["detail"]
-    job = run(analyst, conn["id"])
+    job = run(assets_admin, conn["id"])
     assert job["status"] == "failed" and "401" in (job["error"] or "")
     # Смена адреса или учётки без пароля отклоняется: сохранённый пароль не должен уйти на чужой адрес.
     other = {"title": "RT", "url": "http://127.0.0.1:9/json_api.php", "username": rt.username, "password": "", "verify_tls": False}
-    assert analyst.put(f"/api/assets/racktables/{conn['id']}", json=other).status_code == 422
-    assert analyst.put(f"/api/assets/racktables/{conn['id']}", json={**other, "url": rt.url, "username": "other"}).status_code == 422
+    assert assets_admin.put(f"/api/assets/racktables/{conn['id']}", json=other).status_code == 422
+    assert assets_admin.put(f"/api/assets/racktables/{conn['id']}", json={**other, "url": rt.url, "username": "other"}).status_code == 422
     # Пароль поправили (пустой пароль при обновлении — оставить прежний).
-    assert analyst.put(f"/api/assets/racktables/{conn['id']}", json={"title": "RT", "url": rt.url, "username": rt.username, "password": "", "verify_tls": False}).json()["password_set"] is True
-    assert analyst.post(f"/api/assets/racktables/{conn['id']}/check").status_code == 502
-    assert analyst.put(f"/api/assets/racktables/{conn['id']}", json={"title": "RT", "url": rt.url, "username": rt.username, "password": rt.password, "verify_tls": False}).status_code == 200
+    assert assets_admin.put(f"/api/assets/racktables/{conn['id']}", json={"title": "RT", "url": rt.url, "username": rt.username, "password": "", "verify_tls": False}).json()["password_set"] is True
+    assert assets_admin.post(f"/api/assets/racktables/{conn['id']}/check").status_code == 502
+    assert assets_admin.put(f"/api/assets/racktables/{conn['id']}", json={"title": "RT", "url": rt.url, "username": rt.username, "password": rt.password, "verify_tls": False}).status_code == 200
     rt.fail_all = True
-    job = run(analyst, conn["id"])
+    job = run(assets_admin, conn["id"])
     assert job["status"] == "failed" and "Database is unavailable" in (job["error"] or "")
     assert db_session.execute(select(Network)).first() is None
 
 
-def test_crud_schedule_and_roles(analyst: TestClient, rt: FakeRacktables, db_session: Session, client_as: Callable[[str], TestClient], monkeypatch: pytest.MonkeyPatch) -> None:
-    assert analyst.post("/api/assets/racktables", json={"url": "racktables/json_api.php"}).status_code == 422
-    conn = connect(analyst, rt)
-    assert analyst.get("/api/assets/racktables").json()[0]["password_set"] is True
-    sched = analyst.put(f"/api/assets/racktables/{conn['id']}/schedule", json={"interval_hours": 24, "window_from": "", "window_to": "", "enabled": True})
+def test_crud_schedule_and_roles(assets_admin: TestClient, rt: FakeRacktables, db_session: Session, client_as: Callable[[str], TestClient], monkeypatch: pytest.MonkeyPatch) -> None:
+    assert assets_admin.post("/api/assets/racktables", json={"url": "racktables/json_api.php"}).status_code == 422
+    conn = connect(assets_admin, rt)
+    assert assets_admin.get("/api/assets/racktables").json()[0]["password_set"] is True
+    sched = assets_admin.put(f"/api/assets/racktables/{conn['id']}/schedule", json={"interval_hours": 24, "window_from": "", "window_to": "", "enabled": True})
     assert sched.status_code == 200, sched.text
     # Тик планировщика запускает проход.
     db_session.expire_all()
@@ -226,7 +221,7 @@ def test_crud_schedule_and_roles(analyst: TestClient, rt: FakeRacktables, db_ses
     assert auditor.post(f"/api/assets/racktables/{conn['id']}/run").status_code == 403
     assert auditor.post(f"/api/assets/racktables/{conn['id']}/check").status_code == 403
 
-    assert analyst.put(f"/api/assets/racktables/{conn['id']}", json={"title": "RT", "url": rt.url, "username": rt.username, "enabled": False}).status_code == 200
-    assert analyst.post(f"/api/assets/racktables/{conn['id']}/run").status_code == 409
-    assert analyst.delete(f"/api/assets/racktables/{conn['id']}").status_code == 204
-    assert analyst.get("/api/assets/racktables").json() == []
+    assert assets_admin.put(f"/api/assets/racktables/{conn['id']}", json={"title": "RT", "url": rt.url, "username": rt.username, "enabled": False}).status_code == 200
+    assert assets_admin.post(f"/api/assets/racktables/{conn['id']}/run").status_code == 409
+    assert assets_admin.delete(f"/api/assets/racktables/{conn['id']}").status_code == 204
+    assert assets_admin.get("/api/assets/racktables").json() == []

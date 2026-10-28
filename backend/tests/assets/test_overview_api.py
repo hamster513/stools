@@ -62,10 +62,10 @@ def test_overview_counts_match_synthetic(analyst: TestClient) -> None:
     assert body["codes"] == facets["code"] and body["by_source"] == facets["source"]
 
 
-def test_overview_networks_zones_and_last_runs(analyst: TestClient, db_session: Session) -> None:
-    r = analyst.post("/api/assets/networks", json={"cidr": "10.10.0.0/24", "title": "Серверы", "zone": "Internal"})
+def test_overview_networks_zones_and_last_runs(analyst: TestClient, assets_admin: TestClient, db_session: Session) -> None:
+    r = assets_admin.post("/api/assets/networks", json={"cidr": "10.10.0.0/24", "title": "Серверы", "zone": "Internal"})
     assert r.status_code == 201, r.text
-    assert analyst.post("/api/assets/networks", json={"cidr": "10.20.0.0/24"}).status_code == 201
+    assert assets_admin.post("/api/assets/networks", json={"cidr": "10.20.0.0/24"}).status_code == 201
     for i in range(12):
         db_session.add(AssetDns(title=f"dns{i:02}", server=f"10.10.0.{i + 1}", last_run_at=NOW - dt.timedelta(hours=i)))
     db_session.add(AssetDns(title="никогда", server="10.10.0.99"))
@@ -83,8 +83,8 @@ def test_overview_networks_zones_and_last_runs(analyst: TestClient, db_session: 
 
 
 @pytest.fixture
-def plain(db_session: Session, client_as: Callable[[str], TestClient]) -> TestClient:
-    return client_as("analyst")
+def plain(db_session: Session, assets_admin: TestClient) -> TestClient:
+    return assets_admin
 
 
 def test_settings_defaults_and_round_trip(plain: TestClient, db_session: Session) -> None:
@@ -112,10 +112,10 @@ def test_settings_validation(plain: TestClient, body: dict[str, Any]) -> None:
     assert plain.put("/api/assets/settings", json=body).status_code == 422
 
 
-def test_stale_days_changes_discrepancies(analyst: TestClient) -> None:
+def test_stale_days_changes_discrepancies(analyst: TestClient, assets_admin: TestClient) -> None:
     """Порог устаревания из настроек сразу меняет код: обе даты msk1 сегодня — при 0 дней это `stale`."""
     assert asset_id(analyst, "msk1") in {i["id"] for i in analyst.get("/api/assets/assets", params={"code": "conflict"}).json()["items"]}
-    assert analyst.put("/api/assets/settings", json={"inactive_days": 30, "stale_days": 0, "sync_after_import": False}).status_code == 200
+    assert assets_admin.put("/api/assets/settings", json={"inactive_days": 30, "stale_days": 0, "sync_after_import": False}).status_code == 200
     stale = analyst.get("/api/assets/assets", params={"code": "stale"}).json()["items"]
     assert [i["name"].lower() for i in stale] == ["msk1"]
 

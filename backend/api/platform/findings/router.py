@@ -1,9 +1,10 @@
 """Ручки статусов находок (спека §5): /api/findings/*, справочник исполнителей, настройки.
 
-Права — общим правилом api/rbac.py по методу и пути: чтение всем, запись в
-/api/findings — аналитику, запись /api/settings/findings — администратору.
-Внутри ручек остаётся одна проверка роли — `risk_accept_role`, она зависит
-от настроек, а не от пути.
+Запись /api/settings/findings — администратор платформы, общим правилом
+api/rbac.py. Правило для /api/findings/* и справочника исполнителей ничего не
+требует: уровень в модуле находки проверяют сами ручки (`_require`) — запись
+требует `write`, чтение `read`, «Мои находки» фильтруются по модулям с уровнем
+не ниже `read`. Кроме того, «принять риск» зависит от настройки `risk_accept_role`.
 
 В PUT отличаются «поле не передано» (не трогать) и `null` (очистить) — по
 `model_fields_set` тела.
@@ -31,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from api.audit import changes_summary
 from api.db.base import get_db
-from api.db.models import AppUser
+from api.db.models import MODULE_IDS, AppUser
 from api.deps import get_current_user
 from api.platform.export import Column, export_response
 from api.platform.filters import QueryList, QueryStatus, is_all, multi
@@ -55,6 +56,8 @@ from api.platform.findings.core import (
     is_overdue,
 )
 from api.platform.findings.models import FindingState
+from api.platform.services.access import Access, allows
+from api.rbac import LEVEL_TITLES, current_access
 
 router = APIRouter(tags=["findings"])
 
@@ -123,7 +126,7 @@ class SettingsPatch(BaseModel):
 
     counted: dict[str, bool] = Field(default_factory=dict)
     risk_max_days: int | None = Field(default=None, ge=1, le=3650)
-    risk_accept_role: Literal["analyst", "admin"] = "analyst"
+    risk_accept_role: Literal["write", "admin"] = "write"
 
     @field_validator("counted")
     @classmethod
@@ -205,9 +208,23 @@ def _adapter(module: str) -> FindingAdapter:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from None
 
 
-def _scoped(db: Session, module: str, scope_id: int) -> FindingAdapter:
-    """Модуль подключён и область у него есть: строки не заводятся для выдуманной области."""
+def _require(access: Access, module: str, level: str) -> None:
+    """У вызывающего в модуле находки (его области прав) уровень не ниже `level`; иначе 403 — текст как у api/rbac.py."""
+    area = svc.area_of(module)
+    if not allows(access, area, level):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=f"нет доступа: {area}, нужен уровень {LEVEL_TITLES[level]}")
+
+
+def _modules_at(access: Access, level: str) -> list[str]:
+    """Модули находок, в которых у вызывающего уровень не ниже `level` (с находками Threat Hunting — вместе с SIEM)."""
+    modules = [area for area in access if area != "platform" and allows(access, area, level)]
+    return modules + [m for m, area in svc.AREA_OF.items() if area in modules]
+
+
+def _writable(db: Session, module: str, scope_id: int, access: Access) -> FindingAdapter:
+    """Модуль подключён, у вызывающего в нём `write`, и область есть: строки не заводятся для выдуманной области."""
     adapter = _adapter(module)
+    _require(access, module, "write")
     if not adapter.has_scope(db, scope_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="область не найдена")
     return adapter
@@ -241,20 +258,22 @@ def _view(db: Session, module: str, scope_id: int, key: str) -> StateView:
 def get_state(
     module: str = Query(max_length=16), scope_id: int = Query(ge=0, le=MAX_SCOPE_ID),
     key: str = Query(min_length=1, max_length=MAX_KEY),
-    db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user), access: Access = Depends(current_access),
 ) -> StateView:
     _adapter(module)
+    _require(access, module, "read")
     return _view(db, module, scope_id, key)
 
 
 @router.put("/api/findings/state", response_model=StateView)
 def put_state(payload: StateChange, request: Request, db: Session = Depends(get_db),
-              user: AppUser = Depends(get_current_user)) -> StateView:
-    _scoped(db, payload.module, payload.scope_id)
+              user: AppUser = Depends(get_current_user), access: Access = Depends(current_access)) -> StateView:
+    _writable(db, payload.module, payload.scope_id, access)
     request.state.audit_summary = f"{payload.module}: находок 1; {payload.describe()}"
     try:
         svc.change(db, module=payload.module, scope_id=payload.scope_id, key=payload.key,
-                   change=payload.to_change(), actor=user, title=payload.title, severity=payload.severity)
+                   change=payload.to_change(), actor=user, level=access[svc.area_of(payload.module)],
+                   title=payload.title, severity=payload.severity)
     except TransitionError as exc:
         raise _refused(exc) from None
     return _view(db, payload.module, payload.scope_id, payload.key)
@@ -262,8 +281,8 @@ def put_state(payload: StateChange, request: Request, db: Session = Depends(get_
 
 @router.post("/api/findings/comment", response_model=StateView)
 def post_comment(payload: CommentBody, request: Request, db: Session = Depends(get_db),
-                 user: AppUser = Depends(get_current_user)) -> StateView:
-    _scoped(db, payload.module, payload.scope_id)
+                 user: AppUser = Depends(get_current_user), access: Access = Depends(current_access)) -> StateView:
+    _writable(db, payload.module, payload.scope_id, access)
     request.state.audit_summary = f"{payload.module}: находок 1; комментарий"
     try:
         svc.comment(db, module=payload.module, scope_id=payload.scope_id, key=payload.key, text=payload.text, actor=user)
@@ -274,11 +293,13 @@ def post_comment(payload: CommentBody, request: Request, db: Session = Depends(g
 
 @router.post("/api/findings/bulk")
 def post_bulk(payload: BulkBody, request: Request, response: Response, background: BackgroundTasks,
-              db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> dict[str, int]:
+              db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+              access: Access = Depends(current_access)) -> dict[str, int]:
     """Смена по списку ключей — сразу, `{changed}`. Выбор «всё по фильтру» — только у модулей,
     которые зарегистрировали разбор своего фильтра: фоновой задачей модуля (`register_bulk_job`,
     202 `{job_id}`), иначе сразу (`register_bulk_filter`). `assignee: "me"` в фильтре — автор."""
-    _scoped(db, payload.module, payload.scope_id)
+    _writable(db, payload.module, payload.scope_id, access)
+    level = access[svc.area_of(payload.module)]
     if (payload.keys is None) == (payload.filter is None):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="нужны либо ключи, либо фильтр")
     what = payload.change.describe()
@@ -294,8 +315,8 @@ def post_bulk(payload: BulkBody, request: Request, response: Response, backgroun
         if start is not None:
             change = payload.change.to_change()
             try:
-                svc.check_change(db, change, actor=user)
-                job_id, run = start(db, BulkJobRequest(payload.scope_id, flt, change, user.login, bulk_id))
+                svc.check_change(db, payload.module, change, level=level)
+                job_id, run = start(db, BulkJobRequest(payload.scope_id, flt, change, user.login, bulk_id, level))
             except TransitionError as exc:
                 raise _refused(exc) from None
             except BulkConflict as exc:
@@ -318,7 +339,7 @@ def post_bulk(payload: BulkBody, request: Request, response: Response, backgroun
     request.state.audit_summary = f"{payload.module}: находок {len(keys)}; {what}; bulk_id {bulk_id}{by_filter}"
     try:
         changed = svc.bulk_change(db, module=payload.module, scope_id=payload.scope_id, keys=keys,
-                                  change=payload.change.to_change(), actor=user, bulk_id=bulk_id)
+                                  change=payload.change.to_change(), actor=user, level=level, bulk_id=bulk_id)
     except TransitionError as exc:
         raise _refused(exc) from None
     request.state.audit_summary = (f"{payload.module}: изменено находок {changed} из {len(keys)}; {what}"
@@ -329,16 +350,20 @@ def post_bulk(payload: BulkBody, request: Request, response: Response, backgroun
 @router.get("/api/findings/mine", response_model=list[MineItem])
 def get_mine(
     status_: QueryStatus = None, module: QueryList = None,
-    db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db), user: AppUser = Depends(get_current_user), access: Access = Depends(current_access),
 ) -> list[MineItem]:
     """Находки, назначенные текущему пользователю, из всех модулей: сначала просроченные,
     затем по сроку (без срока — в конце), затем по тяжести. По умолчанию — открытые; `all` — любые,
-    как у списков модулей. `status` и `module` — повтором ключа (`status` — ещё и через запятую)."""
+    как у списков модулей. `status` и `module` — повтором ключа (`status` — ещё и через запятую).
+    Только модули, в которых у вызывающего уровень не ниже `read`."""
     wanted = STATUSES if is_all(status_) else multi(status_, commas=True) or OPEN
     unknown = set(wanted) - set(STATUSES)
     if unknown:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестные статусы: {', '.join(sorted(unknown))}")
-    query = select(FindingState).where(FindingState.assignee == user.login, FindingState.status.in_(sorted(wanted)))
+    query = select(FindingState).where(
+        FindingState.assignee == user.login, FindingState.status.in_(sorted(wanted)),
+        FindingState.module.in_(_modules_at(access, "read")),
+    )
     modules = multi(module)
     if modules is not None:
         query = query.where(FindingState.module.in_(sorted(modules)))
@@ -375,21 +400,24 @@ MINE_COLUMNS = [
 @router.get("/api/findings/mine/export")
 def export_mine(
     status_: QueryStatus = None, module: QueryList = None, fmt: str = Query(default="csv", alias="format"),
-    db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db), user: AppUser = Depends(get_current_user), access: Access = Depends(current_access),
 ) -> StreamingResponse:
     """«Мои находки» под теми же фильтрами и в том же порядке, что на странице (список и так без лимита)."""
     rows = [
         {"module": i.module_title, "title": i.title, "severity": SEVERITY_TITLES.get(i.severity.lower(), i.severity),
          "status": i.status_title, "due": i.due_date, "risk_until": i.risk_until}
-        for i in get_mine(status_, module, db=db, user=user)
+        for i in get_mine(status_, module, db=db, user=user, access=access)
     ]
     return export_response(fmt, MINE_COLUMNS, rows, module="findings", name="mine")
 
 
 @router.get("/api/findings/mine/count", response_model=MineCount)
-def get_mine_count(db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> MineCount:
-    """Для значка меню: открытые находки текущего пользователя и сколько из них просрочено."""
-    is_open = (FindingState.assignee == user.login, FindingState.status.in_(OPEN))
+def get_mine_count(db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+                   access: Access = Depends(current_access)) -> MineCount:
+    """Для значка меню: открытые находки текущего пользователя и сколько из них просрочено —
+    только в модулях, где он может ими заниматься (уровень не ниже `write`)."""
+    is_open = (FindingState.assignee == user.login, FindingState.status.in_(OPEN),
+               FindingState.module.in_(_modules_at(access, "write")))
     open_, overdue = db.execute(select(
         func.count(), func.count().filter(FindingState.due_date < svc.today()),
     ).where(*is_open)).one()
@@ -399,9 +427,10 @@ def get_mine_count(db: Session = Depends(get_db), user: AppUser = Depends(get_cu
 @router.get("/api/findings/summary")
 def get_summary(
     module: str = Query(max_length=16), scope_id: int = Query(ge=0, le=MAX_SCOPE_ID),
-    db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+    db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user), access: Access = Depends(current_access),
 ) -> dict[str, Any]:
     adapter = _adapter(module)
+    _require(access, module, "read")
     # Нет данных области — считаются только строки состояния. Адаптер, который умеет
     # сосчитать находки сам (VM), их не перечисляет.
     count_current = getattr(adapter, "count_current", None)
@@ -414,8 +443,16 @@ def get_summary(
 
 
 @router.get("/api/users/directory", response_model=list[DirectoryUser])
-def get_directory(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[DirectoryUser]:
-    return [DirectoryUser(login=u.login, display_name=u.display_name) for u in svc.directory(db)]
+def get_directory(
+    module: str = Query(max_length=16), db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+    access: Access = Depends(current_access),
+) -> list[DirectoryUser]:
+    """Кому можно назначить находку модуля: активные пользователи с `write` в нём. Спрашивать может тот, кто сам
+    может назначать (`write` в модуле); `module` — модуль находок, в том числе `siem_th`."""
+    if svc.area_of(module) not in MODULE_IDS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"неизвестный модуль «{module}»")
+    _require(access, module, "write")
+    return [DirectoryUser(login=u.login, display_name=u.display_name) for u in svc.directory(db, module)]
 
 
 @router.get("/api/settings/findings", response_model=FindingSettings)

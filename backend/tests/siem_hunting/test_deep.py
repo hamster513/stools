@@ -92,6 +92,37 @@ def test_deep_runs_all_slices_and_persists_one_finding(db_session: Any, fake: Fa
     assert [json.loads(r.data_json)["event_src.host"] for r in rows] == ["ws-0001", "ws-0001", "ws-0002"]
 
 
+def test_no_events_no_finding(db_session: Any, fake: FakeEvents) -> None:
+    # Как у ночного прогона: пустой результат находки не заводит, хант при этом завершён.
+    set_th(db_session, hot_days=1, slice_hours=3)
+    deep = new_deep(db_session, NOW - D - 6 * H)
+    fake.events_by_time_from = {}
+    job = ThJob(kind="deep", started_by="t")
+    db_session.add(job)
+    db_session.commit()
+    run_deep(db_session, JobHandle(db_session, job), deep.id, sleeper=Sleeper(), clock=Clock(NOW))
+    db_session.expire_all()
+    got = db_session.get(ThDeepHunt, deep.id)
+    assert (got.status, got.slices_done, got.events) == ("done", 3, 0)
+    assert db_session.scalars(select(ThFinding)).all() == []
+
+
+def test_finding_starts_with_first_slice_that_has_events(db_session: Any, fake: FakeEvents) -> None:
+    set_th(db_session, hot_days=1, slice_hours=3)
+    period_from = NOW - D - 6 * H
+    deep = new_deep(db_session, period_from)
+    fake.events_by_time_from = {ts(NOW - D): [], ts(NOW - D - 3 * H): events(2), ts(period_from): events(1, "ws-0002")}
+    job = ThJob(kind="deep", started_by="t")
+    db_session.add(job)
+    db_session.commit()
+    run_deep(db_session, JobHandle(db_session, job), deep.id, sleeper=Sleeper(), clock=Clock(NOW))
+    db_session.expire_all()
+    (finding,) = db_session.scalars(select(ThFinding)).all()
+    assert finding.event_count == 3
+    rows = db_session.scalars(select(ThEvent).where(ThEvent.finding_id == finding.id).order_by(ThEvent.position)).all()
+    assert [r.position for r in rows] == [0, 1, 2]
+
+
 def test_limit_hit_slices_counted(db_session: Any, fake: FakeEvents) -> None:
     set_th(db_session, hot_days=1, slice_hours=3)
     deep = new_deep(db_session, NOW - D - 6 * H, limit=2)

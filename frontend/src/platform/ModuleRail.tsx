@@ -1,11 +1,13 @@
-import { ListChecks, LogOut, Moon, Settings2, Shield, Sun } from 'lucide-react'
-import { useLogout, useMe } from '@/api/auth'
+import type { Ref } from 'react'
+import { ListChecks, Settings2, Shield } from 'lucide-react'
+import { useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
-import { useCan } from '@/lib/can'
-import { useThemeChoice } from '@/lib/useThemeChoice'
+import { firstReadableModule, useCan } from '@/lib/can'
+import { atLeast, type Area } from '@/platform/access/types'
 import { useMyFindingsCount } from './findings/queries'
 import { MODULES } from './modules'
+import { UserMenu } from './UserMenu'
 
 const FOCUS =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset'
@@ -15,28 +17,40 @@ const FOCUS =
  * каждой иконкой код модуля, иначе пять похожих значков не различить.
  * Полное имя — в title и для скринридера.
  */
-export function ModuleRail() {
-  const { path, navigate } = useRouter()
+export function ModuleRail({
+  helpOpen,
+  onHelp,
+  helpButtonRef,
+}: {
+  helpOpen: boolean
+  onHelp: () => void
+  helpButtonRef: Ref<HTMLButtonElement>
+}) {
+  const { path } = useRouter()
   const { data: me } = useMe()
   const can = useCan()
-  const logout = useLogout()
-  const appearance = useThemeChoice()
-  // Исполнителем бывает только аналитик или администратор: аудитору значок ни к чему.
-  const mine = useMyFindingsCount(can.write)
+  // Модули, закрытые группам пользователя, в рейке не показываются.
+  // Заглушки «в разработке» прав не имеют — их видят все.
+  const modules = MODULES.filter((m) => m.status === 'planned' || (me && atLeast(me.access, m.id as Area, 'read')))
+  const home = firstReadableModule(me?.access)
+  // Исполнителем бывает только аналитик или администратор модуля: тому, кто
+  // нигде не пишет, значок ни к чему.
+  const mine = useMyFindingsCount(can.anyWrite)
   const open = mine.data?.open ?? 0
   const overdue = mine.data?.overdue ?? 0
 
   return (
     <nav aria-label="Модули" className="flex w-16 shrink-0 flex-col border-r border-grid bg-app-bg">
       {/* Логотип ведёт на матрицу ATT&CK: это общий экран всех модулей,
-          и он же — точка входа в продукт. */}
+          и он же — точка входа в продукт. Матрица закрыта — на первый
+          открытый модуль, а без модулей — в профиль. */}
       <Link
-        to="/attack"
+        to={home ? `/${home}` : '/settings/profile'}
         className={cn(
           'flex h-14 flex-col items-center justify-center gap-0.5 border-b border-grid text-primary',
           FOCUS,
         )}
-        aria-label="Security Tools, к матрице ATT&CK"
+        aria-label={home === 'attack' ? 'Security Tools, к матрице ATT&CK' : 'Security Tools'}
         title="Security Tools"
       >
         <Shield size={22} strokeWidth={2} aria-hidden />
@@ -44,7 +58,7 @@ export function ModuleRail() {
       </Link>
 
       <ul className="flex flex-col gap-1 px-1.5 py-2">
-        {MODULES.map((m) => {
+        {modules.map((m) => {
           const Icon = m.icon
           const active = path === `/${m.id}` || path.startsWith(`/${m.id}/`)
           const planned = m.status === 'planned'
@@ -74,7 +88,7 @@ export function ModuleRail() {
       </ul>
 
       <div className="mt-auto flex flex-col items-center gap-1 border-t border-grid px-1 py-2">
-        {can.write && (
+        {can.anyWrite && (
           <Link
             to="/findings"
             className={cn(
@@ -99,9 +113,10 @@ export function ModuleRail() {
             )}
           </Link>
         )}
-        {/* Настройки — для всех ролей: в них страницы модулей и сводка
-            «Данные», а у боковых панелей модулей своей ссылки на настройки
-            больше нет. Разделы платформы внутри остаются администратору. */}
+        {/* Настройки — для всех: в них профиль и сводка «Данные» (строки
+            сервер отбирает по модулям пользователя), а у боковых панелей
+            модулей своей ссылки на настройки больше нет. Разделы платформы и
+            страницы модулей внутри — по уровню. */}
         <Link
           to="/settings"
           className={cn(
@@ -114,37 +129,14 @@ export function ModuleRail() {
         >
           <Settings2 size={16} aria-hidden />
         </Link>
-        {/* Тема — не настройка администратора: за экраном сидит каждый,
-            и менять её надо там, где сидишь, а не через раздел настроек. */}
-        <button
-          type="button"
-          onClick={() => appearance.choose(appearance.theme === 'dark' ? 'light' : 'dark')}
-          className={cn('rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text', FOCUS)}
-          aria-label={appearance.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-          title={appearance.theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
-        >
-          {appearance.theme === 'dark' ? <Sun size={16} aria-hidden /> : <Moon size={16} aria-hidden />}
-        </button>
-        <span
-          className="max-w-full truncate font-mono text-[10px] text-text-secondary"
-          title={me?.display_name ?? me?.login}
-        >
-          {me?.login ?? '—'}
-        </span>
-        {can.role === 'auditor' && (
-          <span className="text-[9px] text-text-secondary" title="Роль: аудитор">
+        {/* Логин — кнопка меню пользователя: подсказка по странице, тема, выход.
+            Раздел справки /help открывается из панели подсказки («Вся справка →»). */}
+        <UserMenu helpOpen={helpOpen} onHelp={onHelp} helpButtonRef={helpButtonRef} />
+        {!can.anyWrite && (
+          <span className="text-[9px] text-text-secondary" title="Ни в одном модуле нет права на изменения">
             только чтение
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => logout.mutate(undefined, { onSuccess: () => navigate('/login', { replace: true }) })}
-          className={cn('rounded p-2 text-text-secondary hover:bg-row-hover hover:text-text', FOCUS)}
-          aria-label="Выйти"
-          title="Выйти"
-        >
-          <LogOut size={16} aria-hidden />
-        </button>
       </div>
     </nav>
   )

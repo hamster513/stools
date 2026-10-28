@@ -10,7 +10,7 @@ import { NUM } from './ui'
 
 function Table({ title, rows, labels, onChange }: { title: string; rows: Record<string, number>; labels?: Record<string, string>; onChange: (k: string, v: number) => void }) {
   // Веса аудитор читает: без них непонятно, из чего сложился балл.
-  const { write } = useCan()
+  const { admin } = useCan()
   return (
     <div>
       <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{title}</div>
@@ -19,7 +19,7 @@ function Table({ title, rows, labels, onChange }: { title: string; rows: Record<
           {Object.entries(rows).map(([k, v]) => (
             <tr key={k}>
               <td className="py-0.5 pr-3 text-text-secondary">{labels?.[k] ?? k}</td>
-              <td className="py-0.5"><input className={NUM} type="number" step={0.05} value={v} onChange={(e) => onChange(k, Number(e.target.value))} aria-label={`${title}: ${labels?.[k] ?? k}`} disabled={!write} /></td>
+              <td className="py-0.5"><input className={NUM} type="number" step={0.05} value={v} onChange={(e) => onChange(k, Number(e.target.value))} aria-label={`${title}: ${labels?.[k] ?? k}`} disabled={!admin} /></td>
             </tr>
           ))}
         </tbody>
@@ -31,18 +31,18 @@ function Table({ title, rows, labels, onChange }: { title: string; rows: Record<
 const REACH = { network_internet: 'сеть, хост из интернета', network_internal: 'сеть, хост внутри', adjacent: 'соседняя сеть', local: 'локально / физически' }
 
 function Scalar({ label, value, onChange, step = 0.05 }: { label: string; value: number; onChange: (v: number) => void; step?: number }) {
-  const { write } = useCan()
+  const { admin } = useCan()
   return (
     <label className="flex items-center justify-between gap-3 py-0.5 text-xs">
       <span className="text-text-secondary">{label}</span>
-      <input className={NUM} type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} disabled={!write} />
+      <input className={NUM} type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} disabled={!admin} />
     </label>
   )
 }
 
 /** Веса формулы. Сохранение ставит задачу пересчёта: он идёт секунды, а не часы. */
 export function WeightsSection({ settings }: { settings: SettingsView }) {
-  const { write } = useCan()
+  const { admin } = useCan()
   const save = useSaveVmSettings()
   const recalc = useRecalculate()
   const [w, setW] = useState<Weights>(settings.weights)
@@ -83,16 +83,16 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
     >
       <div className="mb-4 flex items-center gap-3">
         <label htmlFor="risk-threshold" className="text-xs text-text">Порог риска</label>
-        <input id="risk-threshold" className={NUM} type="number" min={0} max={100} value={threshold} onChange={(e) => { setDirty(true); setThreshold(Number(e.target.value)) }} aria-label="Порог риска" disabled={!write} />
+        <input id="risk-threshold" className={NUM} type="number" min={0} max={100} value={threshold} onChange={(e) => { setDirty(true); setThreshold(Number(e.target.value)) }} aria-label="Порог риска" disabled={!admin} />
         <span className="text-[11px] text-text-secondary">выше порога — «требует действия» на обзоре и в карточке</span>
       </div>
       <div className="mb-4">
         <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Уровни</div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
           {/* Нижние границы по баллу; ниже «среднего» — низкий. */}
-          средний ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={medium} onChange={(e) => edit((d) => { d.levels.medium = Number(e.target.value) })} aria-label="Уровни: средний от" disabled={!write} />
-          высокий ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={high} onChange={(e) => edit((d) => { d.levels.high = Number(e.target.value) })} aria-label="Уровни: высокий от" disabled={!write} />
-          критический ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={critical} onChange={(e) => edit((d) => { d.levels.critical = Number(e.target.value) })} aria-label="Уровни: критический от" disabled={!write} />
+          средний ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={medium} onChange={(e) => edit((d) => { d.levels.medium = Number(e.target.value) })} aria-label="Уровни: средний от" disabled={!admin} />
+          высокий ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={high} onChange={(e) => edit((d) => { d.levels.high = Number(e.target.value) })} aria-label="Уровни: высокий от" disabled={!admin} />
+          критический ≥ <input className={NUM} type="number" step={1} min={1} max={100} value={critical} onChange={(e) => edit((d) => { d.levels.critical = Number(e.target.value) })} aria-label="Уровни: критический от" disabled={!admin} />
           {!levelsOk && <span className="text-kind-1">нужны целые: 0 &lt; средний &lt; высокий &lt; критический ≤ 100</span>}
         </div>
       </div>
@@ -112,7 +112,7 @@ export function WeightsSection({ settings }: { settings: SettingsView }) {
           <Table title="Ценность: критичность" rows={w.value.criticality} labels={{ None: 'не задана' }} onChange={(k, v) => edit((d) => { d.value.criticality[k] = v })} />
         </div>
       </div>
-      {write && (
+      {admin && (
         <div className="mt-4 flex items-center gap-2 border-t border-grid pt-3">
           <Button variant="primary" onClick={submit} loading={save.isPending} disabled={!dirty || !levelsOk}><Save size={13} aria-hidden /> Сохранить и пересчитать</Button>
           <Button onClick={reset}><RotateCcw size={13} aria-hidden /> По умолчанию</Button>

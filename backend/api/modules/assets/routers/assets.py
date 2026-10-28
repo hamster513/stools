@@ -67,6 +67,7 @@ from api.platform.findings.core import STATUSES, RoleRequired, TransitionError
 from api.platform.findings.router import ChangeBody
 from api.platform.schedule_views import ScheduleIn, ScheduleView, schedule_view
 from api.platform.scheduler import PlatformSchedule, delete_schedule, upsert_schedule
+from api.rbac import current_access
 from api.settings import Settings, get_settings
 
 router = APIRouter(tags=["assets"])
@@ -269,16 +270,17 @@ def bulk(payload: BulkIn, db: Session = Depends(get_db), _user: AppUser = Depend
 @router.post("/assets/discrepancies/bulk")
 def bulk_discrepancies(
     payload: DiscrepancyBulkIn, request: Request, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+    access: dict[str, str] = Depends(current_access),
 ) -> dict[str, int]:
     """Статус, исполнитель, срок расхождения `code` у отмеченных активов — одним массовым действием
     (`bulk_id`). Ключи — расхождения, которые у этих активов есть сейчас; права — как у
-    `/api/findings/bulk` (принять риск — по `risk_accept_role`, 403)."""
+    `/api/findings/bulk` (принять риск — по `risk_accept_role` и уровню в Assets, 403)."""
     _check(payload.code, CODES)
     change = payload.change.to_change()
     what = payload.change.describe()
     try:
         # До первого куска: отказ по правилам не должен оставить смену сделанной наполовину.
-        finding_svc.check_change(db, change, actor=user)
+        finding_svc.check_change(db, MODULE, change, level=access[MODULE])
     except TransitionError as exc:
         code = status.HTTP_403_FORBIDDEN if isinstance(exc, RoleRequired) else status.HTTP_422_UNPROCESSABLE_CONTENT
         raise HTTPException(code, detail=str(exc)) from None
@@ -289,7 +291,7 @@ def bulk_discrepancies(
     try:
         for chunk in batched(keys, DISC_BULK_CHUNK):
             changed += finding_svc.bulk_change(db, module=MODULE, scope_id=SCOPE, keys=list(chunk), change=change,
-                                               actor=user, bulk_id=bulk_id)
+                                               actor=user, level=access[MODULE], bulk_id=bulk_id)
     except TransitionError as exc:
         db.rollback()
         code = status.HTTP_403_FORBIDDEN if isinstance(exc, RoleRequired) else status.HTTP_422_UNPROCESSABLE_CONTENT

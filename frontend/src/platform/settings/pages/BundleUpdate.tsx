@@ -76,7 +76,7 @@ function DiffCounts({ diff }: { diff: AttackBundleDiff }) {
  * только администратор: матрица одна на все модули.
  */
 export function BundleUpdate() {
-  const { admin } = useCan()
+  const { admin } = useCan('attack')
   const state = useAttackBundle()
   const gaps = useTranslationGaps()
   const preview = usePreviewBundle()

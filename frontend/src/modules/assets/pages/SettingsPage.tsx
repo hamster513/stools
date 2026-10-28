@@ -51,7 +51,7 @@ const shown = (value: number) => (Number.isNaN(value) ? '' : value)
 
 /** Форма порогов: черновик живёт, пока не сохранён; без изменений кнопка выключена. */
 function ThresholdsForm({ saved }: { saved: AssetSettings }) {
-  const { write } = useCan()
+  const { admin } = useCan()
   const save = useSaveAssetSettings()
   const [form, setForm] = useState(saved)
   const dirty = form.inactive_days !== saved.inactive_days || form.stale_days !== saved.stale_days || form.sync_after_import !== saved.sync_after_import
@@ -59,17 +59,17 @@ function ThresholdsForm({ saved }: { saved: AssetSettings }) {
     <>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Устаревание, дней" hint="Значение источника старше актуального на столько дней — «данные устарели», моложе — «источники расходятся». 0 — любое отличие считается устаревшим.">
-          <input type="number" min={0} className={FIELD} disabled={!write} value={shown(form.stale_days)} onChange={(e) => setForm({ ...form, stale_days: numberOrEmpty(e.target.value) })} />
+          <input type="number" min={0} className={FIELD} disabled={!admin} value={shown(form.stale_days)} onChange={(e) => setForm({ ...form, stale_days: numberOrEmpty(e.target.value) })} />
         </Field>
         <Field label="Неактивность AD, дней" hint="Компьютер AD без входа и без других источников дольше — «неактивный компьютер AD»; с входом не старше — нужен агент антивируса.">
-          <input type="number" min={1} className={FIELD} disabled={!write} value={shown(form.inactive_days)} onChange={(e) => setForm({ ...form, inactive_days: numberOrEmpty(e.target.value) })} />
+          <input type="number" min={1} className={FIELD} disabled={!admin} value={shown(form.inactive_days)} onChange={(e) => setForm({ ...form, inactive_days: numberOrEmpty(e.target.value) })} />
         </Field>
       </div>
       <label className="mt-3 flex items-center gap-2 text-xs text-text">
-        <input type="checkbox" disabled={!write} checked={form.sync_after_import} onChange={(e) => setForm({ ...form, sync_after_import: e.target.checked })} />
+        <input type="checkbox" disabled={!admin} checked={form.sync_after_import} onChange={(e) => setForm({ ...form, sync_after_import: e.target.checked })} />
         Синхронизировать сразу после импорта в модулях VM, антивирус и AD
       </label>
-      {write && (
+      {admin && (
         <div className="mt-3 flex items-center gap-3">
           <Button variant="primary" loading={save.isPending} disabled={!dirty} onClick={() => save.mutate(form)}>
             <Save size={13} aria-hidden /> Сохранить
@@ -100,14 +100,14 @@ const SYNC_SOURCES: { source: SyncSource; title: string }[] = [
 
 /** Расписание синхронизации: форма у того, кто может писать, строка — у остальных. */
 function SyncSchedule() {
-  const { write } = useCan()
+  const { admin } = useCan()
   const schedule = useSyncSchedule()
   const save = useSaveSyncSchedule()
   const remove = useDeleteSyncSchedule()
   if (schedule.isError) return <p className="mt-3 text-xs text-kind-1">{message(schedule.error, 'Не удалось загрузить расписание')}</p>
   if (schedule.data === undefined) return null
   const current = schedule.data
-  if (!write) {
+  if (!admin) {
     return (
       <p className="mt-3 text-xs text-text-secondary">
         Расписание: {current ? `раз в ${current.interval_hours} ч${current.window_from && current.window_to ? `, ${current.window_from}–${current.window_to} ${current.tz}` : ''}; следующий запуск ${current.enabled ? when(current.next_run_at) : 'выключено'}` : 'не задано'}.
@@ -176,7 +176,7 @@ const SELECT = 'rounded border border-border bg-app-bg px-1.5 py-1 text-xs text-
  * выбирается из справочника или назначается правилами; группу, заданную у сетей или в правилах, удалить нельзя.
  */
 function ZonesSection() {
-  const { write } = useCan()
+  const { admin } = useCan()
   const zones = useZones()
   const create = useCreateZone()
   const remove = useDeleteZone()
@@ -202,21 +202,21 @@ function ZonesSection() {
                   <td className="py-2 pr-3 break-words text-text">{z.title || '—'}</td>
                   <td className="py-2 pr-3 break-words text-text-secondary">{z.description || '—'}</td>
                   <td className="py-1.5 pr-3">
-                    {write ? (
+                    {admin ? (
                       <select value={z.placement} onChange={(e) => patchZone.mutate({ name: z.name, body: { placement: e.target.value as Placement } })} aria-label={`Расположение группы ${z.name}`} className={SELECT}>
                         {PLACEMENTS.map((p) => <option key={p} value={p}>{PLACEMENT_LABELS[p]}</option>)}
                       </select>
                     ) : <span className="text-text">{PLACEMENT_LABELS[z.placement]}</span>}
                   </td>
                   <td className="py-2 pr-3">
-                    <input type="checkbox" className="accent-primary" checked={z.internet_facing} disabled={!write} onChange={(e) => patchZone.mutate({ name: z.name, body: { internet_facing: e.target.checked } })} aria-label={`Группа ${z.name} доступна из интернета`} />
+                    <input type="checkbox" className="accent-primary" checked={z.internet_facing} disabled={!admin} onChange={(e) => patchZone.mutate({ name: z.name, body: { internet_facing: e.target.checked } })} aria-label={`Группа ${z.name} доступна из интернета`} />
                   </td>
                   <td className="py-2 pr-3">
-                    <input type="checkbox" className="accent-primary" checked={z.confidential} disabled={!write} onChange={(e) => patchZone.mutate({ name: z.name, body: { confidential: e.target.checked } })} aria-label={`В группе ${z.name} конфиденциальные данные`} />
+                    <input type="checkbox" className="accent-primary" checked={z.confidential} disabled={!admin} onChange={(e) => patchZone.mutate({ name: z.name, body: { confidential: e.target.checked } })} aria-label={`В группе ${z.name} конфиденциальные данные`} />
                   </td>
                   <td className="py-2 pr-3 text-right font-mono tabular-nums text-text-secondary">{z.networks}</td>
                   <td className="py-2 text-right">
-                    {write && (
+                    {admin && (
                       <Button variant="ghost" onClick={() => remove.mutate(z.name)} disabled={z.networks > 0} title={z.networks > 0 ? 'группа задана у сетей' : undefined} aria-label={`Удалить группу ${z.name}`}>
                         <Trash2 size={13} aria-hidden />
                       </Button>
@@ -230,7 +230,7 @@ function ZonesSection() {
       )}
       {remove.error && <p className="mb-2 text-xs text-kind-1">{message(remove.error, 'Группа не удалена')}</p>}
       {patchZone.error && <p className="mb-2 text-xs text-kind-1">{message(patchZone.error, 'Признак группы не изменён')}</p>}
-      {write && (
+      {admin && (
         <div className="grid items-end gap-3 sm:grid-cols-[1fr_1fr_2fr]">
           <Field label="Имя"><input className={FIELD} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Lab" /></Field>
           <Field label="Название"><input className={FIELD} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></Field>

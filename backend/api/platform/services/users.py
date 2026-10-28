@@ -1,18 +1,28 @@
 """Пользователи платформы.
 
-Защита от выстрела в ногу: нельзя заблокировать, удалить или понизить
-себя и нельзя оставить систему без активного администратора.
+Права пользователя — это его группы (api.platform.services.access). Защита от
+выстрела в ногу: нельзя заблокировать или удалить себя, а блокировка, удаление и
+смена групп не оставляют систему без администратора и не снимают права с самого
+себя (`guard_last_admin`).
 """
 from __future__ import annotations
 
 import datetime as dt
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from api.db.models import ROLE_ADMIN, ROLES, AppUser, SessionRow
+from api.db.models import AppUser, SessionRow
+from api.platform.services.access import (
+    Access,
+    GroupRef,
+    access_for,
+    groups_of,
+    guard_last_admin,
+    set_user_groups,
+)
 from api.security import hash_password
 
 MIN_PASSWORD = 8
@@ -22,7 +32,9 @@ class UserView(BaseModel):
     id: int
     login: str
     display_name: str | None = None
-    role: str
+    #: Группы пользователя (локальные и из OIDC) и итоговые права по ним.
+    groups: list[GroupRef]
+    access: Access
     is_active: bool
     last_login_at: dt.datetime | None = None
     created_at: dt.datetime
@@ -32,55 +44,54 @@ class UserView(BaseModel):
 class UserCreate(BaseModel):
     login: str = Field(min_length=1, max_length=255)
     display_name: str | None = Field(default=None, max_length=255)
-    role: str
+    #: Только локальные группы: членство в группах из OIDC выдаёт вход.
+    group_ids: list[int] = []
     password: str = Field(min_length=MIN_PASSWORD)
-
-    @field_validator("role")
-    @classmethod
-    def _role(cls, value: str) -> str:
-        if value not in ROLES:
-            raise ValueError(f"роль должна быть одной из: {', '.join(ROLES)}")
-        return value
 
 
 class UserPatch(BaseModel):
     display_name: str | None = Field(default=None, max_length=255)
-    role: str | None = None
+    #: None — группы не трогать; список заменяет локальное членство целиком.
+    group_ids: list[int] | None = None
     is_active: bool | None = None
-
-    @field_validator("role")
-    @classmethod
-    def _role(cls, value: str | None) -> str | None:
-        if value is not None and value not in ROLES:
-            raise ValueError(f"роль должна быть одной из: {', '.join(ROLES)}")
-        return value
 
 
 class PasswordSet(BaseModel):
     password: str = Field(min_length=MIN_PASSWORD)
 
 
-def view(user: AppUser) -> UserView:
-    return UserView.model_validate(user, from_attributes=True)
+def view(db: Session, user: AppUser) -> UserView:
+    return UserView(
+        id=user.id, login=user.login, display_name=user.display_name,
+        groups=[GroupRef(id=g.id, name=g.name, source=g.source) for g in groups_of(db, user.id)],
+        access=access_for(db, user.id), is_active=user.is_active, last_login_at=user.last_login_at,
+        created_at=user.created_at, auth_source=user.auth_source,
+    )
 
 
 def list_users(db: Session) -> list[UserView]:
-    return [view(u) for u in db.scalars(select(AppUser).order_by(AppUser.login))]
+    return [view(db, u) for u in db.scalars(select(AppUser).order_by(AppUser.login))]
 
 
-def create_user(db: Session, payload: UserCreate) -> UserView:
+def create_user(db: Session, actor: AppUser, payload: UserCreate) -> UserView:
     if db.scalar(select(AppUser).where(AppUser.login == payload.login)) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="пользователь с таким логином уже есть")
-    user = AppUser(
-        login=payload.login,
-        display_name=payload.display_name,
-        role=payload.role,
-        password_hash=hash_password(payload.password),
-    )
+    user = AppUser(login=payload.login, display_name=payload.display_name, password_hash=hash_password(payload.password))
     db.add(user)
-    db.commit()
+    try:
+        db.flush()
+        if payload.group_ids:
+            set_user_groups(db, actor, user.id, payload.group_ids)
+        else:
+            db.commit()
+    except HTTPException:
+        #: Неудачные группы не оставляют учётку без прав; откат сбрасывает и актора,
+        #: которого журнал действий читает уже после закрытия сессии.
+        db.rollback()
+        db.get(AppUser, actor.id)
+        raise
     db.refresh(user)
-    return view(user)
+    return view(db, user)
 
 
 def _get(db: Session, user_id: int) -> AppUser:
@@ -90,44 +101,51 @@ def _get(db: Session, user_id: int) -> AppUser:
     return user
 
 
-def _active_admins(db: Session) -> int:
-    return db.scalar(select(func.count()).select_from(AppUser).where(AppUser.role == ROLE_ADMIN, AppUser.is_active.is_(True))) or 0
-
-
 def drop_sessions(db: Session, user_id: int) -> None:
     db.execute(delete(SessionRow).where(SessionRow.user_id == user_id))
 
 
 def patch_user(db: Session, actor: AppUser, user_id: int, payload: UserPatch) -> UserView:
     user = _get(db, user_id)
-    loses_admin = user.role == ROLE_ADMIN and user.is_active and (
-        (payload.role is not None and payload.role != ROLE_ADMIN) or payload.is_active is False
-    )
-    if user.id == actor.id and loses_admin:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="нельзя понизить или заблокировать себя")
-    if loses_admin and _active_admins(db) <= 1:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="это последний активный администратор")
-    if payload.display_name is not None:
-        user.display_name = payload.display_name
-    if payload.role is not None:
-        user.role = payload.role
-    if payload.is_active is not None:
-        user.is_active = payload.is_active
-        if not payload.is_active:
-            drop_sessions(db, user.id)
-    db.commit()
+    if user.id == actor.id and payload.is_active is False:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="нельзя заблокировать себя")
+
+    def apply() -> None:
+        if payload.display_name is not None:
+            user.display_name = payload.display_name
+        if payload.is_active is not None:
+            user.is_active = payload.is_active
+            if not payload.is_active:
+                drop_sessions(db, user.id)
+
+    if payload.is_active is False:
+        guard_last_admin(db, actor.id, after=apply)
+    else:
+        apply()
+    if payload.group_ids is not None:
+        #: Фиксирует и правки выше: не прошла проверка групп — откат всего.
+        try:
+            set_user_groups(db, actor, user.id, payload.group_ids)
+        except HTTPException:
+            db.rollback()
+            db.get(AppUser, actor.id)
+            raise
+    else:
+        db.commit()
     db.refresh(user)
-    return view(user)
+    return view(db, user)
 
 
 def delete_user(db: Session, actor: AppUser, user_id: int) -> None:
     user = _get(db, user_id)
     if user.id == actor.id:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="нельзя удалить себя")
-    if user.role == ROLE_ADMIN and user.is_active and _active_admins(db) <= 1:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="это последний активный администратор")
-    drop_sessions(db, user.id)
-    db.delete(user)
+
+    def apply() -> None:
+        drop_sessions(db, user.id)
+        db.delete(user)
+
+    guard_last_admin(db, actor.id, after=apply)
     db.commit()
 
 

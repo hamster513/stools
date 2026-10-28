@@ -23,9 +23,9 @@ TODAY = dt.date(2026, 10, 2)
 DEFAULTS = FindingSettings()
 
 
-def _check(status: str, *, reason: str = "так решили", role: str = "analyst",
+def _check(status: str, *, reason: str = "так решили", level: str = "write",
            settings: FindingSettings = DEFAULTS, risk_until: dt.date | None = None) -> None:
-    check_manual(status, reason=reason, role=role, settings=settings, risk_until=risk_until, today=TODAY)
+    check_manual(status, reason=reason, level=level, settings=settings, risk_until=risk_until, today=TODAY)
 
 
 def test_manual_statuses_pass() -> None:
@@ -47,11 +47,26 @@ def test_system_statuses_are_not_manual(status: str) -> None:
 
 def test_risk_accept_role_admin_denies_analyst() -> None:
     settings = FindingSettings(risk_accept_role="admin")
-    with pytest.raises(RoleRequired):
+    with pytest.raises(RoleRequired, match="администратор модуля"):
         _check("risk_accepted", settings=settings)
-    _check("risk_accepted", settings=settings, role="admin")
-    # Ложное срабатывание — не принятие риска: роль на него не влияет.
+    _check("risk_accepted", settings=settings, level="admin")
+    # Ложное срабатывание — не принятие риска: уровень на него не влияет.
     _check("false_positive", settings=settings)
+
+
+def test_risk_accept_needs_write_in_module() -> None:
+    with pytest.raises(RoleRequired, match="аналитик модуля"):
+        _check("risk_accepted", level="read")
+    _check("risk_accepted", level="write")
+    _check("risk_accepted", level="admin")
+
+
+def test_old_risk_accept_role_values_are_translated() -> None:
+    assert FindingSettings.model_validate({"risk_accept_role": "analyst"}).risk_accept_role == "write"
+    assert FindingSettings.model_validate({"risk_accept_role": "admin"}).risk_accept_role == "admin"
+    assert FindingSettings.model_validate({"risk_accept_role": "write"}).risk_accept_role == "write"
+    with pytest.raises(ValueError):
+        FindingSettings.model_validate({"risk_accept_role": "auditor"})
 
 
 def test_risk_max_days() -> None:

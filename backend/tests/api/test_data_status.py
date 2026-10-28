@@ -42,15 +42,21 @@ def test_data_status_serializes_item_and_provider_error(
     def broken(db: object) -> list[DataItem]:
         raise RuntimeError("boom")
 
-    register_data_status("aaa", lambda db: [DataItem("aaa", "k", "Заголовок", "reference", when, "fresh", "src", "d", "#a")])
-    register_data_status("bbb", broken)
-    items = auth_client.get("/api/settings/data-status").json()["items"]
-    assert items[0] == {
-        "module": "aaa", "key": "k", "title": "Заголовок", "kind": "reference",
+    register_data_status("siem", lambda db: [DataItem("siem", "k", "Заголовок", "reference", when, "fresh", "src", "d", "#a")])
+    register_data_status("vm", broken)
+    items = {i["module"]: i for i in auth_client.get("/api/settings/data-status").json()["items"]}
+    assert items["siem"] == {
+        "module": "siem", "key": "k", "title": "Заголовок", "kind": "reference",
         "updated_at": when.isoformat(), "state": "fresh", "source": "src", "detail": "d", "anchor": "#a",
     }
-    assert items[1]["module"] == "bbb" and items[1]["state"] == "missing"
-    assert items[1]["updated_at"] is None and items[1]["detail"] == "ошибка: RuntimeError"
+    assert items["vm"]["state"] == "missing"
+    assert items["vm"]["updated_at"] is None and items["vm"]["detail"] == "ошибка: RuntimeError"
+
+
+def test_data_status_rows_only_of_readable_modules(client_as: Callable[..., TestClient]) -> None:
+    """Строки модулей, где у вызывающего нет чтения, в сводку не попадают."""
+    items = client_as({"siem": "read", "vm": "deny"}).get("/api/settings/data-status").json()["items"]
+    assert items and {i["module"] for i in items} == {"siem"}
 
 
 def test_collect_survives_db_error_in_provider(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:

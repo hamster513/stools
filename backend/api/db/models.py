@@ -42,13 +42,6 @@ def _utcnow() -> dt.datetime:
 # --------------------------------------------------------------------------
 
 
-#: Роли платформы. Порядок — от широкой к узкой, им пользуется api/rbac.py.
-ROLE_ADMIN = "admin"
-ROLE_ANALYST = "analyst"
-ROLE_AUDITOR = "auditor"
-ROLES = (ROLE_ADMIN, ROLE_ANALYST, ROLE_AUDITOR)
-
-
 class AppUser(Base):
     __tablename__ = "app_user"
 
@@ -56,8 +49,6 @@ class AppUser(Base):
     login: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     #: NULL у пользователей из OIDC — пароля в этой базе для них нет.
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    #: admin — всё; analyst — чтение и запись в модулях; auditor — только чтение.
-    role: Mapped[str] = mapped_column(String(16), default=ROLE_ADMIN)
     #: local — пароль в этой базе; oidc — вход через провайдера, пароля нет.
     auth_source: Mapped[str] = mapped_column(String(8), default="local", server_default="local")
     #: claim `sub` провайдера: логин в FAM могут переименовать, sub — нет.
@@ -84,6 +75,63 @@ class SessionRow(Base):
     #: Последний запрос по сессии; нужен таймауту бездействия. Обновляется
     #: не чаще раза в минуту (api/deps.py), чтобы не писать на каждый GET.
     last_seen_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+#: Уровни доступа по порядку включения: каждый следующий разрешает всё, что предыдущий.
+LEVELS = ("deny", "read", "write", "admin")
+#: Идентификаторы модулей — они же префиксы `/api/<id>/` (api/modules/__init__.py).
+MODULE_IDS = ("attack", "siem", "vm", "ad", "ksc", "assets", "toolbox")
+#: Области, по которым роль задаёт уровень: модули и платформа (пользователи, настройки).
+AREAS = MODULE_IDS + ("platform",)
+
+
+class AccessRole(Base):
+    """Роль: матрица «область × уровень». Нет строки в `levels` — это `deny`."""
+
+    __tablename__ = "access_role"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    #: Встроенные роли заводит ensure_builtin (api/platform/services/access.py).
+    builtin: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    levels: Mapped[list[AccessRoleLevel]] = relationship(cascade="all, delete-orphan")
+
+
+class AccessRoleLevel(Base):
+    __tablename__ = "access_role_level"
+
+    role_id: Mapped[int] = mapped_column(ForeignKey("access_role.id", ondelete="CASCADE"), primary_key=True)
+    area: Mapped[str] = mapped_column(String(16), primary_key=True)
+    level: Mapped[str] = mapped_column(String(8))
+
+
+class AccessGroup(Base):
+    """Группа: к ней привязана ровно одна роль, в неё входят пользователи.
+
+    `oidc` — группа, членство в которой выдаётся при входе по claim провайдера
+    (`external_name` — значение claim); `local` — членство назначает человек."""
+
+    __tablename__ = "access_group"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    source: Mapped[str] = mapped_column(String(8), default="local", server_default="local")
+    #: NULL у local; у oidc уникально (в Postgres NULL-ы в UNIQUE не конфликтуют).
+    external_name: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("access_role.id", ondelete="RESTRICT"))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    role: Mapped[AccessRole] = relationship()
+
+
+class AccessMembership(Base):
+    __tablename__ = "access_membership"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id", ondelete="CASCADE"), primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("access_group.id", ondelete="CASCADE"), primary_key=True)
 
 
 class OidcLoginState(Base):
@@ -118,7 +166,8 @@ class AuditEvent(Base):
         ForeignKey("app_user.id", ondelete="SET NULL"), nullable=True, index=True
     )
     login: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: Группы пользователя через запятую на момент действия.
+    role: Mapped[str | None] = mapped_column(Text, nullable=True)
     method: Mapped[str] = mapped_column(String(8))
     path: Mapped[str] = mapped_column(Text)
     status: Mapped[int] = mapped_column(Integer)

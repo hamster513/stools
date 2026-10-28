@@ -5,7 +5,7 @@ import { FIELD } from '@/components/ui/Field'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { useBulkChange, useUsersDirectory } from './queries'
-import { MANUAL_STATUSES, NEEDS_REASON, STATUS_TITLES, type FindingChange, type FindingStatus } from './types'
+import { findingArea, MANUAL_STATUSES, NEEDS_REASON, STATUS_TITLES, type FindingChange, type FindingStatus } from './types'
 
 /** Значение «очистить исполнителя» в списке: пустая строка уже значит «не менять». */
 const NOBODY = '\u0000'
@@ -31,8 +31,8 @@ export function BulkBar({ module, scopeId, keys, total, onSelectAll, filter, onJ
   onDone: (changed: number) => void
   onClear: () => void
 }) {
-  const { write } = useCan()
-  const directory = useUsersDirectory()
+  const { write } = useCan(findingArea(module))
+  const directory = useUsersDirectory(module, write)
   const bulk = useBulkChange()
   const [status, setStatus] = useState<FindingStatus | ''>('')
   const [assignee, setAssignee] = useState('')

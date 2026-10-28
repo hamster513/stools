@@ -7,7 +7,6 @@ import { Field, FIELD } from '@/components/ui/Field'
 import { cn } from '@/lib/cn'
 import { useThemeChoice } from '@/lib/useThemeChoice'
 import { FullPageSpinner } from '@/components/ui/Spinner'
-import { ROLE_TITLES } from '@/platform/settings/api/types'
 
 const MIN_PASSWORD = 8
 
@@ -102,7 +101,7 @@ export function ProfilePage() {
       <div className="mb-5">
         <h1 className="text-base font-semibold text-text">Мой профиль</h1>
         <p className="font-mono text-xs text-text-secondary">
-          {me.data.login} · {ROLE_TITLES[me.data.role]}
+          {me.data.login} · {me.data.groups.length ? me.data.groups.map((g) => g.name).join(', ') : 'без групп'}
         </p>
       </div>
 

@@ -16,7 +16,7 @@ import { BundleUpdate } from './BundleUpdate'
  * администратор; состояние видят все.
  */
 export function AttackSettingsPage() {
-  const { admin } = useCan()
+  const { admin } = useCan('attack')
   // Секции отрисованы сразу, данные они грузят каждая сама.
   useScrollToAnchor(true)
   return (
@@ -41,8 +41,8 @@ export function AttackSettingsPage() {
 
 /** Применяемость техник в России. Расхождение с миром — в разделе «РФ TTP». */
 function RuTtpSource() {
-  // Аудитору остаётся состояние выгрузки: какая, кем и когда загружена.
-  const { write } = useCan()
+  // Выгрузка — данные модуля ATT&CK, её грузит аналитик; остальным — состояние: какая, кем и когда.
+  const { write } = useCan('attack')
   const state = useRuTtpState()
   const upload = useUploadRuTtp()
   const drop = useDropRuTtp()

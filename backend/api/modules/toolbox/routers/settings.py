@@ -7,11 +7,10 @@ from sqlalchemy.orm import Session
 
 from api.audit import changes_summary
 from api.db.base import get_db
-from api.db.models import ROLE_ADMIN, AppUser
-from api.deps import get_current_user
 from api.modules.toolbox.services.dictionaries import RulesError, parse_subnets
 from api.modules.toolbox.services.scrub import get_settings_row
-from api.rbac import allows
+from api.platform.services.access import Access, allows
+from api.rbac import current_access
 
 router = APIRouter(prefix="/settings", tags=["toolbox"])
 
@@ -32,15 +31,15 @@ class ToolboxSettingsIn(BaseModel):
     retention_days: int = Field(default=7, ge=0, le=3650)
 
 
-def require_admin(user: AppUser) -> None:
-    if not allows(user.role, ROLE_ADMIN):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="нужна роль: администратор")
+def require_admin(access: Access) -> None:
+    if not allows(access, "toolbox", "admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="нет доступа: toolbox, нужен уровень администратор")
 
 
 @router.get("", response_model=ToolboxSettingsIn)
-def get_settings(db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> ToolboxSettingsIn:
+def get_settings(db: Session = Depends(get_db), access: Access = Depends(current_access)) -> ToolboxSettingsIn:
     # Настройки — только администратору (спека §6): в словах и подсетях — настоящие значения.
-    require_admin(user)
+    require_admin(access)
     row = get_settings_row(db)
     return ToolboxSettingsIn.model_validate(
         {"words": row.words, "subnets": row.subnets, "retention_days": row.retention_days},
@@ -49,9 +48,9 @@ def get_settings(db: Session = Depends(get_db), user: AppUser = Depends(get_curr
 
 @router.put("", response_model=ToolboxSettingsIn)
 def put_settings(
-    payload: ToolboxSettingsIn, request: Request, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
+    payload: ToolboxSettingsIn, request: Request, db: Session = Depends(get_db), access: Access = Depends(current_access),
 ) -> ToolboxSettingsIn:
-    require_admin(user)
+    require_admin(access)
     data = payload.model_dump()
     try:
         parse_subnets(data["subnets"])

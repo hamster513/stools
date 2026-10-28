@@ -165,7 +165,7 @@ def oidc_callback(
         )
         return _refused(request, exc.code, exc.login)
     request.state.audit_summary = "oidc"
-    redirect = RedirectResponse("/attack", status_code=status.HTTP_302_FOUND)
+    redirect = RedirectResponse("/", status_code=status.HTTP_302_FOUND)
     _forget_state(redirect)
     open_session(db, request, redirect, settings, user)
     return redirect

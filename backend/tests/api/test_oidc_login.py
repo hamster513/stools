@@ -1,4 +1,4 @@
-"""Вход через провайдера: автозаведение, роль из групп, отказы без сессии."""
+"""Вход через провайдера: автозаведение, членство в группах из OIDC, отказы без сессии."""
 from __future__ import annotations
 
 import datetime as dt
@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi.testclient import TestClient
 
-from api.db.models import AppUser, AuditEvent, OidcLoginState
+from api.db.models import AccessGroup, AccessMembership, AppUser, AuditEvent, OidcLoginState
 from api.main import app
 from tests.api.fake_oidc import FakeProvider
 
@@ -41,6 +41,26 @@ def _login(
     )
 
 
+def _me(fam: FakeProvider, sub: str, login: str, groups: list[str], **kw: Any) -> dict[str, Any]:
+    """Вход новым браузером и его `/api/auth/me`: права и группы после пересчёта членства."""
+    fresh = TestClient(app)
+    response = _login(fresh, fam, sub, login, groups, **kw)
+    assert response.status_code == 302 and response.headers["location"] == "/", response.headers
+    me: dict[str, Any] = fresh.get("/api/auth/me").json()
+    return me
+
+
+def _groups(me: dict[str, Any]) -> list[tuple[str, str]]:
+    return sorted((g["name"], g["source"]) for g in me["groups"])
+
+
+def _add_to_local_group(db: Any, login: str, group: str) -> None:
+    db.expire_all()
+    user = db.query(AppUser).filter_by(login=login).one()
+    db.add(AccessMembership(user_id=user.id, group_id=db.query(AccessGroup).filter_by(name=group).one().id))
+    db.commit()
+
+
 def test_status_is_public_and_reflects_settings(
     client: TestClient, oidc_enabled: FakeProvider
 ) -> None:
@@ -60,21 +80,13 @@ def test_start_redirects_with_pkce_and_stores_state(
     assert db_session.get(OidcLoginState, params["state"]) is not None
 
 
-def test_first_login_creates_user_with_mapped_role(
+def test_first_login_creates_user_in_the_matching_oidc_group(
     client: TestClient, oidc_enabled: FakeProvider, db_session: Any
 ) -> None:
-    fresh = TestClient(app)
-    response = _login(fresh, oidc_enabled, "sub-1", "ann", ["stools-analysts", "other"])
-    assert response.status_code == 302 and response.headers["location"] == "/attack"
-    assert "stools_session" in fresh.cookies
-    me = fresh.get("/api/auth/me").json()
-    assert me == {
-        "login": "ann",
-        "display_name": "Ann",
-        "role": "analyst",
-        "theme": "dark",
-        "auth_source": "oidc",
-    }
+    me = _me(oidc_enabled, "sub-1", "ann", ["stools-analysts", "other"])
+    assert (me["login"], me["display_name"], me["theme"], me["auth_source"]) == ("ann", "Ann", "dark", "oidc")
+    assert _groups(me) == [("stools-analysts", "oidc")]
+    assert me["access"]["siem"] == "write" and me["access"]["platform"] == "deny"
     db_session.expire_all()
     user = db_session.query(AppUser).filter_by(login="ann").one()
     assert user.oidc_subject == "sub-1" and user.password_hash is None
@@ -84,15 +96,56 @@ def test_first_login_creates_user_with_mapped_role(
     assert "code=" not in (last.summary or "") and "state=" not in (last.summary or "")
 
 
-def test_widest_role_wins_and_role_is_recomputed_each_login(
+def test_oidc_membership_is_recomputed_each_login(
     client: TestClient, oidc_enabled: FakeProvider
 ) -> None:
-    first = TestClient(app)
-    _login(first, oidc_enabled, "sub-1", "ann", ["stools-auditors", "stools-admins"])
-    assert first.get("/api/auth/me").json()["role"] == "admin"
-    second = TestClient(app)
-    _login(second, oidc_enabled, "sub-1", "ann", ["stools-auditors"])
-    assert second.get("/api/auth/me").json()["role"] == "auditor"
+    me = _me(oidc_enabled, "sub-1", "ann", ["stools-auditors", "stools-admins"])
+    assert _groups(me) == [("stools-admins", "oidc"), ("stools-auditors", "oidc")]
+    assert me["access"]["platform"] == "admin"
+    me = _me(oidc_enabled, "sub-1", "ann", ["stools-auditors"])
+    assert _groups(me) == [("stools-auditors", "oidc")]
+    assert (me["access"]["platform"], me["access"]["siem"]) == ("deny", "read")
+
+
+def test_local_groups_survive_oidc_login(
+    client: TestClient, oidc_enabled: FakeProvider, db_session: Any
+) -> None:
+    """Локальные группы OIDC-пользователю назначает администратор STools — вход их не трогает,
+    и одних локальных групп хватает, чтобы войти."""
+    _me(oidc_enabled, "sub-1", "ann", ["stools-auditors"])
+    _add_to_local_group(db_session, "ann", "Аналитики")
+    me = _me(oidc_enabled, "sub-1", "ann", ["stools-admins"])
+    assert _groups(me) == [("stools-admins", "oidc"), ("Аналитики", "local")]
+    me = _me(oidc_enabled, "sub-1", "ann", ["unrelated"])
+    assert _groups(me) == [("Аналитики", "local")]
+    assert me["access"]["siem"] == "write"
+
+
+def test_existing_user_without_any_group_is_refused_but_kept(
+    client: TestClient, oidc_enabled: FakeProvider, db_session: Any
+) -> None:
+    _me(oidc_enabled, "sub-1", "ann", ["stools-analysts"])
+    fresh = TestClient(app)
+    response = _login(fresh, oidc_enabled, "sub-1", "ann", ["unrelated"])
+    assert response.headers["location"] == "/login?error=oidc_no_role"
+    assert "stools_session" not in fresh.cookies
+    db_session.expire_all()
+    user = db_session.query(AppUser).filter_by(login="ann").one()
+    #: Пересчёт сохраняется и при отказе: членство от прежнего входа не дало бы прав
+    #: уже открытым сессиям этого человека.
+    assert db_session.query(AccessMembership).filter_by(user_id=user.id).count() == 0
+
+
+def test_last_admin_losing_the_group_logs_in_without_platform_rights(
+    client: TestClient, oidc_enabled: FakeProvider, db_session: Any, test_user: AppUser
+) -> None:
+    """Пересчёт при входе не держит последнего администратора (владелец, 19.10): убрали группу
+    в каталоге — человек больше не администратор, даже если других не осталось."""
+    _me(oidc_enabled, "sub-1", "ann", ["stools-admins"])
+    db_session.query(AccessMembership).filter_by(user_id=test_user.id).delete()
+    db_session.commit()
+    me = _me(oidc_enabled, "sub-1", "ann", ["stools-auditors"])
+    assert me["access"]["platform"] == "deny"
 
 
 def test_no_mapped_group_is_refused_without_creating_user(
@@ -140,11 +193,10 @@ def test_blocked_user_is_refused(
 
 
 def test_groups_from_userinfo_when_absent_in_id_token(
-    client: TestClient, oidc_enabled: FakeProvider
+    client: TestClient, oidc_enabled: FakeProvider, db_session: Any
 ) -> None:
-    fresh = TestClient(app)
-    _login(fresh, oidc_enabled, "sub-1", "ann", ["stools-analysts"], in_id_token=False)
-    assert fresh.get("/api/auth/me").json()["role"] == "analyst"
+    me = _me(oidc_enabled, "sub-1", "ann", ["stools-analysts"], in_id_token=False)
+    assert _groups(me) == [("stools-analysts", "oidc")]
     assert any(path.endswith("/userinfo") for path in oidc_enabled.calls)
 
 
@@ -162,7 +214,7 @@ def test_empty_groups_in_id_token_do_not_ask_userinfo(
 def test_userinfo_with_another_sub_is_refused(
     client: TestClient, oidc_enabled: FakeProvider
 ) -> None:
-    """userinfo про другого человека решал бы роль этого — вход отклоняется."""
+    """userinfo про другого человека решал бы права этого — вход отклоняется."""
     fresh = TestClient(app)
     params = _start(fresh)
     code = oidc_enabled.issue_code(
@@ -389,7 +441,7 @@ def test_legacy_plaintext_client_secret_still_logs_in_and_is_reencrypted(
 
     fresh = TestClient(app)
     response = _login(fresh, oidc_enabled, "sub-9", "zoe", ["stools-analysts"])
-    assert response.status_code == 302 and response.headers["location"] == "/attack"
+    assert response.status_code == 302 and response.headers["location"] == "/"
 
     body = {k: v for k, v in auth_client.get("/api/settings/oidc").json().items() if k not in ("has_secret", "redirect_uri")}
     assert auth_client.put("/api/settings/oidc", json=body).status_code == 204

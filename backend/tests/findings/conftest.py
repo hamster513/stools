@@ -10,8 +10,9 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 
-from api.db.models import AppUser
+from api.db.models import AccessRole, AccessRoleLevel, AppUser
 from api.platform.findings import adapters
 from api.platform.findings.adapters import CurrentFinding
 from tests.api.conftest import (  # noqa: F401 — реэкспорт фикстур
@@ -81,9 +82,23 @@ def adapter() -> Iterator[FakeAdapter]:
     adapters._ADAPTERS.pop("test", None)
 
 
+#: Поддельные модули тестов находок — области прав, которых нет в MODULE_IDS.
+FAKE_AREAS = ("test", "test2")
+#: Встроенная роль → уровень, который она получает в поддельных модулях.
+FAKE_LEVELS = {"Администратор": "admin", "Аналитик": "write", "Аудитор": "read"}
+
+
 @pytest.fixture
-def users(make_user: Callable[[str, str], AppUser], db_session: Any) -> dict[str, AppUser]:  # noqa: F811
-    """Синтетические учётки: двое аналитиков, администратор, аудитор и заблокированный аналитик."""
+def users(
+    make_user: Callable[[str, str], AppUser], db_session: Any, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> dict[str, AppUser]:
+    """Синтетические учётки: двое аналитиков, администратор, аудитор и заблокированный аналитик.
+
+    Встроенные роли получают уровни и в поддельных модулях `test`, `test2`: права считаются
+    по области, а модулей вне AREAS в проде нет."""
+    from api.db.models import AREAS
+
+    monkeypatch.setattr("api.platform.services.access.AREAS", (*AREAS, *FAKE_AREAS))
     made = {
         "analyst1": make_user("analyst1", "analyst"),
         "analyst2": make_user("analyst2", "analyst"),
@@ -91,6 +106,8 @@ def users(make_user: Callable[[str, str], AppUser], db_session: Any) -> dict[str
         "auditor1": make_user("auditor1", "auditor"),
         "blocked1": make_user("blocked1", "analyst"),
     }
+    for role in db_session.scalars(select(AccessRole).where(AccessRole.name.in_(FAKE_LEVELS))):
+        role.levels.extend(AccessRoleLevel(area=a, level=FAKE_LEVELS[role.name]) for a in FAKE_AREAS)
     made["blocked1"].is_active = False
     made["analyst1"].display_name = "Аналитик Один"
     db_session.commit()

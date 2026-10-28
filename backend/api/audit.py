@@ -53,6 +53,16 @@ def changes_summary(fields: list[str]) -> str:
     return "изменено: " + ", ".join(fields) if fields else "без изменений"
 
 
+def _groups_label(db: Session, user: AppUser | None) -> str | None:
+    """Группы пользователя через запятую — что у него было на момент действия."""
+    if user is None:
+        return None
+    # Лениво: пакет api.platform тянет роутеры модулей, а они импортируют этот модуль.
+    from api.platform.services.access import groups_of
+
+    return ", ".join(g.name for g in groups_of(db, user.id)) or None
+
+
 def record(
     db: Session,
     *,
@@ -68,7 +78,7 @@ def record(
         AuditEvent(
             user_id=user.id if user else None,
             login=login,
-            role=user.role if user else None,
+            role=_groups_label(db, user),
             method=method,
             path=path,
             status=status,

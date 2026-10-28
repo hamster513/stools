@@ -24,13 +24,13 @@ def _ids(c: TestClient, **params: Any) -> set[int]:
     return {i["id"] for i in body["items"]}
 
 
-def _with_networks(c: TestClient) -> tuple[int, int]:
-    """Две сети в разных зонах; msk1 — в первой, ws01 и srv01 — во второй."""
+def _with_networks(c: TestClient, admin: TestClient) -> tuple[int, int]:
+    """Две сети в разных зонах (их заводит администратор модуля); msk1 — в первой, ws01 и srv01 — во второй."""
     for zone in ("DMZ", "Office"):
-        assert c.post("/api/assets/zones", json={"name": zone}).status_code in (200, 201, 409)
+        assert admin.post("/api/assets/zones", json={"name": zone}).status_code in (200, 201, 409)
     nets = []
     for cidr, zone in (("10.91.0.0/24", "DMZ"), ("10.92.0.0/24", "Office")):
-        r = c.post("/api/assets/networks", json={"cidr": cidr, "zone": zone})
+        r = admin.post("/api/assets/networks", json={"cidr": cidr, "zone": zone})
         assert r.status_code in (200, 201), r.text
         nets.append(int(r.json()["id"]))
     for name, net in (("msk1", nets[0]), ("ws01", nets[1]), ("srv01", nets[1])):
@@ -45,8 +45,8 @@ def _with_networks(c: TestClient) -> tuple[int, int]:
     ("network_id", None, None),
     ("assignee", "me", "none"),
 ])
-def test_single_valued_facets_sum_up(analyst: TestClient, param: str, a: str | None, b: str | None) -> None:  # noqa: F811
-    net1, net2 = _with_networks(analyst)
+def test_single_valued_facets_sum_up(analyst: TestClient, assets_admin: TestClient, param: str, a: str | None, b: str | None) -> None:  # noqa: F811
+    net1, net2 = _with_networks(analyst, assets_admin)
     assert analyst.patch(f"{URL}/{by_name(analyst, 'old01')['id']}", json={"criticality": "High"}).status_code == 200
     if param == "network_id":
         a, b = str(net1), str(net2)
@@ -90,9 +90,9 @@ def test_empty_disc_status_does_not_switch_the_filter_on() -> None:
     assert disc_filter(counted, disc_status=["new"]).active and disc_filter(counted, disc_status=["all"]).active
 
 
-def test_dash_is_the_empty_value(analyst: TestClient) -> None:  # noqa: F811
+def test_dash_is_the_empty_value(analyst: TestClient, assets_admin: TestClient) -> None:  # noqa: F811
     """`-` — «не задано»: критичность не задана (как `none`), зона не задана (вне сетей с зоной)."""
-    _with_networks(analyst)
+    _with_networks(analyst, assets_admin)
     assert analyst.patch(f"{URL}/{by_name(analyst, 'old01')['id']}", json={"criticality": "High"}).status_code == 200
     assert _ids(analyst, criticality="-") == _ids(analyst, criticality="none") and _ids(analyst, criticality="-")
     assert _ids(analyst, criticality=["High", "-"]) == _ids(analyst)
@@ -100,11 +100,11 @@ def test_dash_is_the_empty_value(analyst: TestClient) -> None:  # noqa: F811
     assert no_zone == _ids(analyst) - _ids(analyst, zone=["DMZ", "Office"]) and no_zone
 
 
-def test_zone_with_comma_is_one_value(analyst: TestClient) -> None:  # noqa: F811
+def test_zone_with_comma_is_one_value(analyst: TestClient, assets_admin: TestClient) -> None:  # noqa: F811
     """Свободное значение с запятой (зона «Офис, этаж 2») не рвётся на части."""
     zone = "Офис, этаж 2"
-    assert analyst.post("/api/assets/zones", json={"name": zone}).status_code in (200, 201)
-    r = analyst.post("/api/assets/networks", json={"cidr": "10.93.0.0/24", "zone": zone})
+    assert assets_admin.post("/api/assets/zones", json={"name": zone}).status_code in (200, 201)
+    r = assets_admin.post("/api/assets/networks", json={"cidr": "10.93.0.0/24", "zone": zone})
     assert r.status_code in (200, 201), r.text
     msk1 = by_name(analyst, "msk1")["id"]
     assert analyst.patch(f"{URL}/{msk1}", json={"network_id": r.json()["id"], "network_manual": True}).status_code == 200

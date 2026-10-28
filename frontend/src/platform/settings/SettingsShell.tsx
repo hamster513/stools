@@ -1,76 +1,38 @@
-import type { ComponentType, ReactNode } from 'react'
-import { matchPath, Redirect, useRouter } from '@/lib/router'
+import type { ReactNode } from 'react'
+import { useMe } from '@/api/auth'
+import { Redirect, useRouter } from '@/lib/router'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { useCan } from '@/lib/can'
-import { SettingsPage as SiemSettingsPage } from '@/modules/siem/pages/SettingsPage'
-import { SettingsPage as VmSettingsPage } from '@/modules/vm/pages/SettingsPage'
-import { SettingsPage as AdSettingsPage } from '@/modules/ad/pages/SettingsPage'
-import { SettingsPage as KscSettingsPage } from '@/modules/ksc/pages/SettingsPage'
-import { SettingsPage as AssetsSettingsPage } from '@/modules/assets/pages/SettingsPage'
-import { SettingsPage as ToolboxSettingsPage } from '@/modules/toolbox/pages/SettingsPage'
+import { atLeast } from '@/platform/access/types'
 import { SettingsSidebar } from './SettingsSidebar'
 import { Forbidden } from './Forbidden'
-import { ProfilePage } from './pages/ProfilePage'
-import { UsersPage } from './pages/UsersPage'
-import { SecurityPage } from './pages/SecurityPage'
-import { OidcPage } from './pages/OidcPage'
-import { AuditPage } from './pages/AuditPage'
-import { LlmPage } from './pages/LlmPage'
-import { AttackSettingsPage } from './pages/AttackSettingsPage'
-import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
+import { PAGES } from './pages'
 import { DataStatusPage } from './pages/DataStatusPage'
-
-/**
- * Разделы, открытые всем ролям. Статусы находок: от них зависят подсчёты,
- * которые видит каждый. Модули: что загружено и как настроено, видят все;
- * менять или загружать — по правам, их проверяет сама страница модуля.
- */
-const OPEN_PAGES = new Map<string, ComponentType>([
-  ['profile', ProfilePage],
-  ['findings', FindingsSettingsPage],
-  ['attack', AttackSettingsPage],
-  ['siem', SiemSettingsPage],
-  ['vm', VmSettingsPage],
-  ['ad', AdSettingsPage],
-  ['ksc', KscSettingsPage],
-  ['assets', AssetsSettingsPage],
-  ['toolbox', ToolboxSettingsPage],
-])
-
-/** Разделы платформы — только администратору. */
-const ADMIN_PAGES = new Map<string, ComponentType>([
-  ['users', UsersPage],
-  ['security', SecurityPage],
-  ['oidc', OidcPage],
-  ['audit', AuditPage],
-  ['llm', LlmPage],
-])
 
 /**
  * Маршруты общих настроек — всё под /settings: разделы платформы и
  * страницы модулей /settings/<модуль>. Права проверяет сервер; здесь
- * разделы администратора закрыты экраном отказа, чтобы аудитор не
+ * недоступные разделы закрыты экраном отказа, чтобы пользователь не
  * упирался в 403 после перехода по чужой ссылке.
  */
 export function SettingsShell() {
   const { path } = useRouter()
-  const { admin } = useCan()
+  const { data: me } = useMe()
   // /settings/ с хвостовым слэшем — тот же корень, что и /settings.
   const base = path.length > 1 ? path.replace(/\/+$/, '') : path
-  const section = matchPath('/settings/:section', base)?.section ?? null
-  const Open = section ? OPEN_PAGES.get(section) : undefined
-  const Admin = section ? ADMIN_PAGES.get(section) : undefined
+  // /settings/<раздел>; у вложенных разделов (nested) дальше идёт их собственный путь.
+  const [, section = null, ...rest] = base.split('/').filter(Boolean)
+  const entry = section ? PAGES.get(section) : undefined
 
-  // Голый /settings — сводка «Данные», её видят все роли. Неизвестные
-  // разделы уводят на первый раздел, а не показывают его на чужом адресе:
-  // иначе в сайдбаре не подсвечен ни один пункт, и непонятно, что открыто.
+  // Голый /settings — сводка «Данные», её видят все: строки сервер отбирает
+  // по модулям пользователя. Неизвестные разделы уводят на сводку, а не
+  // показывают её на чужом адресе: иначе в сайдбаре не подсвечен ни один
+  // пункт, и непонятно, что открыто.
   let page: ReactNode
   if (base === '/settings') page = <DataStatusPage />
-  else if (Open) page = <Open />
-  else if (!admin) page = <Forbidden />
-  else if (Admin) page = <Admin />
-  else page = <Redirect to="/settings/users" />
+  else if (!entry || (rest.length > 0 && !entry.nested)) page = <Redirect to="/settings" />
+  else if (entry.need && !(me && atLeast(me.access, ...entry.need))) page = <Forbidden kind="settings" />
+  else page = <entry.page />
 
   return (
     <AppShell sidebar={<SettingsSidebar />}>

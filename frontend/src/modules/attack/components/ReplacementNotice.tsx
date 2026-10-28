@@ -12,9 +12,9 @@ import { cn } from '@/lib/cn'
  * Молчаливая подмена оставила бы его гадать, откуда взялась другая версия.
  */
 export function ReplacementNotice({ className }: { className?: string }) {
-  // Сообщение аудитор читает — замена версии объясняет пометки на разметке;
-  // «я увидел» пишется в базу, и у него оно не сработает.
-  const { write } = useCan()
+  // Сообщение читают все — замена версии объясняет пометки на разметке;
+  // «я увидел» пишется в настройки базы ATT&CK — это администратору модуля ATT&CK.
+  const { admin } = useCan('attack')
   const bundle = useAttackBundle()
   const dismiss = useDismissReplacementNotice()
   const notice = bundle.data?.replacement
@@ -50,7 +50,7 @@ export function ReplacementNotice({ className }: { className?: string }) {
           <> Разметка сохранена; сделанная на прежней версии помечена на пересмотр.</>
         )}
       </span>
-      {write && (
+      {admin && (
         <button
           type="button"
           onClick={() => dismiss.mutate()}

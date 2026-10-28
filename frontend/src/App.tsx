@@ -6,7 +6,11 @@ import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { LoginPage } from '@/pages/LoginPage'
+import { firstReadableModule } from '@/lib/can'
+import { atLeast, type Area } from '@/platform/access/types'
+import { HelpPage } from '@/help/pages/HelpPage'
 import { findModule } from '@/platform/modules'
+import { Forbidden } from '@/platform/settings/Forbidden'
 import { ModuleStubPage } from '@/platform/ModuleStubPage'
 import { SettingsShell } from '@/platform/settings/SettingsShell'
 import { MyFindingsPage } from '@/platform/findings/MyFindingsPage'
@@ -23,7 +27,8 @@ const MOVED_SETTINGS = new Set(['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', '
 
 /**
  * Прежние адреса: /snapshots/…, /upload (до появления модулей), /siem/upload
- * и /<модуль>/settings (до переезда настроек в /settings/<модуль>). На них ведут
+ * и /<модуль>/settings (до переезда настроек в /settings/<модуль>), а также
+ * /settings/users|groups|roles|security|oidc (до объединения в «Доступ»). На них ведут
  * закладки и ссылки в чужих инструкциях — переводим на новые, а не ломаем.
  */
 function legacyPath(path: string, tail: string): string | null {
@@ -31,6 +36,11 @@ function legacyPath(path: string, tail: string): string | null {
   if (path === '/upload' || path === '/siem/upload') return `/settings/siem${tail}`
   const m = /^\/([a-z]+)\/settings$/.exec(path)
   if (m && MOVED_SETTINGS.has(m[1])) return `/settings/${m[1]}${tail}`
+  const access = /^\/settings\/(users|groups|roles)(\/.*)?$/.exec(path)
+  if (access) return `/settings/access/${access[1]}${access[2] ?? ''}${tail}`
+  if (/^\/settings\/security\/?$/.test(path)) return `/settings/access/login${tail}`
+  // Свой якорь заменяет прежний: OIDC теперь блок вкладки «Вход», а не отдельная страница.
+  if (/^\/settings\/oidc\/?$/.test(path)) return `/settings/access/login${tail.split('#')[0]}#oidc`
   return null
 }
 
@@ -75,10 +85,31 @@ function Root() {
       </AppShell>
     )
 
-  // Первый сегмент пути — модуль. Корень и неизвестные пути ведут в SIEM:
-  // это единственный работающий модуль, а пустой экран хуже любого выбора.
+  // Справка — тоже над модулями: оглавление вместо сайдбара модуля.
+  if (path === '/help' || path.startsWith('/help/'))
+    return (
+      <AppShell>
+        <HelpPage />
+      </AppShell>
+    )
+
+  // Первый сегмент пути — модуль. Корень и неизвестные пути ведут в первый
+  // открытый пользователю модуль, а без модулей — в профиль: пустой экран
+  // хуже любого выбора.
   const module = findModule(path.split('/')[1] ?? '')
-  if (!module) return <Redirect to="/siem" />
+  if (!module) {
+    const home = firstReadableModule(me.access)
+    return <Redirect to={home ? `/${home}` : '/settings/profile'} />
+  }
+
+  // Закрытый модуль по прямой ссылке — отказ в оболочке, а не 403 на каждом
+  // запросе. У заглушек «в разработке» области прав нет — их видят все.
+  if (module.status === 'available' && !atLeast(me.access, module.id as Area, 'read'))
+    return (
+      <AppShell>
+        <Forbidden kind="module" />
+      </AppShell>
+    )
 
   if (module.id === 'attack') return <AttackModule />
   if (module.id === 'siem') return <SiemModule />

@@ -58,6 +58,8 @@ class BulkJobRequest:
     actor: str
     #: Общий id массового действия для событий всех кусков.
     bulk_id: str
+    #: Уровень автора в модуле находки: задача проверяет по нему «принять риск» на каждом куске.
+    level: str
 
 
 class BulkConflict(Exception):

@@ -8,7 +8,8 @@
  * не бывает.
  */
 import { http, HttpResponse } from 'msw'
-import type { Role } from '@/api/auth'
+import { AREAS, rank, type Access, type Level } from '@/platform/access/types'
+import type { GroupInput, GroupRow, MemberRow, RoleInput, RoleRow } from '@/platform/settings/api/access'
 import type { AttackBundleDiff, AttackBundleState, PendingBundle } from '@/modules/attack/api/types'
 import { startMockBundleDownload } from '@/modules/attack/mocks/handlers'
 import { LLM_SETTINGS } from '@/modules/siem/mocks/data'
@@ -40,15 +41,15 @@ const MIN_PASSWORD = 8
  *  посмотреть. */
 const MOCK_ME = 'analyst'
 
-const ROLES: Role[] = ['admin', 'analyst', 'auditor']
+/** Учётка без вычисляемого: группы и итоговые права собираются из групп при ответе. */
+type MockUser = Omit<UserRow, 'groups' | 'access'>
 
 let nextUserId = 5
-const users: UserRow[] = [
+const users: MockUser[] = [
   {
     id: 1,
     login: 'admin',
     display_name: 'Пётр Смирнов',
-    role: 'admin',
     is_active: true,
     last_login_at: '2026-09-12T08:41:00Z',
     created_at: '2026-05-04T10:00:00Z',
@@ -58,7 +59,6 @@ const users: UserRow[] = [
     id: 2,
     login: MOCK_ME,
     display_name: 'Анна Кузнецова',
-    role: 'analyst',
     is_active: true,
     last_login_at: '2026-09-11T14:07:00Z',
     created_at: '2026-06-18T09:30:00Z',
@@ -68,7 +68,6 @@ const users: UserRow[] = [
     id: 3,
     login: 'aud',
     display_name: null,
-    role: 'auditor',
     is_active: false,
     last_login_at: null,
     created_at: '2026-08-02T12:15:00Z',
@@ -80,7 +79,6 @@ const users: UserRow[] = [
     id: 4,
     login: 'i.petrov',
     display_name: 'Иван Петров',
-    role: 'analyst',
     is_active: true,
     last_login_at: '2026-09-13T07:22:00Z',
     created_at: '2026-09-01T11:40:00Z',
@@ -104,7 +102,6 @@ const oidc: OidcSettingsInput = {
   groups_claim: 'groups',
   login_claim: 'preferred_username',
   name_claim: 'name',
-  group_roles: [{ group: 'stools-admins', role: 'admin' }],
 }
 
 function oidcView(): OidcSettings {
@@ -128,11 +125,14 @@ const AUDIT_SHAPES: Array<[string, string, number, string | null]> = [
   ['POST', '/api/siem/snapshots', 201, 'выгрузка knowledgebase_2026_08_24.zip'],
   ['PUT', '/api/siem/settings', 204, 'адрес модели изменён'],
   ['POST', '/api/settings/users', 201, 'создан пользователь ann'],
-  ['PATCH', '/api/settings/users/2', 200, 'роль: аналитик'],
+  ['PATCH', '/api/settings/users/2', 200, 'группы: Аналитики'],
   ['DELETE', '/api/settings/users/7', 403, 'нужна роль: администратор'],
   ['PUT', '/api/siem/profile', 403, 'нужна роль: аналитик'],
   ['POST', '/api/siem/attack/confirm', 204, 'разметка группы Kerberos подтверждена'],
 ]
+
+/** Группы авторов событий на момент действия: журнал хранит их названия строкой. */
+const AUDIT_GROUPS: Record<number, string> = { 1: 'Администраторы', 2: 'Аналитики', 3: 'Аудиторы', 4: 'stools-analysts' }
 
 const audit: AuditItem[] = Array.from({ length: 60 }, (_, i) => {
   const id = 60 - i
@@ -143,7 +143,7 @@ const audit: AuditItem[] = Array.from({ length: 60 }, (_, i) => {
     at: new Date(Date.UTC(2026, 8, 12, 9, 0) - i * 37 * 60_000).toISOString(),
     user_id: actor.id,
     login: actor.login,
-    role: actor.role,
+    role: AUDIT_GROUPS[actor.id] ?? null,
     method,
     path,
     status,
@@ -231,7 +231,95 @@ function dataStatus(): DataItem[] {
 const conflict = (detail: string) => HttpResponse.json({ detail }, { status: 409 })
 const unprocessable = (detail: string) => HttpResponse.json({ detail }, { status: 422 })
 
-const activeAdmins = () => users.filter((u) => u.role === 'admin' && u.is_active).length
+
+// --- Роли и группы доступа ----------------------------------------------
+
+const matrix = (module: Level, platform: Level) =>
+  Object.fromEntries(AREAS.map((a) => [a, a === 'platform' ? platform : module])) as Access
+
+let nextRoleId = 4
+const roles: Array<Omit<RoleRow, 'groups'>> = [
+  { id: 1, name: 'Администратор', description: 'Полный доступ ко всем модулям и настройкам', builtin: true, levels: matrix('admin', 'admin') },
+  { id: 2, name: 'Аналитик', description: 'Выгрузки и разметка во всех модулях, без настроек платформы', builtin: true, levels: matrix('write', 'deny') },
+  { id: 3, name: 'Аудитор', description: 'Просмотр всех модулей без изменений', builtin: true, levels: matrix('read', 'deny') },
+]
+
+interface MockGroup {
+  id: number
+  name: string
+  source: 'local' | 'oidc'
+  external_name: string | null
+  role_id: number
+  member_ids: number[]
+}
+
+let nextGroupId = 5
+const groups: MockGroup[] = [
+  { id: 1, name: 'Администраторы', source: 'local', external_name: null, role_id: 1, member_ids: [1] },
+  { id: 2, name: 'Аналитики', source: 'local', external_name: null, role_id: 2, member_ids: [2] },
+  { id: 3, name: 'Аудиторы', source: 'local', external_name: null, role_id: 3, member_ids: [3] },
+  { id: 4, name: 'stools-analysts', source: 'oidc', external_name: 'stools-analysts', role_id: 2, member_ids: [4] },
+]
+
+const roleView = (r: Omit<RoleRow, 'groups'>): RoleRow => ({
+  ...r,
+  groups: groups.filter((g) => g.role_id === r.id).length,
+})
+
+const groupView = (g: MockGroup): GroupRow => ({
+  id: g.id,
+  name: g.name,
+  source: g.source,
+  external_name: g.external_name,
+  role_id: g.role_id,
+  role_name: roles.find((r) => r.id === g.role_id)?.name ?? '',
+  members: g.member_ids.length,
+})
+
+/** Активные учётки с правами администратора платформы — по ролям их групп. */
+function platformAdmins(all: MockGroup[]): Set<string> {
+  const logins = all
+    .filter((g) => roles.find((r) => r.id === g.role_id)?.levels.platform === 'admin')
+    .flatMap((g) => g.member_ids)
+    .map((id) => users.find((u) => u.id === id))
+    .filter((u) => u?.is_active)
+    .map((u) => u!.login)
+  return new Set(logins)
+}
+
+/** Те же две защиты, что на сервере: правка не должна снять права с самого себя и оставить систему без администратора. */
+function adminGuard(next: MockGroup[]) {
+  const before = platformAdmins(groups)
+  const after = platformAdmins(next)
+  if (before.has(MOCK_ME) && !after.has(MOCK_ME)) return conflict('нельзя снять права с себя')
+  if (before.size > 0 && after.size === 0) return conflict('нельзя оставить систему без администратора')
+  return null
+}
+
+const memberRows = (g: MockGroup): MemberRow[] =>
+  g.member_ids.flatMap((id) => {
+    const u = users.find((x) => x.id === id)
+    return u ? [{ user_id: u.id, login: u.login, display_name: u.display_name, auth_source: u.auth_source }] : []
+  })
+
+/** Группы учётки и итоговые права: по каждой области побеждает старший уровень среди ролей групп. */
+function userView(u: MockUser): UserRow {
+  const own = groups.filter((g) => g.member_ids.includes(u.id))
+  const access = Object.fromEntries(
+    AREAS.map((a) => {
+      const levels = own.map((g) => roles.find((r) => r.id === g.role_id)?.levels[a] ?? 'deny')
+      return [a, levels.reduce<Level>((best, l) => (rank(l) > rank(best) ? l : best), 'deny')]
+    }),
+  ) as Access
+  return { ...u, groups: own.map((g) => ({ id: g.id, name: g.name, source: g.source })), access }
+}
+
+/** Проверка тела роли — те же отказы, что у сервера. */
+function roleBodyError(body: RoleInput): ReturnType<typeof unprocessable> | null {
+  if ((body.name ?? '').trim() === '') return unprocessable('название роли не может быть пустым')
+  if (body.levels?.platform === 'write') return unprocessable('у платформы нет уровня «аналитик»')
+  return null
+}
 
 export const platformHandlers = [
   http.post('/api/auth/password', async ({ request }) => {
@@ -260,7 +348,7 @@ export const platformHandlers = [
   http.get('/api/settings/users', () => {
     const denied = noSession()
     if (denied) return denied
-    return HttpResponse.json(users)
+    return HttpResponse.json(users.map(userView))
   }),
 
   http.post('/api/settings/users', async ({ request }) => {
@@ -270,22 +358,25 @@ export const platformHandlers = [
     if (users.some((u) => u.login === body.login)) {
       return conflict('пользователь с таким логином уже есть')
     }
-    if (!ROLES.includes(body.role)) return unprocessable('роль должна быть одной из: ' + ROLES.join(', '))
+    const ids = [...new Set(body.group_ids ?? [])]
+    if (ids.some((id) => groups.find((g) => g.id === id)?.source !== 'local')) {
+      return unprocessable('группа не найдена или не локальная')
+    }
     if ((body.password ?? '').length < MIN_PASSWORD) {
       return unprocessable(`пароль короче ${MIN_PASSWORD} символов`)
     }
-    const row: UserRow = {
+    const row: MockUser = {
       id: nextUserId++,
       login: body.login,
       display_name: body.display_name,
-      role: body.role,
       is_active: true,
       last_login_at: null,
       created_at: new Date().toISOString(),
       auth_source: 'local',
     }
     users.push(row)
-    return HttpResponse.json(row, { status: 201 })
+    for (const g of groups) if (ids.includes(g.id)) g.member_ids.push(row.id)
+    return HttpResponse.json(userView(row), { status: 201 })
   }),
 
   http.patch('/api/settings/users/:id', async ({ params, request }) => {
@@ -295,19 +386,34 @@ export const platformHandlers = [
     if (!row) return HttpResponse.json({ detail: 'пользователь не найден' }, { status: 404 })
     const body = (await request.json()) as PatchUserRequest
 
-    // Те же две защиты, что на сервере: без них не проверить, как экран
+    // Те же защиты, что на сервере: без них не проверить, как экран
     // показывает отказ по правке, о которой клиент знать не мог.
-    const losesAdmin =
-      row.role === 'admin' &&
-      row.is_active &&
-      ((body.role !== undefined && body.role !== 'admin') || body.is_active === false)
-    if (losesAdmin && row.login === MOCK_ME) return conflict('нельзя понизить или заблокировать себя')
-    if (losesAdmin && activeAdmins() <= 1) return conflict('это последний активный администратор')
+    if (body.is_active === false && row.is_active) {
+      if (row.login === MOCK_ME) return conflict('нельзя заблокировать себя')
+      if (platformAdmins(groups).has(row.login) && platformAdmins(groups).size <= 1) {
+        return conflict('нельзя оставить систему без администратора')
+      }
+    }
+    let ids: number[] | undefined
+    if (body.group_ids !== undefined) {
+      ids = [...new Set(body.group_ids)]
+      if (ids.some((id) => groups.find((g) => g.id === id)?.source !== 'local')) {
+        return unprocessable('группа не найдена или не локальная')
+      }
+      // Полная замена локальных групп; oidc-группы остаются как есть.
+      const next = groups.map((g) =>
+        g.source !== 'local'
+          ? g
+          : { ...g, member_ids: [...g.member_ids.filter((m) => m !== row.id), ...(ids!.includes(g.id) ? [row.id] : [])] },
+      )
+      const refused = adminGuard(next)
+      if (refused) return refused
+      for (const [i, g] of groups.entries()) g.member_ids = next[i].member_ids
+    }
 
     if (body.display_name !== undefined) row.display_name = body.display_name
-    if (body.role !== undefined) row.role = body.role
     if (body.is_active !== undefined) row.is_active = body.is_active
-    return HttpResponse.json(row)
+    return HttpResponse.json(userView(row))
   }),
 
   http.delete('/api/settings/users/:id', ({ params }) => {
@@ -317,10 +423,11 @@ export const platformHandlers = [
     if (index === -1) return HttpResponse.json({ detail: 'пользователь не найден' }, { status: 404 })
     const row = users[index]
     if (row.login === MOCK_ME) return conflict('нельзя удалить себя')
-    if (row.role === 'admin' && row.is_active && activeAdmins() <= 1) {
-      return conflict('это последний активный администратор')
+    if (platformAdmins(groups).has(row.login) && platformAdmins(groups).size <= 1) {
+      return conflict('нельзя оставить систему без администратора')
     }
     users.splice(index, 1)
+    for (const g of groups) g.member_ids = g.member_ids.filter((m) => m !== row.id)
     return new HttpResponse(null, { status: 204 })
   }),
 
@@ -338,6 +445,133 @@ export const platformHandlers = [
   }),
 
   // --- Безопасность -----------------------------------------------------
+
+  // --- Роли -------------------------------------------------------------
+
+  http.get('/api/settings/roles', () => noSession() ?? HttpResponse.json(roles.map(roleView))),
+
+  http.post('/api/settings/roles', async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const body = (await request.json()) as RoleInput
+    const invalid = roleBodyError(body)
+    if (invalid) return invalid
+    if (roles.some((r) => r.name === body.name.trim())) return conflict('роль с таким названием уже есть')
+    const row = { id: nextRoleId++, name: body.name.trim(), description: body.description, builtin: false, levels: body.levels }
+    roles.push(row)
+    return HttpResponse.json(roleView(row), { status: 201 })
+  }),
+
+  http.put('/api/settings/roles/:id', async ({ params, request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = roles.find((r) => r.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'роль не найдена' }, { status: 404 })
+    const body = (await request.json()) as RoleInput
+    if (row.builtin && row.id === 1) return conflict('встроенную роль «Администратор» нельзя изменить')
+    const invalid = roleBodyError(body)
+    if (invalid) return invalid
+    if (row.builtin && body.name.trim() !== row.name) return conflict('встроенную роль нельзя переименовать')
+    if (roles.some((r) => r.id !== row.id && r.name === body.name.trim())) return conflict('роль с таким названием уже есть')
+    row.name = body.name.trim()
+    row.description = body.description
+    row.levels = body.levels
+    return HttpResponse.json(roleView(row))
+  }),
+
+  http.delete('/api/settings/roles/:id', ({ params }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const index = roles.findIndex((r) => r.id === Number(params.id))
+    if (index === -1) return HttpResponse.json({ detail: 'роль не найдена' }, { status: 404 })
+    const row = roles[index]
+    if (row.builtin) return conflict('встроенную роль нельзя удалить')
+    if (groups.some((g) => g.role_id === row.id)) return conflict('роль назначена группам, удалить её нельзя')
+    roles.splice(index, 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  // --- Группы -----------------------------------------------------------
+
+  http.get('/api/settings/groups', () => noSession() ?? HttpResponse.json(groups.map(groupView))),
+
+  http.post('/api/settings/groups', async ({ request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const body = (await request.json()) as GroupInput
+    const name = (body.name ?? '').trim()
+    if (name === '') return unprocessable('название группы не может быть пустым')
+    if (body.source === 'oidc' && !(body.external_name ?? '').trim()) {
+      return unprocessable('для группы OIDC нужно имя группы у провайдера')
+    }
+    if (!roles.some((r) => r.id === body.role_id)) return unprocessable('роль не найдена')
+    if (groups.some((g) => g.name === name)) return conflict('группа с таким названием уже есть')
+    const row: MockGroup = {
+      id: nextGroupId++,
+      name,
+      source: body.source,
+      external_name: body.source === 'oidc' ? (body.external_name ?? '').trim() : null,
+      role_id: body.role_id,
+      member_ids: [],
+    }
+    groups.push(row)
+    return HttpResponse.json(groupView(row), { status: 201 })
+  }),
+
+  http.put('/api/settings/groups/:id', async ({ params, request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    const body = (await request.json()) as Omit<GroupInput, 'source'>
+    const name = (body.name ?? '').trim()
+    if (name === '') return unprocessable('название группы не может быть пустым')
+    if (row.source === 'oidc' && !(body.external_name ?? '').trim()) {
+      return unprocessable('для группы OIDC нужно имя группы у провайдера')
+    }
+    if (!roles.some((r) => r.id === body.role_id)) return unprocessable('роль не найдена')
+    if (groups.some((g) => g.id !== row.id && g.name === name)) return conflict('группа с таким названием уже есть')
+    const refused = adminGuard(groups.map((g) => (g === row ? { ...g, role_id: body.role_id } : g)))
+    if (refused) return refused
+    row.name = name
+    row.role_id = body.role_id
+    if (row.source === 'oidc') row.external_name = (body.external_name ?? '').trim()
+    return HttpResponse.json(groupView(row))
+  }),
+
+  http.delete('/api/settings/groups/:id', ({ params }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    const refused = adminGuard(groups.filter((g) => g !== row))
+    if (refused) return refused
+    groups.splice(groups.indexOf(row), 1)
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  http.get('/api/settings/groups/:id/members', ({ params }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    return HttpResponse.json(memberRows(row))
+  }),
+
+  http.put('/api/settings/groups/:id/members', async ({ params, request }) => {
+    const denied = noSession()
+    if (denied) return denied
+    const row = groups.find((g) => g.id === Number(params.id))
+    if (!row) return HttpResponse.json({ detail: 'группа не найдена' }, { status: 404 })
+    if (row.source === 'oidc') return conflict('состав группы OIDC обновляется при входе, вручную его не поменять')
+    const body = (await request.json()) as { user_ids: number[] }
+    const ids = [...new Set(body.user_ids ?? [])]
+    if (ids.some((id) => !users.some((u) => u.id === id))) return unprocessable('пользователь не найден')
+    const refused = adminGuard(groups.map((g) => (g === row ? { ...g, member_ids: ids } : g)))
+    if (refused) return refused
+    row.member_ids = ids
+    return HttpResponse.json(memberRows(row))
+  }),
 
   http.get('/api/settings/security', () => {
     const denied = noSession()
@@ -385,15 +619,17 @@ export const platformHandlers = [
     const secret = body.client_secret === '' || body.client_secret === SECRET_MASK
       ? oidc.client_secret
       : body.client_secret
-    // Те же две проверки, что на сервере: без них не посмотреть, как экран
-    // показывает 422 по включению без заполненных полей.
+    // Те же проверки, что на сервере: без них не посмотреть, как экран
+    // показывает 422 по включению без заполненных полей или без группы из OIDC.
     const missing: string[] = ['public_url', 'issuer_url', 'client_id'].filter(
       (name) => !body[name as 'public_url' | 'issuer_url' | 'client_id'],
     )
     if (!secret) missing.push('client_secret')
-    if (body.group_roles.length === 0) missing.push('group_roles')
     if (body.enabled && missing.length > 0) {
       return unprocessable('нельзя включить OIDC без полей: ' + missing.join(', '))
+    }
+    if (body.enabled && !groups.some((g) => g.source === 'oidc')) {
+      return unprocessable('нельзя включить вход через OIDC: нет ни одной группы из OIDC, а без неё никто не получит доступ')
     }
     Object.assign(oidc, body, { client_secret: secret })
     return new HttpResponse(null, { status: 204 })

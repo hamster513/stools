@@ -22,7 +22,7 @@ export function SettingsPage() {
   // Модель настраивается в общих настройках; здесь её состояние только
   // показывается: без него непонятно, почему нет предложений по разметке.
   const llm = useLlm()
-  const { admin, write } = useCan()
+  const { admin, platform } = useCan()
 
   const [attack, setAttack] = useState<AttackSettings | null>(null)
   const [dirty, setDirty] = useState(false)
@@ -80,7 +80,7 @@ export function SettingsPage() {
               сохранено
             </span>
           )}
-          {write && (
+          {admin && (
             <Button variant="primary" onClick={save} loading={update.isPending} disabled={!dirty}>
               <Save size={14} aria-hidden />
               Сохранить
@@ -112,7 +112,7 @@ export function SettingsPage() {
             >
               {/* Аудитору — значение текстом: менять его он не может, а
                   знать, с каким окном считалась разметка, ему нужно. */}
-              {write ? (
+              {admin ? (
                 <input
                   className={FIELD}
                   type="number"
@@ -137,7 +137,7 @@ export function SettingsPage() {
                   <span className={cn('font-medium', configured ? 'text-kind-accepted' : 'text-kind-3')}>
                     {configured ? 'настроена' : 'не настроена'}
                   </span>
-                  {admin && (
+                  {platform.admin && (
                     <Link
                       to="/settings/llm"
                       className="text-primary underline underline-offset-2 hover:text-text"
@@ -153,7 +153,7 @@ export function SettingsPage() {
               <p className="text-xs text-text-secondary">
                 Без модели работают все разделы, кроме предложений по разметке. Разметку можно
                 вносить руками — она так и помечается: подтверждено человеком.
-                {!admin && ' Адрес модели задаёт администратор в общих настройках.'}
+                {!platform.admin && ' Адрес модели задаёт администратор в общих настройках.'}
               </p>
             )}
           </div>

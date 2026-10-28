@@ -24,7 +24,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from api.db.models import ROLE_ADMIN, ROLE_ANALYST, AppUser
+from api.db.models import AppUser
 from api.platform.findings.adapters import CurrentFinding, FindingAdapter, get_adapter
 from api.platform.findings.core import (
     NEEDS_REASON,
@@ -37,6 +37,7 @@ from api.platform.findings.core import (
     on_present,
 )
 from api.platform.findings.models import FindingEvent, FindingSettingsRow, FindingState
+from api.platform.services.access import access_for, allows
 from api.settings import get_settings
 
 SYSTEM = "system"
@@ -78,17 +79,26 @@ def _iso(value: dt.date | None) -> str | None:
 # ---- Справочник исполнителей --------------------------------------------
 
 
-def directory(db: Session) -> list[AppUser]:
-    """Кому можно назначить находку: активные аналитики и администраторы."""
-    return list(db.scalars(
-        select(AppUser)
-        .where(AppUser.is_active.is_(True), AppUser.role.in_((ROLE_ANALYST, ROLE_ADMIN)))
-        .order_by(AppUser.login)
-    ))
+#: Область прав модуля находок; нет в таблице — совпадает с именем модуля. Находки Threat Hunting
+#: (`siem_th`) — раздел SIEM, своего уровня у них нет.
+AREA_OF = {"siem_th": "siem"}
 
 
-def _directory_logins(db: Session) -> frozenset[str]:
-    return frozenset(u.login for u in directory(db))
+def area_of(module: str) -> str:
+    return AREA_OF.get(module, module)
+
+
+def directory(db: Session, module: str) -> list[AppUser]:
+    """Кому можно назначить находку модуля: активные пользователи с уровнем `write` и выше в нём."""
+    area = area_of(module)
+    return [
+        u for u in db.scalars(select(AppUser).where(AppUser.is_active.is_(True)).order_by(AppUser.login))
+        if allows(access_for(db, u.id), area, "write")
+    ]
+
+
+def _directory_logins(db: Session, module: str) -> frozenset[str]:
+    return frozenset(u.login for u in directory(db, module))
 
 
 # ---- Настройки -----------------------------------------------------------
@@ -206,7 +216,7 @@ def _event(row: FindingState, actor: str, kind: str, *, from_status: str | None 
                         comment=comment, details=details or {})
 
 
-def _apply(row: FindingState, change: Change, *, actor: AppUser, settings: FindingSettings,
+def _apply(row: FindingState, change: Change, *, actor: AppUser, level: str, settings: FindingSettings,
            assignable: frozenset[str], on: dt.date, bulk_id: str | None) -> list[FindingEvent]:
     comment = change.comment.strip()
     extra: dict[str, Any] = {"bulk_id": bulk_id} if bulk_id else {}
@@ -227,7 +237,7 @@ def _apply(row: FindingState, change: Change, *, actor: AppUser, settings: Findi
     if target != old or risk_until != row.risk_until or new_reason:
         # Продление принятого риска без нового текста держится на прежнем обосновании.
         reason = comment or (row.reason if target == old else "")
-        check_manual(target, reason=reason, role=actor.role, settings=settings, risk_until=risk_until, today=on)
+        check_manual(target, reason=reason, level=level, settings=settings, risk_until=risk_until, today=on)
         details = {**extra, "risk_until": _iso(risk_until)} if target == "risk_accepted" else dict(extra)
         events.append(_event(row, actor.login, "status", from_status=old, to_status=target, comment=comment, details=details))
         row.status = target
@@ -251,15 +261,16 @@ def _apply(row: FindingState, change: Change, *, actor: AppUser, settings: Findi
     return events
 
 
-def change(db: Session, *, module: str, scope_id: int, key: str, change: Change, actor: AppUser,
+def change(db: Session, *, module: str, scope_id: int, key: str, change: Change, actor: AppUser, level: str,
            title: str = "", severity: str = "") -> FindingState:
+    """`level` — уровень автора в модуле находки: от него зависит «принять риск» (`risk_accept_role`)."""
     lock_scope(db, module, scope_id)
     row = state_map(db, module, scope_id, [key], fresh=True).get(key)
     if row is None:
         row = _new_row(module, scope_id, key)
         row.first_seen_at = _first_seen(db, module, scope_id, key)
-    events = _apply(row, change, actor=actor, settings=load_settings(db), assignable=_directory_logins(db),
-                    on=today(), bulk_id=None)
+    events = _apply(row, change, actor=actor, level=level, settings=load_settings(db),
+                    assignable=_directory_logins(db, module), on=today(), bulk_id=None)
     if events:
         if title:
             row.title = title[:512]
@@ -309,12 +320,12 @@ def rekey(db: Session, module: str, scope_id: int, old_key: str, new_key: str, *
     return True
 
 
-def check_change(db: Session, change: Change, *, actor: AppUser) -> None:
+def check_change(db: Session, module: str, change: Change, *, level: str) -> None:
     """Проверить смену заранее — для фоновой задачи, которая применит её позже кусками: отказ
-    по правилам §1, не зависящим от строки (статус и обоснование к нему, роль, срок риска,
-    исполнитель), — до её запуска. Зависящее от строки (продление срока у непринятой
-    находки) проверяет `bulk_change` на каждом куске. Ничего не записывает."""
-    if isinstance(change.assignee, str) and change.assignee not in _directory_logins(db):
+    по правилам §1, не зависящим от строки (статус и обоснование к нему, уровень автора `level`
+    в модуле, срок риска, исполнитель), — до её запуска. Зависящее от строки (продление срока
+    у непринятой находки) проверяет `bulk_change` на каждом куске. Ничего не записывает."""
+    if isinstance(change.assignee, str) and change.assignee not in _directory_logins(db, module):
         raise TransitionError(f"«{change.assignee}» нет в справочнике исполнителей")
     risk_until = None if isinstance(change.risk_until, Unset) else change.risk_until
     # Без статуса срок риска задаётся принятым находкам: их и проверяем.
@@ -325,16 +336,16 @@ def check_change(db: Session, change: Change, *, actor: AppUser) -> None:
         raise TransitionError("срок принятия риска задаётся только для статуса «Принят риск»")
     # Продление срока без статуса держится на прежнем обосновании строки.
     reason = change.comment if change.status else "прежнее"
-    check_manual(target, reason=reason, role=actor.role, settings=load_settings(db), risk_until=risk_until, today=today())
+    check_manual(target, reason=reason, level=level, settings=load_settings(db), risk_until=risk_until, today=today())
 
 
 def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str], change: Change,
-                actor: AppUser, bulk_id: str | None = None) -> int:
+                actor: AppUser, level: str, bulk_id: str | None = None) -> int:
     """Одна и та же смена для многих находок; события помечены общим `bulk_id`.
     Новым строкам подпись, тяжесть и возраст — сразу, одним запросом к адаптеру на вызов."""
     bulk_id = bulk_id or uuid.uuid4().hex
     get_adapter(module)
-    settings, assignable, on = load_settings(db), _directory_logins(db), today()
+    settings, assignable, on = load_settings(db), _directory_logins(db, module), today()
     lock_scope(db, module, scope_id)
     existing = state_map(db, module, scope_id, keys, fresh=True)
     changed = 0
@@ -342,7 +353,8 @@ def bulk_change(db: Session, *, module: str, scope_id: int, keys: Sequence[str],
     for key in dict.fromkeys(keys):
         row = existing.get(key) or _new_row(module, scope_id, key)
         try:
-            events = _apply(row, change, actor=actor, settings=settings, assignable=assignable, on=on, bulk_id=bulk_id)
+            events = _apply(row, change, actor=actor, level=level, settings=settings, assignable=assignable, on=on,
+                            bulk_id=bulk_id)
         except TransitionError as exc:
             # Отказ на одной — отказ всей смены; фиксации не было, вызывающий откатит.
             raise type(exc)(f"находка «{key}»: {exc}") from exc

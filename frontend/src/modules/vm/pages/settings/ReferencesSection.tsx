@@ -21,7 +21,7 @@ const SOURCE: Record<string, string> = { network: 'сеть', file: 'файл', 
 
 function RefCard({ r }: { r: RefState }) {
   // Аудитору остаётся состояние справочника: что загружено, когда и откуда.
-  const { write } = useCan()
+  const { admin } = useCan()
   const download = useDownloadRef()
   const upload = useUploadRef()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -54,14 +54,14 @@ function RefCard({ r }: { r: RefState }) {
       <div className="mb-2 font-mono text-[11px] tabular-nums text-text-secondary">
         {r.records ? `${r.records.toLocaleString('ru-RU')} записей` : '—'}{r.detail && ` · ${r.detail}`}
       </div>
-      {write && r.name === 'nvd' && (
+      {admin && r.name === 'nvd' && (
         <label className="mb-2 block text-[11px] text-text-secondary">
           <span>Годы для скачивания</span>
           <input className="mt-1 w-full rounded border border-border bg-surface px-2 py-1 font-mono text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" value={years} onChange={(e) => setYears(e.target.value)} placeholder="2002-2026 или 2023, 2024" />
         </label>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        {write && (
+        {admin && (
           <>
             <Button onClick={() => download.mutate({ name: r.name, years: r.name === 'nvd' ? parseYears() : undefined })} loading={download.isPending} disabled={busy} title={r.url}>
               <Download size={13} aria-hidden /> Скачать
@@ -81,7 +81,7 @@ function RefCard({ r }: { r: RefState }) {
 
 function BundleUpload({ refs }: { refs: RefState[] }) {
   // Скрипт для сети без интернета собирает все ленты в один zip; грузится он одной задачей.
-  const { write } = useCan()
+  const { admin } = useCan()
   const upload = useUploadBundle()
   const inputRef = useRef<HTMLInputElement>(null)
   // Задача архива занимает все справочники сразу: у каждой карточки один и тот же номер.
@@ -100,7 +100,7 @@ function BundleUpload({ refs }: { refs: RefState[] }) {
         {' · '}
         <a className={LINK} href="/vm/download-references.sh" download>Linux</a>
       </span>
-      {write && (
+      {admin && (
         <>
           <Button onClick={() => inputRef.current?.click()} loading={upload.isPending} disabled={busy}>
             <Upload size={13} aria-hidden /> Загрузить архив

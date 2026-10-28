@@ -8,14 +8,27 @@ from __future__ import annotations
 
 import getpass
 import json
+from typing import Annotated
 
 import typer
+from sqlalchemy.orm import Session
 
 from api.crypto import reseal
 from api.db.base import get_sessionmaker
-from api.db.models import ROLE_ADMIN, ROLE_ANALYST, ROLES, AppSetting, AppUser
+from api.db.models import AccessGroup, AccessMembership, AccessRole, AppSetting, AppUser
+from api.platform.services.access import (
+    BUILTIN_GROUPS,
+    access_for_groups,
+    active_platform_admins,
+    allows,
+    ensure_builtin,
+)
 from api.security import hash_password
 from api.settings import get_settings
+
+#: Группа по умолчанию: первому пользователю — полные права, чтобы было кому управлять.
+FIRST_USER_GROUP = "Администраторы"
+NEXT_USER_GROUP = "Аналитики"
 
 app = typer.Typer(help="Администрирование STools API", no_args_is_help=True)
 
@@ -30,36 +43,74 @@ def _callback() -> None:
 @app.command("create-user")
 def create_user(
     login: str,
-    role: str | None = typer.Option(None, "--role", help="admin | analyst | auditor"),
+    group: Annotated[list[str] | None, typer.Option("--group", help="имя локальной группы; можно повторять")] = None,
 ) -> None:
     """Создать пользователя. Пароль спрашивается дважды, в открытый вид
-    нигде не попадает — ни в аргументы, ни в лог. Роль по умолчанию:
-    admin для первого пользователя, analyst для остальных."""
-    if role is not None and role not in ROLES:
-        typer.secho(f"неизвестная роль: {role}; допустимы {', '.join(ROLES)}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
-    password = getpass.getpass("пароль: ")
-    confirm = getpass.getpass("повторите пароль: ")
-    if password != confirm:
-        typer.secho("пароли не совпадают", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
-    if not password:
-        typer.secho("пустой пароль недопустим", fg=typer.colors.RED, err=True)
-        raise typer.Exit(code=1)
+    нигде не попадает — ни в аргументы, ни в лог. Группа по умолчанию:
+    «Администраторы» для первого пользователя, «Аналитики» для остальных.
 
+    Это и выход, когда система осталась без администратора: удалённая
+    встроенная группа заводится заново со своей встроенной ролью, а
+    учётка без `platform = admin` в системе без администратора не
+    создаётся — иначе выход молча не сработал бы."""
     session = get_sessionmaker()()
     try:
+        #: CLI работает без старта API, где встроенные роли и группы заводятся.
+        ensure_builtin(session)
+        names = group or [FIRST_USER_GROUP if session.query(AppUser).count() == 0 else NEXT_USER_GROUP]
+        _restore_builtin_groups(session, names)
+        found = {
+            g.name: g
+            for g in session.query(AccessGroup).filter(AccessGroup.name.in_(names), AccessGroup.source == "local")
+        }
+        for name in names:
+            if name not in found:
+                typer.secho(f"неизвестная локальная группа: {name}", fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1)
+        if active_platform_admins(session) == 0 and not allows(
+            access_for_groups(session, (g.id for g in found.values())), "platform", "admin",
+        ):
+            given = ", ".join(f"«{n}» (роль «{found[n].role.name}»)" for n in dict.fromkeys(names))
+            typer.secho(
+                f"в системе нет активного администратора платформы, а группы {given} не дают "
+                "platform = admin — учётка не создана; укажите группу с ролью «Администратор»",
+                fg=typer.colors.RED, err=True,
+            )
+            raise typer.Exit(code=1)
+        password = getpass.getpass("пароль: ")
+        confirm = getpass.getpass("повторите пароль: ")
+        if password != confirm:
+            typer.secho("пароли не совпадают", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        if not password:
+            typer.secho("пустой пароль недопустим", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
         if session.query(AppUser).filter_by(login=login).one_or_none() is not None:
             typer.secho(f"пользователь уже существует: {login}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1)
-        if role is None:
-            role = ROLE_ADMIN if session.query(AppUser).count() == 0 else ROLE_ANALYST
-        user = AppUser(login=login, password_hash=hash_password(password), role=role)
+        user = AppUser(login=login, password_hash=hash_password(password))
         session.add(user)
+        session.flush()
+        session.add_all(AccessMembership(user_id=user.id, group_id=found[n].id) for n in dict.fromkeys(names))
         session.commit()
-        typer.secho(f"пользователь создан: {login} ({role})", fg=typer.colors.GREEN)
+        typer.secho(f"пользователь создан: {login} ({', '.join(dict.fromkeys(names))})", fg=typer.colors.GREEN)
     finally:
         session.close()
+
+
+def _restore_builtin_groups(session: Session, names: list[str]) -> None:
+    """Встроенная группа, которой нет, заводится заново со своей встроенной ролью.
+
+    API встроенные группы не возвращает (владелец мог их удалить), но запрос
+    группы по имени в CLI — явное действие оператора на сервере. Без коммита:
+    группа сохраняется вместе с учёткой."""
+    for name in dict.fromkeys(names):
+        if name not in BUILTIN_GROUPS or session.query(AccessGroup).filter_by(name=name).count():
+            continue
+        role = session.query(AccessRole).filter_by(name=BUILTIN_GROUPS[name], builtin=True).one_or_none()
+        if role is not None:
+            session.add(AccessGroup(name=name, source="local", role_id=role.id))
+    session.flush()
 
 
 @app.command("reseal-secrets")

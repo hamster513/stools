@@ -143,7 +143,7 @@ function ConfirmDelete({ rule, onDone }: { rule: ZoneRule; onDone: () => void })
  * группу, выбранную у сети вручную, правила не трогают. Любая правка правил пересчитывает группы сразу.
  */
 export function ZoneRulesPanel() {
-  const { write } = useCan()
+  const { admin } = useCan()
   const rules = useZoneRules()
   const zones = useZones()
   const reorder = useReorderZoneRules()
@@ -151,7 +151,7 @@ export function ZoneRulesPanel() {
   // undefined — форма закрыта, null — новое правило, иначе изменяемое.
   const [editing, setEditing] = useState<ZoneRule | null | undefined>(undefined)
   const [deleting, setDeleting] = useState<ZoneRule | null>(null)
-  const cols = useColumnWidths('assets-zone-rules-columns', write ? WRITE_COLUMNS : COLUMNS)
+  const cols = useColumnWidths('assets-zone-rules-columns', admin ? WRITE_COLUMNS : COLUMNS)
 
   if (rules.isLoading) return <FullPageSpinner />
   if (rules.isError || !rules.data) return <div className="p-6"><ErrorState message={message(rules.error, 'Не удалось загрузить правила')} onRetry={() => rules.refetch()} /></div>
@@ -174,7 +174,7 @@ export function ZoneRulesPanel() {
           включённое подошедшее; группу, выбранную у сети вручную, правила не трогают. Публичные сети RackTables без правила — в External.
           Группы и их признаки (расположение, доступ из интернета) — в <Link to="/settings/assets#zones" className="text-primary hover:underline">настройках модуля</Link>.
         </p>
-        {write && (
+        {admin && (
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {apply.data && !apply.isPending && <span className="text-xs text-text-secondary">изменено сетей: {num(apply.data.changed)}</span>}
             {apply.error && <span className="text-xs text-kind-1">{message(apply.error, 'Не удалось применить')}</span>}
@@ -206,7 +206,7 @@ export function ZoneRulesPanel() {
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{num(r.networks)}</td>
                   <td className="px-3 py-2 text-text-secondary">{r.enabled ? 'да' : 'выключено'}</td>
                   <td className="px-3 py-2 break-words text-text-secondary">{r.note || '—'}</td>
-                  {write && (
+                  {admin && (
                     <td className="px-3 py-1.5">
                       <div className="flex items-center justify-end gap-0.5">
                         <Button variant="ghost" className="px-1.5" disabled={i === 0 || reorder.isPending} onClick={() => move(i, -1)} aria-label={`Поднять правило №${r.position}`}><ArrowUp size={13} aria-hidden /></Button>

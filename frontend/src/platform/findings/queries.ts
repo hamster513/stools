@@ -55,11 +55,14 @@ export function useBulkChange() {
   })
 }
 
-export function useUsersDirectory() {
+/** Кому можно назначить находку модуля — у кого в нём «аналитик» и выше. Спросить может
+ *  только тот, кто сам назначает: без права записи запрос не идёт (сервер ответил бы 403). */
+export function useUsersDirectory(module: string, enabled = true) {
   return useQuery<DirectoryUser[], ApiRequestError>({
-    queryKey: ['users-directory'],
-    queryFn: () => api.get('/api/users/directory'),
+    queryKey: ['users-directory', module],
+    queryFn: () => api.get(`/api/users/directory${buildQuery({ module })}`),
     staleTime: 5 * 60_000,
+    enabled,
   })
 }
 

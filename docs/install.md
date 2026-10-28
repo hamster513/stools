@@ -98,10 +98,11 @@ API на старте применяет миграции базы. Все тр�
 ## 4. Первый администратор
 
 ```bash
-docker compose -f docker-compose.prod.yml exec api python -m api.cli create-user <логин> --role admin
+docker compose -f docker-compose.prod.yml exec api python -m api.cli create-user <логин> --group Администраторы
 ```
 
-Пароль спрашивается дважды и никуда не пишется. Дальше — вход через
+Пароль спрашивается дважды и никуда не пишется. Группы, роли и уровни доступа —
+`docs/platform/access.md`. Дальше — вход через
 интерфейс; вход через Avanpost FAM настраивается в `/settings` (README,
 «Вход через Avanpost FAM»).
 

@@ -5,6 +5,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, type ApiRequestError } from '@/api/client'
+import { invalidateAccess } from './access'
 import type {
   AuditFilters,
   AuditResponse,
@@ -21,6 +22,7 @@ import type {
 } from './types'
 
 // --- Пользователи -----------------------------------------------------
+// Правка пользователя меняет счётчики групп и, если это сам вызывающий, его права (`me`, рейка).
 
 export function useUsers() {
   return useQuery<UserRow[], ApiRequestError>({
@@ -33,7 +35,7 @@ export function useCreateUser() {
   const qc = useQueryClient()
   return useMutation<UserRow, ApiRequestError, CreateUserRequest>({
     mutationFn: (body) => api.post('/api/settings/users', body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings-users'] }),
+    onSuccess: () => invalidateAccess(qc),
   })
 }
 
@@ -41,7 +43,7 @@ export function usePatchUser() {
   const qc = useQueryClient()
   return useMutation<UserRow, ApiRequestError, { id: number; patch: PatchUserRequest }>({
     mutationFn: ({ id, patch }) => api.patch(`/api/settings/users/${id}`, patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings-users'] }),
+    onSuccess: () => invalidateAccess(qc),
   })
 }
 
@@ -49,7 +51,7 @@ export function useDeleteUser() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, number>({
     mutationFn: (id) => api.del(`/api/settings/users/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings-users'] }),
+    onSuccess: () => invalidateAccess(qc),
   })
 }
 

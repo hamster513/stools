@@ -3,6 +3,12 @@
  * Коды и названия — дословно из спеки §1; `resolved` и `reopened` ставит
  * только система, человек выбирает из MANUAL_STATUSES.
  */
+import type { Area } from '@/platform/access/types'
+
+/** Область прав модуля находок — как `area_of` на сервере: Threat Hunting (`siem_th`) — раздел SIEM. */
+export function findingArea(module: string): Area {
+  return (module === 'siem_th' ? 'siem' : module) as Area
+}
 
 export type FindingStatus = 'new' | 'in_work' | 'risk_accepted' | 'false_positive' | 'fixed' | 'resolved' | 'reopened'
 
@@ -86,7 +92,8 @@ export interface DirectoryUser {
 export interface FindingSettings {
   counted: Record<FindingStatus, boolean>
   risk_max_days: number | null
-  risk_accept_role: 'analyst' | 'admin'
+  /** Какой уровень в модуле нужен, чтобы принять риск: аналитик или администратор модуля. */
+  risk_accept_role: 'write' | 'admin'
 }
 
 /** Счётчики области (`service.summary`): по статусам, просроченные, «риск истекает», без исполнителя. */

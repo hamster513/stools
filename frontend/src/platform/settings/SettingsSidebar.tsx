@@ -1,20 +1,31 @@
-import { Bot, Database, KeyRound, ListChecks, ScrollText, ShieldCheck, UserRound, Users, type LucideIcon } from 'lucide-react'
+import {
+  Bot,
+  Database,
+  KeyRound,
+  ListChecks,
+  ScrollText,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react'
+import { useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
-import { useCan } from '@/lib/can'
+import { atLeast, type Area, type Level } from '@/platform/access/types'
 import { MODULES } from '@/platform/modules'
 
-/** Настройки платформы, которые меняет только администратор. */
-const ADMIN_ITEMS = [
-  { key: 'users', label: 'Пользователи', icon: Users },
-  { key: 'security', label: 'Безопасность', icon: ShieldCheck },
-  { key: 'oidc', label: 'Вход по OIDC', icon: KeyRound },
-  { key: 'audit', label: 'Журнал действий', icon: ScrollText },
-  { key: 'llm', label: 'Модель LLM', icon: Bot },
+/** Разделы платформы: видны при чтении платформы, «Модель LLM» — её администратору. */
+const PLATFORM_ITEMS = [
+  { key: 'access', label: 'Доступ', icon: KeyRound, admin: false },
+  { key: 'audit', label: 'Журнал действий', icon: ScrollText, admin: false },
+  { key: 'llm', label: 'Модель LLM', icon: Bot, admin: true },
 ] as const
 
 /** Страницы настроек модулей — в порядке рейки, только работающие модули. */
-const MODULE_ITEMS = MODULES.filter((m) => m.status === 'available').map((m) => ({ key: m.id, label: m.title, icon: m.icon }))
+const MODULE_ITEMS = MODULES.filter((m) => m.status === 'available').map((m) => ({
+  key: m.id as Area,
+  label: m.title,
+  icon: m.icon,
+}))
 
 const GROUP = 'px-3 pt-1 pb-1 text-xs font-medium text-text-secondary'
 
@@ -33,7 +44,8 @@ function NavItem({
   className?: string
 }) {
   const { path } = useRouter()
-  const active = path === to
+  // Карточка внутри раздела (/settings/access/roles/3) подсвечивает свой раздел.
+  const active = path === to || (to !== '/settings' && path.startsWith(`${to}/`))
   return (
     <Link
       to={to}
@@ -53,12 +65,17 @@ function NavItem({
 /**
  * Второй уровень навигации для общих настроек.
  *
- * Разделы администратора остальным ролям не показываются: здесь, в
- * отличие от разделов снапшота SIEM, неактивный пункт ничего не обещает —
- * доступ даёт не следующий шаг пользователя, а другой человек.
+ * Недоступные разделы не показываются: здесь, в отличие от разделов
+ * снапшота SIEM, неактивный пункт ничего не обещает — доступ даёт не
+ * следующий шаг пользователя, а другой человек. Условия — те же, что у
+ * SettingsShell.
  */
 export function SettingsSidebar() {
-  const { admin } = useCan()
+  const { data: me } = useMe()
+  const has = (area: Area, level: Level) => !!me && atLeast(me.access, area, level)
+  const platformItems = PLATFORM_ITEMS.filter((i) => has('platform', i.admin ? 'admin' : 'read'))
+  const moduleItems = MODULE_ITEMS.filter((i) => has(i.key, 'write'))
+  const anyPlatform = platformItems.length > 0
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-grid bg-surface">
@@ -67,24 +84,23 @@ export function SettingsSidebar() {
         <div className="text-xs text-text-secondary">платформа и модули</div>
       </div>
       <nav className="flex flex-col gap-0.5 px-2" aria-label="Разделы настроек">
-        {/* Всем: сводка свежести баз и выгрузок всех модулей. */}
+        {/* Всем: сводка свежести баз и выгрузок модулей пользователя. */}
         <NavItem to="/settings" label="Данные" icon={Database} />
         <div className={cn(GROUP, 'mt-2 border-t border-grid pt-3')}>Платформа</div>
-        {admin &&
-          ADMIN_ITEMS.map(({ key, label, icon }) => (
-            <NavItem key={key} to={`/settings/${key}`} label={label} icon={icon} />
-          ))}
-        {/* Всем: остальные роли видят, что считается, но не меняют. */}
+        {platformItems.map(({ key, label, icon }) => (
+          <NavItem key={key} to={`/settings/${key}`} label={label} icon={icon} />
+        ))}
+        {/* Всем: видят, что считается; менять — администратору платформы. */}
         <NavItem to="/settings/findings" label="Статусы находок" icon={ListChecks} />
         <NavItem
           to="/settings/profile"
           label="Мой профиль"
           icon={UserRound}
-          className={admin ? 'mt-2 border-t border-grid pt-3' : undefined}
+          className={anyPlatform ? 'mt-2 border-t border-grid pt-3' : undefined}
         />
-        {/* Всем: что загружено и как настроено, видят все роли; менять — по правам на странице модуля. */}
-        <div className={cn(GROUP, 'mt-2 border-t border-grid pt-3')}>Модули</div>
-        {MODULE_ITEMS.map(({ key, label, icon }) => (
+        {/* Страницы модулей — с уровня «аналитик»: загрузки и сбор; настройку внутри меняет администратор. */}
+        {moduleItems.length > 0 && <div className={cn(GROUP, 'mt-2 border-t border-grid pt-3')}>Модули</div>}
+        {moduleItems.map(({ key, label, icon }) => (
           <NavItem key={key} to={`/settings/${key}`} label={label} icon={icon} />
         ))}
       </nav>

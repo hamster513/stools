@@ -45,8 +45,8 @@ export function TableRow({
   const [open, setOpen] = useState(false)
   const values = useTableValues(open ? entry.name : undefined, snapshotId)
   const readers = useTableReaders(open ? entry.name : undefined, snapshotId)
-  // Отметку аудитор видит, но не ставит: она — решение о профиле.
-  const { write } = useCan()
+  // Отметку видят все, ставит администратор SIEM: она — решение о профиле.
+  const { admin } = useCan()
   // Колонки у каждого списка свои — и ширины помнятся по списку. Резиновая —
   // первая колонка-комментарий (там длинный текст), без неё — последняя.
   const valueColumns = useMemo<ColumnDef[]>(() => {
@@ -96,7 +96,7 @@ export function TableRow({
           type="checkbox"
           checked={scoping}
           onChange={onToggle}
-          disabled={!write}
+          disabled={!admin}
           className="accent-primary"
           aria-label={`${entry.name}: ограничивает область действия правил`}
         />

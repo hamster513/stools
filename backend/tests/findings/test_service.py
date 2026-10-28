@@ -14,7 +14,7 @@ import api.db.base as db_base
 from api.db.models import AppUser
 from api.platform.findings import service as svc
 from api.platform.findings.adapters import safe_reconcile
-from api.platform.findings.core import FindingSettings, TransitionError
+from api.platform.findings.core import FindingSettings, RoleRequired, TransitionError
 from api.platform.findings.models import FindingEvent, FindingSettingsRow, FindingState
 from tests.findings.conftest import FakeAdapter
 
@@ -27,8 +27,13 @@ def _row(db: Any, key: str, scope_id: int = 1) -> FindingState | None:
     return svc.state_map(db, "test", scope_id, [key]).get(key)
 
 
+def _level(actor: AppUser) -> str:
+    """Уровень учётки фикстуры `users` в модуле `test`: администратор — admin, остальные — write."""
+    return "admin" if actor.login.startswith("admin") else "write"
+
+
 def _change(db: Any, actor: AppUser, key: str, change: svc.Change, scope_id: int = 1) -> FindingState:
-    return svc.change(db, module="test", scope_id=scope_id, key=key, change=change, actor=actor)
+    return svc.change(db, module="test", scope_id=scope_id, key=key, change=change, actor=actor, level=_level(actor))
 
 
 def test_change_creates_row_and_event(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
@@ -191,7 +196,7 @@ def test_expire_risks(db_session: Any, adapter: FakeAdapter, users: dict[str, Ap
 
 def test_bulk_change_shares_bulk_id(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser]) -> None:
     changed = svc.bulk_change(db_session, module="test", scope_id=1, keys=["a", "b", "c"],
-                              change=svc.Change(status="in_work"), actor=users["analyst1"])
+                              change=svc.Change(status="in_work"), actor=users["analyst1"], level="write")
     assert changed == 3
     events = list(db_session.scalars(select(FindingEvent)))
     assert len(events) == 3
@@ -199,7 +204,7 @@ def test_bulk_change_shares_bulk_id(db_session: Any, adapter: FakeAdapter, users
     assert len(bulk_ids) == 1 and None not in bulk_ids
     # Повтор ничего не меняет и событий не добавляет.
     assert svc.bulk_change(db_session, module="test", scope_id=1, keys=["a", "b", "c"],
-                           change=svc.Change(status="in_work"), actor=users["analyst1"]) == 0
+                           change=svc.Change(status="in_work"), actor=users["analyst1"], level="write") == 0
 
 
 def test_counted_statuses(db_session: Any) -> None:
@@ -218,6 +223,12 @@ def test_settings_roundtrip(db_session: Any) -> None:
     saved = svc.save_settings(db_session, FindingSettings(risk_max_days=90, risk_accept_role="admin"))
     loaded = svc.load_settings(db_session)
     assert loaded == saved and loaded.risk_max_days == 90 and loaded.risk_accept_role == "admin"
+
+
+def test_old_stored_risk_accept_role_is_read_as_new(db_session: Any) -> None:
+    db_session.add(FindingSettingsRow(id=svc.SETTINGS_ID, data={"risk_accept_role": "analyst"}, updated_by=""))
+    db_session.commit()
+    assert svc.load_settings(db_session).risk_accept_role == "write"
 
 
 def test_summary(db_session: Any, adapter: FakeAdapter, users: dict[str, AppUser], today: dt.date) -> None:
@@ -281,7 +292,7 @@ def test_reconcile_asks_first_seen_once_for_many_rows(
 ) -> None:
     keys = [f"k{i}" for i in range(2000)]
     svc.bulk_change(db_session, module="test", scope_id=1, keys=keys, change=svc.Change(status="in_work"),
-                    actor=users["analyst1"])
+                    actor=users["analyst1"], level="write")
     seen = dt.datetime(2026, 8, 1, tzinfo=dt.UTC)
     adapter.first["k7"] = seen
     adapter.set_keys(1, *keys)
@@ -297,7 +308,7 @@ def test_reconcile_asks_first_seen_once_for_many_rows(
 
 
 def test_safe_reconcile_failure_keeps_callers_pending_work(db_session: Any, adapter: FakeAdapter) -> None:
-    db_session.add(AppUser(login="pending1", password_hash="x", role="analyst"))
+    db_session.add(AppUser(login="pending1", password_hash="x"))
     adapter.fail = True
     safe_reconcile(db_session, "test", 1, "импорт")
     db_session.commit()
@@ -326,7 +337,7 @@ def test_resaving_risk_accepted_with_new_reason_updates_reason(
         "status", "risk_accepted", "risk_accepted", "новое обоснование")
     # Новое обоснование — снова решение о риске: роль проверяется.
     svc.save_settings(db_session, FindingSettings(risk_accept_role="admin"))
-    with pytest.raises(TransitionError):
+    with pytest.raises(RoleRequired):
         _change(db_session, users["analyst1"], "k1", svc.Change(status="risk_accepted", comment="третье"))
 
 
@@ -336,7 +347,8 @@ def test_bulk_error_names_first_failing_key(
     _change(db_session, users["analyst1"], "a", svc.Change(status="risk_accepted", comment="до релиза"))
     with pytest.raises(TransitionError, match="«b»"):
         svc.bulk_change(db_session, module="test", scope_id=1, keys=["a", "b", "c"],
-                        change=svc.Change(risk_until=today + dt.timedelta(days=5)), actor=users["analyst1"])
+                        change=svc.Change(risk_until=today + dt.timedelta(days=5)), actor=users["analyst1"],
+                        level="write")
 
 
 # ---- Одновременные изменения одной области ----------------------------------------
@@ -408,7 +420,8 @@ def test_concurrent_changes_of_new_finding_make_one_row(
     def run(login: str, change: svc.Change) -> None:
         try:
             with db_base.get_sessionmaker()() as db:
-                svc.change(db, module="test", scope_id=1, key="k1", change=change, actor=_actor(db, login))
+                svc.change(db, module="test", scope_id=1, key="k1", change=change, actor=_actor(db, login),
+                           level="write")
         except BaseException as exc:  # noqa: BLE001 — ошибку потока проверяет тест
             errors.append(exc)
 
@@ -457,7 +470,7 @@ def test_new_rows_are_reported_to_the_adapter_once(db_session: Any, adapter: Fak
     _change(db_session, actor, "k0", svc.Change())  # ничего не меняет — строки нет
     svc.comment(db_session, module="test", scope_id=1, key="k2", text="заметка", actor=actor)
     svc.bulk_change(db_session, module="test", scope_id=1, keys=["k1", "k3", "k4"], change=svc.Change(status="in_work"),
-                    actor=actor)
+                    actor=actor, level="write")
     assert [k for _, k in seen] == ["k1", "k2", "k3", "k4"] and all(i is not None for i, _ in seen)
 
 

@@ -167,7 +167,7 @@ function NetworksTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd
 /** Вкладка «Сети»: поиск по адресу, имени, тегу и VLAN, фасеты, список по страницам, карточка сбоку. */
 function NetworksTab({ drawerOpen, onOpen, onCreate, onCloseDrawer }: { drawerOpen: boolean; onOpen: (id: number) => void; onCreate: () => void; onCloseDrawer: () => void }) {
   const params = useSearchParams()
-  const { write } = useCan()
+  const { admin } = useCan()
   const [filters, setFilters] = useState<Filters>(() => ({
     zone: wireFrom(params, 'zone'),
     placement: wireFrom<Placement>(params, 'placement', PLACEMENTS),
@@ -229,7 +229,7 @@ function NetworksTab({ drawerOpen, onOpen, onCreate, onCloseDrawer }: { drawerOp
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${num(items.length)} из ${num(total)}` : num(total)) : '…'}</div>
-        {write && <Button className="ml-auto" onClick={onCreate}><Plus size={13} aria-hidden /> Добавить сеть</Button>}
+        {admin && <Button className="ml-auto" onClick={onCreate}><Plus size={13} aria-hidden /> Добавить сеть</Button>}
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </div>
       <div className="flex min-h-0 flex-1">
