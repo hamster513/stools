@@ -336,3 +336,84 @@ def test_hidden_zone_of_rule_kind_makes_no_into_maybe() -> None:
     zones = ZONES + (ZoneView("Тестовая скрытая", 1, None),)
     m = match_rule(rule(networks=1), packet(remote_ip="203.0.113.7"), zones, HOST_IP)
     assert m.result is Tri.MAYBE
+
+
+# --- раунд исправлений 1: маркер маски своей стороны, самая узкая сеть зоны, мусорные адреса ------------------------------
+
+def test_unread_mask_of_local_addresses_does_not_touch_remote_side() -> None:
+    r = rule(local=(Address(ip="192.0.2.10"),), unread=("mask",))
+    m = match_rule(r, packet(), ZONES, "192.0.2.10")
+    assert {c.name: c.result for c in m.criteria}["address"] is Tri.YES
+    assert {c.name: c.result for c in m.criteria}["local_address"] is Tri.YES
+    assert m.result is Tri.YES
+    other = match_rule(r, packet(), ZONES, "192.0.2.11")
+    assert {c.name: c.result for c in other.criteria}["address"] is Tri.YES
+    assert {c.name: c.result for c in other.criteria}["local_address"] is Tri.MAYBE
+    assert other.assumption == "локальный: маска адреса правила не прочитана"
+
+
+OVERLAP = (
+    ZoneView("Тестовая широкая", 2, ipaddress.ip_network("198.51.0.0/16")),
+    ZoneView("Тестовая узкая", 1, ipaddress.ip_network("198.51.100.0/24")),
+)
+
+
+@pytest.mark.parametrize("zones", [OVERLAP, OVERLAP[::-1]])
+def test_zone_by_narrowest_network(zones: tuple[ZoneView, ...]) -> None:
+    assert zone_of("198.51.100.7", zones) == 1
+    assert zone_of("198.51.7.7", zones) == 2
+    assert crit_zones(rule(networks=1), packet(remote_ip="198.51.100.7"), zones) is Tri.YES
+    assert crit_zones(rule(networks=2), packet(remote_ip="198.51.100.7"), zones) is Tri.NO
+    assert crit_zones(rule(networks=2), packet(remote_ip="198.51.7.7"), zones) is Tri.YES
+
+
+def crit_zones(r: RuleView, p: Packet, zones: tuple[ZoneView, ...]) -> Tri:
+    return next(c.result for c in match_rule(r, p, zones, HOST_IP).criteria if c.name == "address")
+
+
+def test_zone_ambiguous_on_equal_prefix_with_different_kinds() -> None:
+    zones = (ZoneView("Тестовая А", 1, ipaddress.ip_network("198.51.100.0/24")),
+             ZoneView("Тестовая Б", 2, ipaddress.ip_network("198.51.100.0/24")))
+    assert zone_of("198.51.100.7", zones) is None
+    m = match_rule(rule(networks=1), packet(remote_ip="198.51.100.7"), zones, HOST_IP)
+    assert m.result is Tri.MAYBE and m.assumption == "зона адреса 198.51.100.7 неоднозначна"
+
+
+def test_zone_without_kind_is_maybe_when_narrowest() -> None:
+    zones = OVERLAP + (ZoneView("Тестовая без вида", None, ipaddress.ip_network("198.51.100.0/25")),)
+    assert zone_of("198.51.100.7", zones) is None
+    assert zone_of("198.51.100.200", zones) == 1
+    assert crit_zones(rule(networks=1), packet(remote_ip="198.51.100.7"), zones) is Tri.MAYBE
+    assert crit_zones(rule(networks=1), packet(remote_ip="198.51.100.200"), zones) is Tri.YES
+
+
+def test_garbage_addresses_are_maybe_not_errors() -> None:
+    r = rule(local=(Address(ip="192.0.2.0", mask=24),))
+    m = match_rule(r, packet(), ZONES, "не адрес")
+    c = next(c for c in m.criteria if c.name == "local_address")
+    assert c.result is Tri.MAYBE and c.text == "локальный: адрес хоста не разобран"
+    assert crit(rule(remote=(Address(ip="198.51.100.7"),)), packet(remote_ip="мусор"), "address") is Tri.MAYBE
+    assert crit(rule(networks=1), packet(remote_ip="мусор"), "address") is Tri.MAYBE
+    assert zone_of("мусор", ZONES) is None
+
+
+def test_assumption_texts_once_and_local_prefixed() -> None:
+    r = rule(remote=(Address(hidden="secret"),), local=(Address(hidden="secret"),))
+    m = match_rule(r, packet(), ZONES, HOST_IP)
+    hidden = "адрес скрыт: обновите выгрузку сборщиком 1.3+"
+    assert m.assumption == f"{hidden}; локальный: {hidden}"
+
+
+def test_single_ipv6_address_without_mask() -> None:
+    r = rule(remote=(Address(ip="2001:db8::5"),))
+    assert crit(r, packet(remote_ip="2001:db8::5"), "address") is Tri.YES
+    assert crit(r, packet(remote_ip="2001:db8::6"), "address") is Tri.NO
+
+
+def test_invalid_mask_is_maybe() -> None:
+    assert crit(rule(remote=(Address(ip="198.51.100.0", mask=40),)), packet(), "address") is Tri.MAYBE
+
+
+def test_unread_icmp_type_with_packet_without_type_is_yes() -> None:
+    r = rule(protocol=Protocol.ICMP, unread=("icmp_type",))
+    assert crit(r, packet(protocol=Protocol.ICMP, icmp_type=None), "icmp_type") is Tri.YES

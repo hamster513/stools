@@ -50,8 +50,12 @@ IPNetwork = IPv4Network | IPv6Network
 
 
 @lru_cache(maxsize=4096)
-def _ip(ip: str) -> IPAddress:
-    return ipaddress.ip_address(ip)
+def _ip(ip: str) -> IPAddress | None:
+    """Адрес стороны пакета; None — строка не адрес."""
+    try:
+        return ipaddress.ip_address(ip)
+    except ValueError:
+        return None
 
 
 @lru_cache(maxsize=4096)
@@ -76,10 +80,27 @@ def _crit(name: str, ok: bool, text: str) -> Criterion:
     return Criterion(name, Tri.YES if ok else Tri.NO, text)
 
 
+def _zone_lookup(addr: IPAddress, zones: tuple[ZoneView, ...]) -> tuple[int | None, str]:
+    """Зона адреса по самой узкой описанной сети, в которую он входит (Ruling 7): (код вида, "") либо (None, причина) —
+    «неизвестна» (вне всех сетей), «неоднозначна» (самые узкие сети разных видов), «вид не прочитан» (код вида None).
+    Зоны со скрытой сетью здесь не учитываются."""
+    fits = [(z.network.prefixlen, z.kind) for z in zones
+            if z.network is not None and z.network.version == addr.version and addr in z.network]
+    if not fits:
+        return None, "неизвестна"
+    narrowest = max(length for length, _ in fits)
+    kinds = {kind for length, kind in fits if length == narrowest}
+    if len(kinds) > 1:
+        return None, "неоднозначна"
+    kind = kinds.pop()
+    return (kind, "") if kind is not None else (None, "вид не прочитан")
+
+
 def zone_of(ip: str, zones: tuple[ZoneView, ...]) -> int | None:
-    """Код вида первой описанной зоны, в сеть которой входит адрес; None — не в описанных сетях."""
+    """Код вида зоны адреса по самой узкой подходящей сети; None — адрес вне описанных сетей, зона неоднозначна, вид не
+    прочитан или строка не адрес."""
     addr = _ip(ip)
-    return next((z.kind for z in zones if z.network is not None and z.network.version == addr.version and addr in z.network), None)
+    return _zone_lookup(addr, zones)[0] if addr is not None else None
 
 
 def _direction(rule: RuleView, outbound: bool, reply: bool) -> Criterion:
@@ -177,6 +198,8 @@ def _address(name: str, a: Address, ip: str | None, host: str, what: str) -> Cri
     if network is None:
         return Criterion(name, Tri.MAYBE, f"адрес {shown}: маска не читается")
     addr = _ip(ip)
+    if addr is None:
+        return Criterion(name, Tri.MAYBE, f"{what} не разобран")
     if addr.version != network.version:
         return Criterion(name, Tri.NO, f"адрес {ip}: другая версия IP, чем {shown}")
     ok = addr in network
@@ -184,24 +207,29 @@ def _address(name: str, a: Address, ip: str | None, host: str, what: str) -> Cri
 
 
 def _zone(code: int, ip: str | None, zones: tuple[ZoneView, ...]) -> Criterion:
-    """Адрес в зоне правила: входит в одну из описанных сетей этого вида; не входит ни в одну — зона неизвестна."""
+    """Адрес в зоне правила: зона адреса — как у `zone_of` (самая узкая сеть); неизвестная, неоднозначная или без вида — MAYBE.
+    Несовпадение становится MAYBE, если есть зона со скрытой сетью вида правила или без вида."""
     name, label = "address", _NETWORKS.get(code, f"зона {code}")
     if ip is None:
         return Criterion(name, Tri.MAYBE, "адрес назначения не задан")
     addr = _ip(ip)
-    kinds = {z.kind for z in zones if z.network is not None and z.network.version == addr.version and addr in z.network}
-    if code in kinds:
+    if addr is None:
+        return Criterion(name, Tri.MAYBE, "адрес назначения не разобран")
+    kind, reason = _zone_lookup(addr, zones)
+    if kind is None:
+        return Criterion(name, Tri.MAYBE, f"зона адреса {ip} {reason}")
+    if kind == code:
         return Criterion(name, Tri.YES, f"адрес {ip} в зоне «{label}»")
-    hidden = any(z.network is None and z.kind in (code, None) for z in zones)
-    if not kinds or None in kinds or hidden:
-        return Criterion(name, Tri.MAYBE, f"зона адреса {ip} неизвестна")
+    if any(z.network is None and z.kind in (code, None) for z in zones):
+        return Criterion(name, Tri.MAYBE, f"зона адреса {ip} неизвестна: есть скрытая сеть")
     return Criterion(name, Tri.NO, f"адрес {ip} не в зоне «{label}»")
 
 
 def _remote(rule: RuleView, packet: Packet, zones: tuple[ZoneView, ...]) -> Criterion:
-    """Удалённый адрес: любой из адресов правила или зона правила; нечитаемые зона или маска делают NO возможным."""
+    """Удалённый адрес: любой из адресов правила или зона правила; нечитаемые зона или маска делают NO возможным. Маркер
+    `mask` общий для обеих сторон, поэтому учитывается только при непустых удалённых адресах."""
     s, name = rule.scope, "address"
-    unread = "networks" in s.unread or "mask" in s.unread
+    unread = "networks" in s.unread or ("mask" in s.unread and bool(s.remote))
     if not s.remote and s.networks is None and not unread:
         return Criterion(name, Tri.YES, "любой адрес")
     options = [_address(name, a, packet.remote_ip, packet.remote_host, "адрес назначения") for a in s.remote]
@@ -219,7 +247,7 @@ def _local(rule: RuleView, host_ip: str) -> Criterion:
         return Criterion(name, Tri.YES, "любой локальный адрес")
     found = _either((_address(name, a, host_ip or None, "", "адрес хоста") for a in rule.scope.local), Criterion(name, Tri.NO, ""))
     if found.result is Tri.NO and "mask" in rule.scope.unread:
-        return Criterion(name, Tri.MAYBE, "маска адреса правила не прочитана")
+        return Criterion(name, Tri.MAYBE, "локальный: маска адреса правила не прочитана")
     return Criterion(name, found.result, f"локальный: {found.text}")
 
 
@@ -245,5 +273,5 @@ def match_rule(rule: RuleView, packet: Packet, zones: tuple[ZoneView, ...], host
     stream_on_reply = reply and rule.scope.direction in (3, 4)
     noes = [c for c in criteria[1:] if c.result is Tri.NO]
     almost = noes[0] if rule.enabled and not stream_on_reply and len(noes) == 1 and Tri.MAYBE not in results else None
-    assumption = "; ".join(c.text for c in criteria if c.result is Tri.MAYBE) if result is Tri.MAYBE else ""
+    assumption = "; ".join(dict.fromkeys(c.text for c in criteria if c.result is Tri.MAYBE)) if result is Tri.MAYBE else ""
     return RuleMatch(rule, result, criteria, almost, assumption)
