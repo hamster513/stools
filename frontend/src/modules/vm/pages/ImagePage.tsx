@@ -18,6 +18,7 @@ import { Link, useRouter, useSearchParams } from '@/lib/router'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { date, megabytes } from './images/format'
 import { ImageRiskDrawer } from './images/ImageRiskDrawer'
 import { ImageVulnsFacetPanel, type ImageVulnFilters } from './images/ImageVulnsFacetPanel'
 import { ImageVulnsTable } from './images/ImageVulnsTable'
@@ -35,42 +36,49 @@ function vulnKey(v: ImageVulnItem): string {
   return `${v.cve_id}|${v.package}|${v.installed_version}`
 }
 
-function date(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleDateString('ru-RU') : '—'
-}
-
-function megabytes(size: number | null): string {
-  if (size === null) return '—'
-  return `${(size / 1024 / 1024).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} МБ`
-}
-
-/** Короткий digest с кнопкой «копировать»: в буфер уходит полный хеш. */
+/**
+ * Короткий digest с кнопкой «копировать»: в буфер уходит полный хеш. Буфер бывает закрыт
+ * (нет https, отказ в разрешении) — тогда показывается полный digest, выделенный для ручного копирования.
+ */
 function DigestCopy({ short, full }: { short: string; full: string }) {
-  const [copied, setCopied] = useState(false)
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const text = useRef<HTMLSpanElement>(null)
   useEffect(() => () => clearTimeout(timer.current), [])
+  useEffect(() => {
+    if (state !== 'failed' || !text.current) return
+    const range = document.createRange()
+    range.selectNodeContents(text.current)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }, [state])
 
-  function copy() {
-    navigator.clipboard.writeText(full).then(() => {
-      setCopied(true)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(full)
+      setState('copied')
       clearTimeout(timer.current)
-      timer.current = setTimeout(() => setCopied(false), 1500)
-    }, () => undefined)
+      timer.current = setTimeout(() => setState('idle'), 1500)
+    } catch {
+      setState('failed')
+    }
   }
 
+  const message = state === 'copied' ? 'Digest скопирован' : state === 'failed' ? 'Не удалось скопировать — digest выделен, скопируйте вручную' : ''
   return (
     <span className="inline-flex items-center gap-1">
-      <span className="font-mono text-text" title={full}>{short}</span>
+      <span ref={text} className="font-mono text-text" title={full}>{state === 'failed' ? full : short}</span>
       <button
         type="button"
         onClick={copy}
-        aria-label={copied ? 'Digest скопирован' : 'Копировать полный digest'}
-        title={copied ? 'Скопировано' : 'Копировать полный digest'}
+        aria-label="Копировать полный digest"
+        title={message || 'Копировать полный digest'}
         className="rounded p-0.5 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
       >
-        {copied ? <Check size={12} aria-hidden /> : <Copy size={12} aria-hidden />}
+        {state === 'copied' ? <Check size={12} aria-hidden /> : <Copy size={12} aria-hidden />}
       </button>
-      <span role="status" className="sr-only">{copied ? 'Digest скопирован' : ''}</span>
+      <span role="status" className={state === 'failed' ? 'text-[11px] text-risk-medium' : 'sr-only'}>{message}</span>
     </span>
   )
 }
@@ -225,7 +233,7 @@ export function ImagePage({ id }: { id: number }) {
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2">
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         {/* Выгрузка — все находки образа: ручка фильтрует по образу, а не по находкам. */}
-        <ExportButton href={exportHref('/api/vm/images/export', { image_id: id })} disabled={query.isLoading} />
+        <ExportButton href={exportHref('/api/vm/images/export', { image_id: id })} total={image.data.trivy.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input

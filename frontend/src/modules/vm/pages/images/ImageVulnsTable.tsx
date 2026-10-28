@@ -1,13 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Check, ChevronDown, ChevronRight } from 'lucide-react'
+import { Check, ChevronRight } from 'lucide-react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
-import type { ImageVulnItem, ImageVulnSort, TrivySeverity } from '@/modules/vm/api/types'
-import { TRIVY_SEVERITY_LABELS } from '@/modules/vm/api/types'
+import type { ImageVulnItem, ImageVulnSort } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { cn } from '@/lib/cn'
-import { ResizeHandle } from '@/platform/table/ResizeHandle'
-import { useColumnWidths, type ColumnDef, type ColumnWidths } from '@/platform/table/useColumnWidths'
+import { SortableTh } from '@/platform/table/SortableTh'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+import { epssPercent } from './format'
+import { TrivyBadge } from './TrivyCounts'
 
 const ROW_HEIGHT = 32
 
@@ -27,19 +28,6 @@ const SORT_KEYS: Partial<Record<string, ImageVulnSort>> = {
 }
 const ASCENDING: ImageVulnSort[] = ['cve', 'package']
 
-const TRIVY_TEXT: Record<TrivySeverity, string> = {
-  critical: 'text-risk-critical',
-  high: 'text-risk-high',
-  medium: 'text-risk-medium',
-  low: 'text-risk-low',
-  unknown: 'text-text-secondary',
-}
-
-/** Оценка Trivy словом: цвет не единственный носитель смысла. */
-export function TrivyBadge({ severity }: { severity: TrivySeverity }) {
-  return <span className={cn('text-xs font-medium', TRIVY_TEXT[severity])}>{TRIVY_SEVERITY_LABELS[severity]}</span>
-}
-
 interface Props {
   items: ImageVulnItem[]
   /** Ключ строки: тройка (идентификатор, пакет, версия) — см. `vulnKey` в ImagePage. */
@@ -50,39 +38,6 @@ interface Props {
   onSelectIndex: (i: number) => void
   onOpen: (i: number) => void
   onReachEnd?: () => void
-}
-
-// Свой заголовок вместо ResizableHeader: сортировка по щелчку и aria-sort остаются на ячейке.
-function Th({ children, sortKey, sort, onSort, cols, col }: {
-  children: React.ReactNode
-  sortKey?: ImageVulnSort
-  sort: ImageVulnSort
-  onSort: (s: ImageVulnSort) => void
-  cols: ColumnWidths
-  col: ColumnDef
-}) {
-  const handle = col.resizable !== false && <ResizeHandle cols={cols} col={col.key} label={col.label} />
-  // «сбросить» — в резиновой колонке, пока ширины изменены.
-  const reset = col.flex && cols.customized && (
-    <button type="button" onClick={cols.reset} className="mr-2 shrink-0 rounded font-normal tracking-normal text-text-secondary normal-case hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title="Вернуть ширины колонок по умолчанию">сбросить</button>
-  )
-  if (!sortKey) return <div className="relative flex min-w-0 items-center"><div className="min-w-0 flex-1 px-2 py-2">{children}</div>{reset}{handle}</div>
-  const active = sort === sortKey
-  const ascending = ASCENDING.includes(sortKey)
-  return (
-    <div role="columnheader" aria-sort={active ? (ascending ? 'ascending' : 'descending') : 'none'} className="relative flex min-w-0 items-center">
-      <button
-        type="button"
-        onClick={() => onSort(sortKey)}
-        className={cn('flex min-w-0 flex-1 items-center gap-1 px-2 py-2 text-left uppercase hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active && 'text-text')}
-      >
-        {children}
-        {active && <ChevronDown size={11} className={cn(ascending && 'rotate-180')} aria-hidden />}
-      </button>
-      {reset}
-      {handle}
-    </div>
-  )
 }
 
 /** Находки образа: строка открывает дровер расчёта риска; j/k и Enter — на странице. */
@@ -106,7 +61,7 @@ export function ImageVulnsTable({ items, rowKey, selectedIndex, sort, onSort, on
   return (
     <div ref={parentRef} data-col-resize-root className="h-full overflow-auto">
       <div className="sticky top-0 z-10 grid items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
-        {cols.columns.map((c) => <Th key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort}>{c.label}</Th>)}
+        {cols.columns.map((c) => <SortableTh key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort} ascending={ASCENDING.includes(SORT_KEYS[c.key] as ImageVulnSort)}>{c.label}</SortableTh>)}
       </div>
 
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
@@ -140,7 +95,7 @@ export function ImageVulnsTable({ items, rowKey, selectedIndex, sort, onSort, on
                   : <span className="text-text-secondary" title="риск не оценён: идентификатора нет в справочнике CVE">—</span>}
               </div>
               <div className="min-w-0 truncate px-2 font-mono tabular-nums text-text-secondary">
-                {item.epss === null ? '—' : `${(item.epss * 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 })} %`}
+                {epssPercent(item.epss)}
               </div>
               <div className="px-2">
                 {item.kev ? <><Check size={14} className="text-risk-critical" aria-hidden /><span className="sr-only">в каталоге CISA KEV</span></> : <span className="text-text-secondary">—</span>}

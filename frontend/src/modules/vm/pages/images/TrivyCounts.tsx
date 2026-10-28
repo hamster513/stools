@@ -2,6 +2,7 @@ import type { ImageItem, TrivySeverity } from '@/modules/vm/api/types'
 import { TRIVY_SEVERITIES, TRIVY_SEVERITY_LABELS } from '@/modules/vm/api/types'
 import { cn } from '@/lib/cn'
 
+/** Цвет оценки Trivy: общий для счётчиков и бейджа. */
 const DOT: Record<TrivySeverity, string> = {
   critical: 'text-risk-critical',
   high: 'text-risk-high',
@@ -26,4 +27,9 @@ export function TrivyCounts({ trivy, className }: { trivy: ImageItem['trivy']; c
       ))}
     </span>
   )
+}
+
+/** Оценка Trivy словом: цвет не единственный носитель смысла. */
+export function TrivyBadge({ severity }: { severity: TrivySeverity }) {
+  return <span className={cn('text-xs font-medium', DOT[severity])}>{TRIVY_SEVERITY_LABELS[severity]}</span>
 }

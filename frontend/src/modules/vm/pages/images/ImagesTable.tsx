@@ -1,13 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import type { ImageItem, ImageSort } from '@/modules/vm/api/types'
 import { NO_RISK_TITLE, SCAN_STATUS_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { cn } from '@/lib/cn'
-import { ResizeHandle } from '@/platform/table/ResizeHandle'
-import { useColumnWidths, type ColumnDef, type ColumnWidths } from '@/platform/table/useColumnWidths'
+import { SortableTh } from '@/platform/table/SortableTh'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
+import { date, megabytes } from './format'
 import { TrivyCounts } from './TrivyCounts'
 
 const ROW_HEIGHT = 40
@@ -27,15 +28,6 @@ const SORT_KEYS: Partial<Record<string, ImageSort>> = {
   image: 'name', risk: 'risk_desc', trivy: 'trivy_desc', pushed: 'pushed_desc',
 }
 
-function date(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleDateString('ru-RU') : '—'
-}
-
-function megabytes(size: number | null): string {
-  if (size === null) return '—'
-  return `${(size / 1024 / 1024).toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} МБ`
-}
-
 interface Props {
   items: ImageItem[]
   selectedIndex: number
@@ -44,38 +36,6 @@ interface Props {
   onSelectIndex: (i: number) => void
   onOpen: (i: number) => void
   onReachEnd?: () => void
-}
-
-// Свой заголовок вместо ResizableHeader: сортировка по щелчку и aria-sort остаются на ячейке.
-function Th({ children, sortKey, sort, onSort, cols, col }: {
-  children: React.ReactNode
-  sortKey?: ImageSort
-  sort: ImageSort
-  onSort: (s: ImageSort) => void
-  cols: ColumnWidths
-  col: ColumnDef
-}) {
-  const handle = col.resizable !== false && <ResizeHandle cols={cols} col={col.key} label={col.label} />
-  // «сбросить» — в резиновой колонке, пока ширины изменены.
-  const reset = col.flex && cols.customized && (
-    <button type="button" onClick={cols.reset} className="mr-2 shrink-0 rounded font-normal tracking-normal text-text-secondary normal-case hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title="Вернуть ширины колонок по умолчанию">сбросить</button>
-  )
-  if (!sortKey) return <div className="relative flex min-w-0 items-center"><div className="min-w-0 flex-1 px-2 py-2">{children}</div>{reset}{handle}</div>
-  const active = sort === sortKey
-  return (
-    <div role="columnheader" aria-sort={active ? (sortKey === 'name' ? 'ascending' : 'descending') : 'none'} className="relative flex min-w-0 items-center">
-      <button
-        type="button"
-        onClick={() => onSort(sortKey)}
-        className={cn('flex min-w-0 flex-1 items-center gap-1 px-2 py-2 text-left uppercase hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active && 'text-text')}
-      >
-        {children}
-        {active && <ChevronDown size={11} className={cn(sortKey === 'name' && 'rotate-180')} aria-hidden />}
-      </button>
-      {reset}
-      {handle}
-    </div>
-  )
 }
 
 /** Список образов: строка открывает страницу образа; j/k и Enter — на странице. */
@@ -99,7 +59,7 @@ export function ImagesTable({ items, selectedIndex, sort, onSort, onSelectIndex,
   return (
     <div ref={parentRef} data-col-resize-root className="h-full overflow-auto">
       <div className="sticky top-0 z-10 grid items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
-        {cols.columns.map((c) => <Th key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort}>{c.label}</Th>)}
+        {cols.columns.map((c) => <SortableTh key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort} ascending={SORT_KEYS[c.key] === 'name'}>{c.label}</SortableTh>)}
       </div>
 
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>

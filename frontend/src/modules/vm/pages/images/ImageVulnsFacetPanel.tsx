@@ -3,7 +3,7 @@ import { IMAGE_LEVEL_LABELS, IMAGE_LEVELS, TRIVY_SEVERITIES } from '@/modules/vm
 import { LEVEL_TEXT } from '@/modules/vm/components/RiskBadge'
 import { toggleValue } from '@/platform/findings/facets'
 import { Row, Section } from '../vulns/FacetPanel'
-import { TrivyBadge } from './ImageVulnsTable'
+import { TrivyBadge } from './TrivyCounts'
 
 export type ImageVulnFilters = Pick<ImageVulnsQuery, 'severity' | 'level' | 'fixed'>
 

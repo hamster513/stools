@@ -1,14 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import type { VulnItem, VulnSort } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { cn } from '@/lib/cn'
-import { ResizeHandle } from '@/platform/table/ResizeHandle'
-import { useColumnWidths, type ColumnDef, type ColumnWidths } from '@/platform/table/useColumnWidths'
+import { SortableTh } from '@/platform/table/SortableTh'
+import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 
 const ROW_HEIGHT = 32
 
@@ -46,45 +46,6 @@ interface Props {
   onCheckAll?: (on: boolean) => void
 }
 
-// Свой заголовок вместо ResizableHeader: сортировка по щелчку и aria-sort остаются на ячейке.
-function Th({
-  children,
-  sortKey,
-  sort,
-  onSort,
-  cols,
-  col,
-}: {
-  children: React.ReactNode
-  sortKey?: VulnSort
-  sort: VulnSort
-  onSort: (s: VulnSort) => void
-  cols: ColumnWidths
-  col: ColumnDef
-}) {
-  const handle = col.resizable !== false && <ResizeHandle cols={cols} col={col.key} label={col.label} />
-  // «сбросить» — в резиновой колонке, пока ширины изменены.
-  const reset = col.flex && cols.customized && (
-    <button type="button" onClick={cols.reset} className="mr-2 shrink-0 rounded font-normal tracking-normal text-text-secondary normal-case hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" title="Вернуть ширины колонок по умолчанию">сбросить</button>
-  )
-  if (!sortKey) return <div className="relative flex min-w-0 items-center"><div className="min-w-0 flex-1 px-2 py-2">{children}</div>{reset}{handle}</div>
-  const active = sort === sortKey
-  return (
-    <div role="columnheader" aria-sort={active ? 'descending' : 'none'} className="relative flex min-w-0 items-center">
-      <button
-        type="button"
-        onClick={() => onSort(sortKey)}
-        className={cn('flex min-w-0 flex-1 items-center gap-1 px-2 py-2 text-left uppercase hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring', active && 'text-text')}
-      >
-        {children}
-        {active && <ChevronDown size={11} aria-hidden />}
-      </button>
-      {reset}
-      {handle}
-    </div>
-  )
-}
-
 export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: Props) {
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 12 })
@@ -108,7 +69,7 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
       <div className="sticky top-0 z-10 grid items-center border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase" style={cols.gridStyle}>
         {cols.columns.map((c) => c.key === 'check'
           ? <div key={c.key} className="pl-3"><input type="checkbox" aria-label="Отметить все загруженные" checked={allChecked} onChange={(e) => onCheckAll?.(e.target.checked)} /></div>
-          : <Th key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort}>{c.label}</Th>)}
+          : <SortableTh key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} sort={sort} onSort={onSort}>{c.label}</SortableTh>)}
       </div>
 
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>

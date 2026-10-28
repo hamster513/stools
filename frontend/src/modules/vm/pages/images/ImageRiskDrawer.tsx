@@ -6,8 +6,10 @@ import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
-import { FactorRow } from '../vulns/RiskDrawer'
-import { TrivyBadge } from './ImageVulnsTable'
+import { Link } from '@/lib/router'
+import { FactorRow, FormulaBlock, SectionTitle } from '../vulns/RiskParts'
+import { epssPercent } from './format'
+import { TrivyBadge } from './TrivyCounts'
 
 interface Props {
   imageId: number
@@ -15,17 +17,11 @@ interface Props {
   onClose: () => void
 }
 
-/** Члены формулы — ровно два знака, как в строке `0,82 × 0,98 × 1,00 × 100 = 81`. */
-function num2(v: number): string {
-  return v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
 /** Ссылка из отчёта Trivy приходит снаружи: переходим только по http(s). */
 function safeLink(url: string | null): string | null {
   return url && /^https?:\/\//i.test(url) ? url : null
 }
 
-const SECTION = 'mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase'
 const EXTERNAL = 'inline-flex items-center gap-1 text-text underline'
 
 /**
@@ -34,7 +30,7 @@ const EXTERNAL = 'inline-flex items-center gap-1 text-text underline'
  */
 export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
   const open = item !== null
-  const card = useImageCard(imageId, item)
+  const card = useImageCard(imageId, item?.is_cve ? item : null)
   const closeRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -79,15 +75,7 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
                     <span className="text-[11px] text-text-secondary">порог {r.threshold}{r.score >= r.threshold ? ' — требует действия' : ''}</span>
                   </div>
 
-                  <div className={SECTION}>Формула</div>
-                  <code className="mb-1 block rounded border border-grid bg-app-bg px-2 py-1.5 font-mono text-[11px] text-text">
-                    {num2(r.likelihood.value)} × {num2(r.severity.value)} × {num2(r.value.value)} × 100 = {r.score}
-                  </code>
-                  <p className="mb-3 text-[11px] text-text-secondary">
-                    вероятность эксплуатации × тяжесть × ценность
-                    {/* Балл — сохранённый при последнем пересчёте, части — по текущим весам: после смены весов они расходятся до пересчёта. */}
-                    {Math.floor(r.likelihood.value * r.severity_parts.cvss.value * r.severity_parts.reach.value * r.value.value * 100 + 0.5) !== r.score && ' · части посчитаны по текущим весам, балл — по последнему пересчёту'}
-                  </p>
+                  <FormulaBlock r={r} valueLabel="ценность" />
                   <table className="mb-2 w-full">
                     <tbody>
                       <FactorRow label="Вероятность эксплуатации" f={r.likelihood} total />
@@ -104,6 +92,12 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
                   <p className="mb-4 rounded border border-grid bg-app-bg px-3 py-2 text-[11px] text-text-secondary">
                     Образ: ценность одинаковая для всех образов, доступ из интернета не учитывается.
                   </p>
+                  {/* Без каталога «нет в KEV» не факт: эксплуатируемая CVE считается только по EPSS и эксплойтам. */}
+                  {r.likelihood_parts.kev.substituted && (
+                    <p className="mb-4 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-[11px] text-text-secondary">
+                      Справочник CISA KEV не загружен — факт эксплуатации не учтён. <Link to="/settings/vm#references" onNavigate={onClose} className="text-text underline">Загрузить справочники</Link>.
+                    </p>
+                  )}
                 </>
               )}
               {item.is_cve && d && !r && (
@@ -117,7 +111,7 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
                 </p>
               )}
 
-              <div className={SECTION}>Trivy</div>
+              <SectionTitle>Trivy</SectionTitle>
               <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-text-secondary">
                 <dt>Оценка</dt><dd><TrivyBadge severity={item.trivy_severity} /></dd>
                 <dt>CVSS</dt><dd className="font-mono text-text">{item.trivy_cvss ?? '—'}</dd>
@@ -133,18 +127,18 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
               </dl>
               {item.description && (
                 <>
-                  <div className={SECTION}>Описание</div>
+                  <SectionTitle>Описание</SectionTitle>
                   <p className="mb-3 leading-relaxed text-text">{item.description}</p>
                 </>
               )}
 
               {item.is_cve && d?.factors && (
                 <>
-                  <div className={SECTION}>CVE</div>
+                  <SectionTitle>CVE</SectionTitle>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-text-secondary">
                     <dt>CVSS</dt>
                     <dd className="font-mono text-text">{item.cvss ?? '—'} {item.cvss_source && <span className="text-[10px] text-text-secondary">{CVSS_SOURCE_LABELS[item.cvss_source]}</span>}</dd>
-                    <dt>EPSS</dt><dd className="font-mono text-text">{item.epss === null ? '—' : item.epss.toFixed(4)}</dd>
+                    <dt>EPSS</dt><dd className="font-mono text-text">{epssPercent(item.epss)}</dd>
                     <dt>CISA KEV</dt><dd className={item.kev ? 'text-risk-critical' : 'text-text'}>{item.kev ? 'в каталоге' : 'нет'}</dd>
                     {d.nvd_url && (
                       <>
