@@ -167,6 +167,25 @@ def firewall_to_json(fw: FirewallSettings) -> dict[str, Any]:
     return asdict(fw)
 
 
+def zones_from_json(text: str) -> tuple[NetworkZone, ...]:
+    """Зоны из колонки `zones_json` (форма `firewall_to_json`)."""
+    return tuple(NetworkZone(name=z["name"], kind=z["kind"], address=_address_from_dict(z["address"])) for z in json.loads(text or "[]"))
+
+
+def app_groups_from_json(text: str) -> tuple[AppGroupDefault, ...]:
+    """Группы доверия из колонки `app_groups_json` (форма `firewall_to_json`)."""
+    return tuple(
+        AppGroupDefault(name=g["name"], parent=g["parent"], depth=g["depth"], access=tuple(AccessRule(**r) for r in g["access"]))
+        for g in json.loads(text or "[]")
+    )
+
+
+def locks_from_json(text: str) -> Locks:
+    """Замки из колонки `locks_json`; нет ключа — замка нет (None)."""
+    data = json.loads(text or "{}")
+    return Locks(**{key: data.get(key) for key in ("packet", "networks", "app", "component", "hips_component")})
+
+
 @dataclass
 class PolicyObjects:
     exclusions: list[Exclusion] = field(default_factory=list)
