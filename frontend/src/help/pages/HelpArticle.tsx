@@ -2,11 +2,12 @@ import { ChevronRight } from 'lucide-react'
 import { useMe } from '@/api/auth'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
-import { atLeast, type Access, type Area } from '@/platform/access/types'
+import { atLeast, type Area } from '@/platform/access/types'
 import { findModule } from '@/platform/modules'
 import { settingsNeed } from '@/platform/settings/pages'
 import { useScrollToAnchor } from '@/platform/settings/useScrollToAnchor'
 import { LevelsBlock, WhereWho } from '../ArticleBlocks'
+import { openRule } from '../core/open.ts'
 import type { Article } from '../core/types.ts'
 import { toc } from '../index'
 import { HELP_SAFE } from '../layout'
@@ -16,28 +17,14 @@ const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:rin
 
 const GROUP_TITLE: Record<string, string> = Object.fromEntries(toc().map((g) => [g.key, g.title]))
 
-/** Адрес для кнопки «Открыть страницу»: первый шаблон без `:` и `*`. */
-function openTarget(article: Article): string | null {
-  return article.routes.find((r) => !r.includes(':') && !r.includes('*')) ?? null
-}
-
-/** Страница открыта пользователю по тем же правилам, что и в самом приложении (App, SettingsShell). */
-function canOpen(article: Article, route: string, access: Access): boolean {
-  if (article.group === 'module') return !!article.module && atLeast(access, article.module as Area, 'read')
-  if (article.group === 'settings') {
-    const need = settingsNeed(route.split('/')[2] ?? '')
-    return need === null || atLeast(access, need[0], need[1])
-  }
-  return false
-}
-
 /** Статья справки целиком: крошки, заголовок, «Где · Кому», уровни и текст. */
 export function HelpArticle({ article }: { article: Article }) {
   const { data: me } = useMe()
   useScrollToAnchor(true)
 
-  const route = openTarget(article)
-  const showOpen = route !== null && !!me && canOpen(article, route, me.access)
+  // Кнопка — по тем же правилам, что и сама страница (App, SettingsShell): см. core/open.ts.
+  const open = openRule(article, settingsNeed)
+  const target = open && me && (open.need === null || atLeast(me.access, open.need[0] as Area, open.need[1])) ? open.route : null
   const section = article.group === 'module' ? (findModule(article.module ?? '')?.title ?? article.module) : GROUP_TITLE[article.group]
 
   return (
@@ -56,8 +43,8 @@ export function HelpArticle({ article }: { article: Article }) {
 
       <div className={cn('mt-2 flex items-start justify-between gap-4', HELP_SAFE)}>
         <h1 className="text-xl font-semibold text-text">{article.title}</h1>
-        {showOpen && (
-          <Link to={route} className={cn('shrink-0 rounded border border-border px-3 py-1.5 text-sm text-text hover:bg-row-hover', FOCUS)}>
+        {target && (
+          <Link to={target} className={cn('shrink-0 rounded border border-border px-3 py-1.5 text-sm text-text hover:bg-row-hover', FOCUS)}>
             Открыть страницу →
           </Link>
         )}
