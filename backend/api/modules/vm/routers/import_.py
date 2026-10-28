@@ -16,6 +16,7 @@ from api.jobs import UPLOAD_INTERRUPTED
 from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.models import VmImport
 from api.modules.vm.routers.jobs import JobView
+from api.modules.vm.services.harbor_sync import SYNC_KIND
 from api.modules.vm.services.importer import run_import
 from api.modules.vm.services.jobs import (
     JobHandle,
@@ -71,6 +72,10 @@ def _reject_if_running(db: Session) -> None:
     bundle = active_job(db, ["ref_bundle"])
     if bundle is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт загрузка архива справочников (задача #{bundle.id})")
+    # Синхронизация образов пополняет ту же витрину CVE, которую импорт чистит от сирот.
+    harbor = active_job(db, [SYNC_KIND])
+    if harbor is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт синхронизация образов из Harbor (задача #{harbor.id})")
 
 
 @router.post("/vm", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)

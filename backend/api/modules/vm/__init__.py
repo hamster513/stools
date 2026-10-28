@@ -24,6 +24,9 @@ from api.modules.vm.routers import (
     zones,
 )
 from api.modules.vm.services.attack_layer import LAYER as ATTACK_LAYER
+from api.modules.vm.services.harbor_sync import SCHEDULE_KIND as HARBOR_SCHEDULE_KIND
+from api.modules.vm.services.harbor_sync import harbor_schedule_handler
+from api.platform import scheduler
 from api.platform.findings.adapters import register_adapter, register_bulk_filter, register_bulk_job
 
 router = APIRouter(prefix="/api/vm")
@@ -49,5 +52,8 @@ register_layer(ATTACK_LAYER)
 register_adapter(FINDINGS_ADAPTER)
 register_bulk_filter("vm", keys_by_filter)
 register_bulk_job("vm", start_bulk_job)
+
+# Синхронизация образов из Harbor по расписанию — общий планировщик платформы.
+scheduler.register_schedule_kind("vm", HARBOR_SCHEDULE_KIND, harbor_schedule_handler)
 
 __all__ = ["router"]

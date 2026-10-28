@@ -36,6 +36,7 @@ MODULE_ADMIN_WRITES: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in 
     r"POST /api/vm/settings/test-vm",
     r"PUT /api/vm/harbor",
     r"POST /api/vm/harbor/test",
+    r"(PUT|DELETE) /api/vm/harbor/schedule",
     r"(PUT|POST) /api/siem/mp(/test)?",
     r"(PUT|POST) /api/siem/profile(/preview)?",
     r"(POST|DELETE) /api/siem/attack/reference(/apply)?",

@@ -95,6 +95,9 @@ def test_vm_refs_missing_until_loaded(db_session: Any) -> None:
     assert {r.state for r in refs.values()} == {"missing"}
     assert {r.anchor for r in refs.values()} == {"references"}
     assert rows["import"].state == "missing" and rows["import"].kind == "snapshot"
+    harbor = rows["harbor"]
+    assert (harbor.state, harbor.kind, harbor.anchor) == ("missing", "source", "harbor")
+    assert set(rows) == {"import", "harbor", *refs}
 
 
 def test_vm_ref_loaded_is_fresh(db_session: Any) -> None:
