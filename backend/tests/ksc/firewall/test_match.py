@@ -263,12 +263,15 @@ def test_unread_mask_with_exact_address_is_yes() -> None:
 
 # --- ответный пакет ----------------------------------------------------------------------------------------------------
 
-def test_reply_packet_swaps_ports_and_direction() -> None:
-    # Исходящее соединение 50000 → 3389: ответный пакет входящий, локальные и удалённые порты меняются местами (спека §4.3).
+def test_reply_packet_flips_direction_keeps_ports() -> None:
+    # Исходящее соединение 50000 → 3389: ответный пакет входящий; порты считаются со стороны компьютера и не меняются
+    # (Ruling 6, поправка к спеке §4.3): локальный остаётся 50000, удалённый 3389.
     p = packet(outbound=True, local_port=50000, remote_port=3389)
-    r = rule(direction=0, local_ports=((3389, 3389),), remote_ports=((50000, 50000),))
+    r = rule(direction=0, local_ports=((50000, 50000),), remote_ports=((3389, 3389),))
     assert match_rule(r, p, ZONES, HOST_IP, reply=True).result is Tri.YES
     assert match_rule(r, p, ZONES, HOST_IP).result is Tri.NO
+    swapped = rule(direction=0, local_ports=((3389, 3389),), remote_ports=((50000, 50000),))
+    assert match_rule(swapped, p, ZONES, HOST_IP, reply=True).result is Tri.NO
     assert crit(rule(direction=1), p, "direction", reply=True) is Tri.NO
 
 

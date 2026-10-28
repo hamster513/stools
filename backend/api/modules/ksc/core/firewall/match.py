@@ -224,10 +224,9 @@ def _local(rule: RuleView, host_ip: str) -> Criterion:
 
 
 def match_rule(rule: RuleView, packet: Packet, zones: tuple[ZoneView, ...], host_ip: str, *, reply: bool = False) -> RuleMatch:
-    """Критерии правила для пакета стороны хоста. `reply` — ответный пакет: направление обратное, локальные и удалённые порты
-    меняются местами (спека §4.3), правила «(поток)» в нём не участвуют. Итог: NO, если есть NO; иначе MAYBE, если есть
-    MAYBE; иначе YES."""
-    local_port, remote_port = (packet.remote_port, packet.local_port) if reply else (packet.local_port, packet.remote_port)
+    """Критерии правила для пакета стороны хоста. `reply` — ответный пакет: направление обратное, правила «(поток)» в нём не
+    участвуют. Итог: NO, если есть NO; иначе MAYBE, если есть MAYBE; иначе YES.
+    Порты считаются со стороны компьютера и в ответном пакете не меняются местами (Ruling 6, поправка к спеке §4.3)."""
     ports_unread = "ports" in rule.scope.unread
     enabled = _crit("enabled", rule.enabled, "правило включено" if rule.enabled else "правило выключено")
     direction = _direction(rule, packet.outbound, reply)
@@ -236,8 +235,8 @@ def match_rule(rule: RuleView, packet: Packet, zones: tuple[ZoneView, ...], host
         direction,
         _protocol(rule, packet),
         _icmp_type(rule, packet),
-        _ports("local_ports", "лок. порт", rule.scope.local_ports, local_port, ports_unread),
-        _ports("remote_ports", "уд. порт", rule.scope.remote_ports, remote_port, ports_unread),
+        _ports("local_ports", "лок. порт", rule.scope.local_ports, packet.local_port, ports_unread),
+        _ports("remote_ports", "уд. порт", rule.scope.remote_ports, packet.remote_port, ports_unread),
         _remote(rule, packet, zones),
         _local(rule, host_ip),
     )
