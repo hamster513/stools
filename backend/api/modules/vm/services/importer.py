@@ -45,7 +45,7 @@ from api.modules.vm.services.scoring import (
     drop_orphan_cves,
     rebuild_cves,
     rebuild_hosts_value,
-    rescore_pairs,
+    rescore_all,
 )
 from api.modules.vm.services.settings import Connection, VmSettings
 
@@ -390,7 +390,7 @@ def run_import(
         rebuild_cves(db, settings.weights, new_cves, handle if new_cves else None)
         rebuild_hosts_value(db, settings.weights)
         handle.stage("scoring", message="риск пар")
-        rescore_pairs(db, settings.weights)
+        rescore_all(db, settings.weights)
         done = VmImport(
             finished_at=dt.datetime.now(dt.UTC),
             source=source,
