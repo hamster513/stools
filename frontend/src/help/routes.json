@@ -74,6 +74,8 @@
   "/toolbox/scrub/:id",
   "/toolbox/scrub/new",
   "/vm",
+  "/vm/images",
+  "/vm/images/:id",
   "/vm/jobs",
   "/vm/vulns"
 ]
