@@ -1,0 +1,237 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Container, FilterX, RefreshCw, Search, X } from 'lucide-react'
+import { ApiRequestError, buildQuery } from '@/api/client'
+import { useHarbor, useImages, useJob, useSyncHarbor } from '@/modules/vm/api/queries'
+import {
+  IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES, STAGE_LABELS, TRIVY_SEVERITY_LABELS,
+  type ImageItem, type ImageLevel, type ImageScanStatus, type ImageSort,
+} from '@/modules/vm/api/types'
+import { ExportButton } from '@/platform/filters/ExportButton'
+import { exportHref } from '@/platform/filters/exportHref'
+import { facetValues, useRememberedFacets } from '@/platform/filters/useRememberedFacets'
+import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
+import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
+import { listFrom, valueChips } from '@/platform/findings/facets'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { useCan } from '@/lib/can'
+import { cn } from '@/lib/cn'
+import { Link, useRouter, useSearchParams } from '@/lib/router'
+import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { ErrorState } from '@/components/ui/ErrorState'
+import { FullPageSpinner, Spinner } from '@/components/ui/Spinner'
+import { ImagesFacetPanel, type ImageFilters } from './images/ImagesFacetPanel'
+import { ImagesTable } from './images/ImagesTable'
+
+function isTypingTarget(el: EventTarget | null): boolean {
+  return el instanceof HTMLElement && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+}
+
+const SORTS: ImageSort[] = ['risk_desc', 'name', 'pushed_desc', 'trivy_desc']
+const DEFAULT_SORT: ImageSort = 'risk_desc'
+const TRIVY_FLAGS = ['critical', 'high'] as const
+
+/**
+ * Образы контейнеров из Harbor: список с фасетами, наибольшим риском находок,
+ * оценкой Trivy и выгрузкой. Фильтры, поиск и сортировка — в адресе: со страницы
+ * образа «назад» возвращает тот же отбор. Строка открывает страницу образа.
+ */
+export function ImagesPage() {
+  const params = useSearchParams()
+  const { search, navigate } = useRouter()
+  const [filters, setFilters] = useState<ImageFilters>(() => ({
+    project: listFrom(params, 'project'),
+    scan_status: listFrom<ImageScanStatus>(params, 'scan_status', SCAN_STATUSES),
+    level: listFrom<ImageLevel>(params, 'level', IMAGE_LEVELS),
+    trivy: listFrom(params, 'trivy', TRIVY_FLAGS),
+  }))
+  const [sort, setSort] = useState<ImageSort>(() => {
+    const s = params.get('sort') as ImageSort | null
+    return s && SORTS.includes(s) ? s : DEFAULT_SORT
+  })
+  const [searchInput, setSearchInput] = useState(() => params.get('q') ?? '')
+  const q = useDebouncedValue(searchInput, 250)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [jobId, setJobId] = useState<number | undefined>(undefined)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const filtersPanel = useFiltersPanel('vm-images')
+  const { write } = useCan()
+  const harbor = useHarbor()
+  const sync = useSyncHarbor()
+  const job = useJob(jobId)
+
+  const queryArgs = useMemo(() => ({ ...filters, q: q || undefined, sort }), [filters, q, sort])
+  const query = useImages(queryArgs)
+  const items = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data])
+  const facets = query.data?.pages[0]?.facets ?? undefined
+  const total = query.data?.pages[0]?.total ?? 0
+  // Память фасетов — на странице: панель по умолчанию закрыта и при закрытии забывала бы значения.
+  const remembered = useRememberedFacets(facets ? {
+    project: facetValues(facets.project), scan_status: facetValues(facets.scan_status),
+  } : undefined)
+
+  // Отбор — в адрес без новой записи истории; сортировка по умолчанию не пишется.
+  useEffect(() => {
+    const next = buildQuery({ ...queryArgs, sort: sort === DEFAULT_SORT ? undefined : sort })
+    if (next !== search) navigate(`/vm/images${next}`, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryArgs])
+  useEffect(() => { setSelectedIndex(0) }, [queryArgs])
+
+  const selected: ImageItem | null = items[selectedIndex] ?? null
+
+  function toggle<K extends keyof ImageFilters>(key: K, value: ImageFilters[K]) {
+    setFilters((prev) => ({ ...prev, [key]: value }))
+  }
+  function clearAll() {
+    setFilters({})
+    setSearchInput('')
+  }
+  function startSync() {
+    setJobId(undefined)
+    sync.mutate(undefined, { onSuccess: (r) => setJobId(r.job_id) })
+  }
+
+  // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
+  const chips: FilterChip[] = [
+    ...valueChips('Проект', filters.project, (p) => p, (v) => toggle('project', v)),
+    ...valueChips('Скан', filters.scan_status, (s) => SCAN_STATUS_LABELS[s], (v) => toggle('scan_status', v)),
+    ...valueChips('Риск', filters.level, (l) => IMAGE_LEVEL_LABELS[l], (v) => toggle('level', v)),
+    ...valueChips('Есть по Trivy', filters.trivy, (t) => TRIVY_SEVERITY_LABELS[t], (v) => toggle('trivy', v)),
+  ]
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        return
+      }
+      if (isTypingTarget(e.target)) return
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); return }
+      if (e.key === 'j') { e.preventDefault(); setSelectedIndex((i) => Math.min(items.length - 1, i + 1)); return }
+      if (e.key === 'k') { e.preventDefault(); setSelectedIndex((i) => Math.max(0, i - 1)); return }
+      if (e.key === 'Enter' && selected) { e.preventDefault(); navigate(`/vm/images/${selected.id}`) }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [items.length, selected, navigate])
+
+  const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== ''
+  const configured = harbor.data?.configured ?? false
+  const running = job.data?.status === 'running' ? job.data : null
+  // Между 202 и первым ответом о задаче кнопка тоже занята: второй запуск получил бы 409.
+  const syncBusy = running !== null || (jobId !== undefined && !job.data)
+  // Пустой список ждёт и подключения: от него зависит, какое пустое состояние показать.
+  const loading = query.isLoading || (items.length === 0 && harbor.isLoading)
+  const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить образы' : null
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
+        <h1 className="text-sm font-semibold text-text">Образы контейнеров</h1>
+        <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+        <ExportButton href={exportHref('/api/vm/images/export', queryArgs)} total={query.data?.pages[0]?.total} disabled={query.isLoading} />
+        <div className="relative max-w-sm flex-1">
+          <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
+          <input
+            ref={searchRef}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Образ или тег… (/)"
+            aria-label="Поиск по образу и тегу"
+            className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          />
+        </div>
+        {hasFilters && (
+          <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
+            <FilterX size={13} aria-hidden /> Сбросить
+          </button>
+        )}
+        <div className="font-mono text-xs tabular-nums text-text-secondary">
+          {query.data ? (items.length < total ? `${items.length.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}` : total.toLocaleString('ru-RU')) : '…'}
+        </div>
+        {write && configured && (
+          <Button className="ml-auto px-2 py-1 text-xs" onClick={startSync} loading={sync.isPending} disabled={syncBusy}>
+            {!sync.isPending && <RefreshCw size={13} className={syncBusy ? 'animate-spin' : undefined} aria-hidden />}
+            Синхронизировать
+          </Button>
+        )}
+        {!filtersPanel.open && <FilterChips chips={chips} />}
+      </header>
+
+      {(job.data || sync.error) && (
+        <div className="flex shrink-0 items-center gap-3 border-b border-grid bg-surface px-4 py-1.5 text-[11px] text-text-secondary" role="status">
+          {sync.error && !job.data && <span className="text-kind-1">Синхронизация не запущена: {sync.error.message}</span>}
+          {job.data && (
+            <>
+              {running && <Spinner size={12} />}
+              <span className="text-text">Синхронизация Harbor, задача #{job.data.id}:</span>
+              {(() => {
+                const j = job.data
+                const text = running
+                  ? [STAGE_LABELS[j.stage] ?? j.stage, j.message].filter(Boolean).join(' · ')
+                  : j.status === 'done' ? `готово: ${j.message}`
+                  : j.status === 'cancelled' ? `остановлена: ${j.message}`
+                  : `ошибка: ${j.error ?? j.message}`
+                return <span className={cn('min-w-0 truncate', j.status === 'failed' && 'text-kind-1')} title={text}>{text}</span>
+              })()}
+              <Link to="/vm/jobs" className="shrink-0 underline underline-offset-2 hover:text-text">Задачи</Link>
+            </>
+          )}
+          {!running && (
+            <button type="button" onClick={() => { setJobId(undefined); sync.reset() }} aria-label="Скрыть" className="ml-auto text-text-secondary hover:text-text">
+              <X size={12} aria-hidden />
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1">
+        {filtersPanel.open && <ImagesFacetPanel facets={facets} remembered={remembered} filters={filters} onToggle={toggle} total={total} />}
+        <div className="min-w-0 flex-1 bg-app-bg">
+          {loading && <FullPageSpinner />}
+          {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => query.refetch()} /></div>}
+          {!loading && !errorMessage && items.length === 0 && (
+            <div className="p-6">
+              {hasFilters ? (
+                <EmptyState icon={FilterX} title="Ничего не найдено" description="Ни один образ не подходит под фильтры. Сбросьте их или измените запрос." />
+              ) : harbor.data && !configured ? (
+                <EmptyState
+                  icon={Container}
+                  title="Подключение к Harbor не настроено"
+                  description={write
+                    ? 'Образы и отчёты Trivy приходят из реестра Harbor. Укажите адрес Harbor и учётную запись робота в настройках модуля VM.'
+                    : 'Образы и отчёты Trivy приходят из реестра Harbor. Подключение настраивает администратор модуля VM.'}
+                  action={write && (
+                    <Link to="/settings/vm#harbor" className="text-sm text-primary underline underline-offset-2 hover:text-text">Настроить</Link>
+                  )}
+                />
+              ) : (
+                <EmptyState
+                  icon={Container}
+                  title="Образов пока нет: запустите синхронизацию"
+                  description={write
+                    ? 'Подключение к Harbor настроено, но образы ещё не получены. Нажмите «Синхронизировать» — образы и отчёты Trivy придут из выбранных проектов.'
+                    : 'Подключение к Harbor настроено, но образы ещё не получены. Синхронизацию запускает пользователь с правом записи в модуле VM.'}
+                />
+              )}
+            </div>
+          )}
+          {!query.isLoading && !errorMessage && items.length > 0 && (
+            <ImagesTable
+              items={items}
+              selectedIndex={selectedIndex}
+              sort={sort}
+              onSort={setSort}
+              onSelectIndex={setSelectedIndex}
+              onOpen={(i) => navigate(`/vm/images/${items[i].id}`)}
+              onReachEnd={() => {
+                if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage()
+              }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

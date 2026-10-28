@@ -1,9 +1,19 @@
 /** Хуки TanStack Query модуля VM. Ключи запросов держим здесь же. */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
+import type { ScheduleIn, ScheduleView } from '@/platform/collector/types'
 import { FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY } from '@/platform/findings/queries'
 import type {
+  HarborUpdate,
+  HarborView,
   HostDetail,
+  ImageDetail,
+  ImageRiskCard,
+  ImagesQuery,
+  ImagesResponse,
+  ImageVulnItem,
+  ImageVulnsQuery,
+  ImageVulnsResponse,
   ImportState,
   Job,
   Overview,
@@ -17,10 +27,15 @@ import type {
 } from './types'
 
 export const VULNS_PAGE_SIZE = 200
+export const IMAGES_PAGE_SIZE = 200
 
 function invalidateData(qc: ReturnType<typeof useQueryClient>) {
   // Импорт и массовая смена меняют и статусы пар: устаревают карточки состояний.
-  for (const key of ['vm-vulns', 'vm-overview', 'vm-zones', 'vm-import', 'vm-refs', 'vm-card', 'vm-host', 'finding-state', FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY]) {
+  // Синхронизация Harbor, пересчёт и справочники меняют образы, их находки и риск.
+  for (const key of [
+    'vm-vulns', 'vm-overview', 'vm-zones', 'vm-import', 'vm-refs', 'vm-card', 'vm-host', 'finding-state', FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY,
+    'vm-images', 'vm-image', 'vm-image-vulns', 'vm-harbor',
+  ]) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -37,6 +52,108 @@ export function useVulns(query: Omit<VulnsQuery, 'limit' | 'offset'>) {
       return last.items.length > 0 && loaded < (pages[0].total ?? 0) ? loaded : undefined
     },
     placeholderData: (prev) => prev,
+  })
+}
+
+/** Следующая страница по offset: число строк — только у первой страницы. */
+function nextOffset(last: { items: unknown[] }, pages: { items: unknown[]; total: number | null }[]): number | undefined {
+  const loaded = pages.reduce((sum, page) => sum + page.items.length, 0)
+  return last.items.length > 0 && loaded < (pages[0].total ?? 0) ? loaded : undefined
+}
+
+export function useImages(query: Omit<ImagesQuery, 'limit' | 'offset'>) {
+  return useInfiniteQuery<ImagesResponse, ApiRequestError>({
+    queryKey: ['vm-images', query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/vm/images${buildQuery({ ...query, limit: IMAGES_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextOffset,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useImage(imageId: number | undefined) {
+  return useQuery<ImageDetail, ApiRequestError>({
+    queryKey: ['vm-image', imageId],
+    queryFn: () => api.get(`/api/vm/images/${imageId}`),
+    enabled: imageId !== undefined,
+  })
+}
+
+export function useImageVulns(imageId: number | undefined, query: Omit<ImageVulnsQuery, 'limit' | 'offset'>) {
+  return useInfiniteQuery<ImageVulnsResponse, ApiRequestError>({
+    queryKey: ['vm-image-vulns', imageId, query],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      api.get(`/api/vm/images/${imageId}/vulns${buildQuery({ ...query, limit: IMAGES_PAGE_SIZE, offset: pageParam as number })}`),
+    getNextPageParam: nextOffset,
+    placeholderData: (prev) => prev,
+    enabled: imageId !== undefined,
+  })
+}
+
+/**
+ * Находка образа и расчёт её риска. Находка — тройка (идентификатор, пакет, версия):
+ * один CVE бывает в нескольких пакетах, поэтому передаётся строка целиком.
+ * Ключ под `vm-image`: синхронизация и пересчёт сбрасывают и его.
+ */
+export function useImageCard(imageId: number | undefined, vuln: Pick<ImageVulnItem, 'cve_id' | 'package' | 'installed_version'> | null | undefined) {
+  return useQuery<ImageRiskCard, ApiRequestError>({
+    queryKey: ['vm-image', imageId, 'card', vuln?.cve_id, vuln?.package, vuln?.installed_version],
+    queryFn: () =>
+      api.get(`/api/vm/images/${imageId}/vulns/${encodeURIComponent(vuln?.cve_id ?? '')}${buildQuery({ package: vuln?.package ?? '', installed_version: vuln?.installed_version ?? '' })}`),
+    enabled: imageId !== undefined && !!vuln,
+  })
+}
+
+export function useHarbor() {
+  return useQuery<HarborView, ApiRequestError>({ queryKey: ['vm-harbor'], queryFn: () => api.get('/api/vm/harbor') })
+}
+
+export function useSaveHarbor() {
+  const qc = useQueryClient()
+  return useMutation<HarborView, ApiRequestError, HarborUpdate>({
+    mutationFn: (body) => api.put('/api/vm/harbor', body),
+    onSuccess: (view) => qc.setQueryData(['vm-harbor'], view),
+  })
+}
+
+/** Проверка сохранённого подключения, а не полей формы. */
+export function useTestHarbor() {
+  return useMutation<{ ok: boolean; message: string }, ApiRequestError, void>({
+    mutationFn: () => api.post('/api/vm/harbor/test'),
+  })
+}
+
+/** Синхронизация сейчас: 202 с номером задачи; за ходом следит страница через `useJob`. */
+export function useSyncHarbor() {
+  const qc = useQueryClient()
+  return useMutation<{ job_id: number }, ApiRequestError, void>({
+    mutationFn: () => api.post('/api/vm/harbor/sync'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vm-jobs'] }),
+  })
+}
+
+// Расписание — под ключом `vm-harbor`: оно же лежит в HarborView и сбрасывается вместе с ним.
+const HARBOR_SCHEDULE_KEY = ['vm-harbor', 'schedule']
+
+export function useHarborSchedule() {
+  return useQuery<ScheduleView | null, ApiRequestError>({ queryKey: HARBOR_SCHEDULE_KEY, queryFn: () => api.get('/api/vm/harbor/schedule') })
+}
+
+export function useSaveHarborSchedule() {
+  const qc = useQueryClient()
+  return useMutation<ScheduleView, ApiRequestError, ScheduleIn>({
+    mutationFn: (body) => api.put('/api/vm/harbor/schedule', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vm-harbor'] }),
+  })
+}
+
+export function useRemoveHarborSchedule() {
+  const qc = useQueryClient()
+  return useMutation<void, ApiRequestError, void>({
+    mutationFn: () => api.del('/api/vm/harbor/schedule'),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['vm-harbor'] }),
   })
 }
 
