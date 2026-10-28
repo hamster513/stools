@@ -518,7 +518,8 @@ GET  /snapshots/{id}/exclusions/{row_id}  {…элемент списка (вк�
                                         policy_hosts, policy_partial}
 GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&action=&direction=&enabled=&host_id=&limit=200&offset=0
                                         {total, items: [{id, policy_id, policy_name, profile, layer, position, name, action,
-                                                         direction, protocol, local_ports, remote_ports, addresses, enabled, key}],
+                                                         direction, protocol, local_ports, remote_ports, addresses, enabled, key,
+                                                         scope}],
                                         facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта],
                                         partial: [policy_id], undetermined: [{policy_id, policy_name, profile}] — только с host_id}
 GET  /snapshots/{id}/net-rules/{row_id}   {…элемент списка, same_in: [{row_id, policy_id, policy_name, profile, enabled}],
@@ -586,6 +587,42 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
   адреса, локальные — с префиксом «локальный: »; адрес — имя узла, иначе `octets` (4 или 16 байт) с `/маской`, иначе
   адреса из `hostNameIPs`; «адрес скрыт (сборщик до 1.3)» — `octets` скрыт старым сборщиком, «адрес не разобран» —
   другой длины.
+- `scope` правила (списка и карточки) — те же критерии структурой, для проверки пакета без разбора текста (колонка
+  `ksc_net_rule.scope_json`, `core/policy_model.Scope`); `null` — у строки структуры нет (снапшот до неё, файла выгрузки
+  для дозаполнения нет). Коды — как в выгрузке, только int (не bool), иначе `null`:
+  ```
+  {"networks": 0|1|2|null, "remote": [Address], "local": [Address], "icmp_type": int|null,
+   "direction": int|null, "protocol": int|null, "local_ports": [[begin, end]], "remote_ports": [[begin, end]],
+   "unread": ["direction"|"protocol"|"networks"|"mask"|"ports"|"icmp_type"]}
+  Address = {"host": str, "ip": str, "mask": int|null, "ips": [Address], "hidden": ""|"secret"|"unparsed"}
+  ```
+  `networks` — один код зоны (`scope.networks`), не список; `direction` — `packetDirection` (0–4, подписи как у
+  `direction`); `protocol` — `unique_id` протокола (TCP 969930675, UDP 2001472323, ICMP −1238929178, ICMPv6 −1356346777),
+  `null` — любой; `icmp_type` — только у ICMP и ICMPv6. Порты — пары в порядке выгрузки, пустой список — портов нет.
+  `Address` — заполнена одна форма: `host` (имя узла), `ip` с `mask` (из `octets`), `ips` (адреса, в которые разрешено
+  имя, по одному на запись `hostNameIPs`, у каждого `ip` или `hidden`); `hidden`: `secret` — скрыт сборщиком до 1.3,
+  `unparsed` — `octets` не разобран. `unread` — критерии, которые в выгрузке есть (не `null`), но не прочитались: код не
+  int, маска bool или не int у адреса из `octets`, пара портов не из int (или элемент не словарь, значение не список),
+  вид ICMP не int; такой критерий в структуре пуст, и пустое значение тогда значит «не прочитано», а не «любой».
+  Текстовые поля (`direction`, `protocol`, порты, `addresses`) и `key` от структуры не зависят.
+- Сетевой экран и HIPS политики или профиля — таблица `ksc_policy_firewall` (API её пока не отдаёт; читает этап движка):
+  строка на пару (политика, профиль; `""` — сама политика), у которой есть секция `cf9370d5` или флаг компонента
+  Firewall в `KLPRSS_Components` (профиль, который только выключает компонент, — строка с пустыми зонами и группами).
+  Колонки: `enabled`, `notify_only` (`firewall.*`), `hips_enabled`, `hips_notify_only` (`hips.*`), `component_enabled`,
+  `hips_component_enabled` (лист `Enabled` компонента `Firewall` и HIPS-компонента — первый из `HIPS`, `Host Intrusion
+  Prevention`), `default_app_group` (`hips.defaultAppGroupId`), `zones_json` (`firewall.availableNetworks[]`: `name`,
+  `kind` — код `type`, `address` — `Address`), `app_groups_json` (`hips.appGroups[]` без программ: `name`, `parent`,
+  `depth` — вложенность по `parent`, `access` — все `networkAccessRules` группы: `networks` −1/0/1/2, `allow`,
+  `inherited`), `locks_json` (`packet`, `networks`, `app` — замки листов `firewall.networkPacketRules`,
+  `firewall.availableNetworks`, `hips.appGroups`; `component`, `hips_component` — замки флагов компонентов). Булевы — только
+  bool, коды — только int, иначе `null`; замок `null` — признака замка нет. В выгрузках KES 11 стенда секции
+  `KLPRSS_Components` нет: флаги компонентов там `null`, состояние компонента — `enabled` / `hips_enabled`.
+- Дозаполнение: `ksc_snapshot.policy_store_version` — версия, которой записаны таблицы политик снапшота
+  (`POLICY_STORE_VERSION` в `services/policy_store.py`; 1 — `scope_json` и `ksc_policy_firewall`). Снапшот без таблиц
+  или с версией ниже текущей при первом чтении (`ensure_policy_tables`) переписывается из файла выгрузки, как при
+  пересчёте: `risks_json` исключений считается заново, id строк меняются; находки, сводка и журнал изменений не
+  трогаются. Без файла — остаётся как был (`scope: null`, строк firewall нет). Сбой перезаписи таблиц старой версии
+  откатывается и оставляет старые таблицы (чтение не падает, следующий заход попробует снова).
 - Списки-источники (`scanExclusions`, `trustedApplications`, их `*_merging_crutch`, `firewall.networkPacketRules`)
   журнал изменений как настройки не считает — их правки видны записями `exclusion` / `net_rule`. `hips.appGroups`
   остаётся настройкой: в нём же правила доступа к сети, привилегии, ресурсы и пути программ. Поэтому правка правила
