@@ -69,7 +69,7 @@ def test_scope_icmp_type_only_for_icmp_and_int() -> None:
 def test_scope_ipv6_and_host_ips() -> None:
     resolved = {"hostName": "", "hostNameIPs": [{"octets": octets("2001:db8::10"), "zoneIPv6": ""}, {"octets": octets("192.0.2.7")}],
                 "unique_id": 1253756384}
-    assert _scope(remote=[resolved]).remote == (Address(ips=("2001:db8::10", "192.0.2.7")),)
+    assert _scope(remote=[resolved]).remote == (Address(ips=(Address(ip="2001:db8::10"), Address(ip="192.0.2.7"))),)
 
 
 def test_scope_hidden_and_unparsed() -> None:
@@ -79,13 +79,37 @@ def test_scope_hidden_and_unparsed() -> None:
     assert _scope(remote=[hidden, odd, non_ascii]).remote == (Address(hidden="secret"), Address(hidden="unparsed"), Address(hidden="unparsed"))
 
 
+def _resolved(*octets_values: Any) -> dict[str, Any]:
+    return {"hostName": "", "hostNameIPs": [{"octets": value, "zoneIPv6": ""} for value in octets_values], "unique_id": 1253756384}
+
+
+def test_host_ips_hidden_kept_one_by_one() -> None:
+    [rule] = extract_kes(kes11_sections(**{PACKET: [packet_rule("Правило", action=0, direction=0, remote=[_resolved(HIDDEN, HIDDEN)])],
+                                           GROUPS: []})).net_rules
+    assert rule.scope.remote == (Address(ips=(Address(hidden="secret"), Address(hidden="secret"))),)
+    # Строка прежнего вывода: подпись на каждую запись.
+    assert rule.addresses == "адрес скрыт (сборщик до 1.3), адрес скрыт (сборщик до 1.3)"
+
+
+def test_host_ips_unparsed_keeps_export_order() -> None:
+    [rule] = extract_kes(kes11_sections(**{
+        PACKET: [packet_rule("Правило", action=0, direction=0, remote=[_resolved("AAA", octets("192.0.2.7")), _resolved(octets("192.0.2.8"), None)])],
+        GROUPS: [],
+    })).net_rules
+    assert rule.scope.remote == (
+        Address(ips=(Address(hidden="unparsed"), Address(ip="192.0.2.7"))),
+        Address(ips=(Address(ip="192.0.2.8"), Address(hidden="unparsed"))),
+    )
+    assert rule.addresses == "адрес не разобран, 192.0.2.7; 192.0.2.8, адрес не разобран"
+
+
 def test_scope_skips_empty_and_foreign_items() -> None:
     empty = {"hostName": "", "hostNameIPs": [], "unique_id": 1253756384}
     assert _scope(remote=[empty, None, 3], local=[empty]) == Scope()  # type: ignore[list-item]
 
 
 def test_scope_json_roundtrip_and_text() -> None:
-    scope = Scope(networks=1, remote=(Address(host="h", ips=("192.0.2.1",)),), local=(Address(ip="192.0.2.0", mask=24),), icmp_type=3)
+    scope = Scope(networks=1, remote=(Address(host="h", ips=(Address(ip="192.0.2.1"), Address(hidden="secret"))),), local=(Address(ip="192.0.2.0", mask=24),), icmp_type=3)
     assert scope_from_json(scope_to_json(scope)) == scope
     assert scope_from_json(None) is None and scope_from_json("") is None and scope_from_json("{") is None
     assert addresses_text(scope) == "локальные сети; h; локальный: 192.0.2.0/24"
@@ -101,9 +125,13 @@ def test_scope_json_shape() -> None:
 
 def test_scope_from_json_wrong_shape_is_none() -> None:
     for text in ("[]", "3", "null", '{"remote": 5}', '{"remote": [3]}', '{"networks": "x"}', '{"remote": [{"ips": 7}]}', '{"icmp_type": true}',
-                 '{"remote": [{"mask": true}]}'):
+                 '{"remote": [{"mask": true}]}',
+                 '{"remote": [{"ips": ["192.0.2.1"]}]}', '{"remote": [{"ips": [{"ips": 3}]}]}'):
         assert scope_from_json(text) is None, text
     assert scope_from_json("{}") == Scope()
+    assert scope_from_json("[" * 100000) is None  # слишком глубокая вложенность
+    nested = Scope(remote=(Address(ips=(Address(ip="192.0.2.1"), Address(hidden="unparsed"))),))
+    assert scope_from_json(scope_to_json(nested)) == nested
 
 
 def test_scope_is_not_part_of_net_rule_key() -> None:

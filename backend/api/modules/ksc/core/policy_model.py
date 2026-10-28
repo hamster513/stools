@@ -43,8 +43,8 @@ class Address:
     ip: str = ""
     #: Длина маски; только int, не bool.
     mask: int | None = None
-    #: Адреса, в которые разрешено имя (`hostNameIPs`), канонические.
-    ips: tuple[str, ...] = ()
+    #: Адреса, в которые разрешено имя (`hostNameIPs`), по одному в порядке выгрузки: у каждого заполнен `ip` или `hidden`.
+    ips: tuple[Address, ...] = ()
     #: "secret" — адрес скрыт сборщиком до 1.3; "unparsed" — `octets` не разобран; "" — адрес разобран.
     hidden: str = ""
 
@@ -127,9 +127,7 @@ def _address_from_dict(item: Any) -> Address:
     host, ip, hidden, mask, ips = item.get("host", ""), item.get("ip", ""), item.get("hidden", ""), item.get("mask"), item.get("ips", [])
     if not all(isinstance(v, str) for v in (host, ip, hidden)) or not (mask is None or _is_int(mask)):
         raise TypeError("поле адреса неверного типа")
-    if not isinstance(ips, list) or not all(isinstance(v, str) for v in ips):
-        raise TypeError("ips не список строк")
-    return Address(host=host, ip=ip, mask=mask, ips=tuple(ips), hidden=hidden)
+    return Address(host=host, ip=ip, mask=mask, ips=_addresses_from_list(ips), hidden=hidden)
 
 
 def _addresses_from_list(value: Any) -> tuple[Address, ...]:
@@ -151,7 +149,7 @@ def scope_from_json(text: str | None) -> Scope | None:
             return None
         return Scope(networks=networks, remote=_addresses_from_list(data.get("remote", [])),
                      local=_addresses_from_list(data.get("local", [])), icmp_type=icmp_type)
-    except (TypeError, ValueError):  # ValueError — битый JSON
+    except (TypeError, ValueError, RecursionError):  # ValueError — битый JSON, RecursionError — слишком глубокая вложенность
         return None
 
 

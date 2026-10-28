@@ -166,20 +166,25 @@ def _canonical(octets: Any) -> str:
     return str(ipaddress.ip_address(packed)) if len(packed) in (4, 16) else ""
 
 
+def _octets_address(octets: Any, mask: Any = None) -> Address:
+    """Адрес из `octets`: скрытый сборщиком, не разобранный или канонический с маской (только int, не bool)."""
+    if octets == HIDDEN:
+        return Address(hidden="secret")
+    ip = _canonical(octets)
+    if not ip:
+        return Address(hidden="unparsed")
+    return Address(ip=ip, mask=mask if isinstance(mask, int) and not isinstance(mask, bool) else None)
+
+
 def _address(item: dict[str, Any]) -> Address | None:
-    """Имя узла, иначе адрес из `octets` с маской, иначе адреса, в которые разрешено имя (`hostNameIPs`); пустой — None."""
+    """Имя узла, иначе адрес из `octets` с маской, иначе адреса, в которые разрешено имя (`hostNameIPs`, по одному, в порядке
+    выгрузки); пустой — None."""
     if host := _text(item.get("hostName")):
         return Address(host=host)
     if "octets" in item:
-        if item["octets"] == HIDDEN:
-            return Address(hidden="secret")
-        ip = _canonical(item["octets"])
-        mask = item.get("mask")
-        return Address(ip=ip, mask=mask if isinstance(mask, int) and not isinstance(mask, bool) else None) if ip else Address(hidden="unparsed")
-    entries = [ip.get("octets") for ip in _items(item.get("hostNameIPs"))]
-    ips = tuple(c for c in map(_canonical, entries) if c)
-    hidden = "secret" if HIDDEN in entries else "unparsed" if len(ips) < len(entries) else ""
-    return Address(ips=ips, hidden=hidden) if entries else None
+        return _octets_address(item["octets"], item.get("mask"))
+    ips = tuple(_octets_address(ip.get("octets")) for ip in _items(item.get("hostNameIPs")))
+    return Address(ips=ips) if ips else None
 
 
 def _icmp_type(proto: dict[str, Any], label: str) -> int | None:
@@ -205,10 +210,9 @@ def _address_text(a: Address) -> str:
         return a.host
     if a.ip:
         return f"{a.ip}/{a.mask}" if a.mask is not None else a.ip
-    parts = list(a.ips)
     if a.hidden:
-        parts.append("адрес скрыт (сборщик до 1.3)" if a.hidden == "secret" else "адрес не разобран")
-    return ", ".join(parts)
+        return "адрес скрыт (сборщик до 1.3)" if a.hidden == "secret" else "адрес не разобран"
+    return ", ".join(map(_address_text, a.ips))
 
 
 def addresses_text(scope: Scope) -> str:
