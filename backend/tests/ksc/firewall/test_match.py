@@ -417,3 +417,24 @@ def test_invalid_mask_is_maybe() -> None:
 def test_unread_icmp_type_with_packet_without_type_is_yes() -> None:
     r = rule(protocol=Protocol.ICMP, unread=("icmp_type",))
     assert crit(r, packet(protocol=Protocol.ICMP, icmp_type=None), "icmp_type") is Tri.YES
+
+
+# --- раунд исправлений 2: зоны со скрытым адресом (Ruling 8) -----------------------------------------------------------
+
+HIDDEN_ZONE = ZoneView("Тестовая скрытая", 2, None)
+
+
+def test_hidden_zone_turns_visible_match_into_maybe() -> None:
+    m = match_rule(rule(networks=1), packet(remote_ip="198.51.100.7"), ZONES + (HIDDEN_ZONE,), HOST_IP)
+    c = next(c for c in m.criteria if c.name == "address")
+    assert c.result is Tri.MAYBE and c.text == "есть зоны со скрытым адресом (сборщик до 1.3)"
+    assert m.result is Tri.MAYBE
+
+
+def test_zone_of_with_hidden_zones_is_undetermined() -> None:
+    assert zone_of("198.51.100.7", ZONES + (HIDDEN_ZONE,)) is None
+
+
+def test_without_hidden_zones_visible_match_stays_yes() -> None:
+    assert crit(rule(networks=1), packet(remote_ip="198.51.100.7"), "address") is Tri.YES
+    assert zone_of("198.51.100.7", ZONES) == 1

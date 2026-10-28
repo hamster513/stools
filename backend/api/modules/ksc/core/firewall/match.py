@@ -96,11 +96,16 @@ def _zone_lookup(addr: IPAddress, zones: tuple[ZoneView, ...]) -> tuple[int | No
     return (kind, "") if kind is not None else (None, "вид не прочитан")
 
 
+def _has_hidden(zones: tuple[ZoneView, ...]) -> bool:
+    """Есть зона со скрытым или неразобранным адресом: зону адреса уверенно не определить (Ruling 8)."""
+    return any(z.network is None for z in zones)
+
+
 def zone_of(ip: str, zones: tuple[ZoneView, ...]) -> int | None:
     """Код вида зоны адреса по самой узкой подходящей сети; None — адрес вне описанных сетей, зона неоднозначна, вид не
-    прочитан или строка не адрес."""
+    прочитан, есть зоны со скрытым адресом или строка не адрес."""
     addr = _ip(ip)
-    return _zone_lookup(addr, zones)[0] if addr is not None else None
+    return _zone_lookup(addr, zones)[0] if addr is not None and not _has_hidden(zones) else None
 
 
 def _direction(rule: RuleView, outbound: bool, reply: bool) -> Criterion:
@@ -208,7 +213,8 @@ def _address(name: str, a: Address, ip: str | None, host: str, what: str) -> Cri
 
 def _zone(code: int, ip: str | None, zones: tuple[ZoneView, ...]) -> Criterion:
     """Адрес в зоне правила: зона адреса — как у `zone_of` (самая узкая сеть); неизвестная, неоднозначная или без вида — MAYBE.
-    Несовпадение становится MAYBE, если есть зона со скрытой сетью вида правила или без вида."""
+    Зоны со скрытой сетью (Ruling 8): совпадение по видимым сетям — MAYBE; несовпадение — MAYBE, если скрытая зона вида
+    правила или без вида."""
     name, label = "address", _NETWORKS.get(code, f"зона {code}")
     if ip is None:
         return Criterion(name, Tri.MAYBE, "адрес назначения не задан")
@@ -219,6 +225,8 @@ def _zone(code: int, ip: str | None, zones: tuple[ZoneView, ...]) -> Criterion:
     if kind is None:
         return Criterion(name, Tri.MAYBE, f"зона адреса {ip} {reason}")
     if kind == code:
+        if _has_hidden(zones):
+            return Criterion(name, Tri.MAYBE, "есть зоны со скрытым адресом (сборщик до 1.3)")
         return Criterion(name, Tri.YES, f"адрес {ip} в зоне «{label}»")
     if any(z.network is None and z.kind in (code, None) for z in zones):
         return Criterion(name, Tri.MAYBE, f"зона адреса {ip} неизвестна: есть скрытая сеть")
