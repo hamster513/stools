@@ -18,8 +18,9 @@ function withoutCodeBlocks(body: string): string {
 /**
  * @param articles все статьи
  * @param routes инвентарь адресов приложения (routes.json); пустой — проверка покрытия пропускается
+ * @param knownModules допустимые значения `module` у статей модулей и настроек: доступные модули и `platform`
  */
-export function validate(articles: Article[], routes: string[]): string[] {
+export function validate(articles: Article[], routes: string[], knownModules: string[]): string[] {
   const msgs: string[] = []
   const slugOwner = new Map<string, string>()
   const routeOwner = new Map<string, { file: string; index: number; route: string }>()
@@ -36,6 +37,8 @@ export function validate(articles: Article[], routes: string[]): string[] {
     if (!a.title?.trim()) err('не заполнено поле title')
     if (!a.group) err('не заполнено поле group')
     if (pageGroup) {
+      if (!a.module?.trim()) err('не заполнено поле module')
+      else if (!knownModules.includes(a.module)) err(`неизвестный модуль «${a.module}» в поле module (допустимы: ${knownModules.join(', ')})`)
       if (a.routes.length === 0) err('не заполнено поле routes')
       if (!a.where?.trim()) err('не заполнено поле where')
       if (!a.levels || !Object.values(a.levels).some((v) => v?.trim())) err('не заполнено поле levels')
