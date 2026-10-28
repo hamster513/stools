@@ -233,7 +233,8 @@ class KscNetRule(Base):
 
 
 class KscPolicyFirewall(Base):
-    """Сетевой экран и HIPS политики или профиля (core/policy_model.FirewallSettings): строка есть, только если секция HIPS есть."""
+    """Сетевой экран и HIPS политики или профиля (core/policy_model.FirewallSettings): строка есть, только если есть секция HIPS
+    или флаг компонента Firewall (`KLPRSS_Components`)."""
 
     __tablename__ = "ksc_policy_firewall"
 
@@ -247,6 +248,11 @@ class KscPolicyFirewall(Base):
     notify_only: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     hips_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     hips_notify_only: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: Флаги компонентов Firewall и HIPS из `KLPRSS_Components`; None — флага нет или значение не bool.
+    component_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    hips_component_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: Группа доверия по умолчанию (`hips.defaultAppGroupId`); None — нет или не int.
+    default_app_group: Mapped[int | None] = mapped_column(Integer, nullable=True)
     zones_json: Mapped[str] = mapped_column(Text, default="[]")
     app_groups_json: Mapped[str] = mapped_column(Text, default="[]")
     locks_json: Mapped[str] = mapped_column(Text, default="{}")

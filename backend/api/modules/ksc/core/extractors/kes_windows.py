@@ -8,8 +8,9 @@
 `firewall.networkPacketRules`, `app` — по всем группам доверия (сначала правила группы, затем её программ). `log` и
 `networkAdapters` пакетных правил в записи не переносятся.
 
-Кроме записей — `firewall`: состояние сетевого экрана и HIPS, зоны сетей, группы доверия (без программ) и замки листов;
-значения из «голых» секций, замки — из сырых (`find_setting`). Булевы — только `bool`, коды — только int (не bool), иначе None.
+Кроме записей — `firewall`: состояние сетевого экрана и HIPS, зоны сетей, группы доверия (без программ), группа по умолчанию,
+флаги компонентов Firewall и HIPS (`KLPRSS_Components`) и замки листов; значения из «голых» секций, замки и флаги компонентов —
+из сырых (`find_setting`). Булевы — только `bool`, коды — только int (не bool), иначе None.
 """
 from __future__ import annotations
 
@@ -17,7 +18,12 @@ import base64
 import ipaddress
 from typing import Any
 
-from api.modules.ksc.core.policy_contents import bare_sections, find_setting, truncate_value
+from api.modules.ksc.core.policy_contents import (
+    Setting,
+    bare_sections,
+    find_setting,
+    truncate_value,
+)
 from api.modules.ksc.core.policy_model import (
     OBJECT,
     AccessRule,
@@ -35,6 +41,12 @@ from api.modules.ksc.core.secrets import HIDDEN
 
 TRUSTED_ZONE = "852d0287"
 HIPS = "cf9370d5"
+#: Секция флагов компонентов: компонент → лист `Enabled` (форма синтетики сборщика; в выгрузках KES 11 стенда этой секции нет).
+COMPONENTS = "KLPRSS_Components"
+#: Ключ компонента Firewall в `COMPONENTS`.
+FIREWALL_COMPONENT = "Firewall"
+#: Ключи HIPS-компонента в `COMPONENTS`: берётся первый найденный.
+HIPS_COMPONENT_KEYS = ("HIPS", "Host Intrusion Prevention")
 _ZONE = "scanExclusionsAndTrustedZone"
 
 #: Листья (`flat_settings`), из которых получены записи: журнал изменений не считает их настройками. `hips.appGroups` сюда не
@@ -301,18 +313,31 @@ def _lock(sections: dict[str, Any], path: str) -> bool | None:
     return setting.locked if setting is not None else None
 
 
+def _component(sections: dict[str, Any], *keys: str) -> Setting | None:
+    """Лист `Enabled` первого найденного из компонентов `keys` в `COMPONENTS`; None — ни одного нет."""
+    return next((s for s in (find_setting(sections, COMPONENTS, f"{key}.Enabled") for key in keys) if s is not None), None)
+
+
 def _firewall(sections: dict[str, Any], bare: dict[str, Any]) -> FirewallSettings | None:
-    """Сетевой экран и HIPS; None — секции HIPS нет (или она не словарь)."""
-    hips = bare.get(HIPS)
+    """Сетевой экран и HIPS; None — нет ни секции HIPS (словарём), ни флага компонента Firewall. Профиль, который только
+    выключает компонент, получает настройки с пустыми зонами и группами."""
+    hips, component = bare.get(HIPS), _component(sections, FIREWALL_COMPONENT)
     if not isinstance(hips, dict):
-        return None
+        if component is None:
+            return None
+        hips = {}
+    hips_component = _component(sections, *HIPS_COMPONENT_KEYS)
     return FirewallSettings(
         enabled=_bool(_at(hips, "firewall.enabled")), notify_only=_bool(_at(hips, "firewall.notifyOnly")),
         hips_enabled=_bool(_at(hips, "hips.enabled")), hips_notify_only=_bool(_at(hips, "hips.notifyOnly")),
         zones=tuple(map(_zone, _items(_at(hips, "firewall.availableNetworks")))),
         app_groups=_app_groups(_items(_at(hips, "hips.appGroups"))),
         locks=Locks(packet=_lock(sections, "firewall.networkPacketRules"), networks=_lock(sections, "firewall.availableNetworks"),
-                    app=_lock(sections, "hips.appGroups")),
+                    app=_lock(sections, "hips.appGroups"), component=component.locked if component else None,
+                    hips_component=hips_component.locked if hips_component else None),
+        component_enabled=_bool(component.value) if component else None,
+        hips_component_enabled=_bool(hips_component.value) if hips_component else None,
+        default_app_group=_int(_at(hips, "hips.defaultAppGroupId")),
     )
 
 

@@ -111,18 +111,22 @@ class AppGroupDefault:
 
 @dataclass(frozen=True)
 class Locks:
-    """Замки листов секции HIPS (`KLPRSS_Mnd`); None — листа или признака замка нет."""
+    """Замки листов секции HIPS и флагов компонентов (`KLPRSS_Mnd`); None — листа или признака замка нет."""
     #: `firewall.networkPacketRules`.
     packet: bool | None
     #: `firewall.availableNetworks`.
     networks: bool | None
     #: `hips.appGroups`.
     app: bool | None
+    #: Лист `Enabled` компонента Firewall в `KLPRSS_Components`.
+    component: bool | None = None
+    #: Лист `Enabled` HIPS-компонента в `KLPRSS_Components`.
+    hips_component: bool | None = None
 
 
 @dataclass(frozen=True)
 class FirewallSettings:
-    """Состояние сетевого экрана и HIPS, зоны сетей, группы доверия и замки листов политики или профиля."""
+    """Состояние сетевого экрана и HIPS, зоны сетей, группы доверия, флаги компонентов и замки листов политики или профиля."""
     enabled: bool | None
     notify_only: bool | None
     hips_enabled: bool | None
@@ -130,6 +134,12 @@ class FirewallSettings:
     zones: tuple[NetworkZone, ...]
     app_groups: tuple[AppGroupDefault, ...]
     locks: Locks
+    #: Флаг компонента Firewall (`KLPRSS_Components`); None — флага нет или он не bool.
+    component_enabled: bool | None = None
+    #: Флаг HIPS-компонента (`KLPRSS_Components`); None — флага нет или он не bool.
+    hips_component_enabled: bool | None = None
+    #: Группа доверия по умолчанию (`hips.defaultAppGroupId`) как в выгрузке; только int, не bool.
+    default_app_group: int | None = None
 
 
 def firewall_to_json(fw: FirewallSettings) -> dict[str, Any]:
@@ -143,7 +153,7 @@ class PolicyObjects:
     net_rules: list[NetRule] = field(default_factory=list)
     #: (секция, путь) настроек, из которых получены записи: журнал изменений их как `setting` не считает.
     consumed: set[tuple[str, str]] = field(default_factory=set)
-    #: Сетевой экран и HIPS; None — секции HIPS в политике или профиле нет. У результата `policy_index.policy_objects`
+    #: Сетевой экран и HIPS; None — в политике или профиле нет ни секции HIPS, ни флага компонента Firewall. У результата `policy_index.policy_objects`
     #: всегда None — там данные в `firewall_by_profile`.
     firewall: FirewallSettings | None = None
     #: Заполняет `policy_index.policy_objects`: профиль ("" — сама политика) → `firewall` его секций, без тех, где он None.

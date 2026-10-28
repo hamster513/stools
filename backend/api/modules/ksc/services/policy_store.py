@@ -115,7 +115,8 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex, cfg: Ks
             data = firewall_to_json(fw)
             firewalls.append({
                 "snapshot_id": sid, "policy_id": p.policy_id, "profile": profile[:255], "enabled": fw.enabled, "notify_only": fw.notify_only,
-                "hips_enabled": fw.hips_enabled, "hips_notify_only": fw.hips_notify_only,
+                "hips_enabled": fw.hips_enabled, "hips_notify_only": fw.hips_notify_only, "component_enabled": fw.component_enabled,
+                "hips_component_enabled": fw.hips_component_enabled, "default_app_group": fw.default_app_group,
                 "zones_json": json.dumps(data["zones"], ensure_ascii=False), "app_groups_json": json.dumps(data["app_groups"], ensure_ascii=False),
                 "locks_json": json.dumps(data["locks"], ensure_ascii=False),
             })

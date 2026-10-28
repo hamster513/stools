@@ -20,6 +20,9 @@ from tests.ksc.test_api import upload
 from tests.ksc.test_firewall_settings import _APP, _NETWORKS, _PACKET, _set_lock
 
 #: Выгрузка, где у политики 1 нет ни одного сетевого правила: пакетных нет, у групп доверия нет программ; секция HIPS есть.
+#: Строки firewall выгрузки `kes11_export()`: секция HIPS — у политики 1; у профиля «Ноутбуки» и политики 3 (синтетика) — только флаг
+#: компонента Firewall в `KLPRSS_Components`; у профиля «Выключенный» — ничего.
+PAIRS = [(1, ""), (1, "Ноутбуки"), (3, "")]
 NO_RULES = {"cf9370d5/firewall.networkPacketRules": [], "cf9370d5/hips.appGroups": [{**g, "applications": []} for g in _APP_GROUPS]}
 
 
@@ -73,17 +76,24 @@ def test_upload_writes_scope_and_firewall(auth_client: TestClient, db_session: S
     assert scope_from_json(scopes[0]) == Scope(networks=2)
     assert _version(db_session, sid) == POLICY_STORE_VERSION
     fw = _firewall(db_session, sid)
-    # Секция HIPS есть только у самой политики 1: у профилей «Ноутбуки» и «Выключенный» её нет, у политики 3 — тоже.
-    assert [(f.policy_id, f.profile) for f in fw] == [(1, "")]
+    assert [(f.policy_id, f.profile) for f in fw] == PAIRS
     objs = extract("KES", kes11_sections())
     assert objs is not None and objs.firewall is not None
     expected = json.loads(json.dumps(firewall_to_json(objs.firewall)))
     row = fw[0]
     assert (row.enabled, row.notify_only, row.hips_enabled, row.hips_notify_only) == (
         expected["enabled"], expected["notify_only"], expected["hips_enabled"], expected["hips_notify_only"])
+    assert (row.component_enabled, row.hips_component_enabled, row.default_app_group) == (None, None, 1) == (
+        expected["component_enabled"], expected["hips_component_enabled"], expected["default_app_group"])
     assert json.loads(row.zones_json) == expected["zones"] and expected["zones"]
     assert json.loads(row.app_groups_json) == expected["app_groups"] and expected["app_groups"]
-    assert json.loads(row.locks_json) == expected["locks"] == {"packet": True, "networks": True, "app": True}
+    assert json.loads(row.locks_json) == expected["locks"] == {"packet": True, "networks": True, "app": True, "component": None,
+                                                              "hips_component": None}
+    # Только флаг компонента: «Ноутбуки» выключает Firewall под замком, политика 3 включает без замка; секции HIPS нет.
+    for f, enabled, locked in ((fw[1], False, True), (fw[2], True, False)):
+        assert (f.component_enabled, f.hips_component_enabled, f.default_app_group, f.enabled, f.hips_enabled) == (enabled, None, None, None, None)
+        assert (f.zones_json, f.app_groups_json) == ("[]", "[]")
+        assert json.loads(f.locks_json) == {"packet": None, "networks": None, "app": None, "component": locked, "hips_component": None}
 
 
 def test_upload_writes_profile_firewall(auth_client: TestClient, db_session: Session) -> None:
@@ -94,10 +104,10 @@ def test_upload_writes_profile_firewall(auth_client: TestClient, db_session: Ses
     objs, _ = policy_objects(load_export(json.dumps(raw).encode()), "1")
     assert list(objs.firewall_by_profile) == ["", "Ноутбуки"]
     fw = _firewall(db_session, sid)
-    assert [(f.policy_id, f.profile) for f in fw] == [(1, ""), (1, "Ноутбуки")]
-    policy, profile = (json.loads(f.locks_json) for f in fw)
-    assert policy == {"packet": True, "networks": True, "app": True}
-    assert profile == {"packet": None, "networks": None, "app": None}
+    assert [(f.policy_id, f.profile) for f in fw] == PAIRS
+    policy, profile = (json.loads(f.locks_json) for f in fw[:2])
+    assert policy == {"packet": True, "networks": True, "app": True, "component": None, "hips_component": None}
+    assert profile == {"packet": None, "networks": None, "app": None, "component": None, "hips_component": None}
     assert (fw[1].zones_json, fw[1].app_groups_json) == (fw[0].zones_json, fw[0].app_groups_json)
 
 
@@ -116,7 +126,7 @@ def test_scope_backfill_on_first_read(auth_client: TestClient, db_session: Sessi
     assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules").status_code == 200
     scopes = _scopes(db_session, sid)
     assert scopes and all(scopes)
-    assert _pairs(db_session, sid) == [(1, "")]
+    assert _pairs(db_session, sid) == PAIRS
     assert _version(db_session, sid) == POLICY_STORE_VERSION
 
 
@@ -125,7 +135,7 @@ def test_backfill_without_net_rules_writes_firewall(auth_client: TestClient, db_
     assert _scopes(db_session, sid) == []
     _forget(db_session, sid)
     assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules").status_code == 200
-    assert _pairs(db_session, sid) == [(1, "")]
+    assert _pairs(db_session, sid) == PAIRS
     assert _version(db_session, sid) == POLICY_STORE_VERSION
 
 
