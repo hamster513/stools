@@ -1,0 +1,86 @@
+[
+    {
+        "accessories": null,
+        "addition_links": {
+            "build_history": {
+                "absolute": false,
+                "href": "/api/v2.0/projects/library/repositories/debian/artifacts/sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65/additions/build_history"
+            },
+            "sboms": {
+                "absolute": false,
+                "href": "/api/v2.0/projects/library/repositories/debian/artifacts//additions/sbom"
+            },
+            "vulnerabilities": {
+                "absolute": false,
+                "href": "/api/v2.0/projects/library/repositories/debian/artifacts/sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65/additions/vulnerabilities"
+            }
+        },
+        "artifact_type": "application/vnd.docker.container.image.v1+json",
+        "digest": "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65",
+        "extra_attrs": {
+            "architecture": "arm64",
+            "author": "",
+            "config": {
+                "Cmd": [
+                    "bash"
+                ],
+                "Env": [
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                ]
+            },
+            "created": "2026-10-27T00:00:00Z",
+            "os": "linux"
+        },
+        "icon": "sha256:0048162a053eef4d4ce3fe7518615bef084403614f8bca43b40ae2e762e11e06",
+        "id": 4,
+        "labels": null,
+        "manifest_media_type": "application/vnd.docker.distribution.manifest.v2+json",
+        "media_type": "application/vnd.docker.container.image.v1+json",
+        "project_id": 1,
+        "pull_time": "2026-10-28T10:36:37.871Z",
+        "push_time": "2026-10-28T10:36:35.781Z",
+        "references": null,
+        "repository_id": 4,
+        "repository_name": "library/debian",
+        "scan_overview": {
+            "application/vnd.security.vulnerability.report; version=1.1": {
+                "complete_percent": 100,
+                "duration": 3,
+                "end_time": "2026-10-28T10:36:39.000Z",
+                "report_id": "b0216488-ffa5-4eae-a02b-f410975e87e0",
+                "scan_status": "Success",
+                "scanner": {
+                    "name": "Trivy",
+                    "vendor": "Aqua Security",
+                    "version": "v0.75.0"
+                },
+                "severity": "Critical",
+                "start_time": "2026-10-28T10:36:36.000Z",
+                "summary": {
+                    "fixable": 0,
+                    "summary": {
+                        "Critical": 1,
+                        "High": 56,
+                        "Low": 83,
+                        "Medium": 87,
+                        "Unknown": 1
+                    },
+                    "total": 228
+                }
+            }
+        },
+        "size": 29242243,
+        "tags": [
+            {
+                "artifact_id": 4,
+                "id": 4,
+                "immutable": false,
+                "name": "bookworm-slim",
+                "pull_time": "0001-01-01T00:00:00.000Z",
+                "push_time": "2026-10-28T10:36:35.810Z",
+                "repository_id": 4
+            }
+        ],
+        "type": "IMAGE"
+    }
+]

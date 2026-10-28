@@ -1,0 +1,191 @@
+{
+ "application/vnd.security.vulnerability.report; version=1.1": {
+  "generated_at": "2026-10-28T10:36:40.362616169Z",
+  "scanner": {
+   "name": "Trivy",
+   "vendor": "Aqua Security",
+   "version": "v0.75.0"
+  },
+  "severity": "High",
+  "vulnerabilities": [
+   {
+    "id": "CVE-2026-114437",
+    "package": "github.com/go-chi/chi/v5",
+    "version": "v5.3.2",
+    "fix_version": "5.4.0",
+    "severity": "Medium",
+    "status": "fixed",
+    "description": "In the Golang Chi web framework, the ClientIPFromXFF middleware skips any X-Forwarded-For entry in a configured trusted CIDR but never verifies that the direct TCP peer in http.Request.RemoteAddr belongs to that CIDR. A client that can reach the Go server directly can therefore append a trusted-looking proxy address and choose the client IP returned by middleware.GetClientIP.\n\nThis issue affects chi before 5.4.0.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-114437"
+    ],
+    "artifact_digests": [
+     "sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b"
+    ],
+    "preferred_cvss": {
+     "score_v3": 4.8,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-348"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "ghsa": {
+       "V3Score": 4.8,
+       "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+      },
+      "redhat": {
+       "V3Score": 4.8,
+       "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-116587",
+    "package": "github.com/go-jose/go-jose/v3",
+    "version": "v3.0.5",
+    "fix_version": "",
+    "severity": "High",
+    "status": "affected",
+    "description": "Go JOSE provides an implementation of the Javascript Object Signing and Encryption set of standards in Go, including support for JSON Web Encryption (JWE), JSON Web Signature (JWS), and JSON Web Token (JWT) standards. Prior to 4.1.6, go-jose parses attacker-controlled RSA modulus and prime values from JWKs without enforcing size and consistency bounds before passing them to crypto/rsa.PrivateKey.Validate. On Go 1.24 and later, crafted large or degenerate RSA parameters can make that validation consume cubic CPU time, allowing remote denial of service in applications that parse JWKs from untrusted sources. This issue is fixed in version 4.1.6.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-116587"
+    ],
+    "artifact_digests": [
+     "sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7.5,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-407",
+     "CWE-770"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "ghsa": {
+       "V3Score": 7.5,
+       "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-116587",
+    "package": "github.com/go-jose/go-jose/v4",
+    "version": "v4.1.5",
+    "fix_version": "4.1.6",
+    "severity": "High",
+    "status": "fixed",
+    "description": "Go JOSE provides an implementation of the Javascript Object Signing and Encryption set of standards in Go, including support for JSON Web Encryption (JWE), JSON Web Signature (JWS), and JSON Web Token (JWT) standards. Prior to 4.1.6, go-jose parses attacker-controlled RSA modulus and prime values from JWKs without enforcing size and consistency bounds before passing them to crypto/rsa.PrivateKey.Validate. On Go 1.24 and later, crafted large or degenerate RSA parameters can make that validation consume cubic CPU time, allowing remote denial of service in applications that parse JWKs from untrusted sources. This issue is fixed in version 4.1.6.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-116587"
+    ],
+    "artifact_digests": [
+     "sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7.5,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-407",
+     "CWE-770"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "ghsa": {
+       "V3Score": 7.5,
+       "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "GO-2026-5932",
+    "package": "golang.org/x/crypto",
+    "version": "v0.57.0",
+    "fix_version": "",
+    "severity": "Unknown",
+    "status": "affected",
+    "description": "The golang.org/x/crypto/openpgp package is unsafe by design, has numerous known security issues, is not maintained, and should not be used.\n\nIf you are required to interoperate with OpenPGP systems and need a maintained package, consider github.com/ProtonMail/go-crypto/openpgp which is a maintained fork that aims to be a drop-in replacement for this package.",
+    "links": [
+     "https://go.dev/issue/44226",
+     "https://pkg.go.dev/vuln/GO-2026-5932"
+    ],
+    "artifact_digests": [
+     "sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b"
+    ],
+    "preferred_cvss": {
+     "score_v3": null,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     ""
+    ],
+    "vendor_attributes": null
+   },
+   {
+    "id": "CVE-2026-78661",
+    "package": "golang.org/x/net",
+    "version": "v0.60.0",
+    "fix_version": "0.62.0",
+    "severity": "Unknown",
+    "status": "fixed",
+    "description": "When coalescing adjacent text nodes in addText and fosterParent, appending to an existing TextNode's Data via string concatenation (n.Data += text) reallocated and copied the accumulated string on every token. Inputs containing many short text runs separated by ignored end tags (such as \"a</x>\") caused O(n^2) allocations and byte copies. Accumulate coalesced text in per-node byte slices during parsing and materialize Data strings once at the end of parse.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-78661"
+    ],
+    "artifact_digests": [
+     "sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b"
+    ],
+    "preferred_cvss": {
+     "score_v3": null,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     ""
+    ],
+    "vendor_attributes": null
+   },
+   {
+    "id": "CVE-2026-97045",
+    "package": "golang.org/x/net",
+    "version": "v0.60.0",
+    "fix_version": "0.62.0",
+    "severity": "Unknown",
+    "status": "fixed",
+    "description": "In childTextNodesAreLiteral, walking up the tree previously stopped at the nearest foreign ancestor once an HTML integration point was found. However, that integration point may itself be a descendant of an element that was foster-parented into a foreign namespace (such as <mglyph> or <malignmark> fostered under <mtext>), causing a parser to resolve the subtree in a different foreign namespace upon re-parsing the rendered output. Continue walking the full ancestor chain and verify that every transition from a non-empty namespace occurs at an HTML integration point before emitting literal text.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-97045"
+    ],
+    "artifact_digests": [
+     "sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b"
+    ],
+    "preferred_cvss": {
+     "score_v3": null,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     ""
+    ],
+    "vendor_attributes": null
+   }
+  ]
+ }
+}

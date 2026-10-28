@@ -1,0 +1,867 @@
+{
+ "application/vnd.security.vulnerability.report; version=1.1": {
+  "generated_at": "2026-10-28T10:36:38.603704085Z",
+  "scanner": {
+   "name": "Trivy",
+   "vendor": "Aqua Security",
+   "version": "v0.75.0"
+  },
+  "severity": "Critical",
+  "vulnerabilities": [
+   {
+    "id": "CVE-2011-3374",
+    "package": "apt",
+    "version": "2.6.1",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "It was found that apt-key in apt, all versions, do not correctly validate gpg keys with the master keyring, leading to a potential man-in-the-middle attack.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2011-3374"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 3.7,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-347"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "nvd": {
+       "V2Score": 4.3,
+       "V2Vector": "AV:N/AC:M/Au:N/C:N/I:P/A:N",
+       "V3Score": 3.7,
+       "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+      }
+     }
+    }
+   },
+   {
+    "id": "TEMP-0841856-B18BAF",
+    "package": "bash",
+    "version": "5.2.15-2+b13",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "",
+    "links": [
+     "https://security-tracker.debian.org/tracker/TEMP-0841856-B18BAF"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": null,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     ""
+    ],
+    "vendor_attributes": null
+   },
+   {
+    "id": "CVE-2026-53613",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "High",
+    "status": "affected",
+    "description": "util-linux is a random collection of Linux utilities. In util-linux 2.17 through 2.41.6 and 2.42 through 2.42.3, and in 2.42.4 when the legacy `mount(2)` path is used without `/proc`, restricted non-r",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-53613"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-367"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 7,
+       "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-53615",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "High",
+    "status": "affected",
+    "description": "util-linux is a random collection of Linux utilities. Before util-linux 2.41.4, `parse_dos_extended()` in `libblkid/src/partitions/dos.c` computes an extended-partition start sector with 32-bit additi",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-53615"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 8,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-190"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 8,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-76642",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "High",
+    "status": "affected",
+    "description": "util-linux versions through 2.41.5 and 2.42.2 fail to check mount helper exit status before running post-mount hooks, allowing unprivileged users to execute privileged operations on pre-existing files",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-76642"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7.8,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-390"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 7.8,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-78408",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "High",
+    "status": "affected",
+    "description": "The nsenter --join-cgroup option opens the target cgroup.procs file as root and leaves that file descriptor open across later namespace and credential changes and across execve(). Because the kernel c",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-78408"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7.9,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-775"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 7.9,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:C/C:N/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-5450",
+    "package": "libc-bin",
+    "version": "2.36-9+deb12u14",
+    "fix_version": "",
+    "severity": "Medium",
+    "status": "affected",
+    "description": "Calling the scanf family of functions with a %mc (malloc'd character match) in the GNU C Library version 2.7 to version 2.43 with a format width specifier with an explicit width greater than 1024 coul",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-5450"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 5,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-122",
+     "CWE-787"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 5,
+       "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:N/I:L/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-78409",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "High",
+    "status": "affected",
+    "description": "The X-mount.subdir option uses a detached-tree fast path on Linux 6.15 and later and passes the configured subdirectory to open_tree() with AT_SYMLINK_NOFOLLOW. That flag does not stop intermediate sy",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-78409"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-59"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 7,
+       "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-78410",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "High",
+    "status": "affected",
+    "description": "A flaw was found in util-linux. Restricted bind mounts take the source path from fstab but do not pin that source before the privileged mount. A local unprivileged user who can replace the authorized ",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-78410"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7.8,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-367"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 7.8,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-13595",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "Medium",
+    "status": "affected",
+    "description": "A flaw was found in the libblkid library of util-linux. During nested partition probing, the BSD, Minix, Solaris x86, and UnixWare partition probers cache a raw pointer to a parent partition entry in ",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-13595"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 5.3,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-416"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "julia": {
+       "V3Score": 5.3,
+       "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:N/A:H"
+      },
+      "nvd": {
+       "V3Score": 5.3,
+       "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:N/A:H"
+      },
+      "redhat": {
+       "V3Score": 6.8,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-27456",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "Medium",
+    "status": "affected",
+    "description": "util-linux is a random collection of Linux utilities. Prior to version 2.41.4, a TOCTOU (Time-of-Check-Time-of-Use) vulnerability has been identified in the SUID binary /usr/bin/mount from util-linux.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-27456"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 4.7,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-59",
+     "CWE-269",
+     "CWE-367"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "julia": {
+       "V3Score": 4.7,
+       "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "redhat": {
+       "V3Score": 4.7,
+       "V3Vector": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-3184",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "Medium",
+    "status": "will_not_fix",
+    "description": "A flaw was found in util-linux. Improper hostname canonicalization in the `login(1)` utility, when invoked with the `-h` option, can modify the supplied remote hostname before setting `PAM_RHOST`. A r",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-3184"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 5.3,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-289"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "nvd": {
+       "V3Score": 5.3,
+       "V3Vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+      },
+      "redhat": {
+       "V3Score": 3.7,
+       "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2022-0563",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "A flaw was found in the util-linux chfn and chsh utilities when compiled with Readline support. The Readline library uses an \"INPUTRC\" environment variable to get a path to the library config file. Wh",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2022-0563"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 5.5,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-209"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "julia": {
+       "V3Score": 5.5,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "nvd": {
+       "V2Score": 1.9,
+       "V2Vector": "AV:L/AC:M/Au:N/C:P/I:N/A:N",
+       "V3Score": 5.5,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "redhat": {
+       "V3Score": 5.5,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2025-14104",
+    "package": "bsdutils",
+    "version": "1:2.38.1-5+deb12u3",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "A flaw was found in util-linux. This vulnerability allows a heap buffer overread when processing 256-byte usernames, specifically within the `setpwnam()` function, affecting SUID (Set User ID) login-u",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2025-14104"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 6.1,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-125"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 6.1,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2016-2781",
+    "package": "coreutils",
+    "version": "9.1-1",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "will_not_fix",
+    "description": "chroot in GNU coreutils, when used with --userspec, allows local users to escape to the parent session via a crafted TIOCSTI ioctl call, which pushes characters to the terminal's input buffer.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2016-2781"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 6.5,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-20"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "nvd": {
+       "V2Score": 2.1,
+       "V2Vector": "AV:L/AC:L/Au:N/C:N/I:P/A:N",
+       "V3Score": 6.5,
+       "V3Vector": "CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:C/C:N/I:H/A:N"
+      },
+      "redhat": {
+       "V2Score": 6.2,
+       "V2Vector": "AV:L/AC:H/Au:N/C:C/I:C/A:C",
+       "V3Score": 8.6,
+       "V3Vector": "CVSS:3.0/AV:L/AC:L/PR:N/UI:R/S:C/C:H/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2017-18018",
+    "package": "coreutils",
+    "version": "9.1-1",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "In GNU Coreutils through 8.29, chown-core.c in chown and chgrp does not prevent replacement of a plain file with a symlink during use of the POSIX \"-R -L\" options, which allows local users to modify t",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2017-18018"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 4.7,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-362"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "nvd": {
+       "V2Score": 1.9,
+       "V2Vector": "AV:L/AC:M/Au:N/C:N/I:P/A:N",
+       "V3Score": 4.7,
+       "V3Vector": "CVSS:3.0/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+      },
+      "redhat": {
+       "V3Score": 4.2,
+       "V3Vector": "CVSS:3.0/AV:L/AC:H/PR:L/UI:R/S:U/C:L/I:L/A:L"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2025-5278",
+    "package": "coreutils",
+    "version": "9.1-1",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "A flaw was found in GNU Coreutils. The sort utility's begfield() function is vulnerable to a heap buffer under-read. The program may access memory outside the allocated buffer if a user runs a crafted",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2025-5278"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 4.4,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-121"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 4.4,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:L"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-56391",
+    "package": "coreutils",
+    "version": "9.1-1",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "GNU coreutils uniq is vulnerable to an out‑of‑bounds read due to incorrect handling of multibyte input when the -w (--check-chars) option is used. The find_field() function miscalculates the byte leng",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-56391"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 6.1,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-125"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "julia": {},
+      "nvd": {
+       "V3Score": 6.1,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:H"
+      },
+      "redhat": {
+       "V3Score": 6.1,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:N/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-56392",
+    "package": "coreutils",
+    "version": "9.1-1",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "GNU coreutils unexpand is vulnerable to a heap-based buffer overflow due to an integer overflow during buffer allocation when processing large tab stop (-t) values. The multiplication used to calculat",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-56392"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 6.1,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-122"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "julia": {},
+      "nvd": {
+       "V3Score": 6.1,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:H"
+      },
+      "redhat": {
+       "V3Score": 4.4,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:L/A:L"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-102473",
+    "package": "dash",
+    "version": "0.5.12-2",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "A flaw was found in dash. When built without libc fnmatch, the internal pmatch() matcher implements * by unbounded recursion over candidate positions. A local user who can plant filenames, or otherwis",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-102473"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 5.5,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-1333"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 5.5,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-102474",
+    "package": "dash",
+    "version": "0.5.12-2",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "A flaw was found in dash. The printf builtin reserves four bytes before converting a Unicode \\u or \\U escape, but the multi-byte token can need five or six bytes. A local user who can supply such an e",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-102474"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 4,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-787"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 4,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-53910",
+    "package": "diffutils",
+    "version": "1:3.8-4",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "diff3 tool from GNU diffutils is vulnerable to a heap‑based buffer overflow due to multiple signed integer overflows in line‑mapping calculations. Incorrect arithmetic in mapping line ranges can resul",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-53910"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 5.3,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-190"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 5.3,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:L"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-102010",
+    "package": "gcc-12-base",
+    "version": "12.2.0-14+deb12u1",
+    "fix_version": "",
+    "severity": "Medium",
+    "status": "will_not_fix",
+    "description": "A flaw was found in GCC. When an application calls the erase_if function on a binary heap priority queue in libstdc++, the library reallocates storage but fails to update its internal entry pointer. A",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-102010"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-825"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 7,
+       "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2026-95619",
+    "package": "gcc-12-base",
+    "version": "12.2.0-14+deb12u1",
+    "fix_version": "",
+    "severity": "Medium",
+    "status": "fix_deferred",
+    "description": "A flaw was found in libstdc++. An integer overflow can occur when processing large inputs to the aligned operator new in the C++ library. This vulnerability could lead to an undersized memory allocati",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2026-95619"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 7.7,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-190"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "redhat": {
+       "V3Score": 7.7,
+       "V3Vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:H/A:H"
+      }
+     }
+    }
+   },
+   {
+    "id": "CVE-2022-27943",
+    "package": "gcc-12-base",
+    "version": "12.2.0-14+deb12u1",
+    "fix_version": "",
+    "severity": "Low",
+    "status": "affected",
+    "description": "libiberty/rust-demangle.c in GNU GCC 11.2 allows stack consumption in demangle_const, as demonstrated by nm-new.",
+    "links": [
+     "https://avd.aquasec.com/nvd/cve-2022-27943"
+    ],
+    "artifact_digests": [
+     "sha256:08a24c5ee07d852b7dee084c3327b0c3b6ef661beb1d9547889043b74ccdde65"
+    ],
+    "preferred_cvss": {
+     "score_v3": 5.5,
+     "score_v2": null,
+     "vector_v3": "",
+     "vector_v2": ""
+    },
+    "cwe_ids": [
+     "CWE-674"
+    ],
+    "vendor_attributes": {
+     "CVSS": {
+      "nvd": {
+       "V2Score": 4.3,
+       "V2Vector": "AV:N/AC:M/Au:N/C:N/I:N/A:P",
+       "V3Score": 5.5,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+      },
+      "redhat": {
+       "V3Score": 5.5,
+       "V3Vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+      }
+     }
+    }
+   }
+  ]
+ }
+}

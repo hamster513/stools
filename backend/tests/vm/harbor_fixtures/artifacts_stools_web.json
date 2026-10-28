@@ -1,0 +1,99 @@
+[
+    {
+        "accessories": null,
+        "addition_links": {
+            "build_history": {
+                "absolute": false,
+                "href": "/api/v2.0/projects/stools/repositories/stools-web/artifacts/sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b/additions/build_history"
+            },
+            "sboms": {
+                "absolute": false,
+                "href": "/api/v2.0/projects/stools/repositories/stools-web/artifacts//additions/sbom"
+            },
+            "vulnerabilities": {
+                "absolute": false,
+                "href": "/api/v2.0/projects/stools/repositories/stools-web/artifacts/sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b/additions/vulnerabilities"
+            }
+        },
+        "artifact_type": "application/vnd.docker.container.image.v1+json",
+        "digest": "sha256:5b8f7358436090779129990592dc1049fdd2bfe59a1a3cf6e298ab9e71ae911b",
+        "extra_attrs": {
+            "architecture": "amd64",
+            "author": "",
+            "config": {
+                "ArgsEscaped": true,
+                "Cmd": [
+                    "caddy",
+                    "run",
+                    "--config",
+                    "/etc/caddy/Caddyfile",
+                    "--adapter",
+                    "caddyfile"
+                ],
+                "Env": [
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "XDG_CONFIG_HOME=/config",
+                    "XDG_DATA_HOME=/data"
+                ],
+                "ExposedPorts": {
+                    "2019/tcp": {},
+                    "443/tcp": {},
+                    "443/udp": {},
+                    "80/tcp": {}
+                },
+                "WorkingDir": "/srv"
+            },
+            "created": "2026-10-28T09:57:02.170724471Z",
+            "os": "linux"
+        },
+        "icon": "sha256:0048162a053eef4d4ce3fe7518615bef084403614f8bca43b40ae2e762e11e06",
+        "id": 5,
+        "labels": null,
+        "manifest_media_type": "application/vnd.docker.distribution.manifest.v2+json",
+        "media_type": "application/vnd.docker.container.image.v1+json",
+        "project_id": 2,
+        "pull_time": "2026-10-28T10:36:39.816Z",
+        "push_time": "2026-10-28T10:36:38.659Z",
+        "references": null,
+        "repository_id": 5,
+        "repository_name": "stools/stools-web",
+        "scan_overview": {
+            "application/vnd.security.vulnerability.report; version=1.1": {
+                "complete_percent": 100,
+                "duration": 3,
+                "end_time": "2026-10-28T10:36:41.000Z",
+                "report_id": "64b90f68-ffa6-4c12-b6f5-63139d0d3341",
+                "scan_status": "Success",
+                "scanner": {
+                    "name": "Trivy",
+                    "vendor": "Aqua Security",
+                    "version": "v0.75.0"
+                },
+                "severity": "High",
+                "start_time": "2026-10-28T10:36:38.000Z",
+                "summary": {
+                    "fixable": 4,
+                    "summary": {
+                        "High": 2,
+                        "Medium": 1,
+                        "Unknown": 3
+                    },
+                    "total": 6
+                }
+            }
+        },
+        "size": 24160194,
+        "tags": [
+            {
+                "artifact_id": 5,
+                "id": 5,
+                "immutable": false,
+                "name": "2615570",
+                "pull_time": "0001-01-01T00:00:00.000Z",
+                "push_time": "2026-10-28T10:36:38.671Z",
+                "repository_id": 5
+            }
+        ],
+        "type": "IMAGE"
+    }
+]
