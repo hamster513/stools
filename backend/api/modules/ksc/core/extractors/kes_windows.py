@@ -198,13 +198,13 @@ def _octets_address(octets: Any, mask: Any = None) -> Address:
 
 
 def _address(item: dict[str, Any]) -> Address | None:
-    """Имя узла, иначе адрес из `octets` с маской, иначе адреса, в которые разрешено имя (`hostNameIPs`, по одному, в порядке
-    выгрузки); пустой — None."""
+    """Имя узла (вместе с его адресами `hostNameIPs`, если они есть), иначе адрес из `octets` с маской, иначе адреса, в которые
+    разрешено имя, по одному, в порядке выгрузки; пустой — None. Подпись правила по имени узла не зависит от его адресов."""
+    ips = tuple(_octets_address(ip.get("octets")) for ip in _items(item.get("hostNameIPs")))
     if host := _text(item.get("hostName")):
-        return Address(host=host)
+        return Address(host=host, ips=ips)
     if "octets" in item:
         return _octets_address(item["octets"], item.get("mask"))
-    ips = tuple(_octets_address(ip.get("octets")) for ip in _items(item.get("hostNameIPs")))
     return Address(ips=ips) if ips else None
 
 

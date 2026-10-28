@@ -125,6 +125,17 @@ def test_scope_ipv6_and_host_ips() -> None:
     assert _scope(remote=[resolved]).remote == (Address(ips=(Address(ip="2001:db8::10"), Address(ip="192.0.2.7"))),)
 
 
+def test_host_name_with_ips_keeps_both() -> None:
+    """Имя узла и его адреса (`hostNameIPs`) хранятся вместе; подпись правила — по-прежнему только имя, маска не помечается."""
+    named = {"hostName": "updates.example.test", "hostNameIPs": [{"octets": octets("192.0.2.7"), "zoneIPv6": ""}, {"octets": HIDDEN}],
+             "mask": "x", "unique_id": 1253756384}
+    sections = kes11_sections(**{PACKET: [packet_rule("Правило", action=0, direction=0, remote=[named])], GROUPS: []})
+    [rule] = extract_kes(sections).net_rules
+    assert rule.scope.remote == (Address(host="updates.example.test", ips=(Address(ip="192.0.2.7"), Address(hidden="secret"))),)
+    assert rule.scope.unread == ()
+    assert rule.addresses == addresses_text(rule.scope) == "updates.example.test"
+
+
 def test_scope_hidden_and_unparsed() -> None:
     hidden = _address("192.0.2.1", 32, octets=HIDDEN)
     odd = _address("192.0.2.1", 32, octets=base64.b64encode(b"\x01\x02\x03").decode())

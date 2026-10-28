@@ -49,8 +49,9 @@ TABLES = (KscPolicy, KscPolicyScope, KscProfile, KscExclusion, KscNetRule, KscPo
 #: Первый ключ блокировки дозаполнения (второй — id снапшота): свой у модуля, чтобы не пересечься с чужими.
 BACKFILL_LOCK = 0x4B5343  # "KSC"
 #: Версия таблиц политик (`KscSnapshot.policy_store_version`): 1 — scope_json у правил и таблица ksc_policy_firewall;
+#: 2 — у адреса с именем узла сохраняются и его адреса (hostNameIPs);
 #: поднимать при каждом новом производном поле, которое старые снапшоты должны получить дозаполнением.
-POLICY_STORE_VERSION = 1
+POLICY_STORE_VERSION = 2
 
 
 def _insert(db: Session, model: type[Any], rows: list[dict[str, Any]]) -> None:

@@ -71,6 +71,17 @@ def _forget(db: Session, sid: int) -> None:
     db.commit()
 
 
+def test_version_is_two(auth_client: TestClient, db_session: Session) -> None:
+    """Версия таблиц 2: у адреса с именем узла сохраняются и его адреса; снапшот версии 0 дозаполняется до неё."""
+    assert POLICY_STORE_VERSION == 2
+    sid = _upload(auth_client)
+    assert _version(db_session, sid) == 2
+    _forget(db_session, sid)
+    assert _version(db_session, sid) == 0
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules").status_code == 200
+    assert _version(db_session, sid) == 2
+
+
 def test_upload_writes_scope_and_firewall(auth_client: TestClient, db_session: Session) -> None:
     sid = _upload(auth_client)
     scopes = _scopes(db_session, sid)
