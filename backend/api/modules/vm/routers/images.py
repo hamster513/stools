@@ -16,11 +16,12 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.vm.core.harbor import is_cve
-from api.modules.vm.core.risk import LEVEL_WORD, CveInputs, explain
-from api.modules.vm.core.risk import level as risk_level
+from api.modules.vm.core.risk import explain
+from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmImage, VmRefState
 from api.modules.vm.services import images_query as q
 from api.modules.vm.services.harbor_sync import last_sync
+from api.modules.vm.services.risk_view import cve_inputs, risk_view
 from api.modules.vm.services.settings import load_settings
 from api.platform.export import Column, export_response
 from api.platform.filters import QueryList, multi
@@ -30,7 +31,7 @@ router = APIRouter(tags=["vm"])
 MAX_LIMIT = 1000
 
 
-def _levels(db: Session) -> Any:
+def _levels(db: Session) -> Levels:
     return load_settings(db).weights.levels
 
 
@@ -178,44 +179,6 @@ def image_vulns(
     return VulnsResponse(total=q.count_vulns(db, f), items=items, facets=q.vuln_facets(db, f))
 
 
-def _factor(fac: Any) -> dict[str, Any]:
-    return {"value": fac.value, "source": fac.source, "substituted": fac.substituted}
-
-
-def _factors(db: Session, cve: VmCve, stored_risk: int | None, stored_raw: float | None) -> dict[str, Any]:
-    """Расчёт по текущим весам для образа: критичности, зоны и интернета нет — V базовая.
-    Балл и уровень — сохранённые (по ним список и фильтры), части — расчёт: после смены весов
-    до пересчёта они могут разойтись."""
-    settings = load_settings(db)
-    kev_loaded = db.get(VmRefState, "kev") is not None
-    inputs = CveInputs(
-        epss=cve.epss,
-        cvss=cve.cvss,
-        av=cve.v3_av or cve.v2_av,
-        exploitdb_type=cve.exploitdb_type,
-        msf_rank=cve.msf_rank,
-        kev=cve.kev,
-        kev_added=cve.kev_added,
-        kev_loaded=kev_loaded,
-    )
-    e = explain(inputs, None, internet=False, confidential=False, zone_marked=False, w=settings.weights)
-    score = stored_risk if stored_risk is not None else e.score
-    lvl = risk_level(score, settings.weights.levels)
-    return {
-        "score": score,
-        "raw": stored_raw if stored_raw is not None else e.raw,
-        "level": lvl,
-        "level_word": LEVEL_WORD[lvl],
-        "threshold": settings.threshold,
-        "likelihood": _factor(e.likelihood),
-        "likelihood_parts": {k: _factor(v) for k, v in e.likelihood_parts.items()},
-        "severity": _factor(e.severity),
-        "severity_parts": {k: _factor(v) for k, v in e.severity_parts.items()},
-        "value": _factor(e.value),
-        "value_parts": {k: _factor(v) for k, v in e.value_parts.items()},
-    }
-
-
 @router.get("/images/{image_id}/vulns/{cve_id}")
 def image_risk_card(
     image_id: int,
@@ -232,11 +195,22 @@ def image_risk_card(
     row = q.find_vuln(db, image_id, vuln_id, package, installed_version)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="находка не найдена")
+    settings = load_settings(db)
+    levels = settings.weights.levels
+    factors = None
     cve = db.get(VmCve, vuln_id) if is_cve(vuln_id) else None
-    levels = _levels(db)
+    if cve is not None:
+        # Расчёт для образа: критичности, зоны и интернета нет — V базовая (`scoring.image_value`).
+        e = explain(
+            cve_inputs(cve, kev_loaded=db.get(VmRefState, "kev") is not None),
+            None, internet=False, confidential=False, zone_marked=False, w=settings.weights,
+        )
+        # Пара ещё без риска (до пересчёта) — показываем расчёт.
+        factors = risk_view(e, settings, row.risk if row.risk is not None else e.score,
+                            row.risk_raw if row.risk_raw is not None else e.raw)
     return {
         "image": q.image_item(image, levels),
         "vuln": q.vuln_item(row, levels),
-        "factors": _factors(db, cve, row.risk, row.risk_raw) if cve is not None else None,
+        "factors": factors,
         "nvd_url": f"https://nvd.nist.gov/vuln/detail/{vuln_id}" if is_cve(vuln_id) else None,
     }

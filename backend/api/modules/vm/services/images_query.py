@@ -100,6 +100,7 @@ def image_conditions(f: ImageFilters) -> list[ColumnElement[bool]]:
     conds: list[ColumnElement[bool]] = []
     if f.q and f.q.strip():
         needle = like(f.q)
+        # Теги ищутся по JSON-тексту столбца `tags` (с кавычками и запятыми) — для первой версии достаточно.
         conds.append(or_(NAME.ilike(needle, escape="\\"), VmImage.tags.ilike(needle, escape="\\")))
     if f.project is not None:
         conds.append(one_of(VmImage.project, f.project))

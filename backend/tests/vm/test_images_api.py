@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import json
 from collections.abc import Callable
@@ -11,7 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.modules.vm.models import VmCve, VmImage, VmImageCve
-from tests.api.conftest import client_as, make_user  # noqa: F401 — фикстуры входа под правами
 
 EXPORT_HEADER = [
     "Образ", "Платформа", "Теги", "CVE", "Пакет", "Установлена", "Исправлена", "Trivy", "CVSS Trivy",
@@ -42,8 +42,8 @@ def seeded(db_session: Any, auth_client: TestClient) -> dict[str, int]:
         cve_id="CVE-2024-1111", epss=0.5, kev=True, cvss=9.8, cvss_source="nvd_v3", v3_av="NETWORK",
         likelihood=1.0, cvss10=0.98, av_class="network", description="mart",
     ))
-    web = _image(db_session, "stools", "web", risk=80, tags=["1.2.3", "stable"], trivy_critical=1, trivy_high=1, trivy_total=2)
-    api = _image(db_session, "stools", "api", risk=10, trivy_high=2, trivy_total=2, platform="linux/amd64, linux/arm64")
+    web = _image(db_session, "stools", "web", risk=80, tags=["1.2.3", "stable"], pushed_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC), trivy_critical=1, trivy_high=1, trivy_total=2)
+    api = _image(db_session, "stools", "api", risk=10, trivy_high=2, trivy_total=2, pushed_at=dt.datetime(2026, 2, 1, tzinfo=dt.UTC), platform="linux/amd64, linux/arm64")
     other = _image(db_session, "library", "alpine", risk=None, scan_status="none")
     _pair(db_session, web, "CVE-2024-1111", "openssl", "critical", fixed_version="3.0.2", risk=80, risk_raw=0.8, trivy_cvss=9.8)
     _pair(db_session, web, "CVE-2024-2222", "zlib", "high", fixed_version="1.3", risk=20, trivy_cvss=7.5)
@@ -91,6 +91,8 @@ def test_list_filters_project_and_search(auth_client: TestClient, seeded: dict[s
     assert names("trivy=critical") == ["stools/web"]
     assert names("trivy=high") == ["stools/web", "stools/api"]
     assert names("q=100%25") == []
+    # `_` в запросе — обычный символ, а не «любой знак»: `w_b` не находит `web`.
+    assert names("q=w_b") == []
     # Фасеты считаются с теми же фильтрами.
     filtered = auth_client.get("/api/vm/images?project=stools").json()
     assert filtered["total"] == 2 and filtered["facets"]["project"] == {"stools": 2}
@@ -104,7 +106,20 @@ def test_list_other_sorts(auth_client: TestClient, seeded: dict[str, int]) -> No
 
     assert order("name") == ["alpine", "api", "web"]
     assert order("trivy_desc")[:2] == ["web", "api"]
-    assert len(order("pushed_desc")) == 3
+    # Дата отправки: свежие выше, без даты — в конце.
+    assert order("pushed_desc") == ["api", "web", "alpine"]
+
+
+def test_equal_risk_ordered_by_name_then_id(auth_client: TestClient, db_session: Any) -> None:
+    # Вставлены в обратном порядке: при равном риске порядок задаёт имя, а не вставка.
+    for repo in ("zeta", "beta", "alpha"):
+        _image(db_session, "stools", repo, risk=50)
+    _image(db_session, "stools", "norisk", risk=None)
+    db_session.commit()
+    first = [i["repository"] for i in auth_client.get("/api/vm/images").json()["items"]]
+    assert first == ["alpha", "beta", "zeta", "norisk"]
+    paged = [auth_client.get(f"/api/vm/images?limit=1&offset={n}").json()["items"][0]["repository"] for n in range(4)]
+    assert paged == first
 
 
 def test_list_bad_sort_422(auth_client: TestClient, seeded: dict[str, int]) -> None:
@@ -191,7 +206,7 @@ def test_export_csv_rows(auth_client: TestClient, seeded: dict[str, int]) -> Non
     assert xlsx.status_code == 200 and xlsx.content[:2] == b"PK"
 
 
-def test_read_level_allowed(client_as: Callable[[Any], TestClient], seeded: dict[str, int]) -> None:  # noqa: F811
+def test_read_level_allowed(client_as: Callable[[Any], TestClient], seeded: dict[str, int]) -> None:
     reader = client_as({"vm": "read"})
     web = seeded["web"]
     assert reader.get("/api/vm/images").status_code == 200
