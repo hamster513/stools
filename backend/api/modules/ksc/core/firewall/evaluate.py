@@ -168,13 +168,26 @@ class _Ctx:
     budget_caps: set[int] = field(default_factory=set)
     sources: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
-    _matches: dict[tuple[int, bool], RuleMatch] = field(default_factory=dict)
+    #: Ключ — `id` правила и признак ответного пакета одним числом (кортеж на правило давил бы на сборщик мусора).
+    _matches: dict[int, RuleMatch] = field(default_factory=dict)
+    _plain: dict[int, RuleMatch | Step] = field(default_factory=dict)
 
     def match(self, rule: RuleView, reply: bool) -> RuleMatch:
-        key = (id(rule), reply)
+        key = id(rule) << 1 | reply
         if key not in self._matches:
             self._matches[key] = match_rule(rule, self.packet, self.fw.zones, self.fw.host_ip, reply=reply)
         return self._matches[key]
+
+    def entry(self, rule: RuleView, reply: bool) -> RuleMatch | Step:
+        """Готовый шаг, если правило не решает и не «возможно» (выключено, поток в ответном пакете, не подошло), иначе его
+        совпадение. Не зависит от пути, поэтому считается один раз на правило, а не на каждую ветвь."""
+        key = id(rule) << 1 | reply
+        if (hit := self._plain.get(key)) is None:
+            m = self.match(rule, reply)
+            hit = self._plain[key] = (Step(m, "disabled") if not rule.enabled
+                                      else Step(m, "skipped") if reply and rule.scope.direction in _STREAM
+                                      else Step(m, "no") if m.result is Tri.NO else m)
+        return hit
 
     def rules(self, path: _Path, layer: str) -> tuple[RuleView, ...]:
         for s in _sources(self.fw, path.model, layer, path.chosen):
@@ -291,15 +304,9 @@ def _walk(ctx: _Ctx, path: _Path, rules: tuple[RuleView, ...], start: int, reply
     acc = list(steps)
     for j in range(start, len(rules)):
         rule = rules[j]
-        m = ctx.match(rule, reply)
-        if not rule.enabled:
-            acc.append(Step(m, "disabled"))
-            continue
-        if reply and rule.scope.direction in _STREAM:
-            acc.append(Step(m, "skipped"))
-            continue
-        if m.result is Tri.NO:
-            acc.append(Step(m, "no"))
+        m = ctx.entry(rule, reply)
+        if isinstance(m, Step):
+            acc.append(m)
             continue
         if m.result is Tri.YES:
             return _decide(ctx, path, rules, j, reply, (*acc, Step(m, "hit")))
