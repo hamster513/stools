@@ -1,7 +1,7 @@
 """VM: образы контейнеров из Harbor, их находки Trivy и журнал синхронизаций
 
 Revision ID: c51bc0de9cad
-Revises: 7e31b0364015
+Revises: 4e7a9c1b3d5f
 Create Date: 2026-10-28 14:00:00.000000
 
 Новые таблицы `vm_image`, `vm_image_cve` и `vm_image_sync`. Пара «образ × CVE» получает
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c51bc0de9cad"
-down_revision: str | Sequence[str] | None = "7e31b0364015"
+down_revision: str | Sequence[str] | None = "4e7a9c1b3d5f"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
