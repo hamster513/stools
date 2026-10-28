@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import json
 import logging
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,32 @@ class Exclusion:
 
 
 @dataclass(frozen=True)
+class Address:
+    """Один адрес правила: имя узла, адрес с маской или адреса, в которые разрешено имя; заполнена одна из форм."""
+    #: Имя узла (`hostName`).
+    host: str = ""
+    #: Канонический адрес (`ipaddress`); "" — адреса нет.
+    ip: str = ""
+    #: Длина маски; только int, не bool.
+    mask: int | None = None
+    #: Адреса, в которые разрешено имя (`hostNameIPs`), канонические.
+    ips: tuple[str, ...] = ()
+    #: "secret" — адрес скрыт сборщиком до 1.3; "unparsed" — `octets` не разобран; "" — адрес разобран.
+    hidden: str = ""
+
+
+@dataclass(frozen=True)
+class Scope:
+    """Адреса правила в виде, пригодном для проверки пакета (рядом с текстом `NetRule.addresses`)."""
+    #: Код зоны 0/1/2 как в выгрузке; None — зоны нет.
+    networks: int | None = None
+    remote: tuple[Address, ...] = ()
+    local: tuple[Address, ...] = ()
+    #: Вид ICMP-сообщения; только у протоколов ICMP и ICMPv6.
+    icmp_type: int | None = None
+
+
+@dataclass(frozen=True)
 class NetRule:
     layer: str
     position: int
@@ -47,6 +74,8 @@ class NetRule:
     enabled: bool = True
     #: Имя профиля; "" — сама политика.
     profile: str = ""
+    #: Адреса в виде структуры; в `net_rule_key` не входит.
+    scope: Scope = Scope()
 
 
 @dataclass
@@ -82,6 +111,48 @@ def _digest(text: str) -> str:
 
 def exclusion_key(e: Exclusion) -> str:
     return _digest(f"{e.kind}|{e.value.strip().lower()}")
+
+
+def scope_to_json(scope: Scope) -> str:
+    return json.dumps(asdict(scope), ensure_ascii=False)
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _address_from_dict(item: Any) -> Address:
+    if not isinstance(item, dict):
+        raise TypeError("адрес не объект")
+    host, ip, hidden, mask, ips = item.get("host", ""), item.get("ip", ""), item.get("hidden", ""), item.get("mask"), item.get("ips", [])
+    if not all(isinstance(v, str) for v in (host, ip, hidden)) or not (mask is None or _is_int(mask)):
+        raise TypeError("поле адреса неверного типа")
+    if not isinstance(ips, list) or not all(isinstance(v, str) for v in ips):
+        raise TypeError("ips не список строк")
+    return Address(host=host, ip=ip, mask=mask, ips=tuple(ips), hidden=hidden)
+
+
+def _addresses_from_list(value: Any) -> tuple[Address, ...]:
+    if not isinstance(value, list):
+        raise TypeError("адреса не список")
+    return tuple(_address_from_dict(item) for item in value)
+
+
+def scope_from_json(text: str | None) -> Scope | None:
+    """Структура адресов из JSON `scope_to_json`; None — текста нет, он не JSON или форма не та (не бросает)."""
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            return None
+        networks, icmp_type = data.get("networks"), data.get("icmp_type")
+        if not all(v is None or _is_int(v) for v in (networks, icmp_type)):
+            return None
+        return Scope(networks=networks, remote=_addresses_from_list(data.get("remote", [])),
+                     local=_addresses_from_list(data.get("local", [])), icmp_type=icmp_type)
+    except (TypeError, ValueError):  # ValueError — битый JSON
+        return None
 
 
 def net_rule_key(r: NetRule) -> str:

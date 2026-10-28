@@ -15,7 +15,14 @@ from api.modules.ksc.core.export import load_export
 from api.modules.ksc.core.extractors.kes_windows import extract_kes
 from api.modules.ksc.core.policy_contents import flat_settings
 from api.modules.ksc.core.policy_index import policy_objects
-from api.modules.ksc.core.policy_model import EXTRACTORS, Exclusion, NetRule, PolicyObjects, extract
+from api.modules.ksc.core.policy_model import (
+    EXTRACTORS,
+    Exclusion,
+    NetRule,
+    PolicyObjects,
+    Scope,
+    extract,
+)
 from api.modules.ksc.models import KscChange, KscExclusion, KscNetRule, KscPolicy
 from tests.ksc.kes11 import (
     ICMP,
@@ -176,7 +183,7 @@ def test_packet_rule_tcp_rdp_public_networks() -> None:
     rule = _objects().net_rules[0]
     assert rule == NetRule(
         layer="packet", position=0, name="Тестовое правило: удалённый рабочий стол", action="запретить", direction="входящий (поток)",
-        protocol="TCP", local_ports="3389", remote_ports="", addresses="публичные сети", enabled=True,
+        protocol="TCP", local_ports="3389", remote_ports="", addresses="публичные сети", enabled=True, scope=Scope(networks=2),
     )
 
 

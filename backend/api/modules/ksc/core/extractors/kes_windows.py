@@ -15,7 +15,14 @@ import ipaddress
 from typing import Any
 
 from api.modules.ksc.core.policy_contents import bare_sections, truncate_value
-from api.modules.ksc.core.policy_model import OBJECT, Exclusion, NetRule, PolicyObjects
+from api.modules.ksc.core.policy_model import (
+    OBJECT,
+    Address,
+    Exclusion,
+    NetRule,
+    PolicyObjects,
+    Scope,
+)
 from api.modules.ksc.core.secrets import HIDDEN
 
 TRUSTED_ZONE = "852d0287"
@@ -150,32 +157,65 @@ def _ports(value: Any) -> str:
     return ", ".join(out)
 
 
-def _ip(octets: Any, mask: Any = None) -> str:
-    if octets == HIDDEN:
-        return "адрес скрыт (сборщик до 1.3)"
+def _canonical(octets: Any) -> str:
+    """Канонический адрес из `octets` (base64); "" — не разобран."""
     try:
         packed = base64.b64decode(octets, validate=True) if isinstance(octets, str) else b""
     except ValueError:  # binascii.Error и не-ASCII строка
         packed = b""
-    if len(packed) not in (4, 16):
-        return "адрес не разобран"
-    address = str(ipaddress.ip_address(packed))
-    return f"{address}/{mask}" if isinstance(mask, int) and not isinstance(mask, bool) else address
+    return str(ipaddress.ip_address(packed)) if len(packed) in (4, 16) else ""
 
 
-def _address(item: dict[str, Any]) -> str:
-    """Имя узла, иначе адрес из `octets` с маской, иначе адреса, в которые разрешено имя (`hostNameIPs`)."""
+def _address(item: dict[str, Any]) -> Address | None:
+    """Имя узла, иначе адрес из `octets` с маской, иначе адреса, в которые разрешено имя (`hostNameIPs`); пустой — None."""
     if host := _text(item.get("hostName")):
-        return host
+        return Address(host=host)
     if "octets" in item:
-        return _ip(item["octets"], item.get("mask"))
-    return ", ".join(_ip(ip.get("octets")) for ip in _items(item.get("hostNameIPs")))
+        if item["octets"] == HIDDEN:
+            return Address(hidden="secret")
+        ip = _canonical(item["octets"])
+        mask = item.get("mask")
+        return Address(ip=ip, mask=mask if isinstance(mask, int) and not isinstance(mask, bool) else None) if ip else Address(hidden="unparsed")
+    entries = [ip.get("octets") for ip in _items(item.get("hostNameIPs"))]
+    ips = tuple(c for c in map(_canonical, entries) if c)
+    hidden = "secret" if HIDDEN in entries else "unparsed" if len(ips) < len(entries) else ""
+    return Address(ips=ips, hidden=hidden) if entries else None
 
 
-def _addresses(scope: dict[str, Any]) -> str:
-    parts = [_code(_NETWORKS, scope["networks"])] if scope.get("networks") is not None else []
-    parts += [a for a in map(_address, _items(scope.get("remoteAddresses"))) if a]
-    parts += [f"локальный: {a}" for a in map(_address, _items(scope.get("localAddresses"))) if a]
+def _icmp_type(proto: dict[str, Any], label: str) -> int | None:
+    kind = _dict(proto.get("type")).get("value")
+    return kind if label in ("ICMP", "ICMPv6") and isinstance(kind, int) and not isinstance(kind, bool) else None
+
+
+def _addresses(items: Any) -> tuple[Address, ...]:
+    return tuple(a for a in map(_address, _items(items)) if a is not None)
+
+
+def _scope(proto: dict[str, Any], scope: dict[str, Any]) -> Scope:
+    networks = scope.get("networks")
+    return Scope(
+        networks=networks if isinstance(networks, int) and not isinstance(networks, bool) else None,
+        remote=_addresses(scope.get("remoteAddresses")), local=_addresses(scope.get("localAddresses")),
+        icmp_type=_icmp_type(proto, _code(_PROTOCOLS, proto.get("unique_id"))),
+    )
+
+
+def _address_text(a: Address) -> str:
+    if a.host:
+        return a.host
+    if a.ip:
+        return f"{a.ip}/{a.mask}" if a.mask is not None else a.ip
+    parts = list(a.ips)
+    if a.hidden:
+        parts.append("адрес скрыт (сборщик до 1.3)" if a.hidden == "secret" else "адрес не разобран")
+    return ", ".join(parts)
+
+
+def addresses_text(scope: Scope) -> str:
+    """Подпись адресов правила: зона, удалённые адреса, затем локальные с префиксом «локальный: »."""
+    parts = [_code(_NETWORKS, scope.networks)] if scope.networks is not None else []
+    parts += [t for t in map(_address_text, scope.remote) if t]
+    parts += [f"локальный: {t}" for t in map(_address_text, scope.local) if t]
     return "; ".join(parts)
 
 
@@ -184,20 +224,20 @@ def _protocol(proto: dict[str, Any]) -> str:
     if uid is None:
         return "любой"
     label = _code(_PROTOCOLS, uid)
-    kind = _dict(proto.get("type")).get("value")
-    icmp = label in ("ICMP", "ICMPv6")
-    return f"{label} (вид {kind})" if icmp and isinstance(kind, int) and not isinstance(kind, bool) else label
+    kind = _icmp_type(proto, label)
+    return f"{label} (вид {kind})" if kind is not None else label
 
 
 def _net_rule(item: dict[str, Any], layer: str, position: int, owner: str = "") -> NetRule | None:
     name = item.get("name")
     if not isinstance(name, str) or "action" not in item:
         return None
-    proto, scope = _dict(item.get("protocol")), _dict(item.get("scope"))
+    proto = _dict(item.get("protocol"))
+    scope = _scope(proto, _dict(item.get("scope")))
     return NetRule(
         layer=layer, position=position, name=f"{owner}: {name}" if owner else name, action=_code(_ACTIONS, item["action"]),
         direction=_code(_DIRECTIONS, item.get("packetDirection")), protocol=_protocol(proto), local_ports=_ports(proto.get("localPorts")),
-        remote_ports=_ports(proto.get("remotePorts")), addresses=_addresses(scope), enabled=_enabled(item),
+        remote_ports=_ports(proto.get("remotePorts")), addresses=addresses_text(scope), enabled=_enabled(item), scope=scope,
     )
 
 
