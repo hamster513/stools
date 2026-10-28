@@ -117,3 +117,5 @@ class HostFirewall:
     trust_groups: tuple[AppGroupDefault, ...]
     #: Оговорки к выводам движка.
     notes: tuple[str, ...]
+    #: Чьи зоны сетей действуют: имя профиля с замком зон; "" — политика.
+    zones_profile: str = ""

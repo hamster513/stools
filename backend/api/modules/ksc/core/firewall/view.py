@@ -167,5 +167,5 @@ def host_firewall(host_id: str, host_name: str, host_ip: str, policy_id: int | N
         app_undetermined=tuple(_set(policy_id, s, "app", s.app) for s in app_maybe),
         zones=zones, firewall_enabled=firewall_enabled, notify_only=_flag(policy, packet_on, "notify_only")[0],
         hips_enabled=_flag(policy, app_on, "hips_enabled")[0], hips_notify_only=_flag(policy, app_on, "hips_notify_only")[0],
-        component_running=running, trust_groups=trust_groups, notes=tuple(out),
+        component_running=running, trust_groups=trust_groups, notes=tuple(out), zones_profile=zones_source.profile,
     )

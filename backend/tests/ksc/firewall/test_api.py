@@ -1,13 +1,16 @@
-"""API движка сетевого экрана: проверка пакета (обе стороны, назначение по адресу, пакетом по хостам), режим наложения
-профиля из настроек модуля."""
+"""API движка сетевого экрана: проверка пакета (обе стороны, назначение по адресу, пакетом по хостам), сводка секций
+сетевых правил, тень и действующий набор в списке, режим наложения профиля из настроек модуля."""
 from __future__ import annotations
 
 import ipaddress
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from api.modules.ksc.core.firewall.evaluate import POINT_MODEL
+from api.modules.ksc.models import KscPolicy
 from tests.ksc.kes11 import TCP, kes11_export, kes11_sections, packet_rule
 from tests.ksc.test_api import upload
 
@@ -171,3 +174,78 @@ def test_profile_mode_setting_changes_result(auth_client: TestClient) -> None:
     assert (body["source"]["verdict"], _decided(body["source"])) == ("deny", [WEB_OUT_DENY["name"]])
     config = auth_client.get("/api/ksc/settings").json()["config"]
     assert auth_client.put("/api/ksc/settings", json={**config, "firewall_profile_mode": "other"}).status_code == 422
+
+
+def _sections(client: TestClient, sid: int, query: str = "") -> list[dict[str, Any]]:
+    r = client.get(f"/api/ksc/snapshots/{sid}/net-rules/sections?{query}")
+    assert r.status_code == 200, r.text
+    return list(r.json())
+
+
+def _key(s: dict[str, Any]) -> tuple[str, int, str]:
+    return s["layer"], s["policy_id"], s["profile"]
+
+
+def test_sections_counts_and_overridden(auth_client: TestClient, db_session: Session) -> None:
+    """Сводка секций: слой, затем политика, затем профиль по приоритету; правила и тени — по отфильтрованному, тень — по всему
+    списку секции; замок листа; с хостом — перекрытие профилем только в режиме «заменяет», иначе метка наложения."""
+    sid = _upload(auth_client, _export([SMB, WEB_IN, WEB_OUT, SMB_COPY], profile_rules=[WEB_OUT]))
+    hosts = db_session.execute(select(KscPolicy.hosts).where(KscPolicy.snapshot_id == sid, KscPolicy.policy_id == 1)).scalar_one()
+    assert hosts > 0
+    sections = _sections(auth_client, sid)
+    assert [_key(s) for s in sections] == [("packet", 1, ""), ("packet", 1, "Ноутбуки"), ("app", 1, ""), ("app", 1, "Ноутбуки")]
+    policy, profile = sections[0], sections[1]
+    assert policy == {"layer": "packet", "policy_id": 1, "policy_name": "KES workstations", "profile": "", "priority": None, "rules": 4,
+                      "shadowed": 1, "hosts": hosts, "hosts_kind": "policy", "locked": True, "overridden": False, "overridden_by": ""}
+    assert (profile["priority"], profile["rules"], profile["shadowed"], profile["locked"]) == (0, 1, 0, True)
+    assert sections[2]["rules"] == 1 and sections[2]["locked"] is True
+    # Фильтр: счётчики по отфильтрованному, тень копии — по всему списку (SMB отфильтрован, а копия всё равно в тени).
+    [only] = _sections(auth_client, sid, "q=%D0%BA%D0%BE%D0%BF%D0%B8%D1%8F")  # «копия»
+    assert (_key(only), only["rules"], only["shadowed"]) == (("packet", 1, ""), 1, 1)
+    assert [_key(s) for s in _sections(auth_client, sid, "layer=app")] == [("app", 1, ""), ("app", 1, "Ноутбуки")]
+    # С хостом WS01 (профиль активен): режим auto — не перекрыто, помечено наложение.
+    ws01 = _sections(auth_client, sid, "host_id=h-ws01")
+    assert [(_key(s), s["overridden"], s["overlay"]) for s in ws01] == [
+        (("packet", 1, ""), False, "auto"), (("packet", 1, "Ноутбуки"), False, None), (("app", 1, ""), False, "auto"),
+        (("app", 1, "Ноутбуки"), False, None)]
+    _set_mode(auth_client, "replace")
+    ws01 = _sections(auth_client, sid, "host_id=h-ws01")
+    assert [(_key(s), s["overridden"], s["overridden_by"]) for s in ws01] == [
+        (("packet", 1, ""), True, "Ноутбуки"), (("packet", 1, "Ноутбуки"), False, ""), (("app", 1, ""), True, "Ноутбуки"),
+        (("app", 1, "Ноутбуки"), False, "")]
+    # WS02: профиль не активен — секций профиля нет, политика не перекрыта.
+    ws02 = _sections(auth_client, sid, "host_id=h-ws02")
+    assert [(_key(s), s["overridden"], s["overlay"]) for s in ws02] == [(("packet", 1, ""), False, None), (("app", 1, ""), False, None)]
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules/sections?host_id=nope").status_code == 404
+
+
+def test_list_shadowed_by_and_effective(auth_client: TestClient) -> None:
+    """Элемент списка — `shadowed_by` по своему набору; с хостом — действующие наборы по секциям и `overridden` у элемента."""
+    sid = _upload(auth_client, _export([SMB, WEB_IN, WEB_OUT, SMB_COPY], profile_rules=[WEB_OUT]))
+    url = f"/api/ksc/snapshots/{sid}/net-rules"
+    items = auth_client.get(f"{url}?layer=packet").json()["items"]
+    by_name = {(i["profile"], i["name"]): i for i in items}
+    smb, copy = by_name[("", SMB["name"])], by_name[("", SMB_COPY["name"])]
+    assert copy["shadowed_by"] == {"row_id": smb["id"], "position": 0, "name": SMB["name"], "same_action": True}
+    assert smb["shadowed_by"] is None and by_name[("Ноутбуки", WEB_OUT["name"])]["shadowed_by"] is None
+    # Профиль — свой набор: его правило не в тени такого же правила политики.
+    assert by_name[("", WEB_OUT["name"])]["shadowed_by"] is None
+    body = auth_client.get(url).json()
+    assert "effective" not in body and all("overridden" not in i for i in body["items"])
+    body = auth_client.get(f"{url}?host_id=h-ws01").json()
+    both = [{"policy_id": 1, "profile": ""}, {"policy_id": 1, "profile": "Ноутбуки"}]
+    assert body["effective"] == {"packet": both, "app": both, "networks": {"policy_id": 1, "profile": "Ноутбуки"}, "mode": "auto"}
+    assert not any(i["overridden"] for i in body["items"])
+    _set_mode(auth_client, "replace")
+    body = auth_client.get(f"{url}?host_id=h-ws01").json()
+    profile = [{"policy_id": 1, "profile": "Ноутбуки"}]
+    assert body["effective"] == {"packet": profile, "app": profile, "networks": {"policy_id": 1, "profile": "Ноутбуки"}, "mode": "replace"}
+    assert {i["profile"] for i in body["items"] if i["overridden"]} == {""} and all(i["overridden"] != (i["profile"] == "Ноутбуки")
+                                                                                 for i in body["items"])
+    body = auth_client.get(f"{url}?host_id=h-ws02").json()
+    policy = [{"policy_id": 1, "profile": ""}]
+    assert body["effective"] == {"packet": policy, "app": policy, "networks": {"policy_id": 1, "profile": ""}, "mode": "replace"}
+    assert not any(i["overridden"] for i in body["items"])
+    # Хост без политики KES — пустые наборы.
+    body = auth_client.get(f"{url}?host_id=h-srv01").json()
+    assert body["effective"] == {"packet": [], "app": [], "networks": None, "mode": "replace"} and body["items"] == []

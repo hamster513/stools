@@ -6,12 +6,16 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from collections import defaultdict
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from api.modules.ksc.core.firewall.evaluate import source_sets
 from api.modules.ksc.core.firewall.model import HostFirewall, RuleView
+from api.modules.ksc.core.firewall.shadow import Shadow, shadows
 from api.modules.ksc.core.firewall.view import (
     NOTE_INACTIVE_POLICY,
     NOTE_NO_POLICY,
@@ -91,3 +95,80 @@ def load_host_firewall(db: Session, snapshot_id: int, host_id: str) -> HostFirew
     if unread and any(r.row_id in unread for s in sets if s is not None for r in s.rules):
         fw = replace(fw, notes=(*fw.notes, NOTE_NO_SCOPE))
     return fw
+
+
+def shadow_lookup(rows: Sequence[KscNetRule]) -> Callable[[KscNetRule], Shadow | None]:
+    """Строка → более раннее правило её набора (политика, профиль, слой), покрывающее её (спека §4.6). Набор считается по
+    всем своим строкам при первом обращении к его строке — фильтры списка тень не меняют. Строки без `scope_json` (снапшот
+    до структуры, файла для дозаполнения нет) не покрывают и не покрываются: пустая структура значила бы «любой пакет»."""
+    groups: dict[tuple[int, str, str], list[KscNetRule]] = defaultdict(list)
+    for r in rows:
+        if r.scope_json is not None:
+            groups[(r.policy_id, r.profile, r.layer)].append(r)
+    done: dict[tuple[int, str, str], dict[int, Shadow]] = {}
+
+    def of(r: KscNetRule) -> Shadow | None:
+        if r.scope_json is None:
+            return None
+        key = (r.policy_id, r.profile, r.layer)
+        if key not in done:
+            done[key] = shadows([rule_view(m) for m in sorted(groups[key], key=lambda m: (m.position, m.id))])
+        return done[key].get(r.id)
+
+    return of
+
+
+@dataclass(frozen=True)
+class HostEffective:
+    """Какие наборы правил действуют у хоста по слоям при режиме наложения `mode` (`KscConfig.firewall_profile_mode`).
+
+    `packet`/`app` — профили действующих источников слоя по порядку применения ("" — политика): `merge` — политика и активные
+    профили с замком списка, `replace` — профиль с наивысшим приоритетом (с правилами), иначе политика; `auto` — объединение
+    обоих, то есть как `merge`. Профили с неопределённой активацией сюда не входят и перекрытыми не считаются."""
+    mode: str
+    #: Действующая политика KES хоста; None — её нет.
+    policy_id: int | None
+    packet: tuple[str, ...]
+    app: tuple[str, ...]
+    #: Чьи зоны сетей действуют (профиль с замком зон или ""); None — политики нет.
+    networks: str | None
+    #: Профили с неопределённой активацией, по слою.
+    undetermined: dict[str, frozenset[str]]
+    #: Профили с замком и правилами, которые накладываются на список политики (активные и неопределённые), по слою.
+    overlays: dict[str, tuple[str, ...]]
+
+    def overridden(self, policy_id: int, profile: str, layer: str) -> bool:
+        """Список набора у хоста не действует: в режиме `replace` его заменил профиль; в любом режиме — у активного профиля
+        список без замка (копия политики). Чужая политика и неопределённый профиль — не перекрыты."""
+        if policy_id != self.policy_id or profile in self.undetermined.get(layer, frozenset()):
+            return False
+        return profile not in (self.packet if layer == "packet" else self.app)
+
+    def overridden_by(self, policy_id: int, profile: str, layer: str) -> str:
+        """Профиль, который действует вместо набора; "" — не перекрыт или перекрыт не профилем (список без замка)."""
+        if not self.overridden(policy_id, profile, layer):
+            return ""
+        best = (self.packet if layer == "packet" else self.app)[:1]
+        return best[0] if best and best[0] != profile else ""
+
+    def json(self) -> dict[str, object]:
+        def sets(names: tuple[str, ...]) -> list[dict[str, object]]:
+            return [{"policy_id": self.policy_id, "profile": p} for p in names]
+
+        networks = {"policy_id": self.policy_id, "profile": self.networks} if self.networks is not None else None
+        return {"packet": sets(self.packet), "app": sets(self.app), "networks": networks, "mode": self.mode}
+
+
+def host_effective(fw: HostFirewall, mode: str) -> HostEffective:
+    model = "merge" if mode == "auto" else mode
+    if fw.policy_id is None:
+        return HostEffective(mode, None, (), (), None, {}, {})
+    return HostEffective(
+        mode=mode, policy_id=fw.policy_id,
+        packet=tuple(s.profile for s in source_sets(fw, model, layer="packet")),
+        app=tuple(s.profile for s in source_sets(fw, model, layer="app")),
+        networks=fw.zones_profile,
+        undetermined={"packet": frozenset(s.profile for s in fw.packet_undetermined), "app": frozenset(s.profile for s in fw.app_undetermined)},
+        overlays={"packet": tuple(s.profile for s in (*fw.packet_profiles, *fw.packet_undetermined) if s.rules),
+                  "app": tuple(s.profile for s in (*fw.app_profiles, *fw.app_undetermined) if s.rules)},
+    )

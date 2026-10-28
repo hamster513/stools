@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from api.modules.ksc.core.exclusion_risks import RISKS
@@ -18,9 +18,9 @@ from api.modules.ksc.core.policy_model import (
     exclusion_key,
 )
 from api.modules.ksc.core.policy_model import covered_by as policy_model_covered_by
-from api.modules.ksc.models import KscExclusion, KscPolicy
+from api.modules.ksc.models import KscExclusion, KscNetRule, KscPolicy
 from api.modules.ksc.routers import policy_objects
-from tests.ksc.kes11 import TCP, exclusion, kes11_export
+from tests.ksc.kes11 import TCP, exclusion, kes11_export, packet_rule
 from tests.ksc.synthetic import activation, build_export, condition_group
 from tests.ksc.test_api import upload
 
@@ -404,3 +404,24 @@ def test_net_rules_expose_scope(auth_client: TestClient) -> None:
     assert dns["scope"]["remote"][0]["ip"] == "192.0.2.53" and dns["scope"]["remote"][0]["mask"] == 32
     card = auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules/{dns['id']}").json()
     assert card["scope"] == dns["scope"]
+
+
+def test_net_rules_layer_filter_and_shadowed_by(auth_client: TestClient, db_session: Session) -> None:
+    """Фильтр `layer` (список, выгрузка); `shadowed_by` — более раннее правило набора, покрывающее строку, и в карточке;
+    у строк без структуры адресов тени нет."""
+    tcp = packet_rule("Тестовое правило: весь TCP", action=0, direction=2, protocol=TCP)
+    web = packet_rule("Тестовое правило: веб", action=1, direction=4, protocol=TCP, remote_ports=[{"begin": 443, "end": 443}])
+    assert upload(auth_client, kes11_export(**{"cf9370d5/firewall.networkPacketRules": [tcp, web]}))["status"] == "done"
+    sid = int(auth_client.get("/api/ksc/snapshots").json()[0]["id"])
+    packet = _net_rules(auth_client, sid, "layer=packet")["items"]
+    assert [i["name"] for i in packet] == [tcp["name"], web["name"]]
+    assert packet[0]["shadowed_by"] is None
+    assert packet[1]["shadowed_by"] == {"row_id": packet[0]["id"], "position": 0, "name": tcp["name"], "same_action": False}
+    assert _card(auth_client, sid, "net-rules", packet[1]["id"])["shadowed_by"] == packet[1]["shadowed_by"]
+    app = _net_rules(auth_client, sid, "layer=app")["items"]
+    assert [i["layer"] for i in app] == ["app"] and app[0]["shadowed_by"] is None
+    csv = auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules/export?format=csv&layer=app").content.decode("utf-8-sig")
+    assert app[0]["name"] in csv and tcp["name"] not in csv
+    db_session.execute(update(KscNetRule).where(KscNetRule.snapshot_id == sid).values(scope_json=None))
+    db_session.commit()
+    assert all(i["shadowed_by"] is None for i in _net_rules(auth_client, sid)["items"])

@@ -117,11 +117,19 @@ def _sources(fw: HostFirewall, model: str, layer: str, chosen: tuple[str, ...]) 
     raise ValueError(f"неизвестная модель наложения профиля: {model}")
 
 
+def source_sets(fw: HostFirewall, model: str, *, with_undetermined: tuple[str, ...] = (),
+                layer: str = "packet") -> tuple[SourceSet, ...]:
+    """Действующие источники слоя (`packet` | `app`) по модели наложения `merge` | `replace`, в порядке применения;
+    `with_undetermined` — имена профилей с неопределённой активацией, которые считаются активными."""
+    return _sources(fw, model, layer, with_undetermined)
+
+
 def effective_rules(fw: HostFirewall, model: str, *, with_undetermined: tuple[str, ...] = (),
                     layer: str = "packet") -> tuple[RuleView, ...]:
     """Действующий список правил слоя (`packet` | `app`) по модели наложения `merge` | `replace`; `with_undetermined` —
     имена профилей с неопределённой активацией, которые считаются активными. Внутри источника — по позиции."""
-    return tuple(r for s in _sources(fw, model, layer, with_undetermined) for r in sorted(s.rules, key=lambda r: r.position))
+    return tuple(r for s in source_sets(fw, model, with_undetermined=with_undetermined, layer=layer)
+                 for r in sorted(s.rules, key=lambda r: r.position))
 
 
 def _source_name(fw: HostFirewall, s: SourceSet) -> str:
