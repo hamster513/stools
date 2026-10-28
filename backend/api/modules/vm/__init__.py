@@ -12,13 +12,24 @@ from api.modules.vm import data_status as data_status  # регистрируе�
 from api.modules.vm import models as models  # таблицы должны попасть в metadata
 from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job
-from api.modules.vm.routers import import_, jobs, overview, recalc, refs, settings, vulns, zones
+from api.modules.vm.routers import (
+    harbor,
+    import_,
+    jobs,
+    overview,
+    recalc,
+    refs,
+    settings,
+    vulns,
+    zones,
+)
 from api.modules.vm.services.attack_layer import LAYER as ATTACK_LAYER
 from api.platform.findings.adapters import register_adapter, register_bulk_filter, register_bulk_job
 
 router = APIRouter(prefix="/api/vm")
 for sub in (
     settings.router,
+    harbor.router,
     zones.router,
     jobs.router,
     import_.router,

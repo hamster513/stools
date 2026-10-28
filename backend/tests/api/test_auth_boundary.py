@@ -234,6 +234,8 @@ BUCKET: dict[tuple[str, str], str] = {
     ("POST", "/api/vm/refs/bundle/upload"): "admin",
     ("POST", "/api/vm/refs/{name}/download"): "admin",
     ("POST", "/api/vm/refs/{name}/upload"): "admin",
+    ("PUT", "/api/vm/harbor"): "admin",
+    ("POST", "/api/vm/harbor/test"): "admin",
     ("PUT", "/api/vm/settings"): "admin",
     ("POST", "/api/vm/settings/test-vm"): "admin",
     ("PUT", "/api/vm/zones"): "admin",
