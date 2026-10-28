@@ -5,7 +5,7 @@ import { HelpParseError, parseArticle, splitSections } from './frontmatter.ts'
 const SAMPLE = `---
 slug: ad-findings                 # адрес /help/ad-findings
 title: Находки Active Directory
-group: module                     # start | module | settings | glossary
+group: module                     # start | news | module | settings | glossary
 module: ad
 routes: ["/ad/findings", "/ad/findings/*"]   # адреса статьи страницы
 

@@ -1,7 +1,7 @@
 // Типы справки. Без React и зависимостей: модуль подключается и из бандла Vite,
 // и из vite-плагина / node-скрипта проверки.
 
-export type Group = 'start' | 'module' | 'settings' | 'glossary'
+export type Group = 'start' | 'news' | 'module' | 'settings' | 'glossary'
 
 export interface ArticleMeta {
   slug: string

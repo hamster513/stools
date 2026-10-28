@@ -17,7 +17,7 @@ export class HelpParseError extends Error {
   }
 }
 
-const GROUPS: readonly string[] = ['start', 'module', 'settings', 'glossary']
+const GROUPS: readonly string[] = ['start', 'news', 'module', 'settings', 'glossary']
 const STRING_KEYS = ['slug', 'title', 'group', 'module', 'where', 'section'] as const
 const LIST_KEYS = ['routes', 'concepts'] as const
 const LEVEL_KEYS = ['read', 'write', 'admin', 'any'] as const

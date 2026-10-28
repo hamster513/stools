@@ -11,7 +11,7 @@ import type { Article, TocItem } from './core/types.ts'
 export type { TocItem }
 
 export interface TocGroup {
-  key: 'start' | 'modules' | 'settings' | 'glossary'
+  key: 'start' | 'news' | 'modules' | 'settings' | 'glossary'
   title: string
   items: TocItem[]
 }
@@ -89,13 +89,15 @@ function byOrderThenTitle(a: Article, b: Article): number {
 const item = (a: Article): TocItem => ({ slug: a.slug, title: a.title })
 
 /**
- * Оглавление: «Начало», «Модули» (доступные, в порядке рейки), «Настройки», «Словарь».
+ * Оглавление: «Начало», «Что нового», «Модули» (доступные, в порядке рейки), «Настройки», «Словарь».
  * Узел модуля ведёт на статью его корня (`/<модуль>`); без неё — на первую статью модуля.
  * Внутри узла: статьи модуля (и страница его настроек — она тоже `group: module`) по `order` и названию,
- * затем его понятия.
+ * затем его понятия. Выпуски — по slug в обратном порядке: `news-<дата>` новые сверху, `news-next`
+ * («Готовится к выпуску») выше любой даты.
  */
 export function toc(): TocGroup[] {
   const start = ARTICLES.filter((a) => a.group === 'start').sort(byOrderThenTitle)
+  const news = ARTICLES.filter((a) => a.group === 'news').sort((a, b) => b.slug.localeCompare(a.slug))
   const platform = ARTICLES.filter((a) => a.group === 'settings' && (a.module ?? 'platform') === 'platform').sort(byOrderThenTitle)
   const glossary = ARTICLES.filter((a) => a.group === 'glossary').sort((a, b) => a.title.localeCompare(b.title, 'ru'))
 
@@ -113,6 +115,7 @@ export function toc(): TocGroup[] {
 
   return [
     { key: 'start', title: 'Начало', items: start.map(item) },
+    { key: 'news', title: 'Что нового', items: news.map(item) },
     { key: 'modules', title: 'Модули', items: modules },
     // Статьи с общим `section` (вкладки «Доступа») — под одним узлом, как в меню настроек.
     { key: 'settings', title: 'Настройки', items: nestSections(platform) },

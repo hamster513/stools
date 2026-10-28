@@ -67,7 +67,8 @@ export function validate(articles: Article[], routes: string[], knownModules: st
     }
 
     // обязательные разделы
-    const needed = pageGroup ? ['Что это', 'Как читать', 'Как настроить'] : ['Что это']
+    // у «Что нового» разделы свободные: выпуск описывается по модулям
+    const needed = pageGroup ? ['Что это', 'Как читать', 'Как настроить'] : a.group === 'news' ? [] : ['Что это']
     for (const title of needed) {
       if (!(a.sections[title] ?? '').trim()) err(`нет раздела «## ${title}»`)
     }

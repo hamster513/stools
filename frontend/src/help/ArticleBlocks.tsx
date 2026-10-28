@@ -5,9 +5,9 @@ import { filledLevels } from './levels'
 /** Заголовок мелкого блока статьи: общий для панели подсказки и страницы справки. */
 export const BLOCK_TITLE = 'mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase'
 
-/** Уровни есть у страниц модулей и настроек; у «Начала» и словаря их нет. */
+/** Уровни есть у страниц модулей и настроек; у «Начала», «Что нового» и словаря их нет. */
 function levelsOf(article: Article) {
-  return article.group !== 'start' && article.group !== 'glossary' ? filledLevels(article.levels, article.module) : []
+  return article.group === 'module' || article.group === 'settings' ? filledLevels(article.levels, article.module) : []
 }
 
 /** Строка «Где: … · Кому: …»: «Кому» — наименьший уровень, с которого статья применима. */

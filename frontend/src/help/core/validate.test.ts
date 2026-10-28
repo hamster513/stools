@@ -209,3 +209,9 @@ test('неизвестный module: опечатка или модуль не �
   list[1] = { ...list[1], module: 'fw' }
   assert.deepEqual(validate(list, [], MODS), ['ad.md: неизвестный модуль «fw» в поле module (допустимы: ad, platform)'])
 })
+
+test('статья «Что нового» без раздела «Что это» проходит: разделы выпуска свободные', () => {
+  const list = clean()
+  list.push(art({ slug: 'news-2026-10-28', group: 'news', module: undefined, where: undefined, levels: undefined, body: '## Справка\nДобавлена.\n', sections: { Справка: 'Добавлена.' } }))
+  assert.deepEqual(validate(list, [], MODS), [])
+})
