@@ -78,12 +78,67 @@ class NetRule:
     scope: Scope = Scope()
 
 
+@dataclass(frozen=True)
+class NetworkZone:
+    """Зона сети (`firewall.availableNetworks`)."""
+    name: str
+    #: Код вида зоны (`type`) как в выгрузке; None — не int.
+    kind: int | None
+    #: Адрес с маской из `address`.
+    address: Address
+
+
+@dataclass(frozen=True)
+class AppGroupDefault:
+    """Группа доверия (`hips.appGroups`) без программ: место в дереве и правило доступа к сети."""
+    name: str
+    #: `parent` как в выгрузке; None — не int.
+    parent: int | None
+    #: 0 — верхний уровень; вложенность по `parent`, если её удаётся восстановить, иначе 0.
+    depth: int
+    #: Поля первого правила `networkAccessRules` группы; None — правила нет или значение неверного типа.
+    allow: bool | None
+    #: Код сети как в выгрузке (-1 как есть).
+    networks: int | None
+    inherited: bool | None
+
+
+@dataclass(frozen=True)
+class Locks:
+    """Замки листов секции HIPS (`KLPRSS_Mnd`); None — листа или признака замка нет."""
+    #: `firewall.networkPacketRules`.
+    packet: bool | None
+    #: `firewall.availableNetworks`.
+    networks: bool | None
+    #: `hips.appGroups`.
+    app: bool | None
+
+
+@dataclass(frozen=True)
+class FirewallSettings:
+    """Состояние сетевого экрана и HIPS, зоны сетей, группы доверия и замки листов политики или профиля."""
+    enabled: bool | None
+    notify_only: bool | None
+    hips_enabled: bool | None
+    hips_notify_only: bool | None
+    zones: tuple[NetworkZone, ...]
+    app_groups: tuple[AppGroupDefault, ...]
+    locks: Locks
+
+
+def firewall_to_json(fw: FirewallSettings) -> dict[str, Any]:
+    """Словарь для колонок `*_json`."""
+    return asdict(fw)
+
+
 @dataclass
 class PolicyObjects:
     exclusions: list[Exclusion] = field(default_factory=list)
     net_rules: list[NetRule] = field(default_factory=list)
     #: (секция, путь) настроек, из которых получены записи: журнал изменений их как `setting` не считает.
     consumed: set[tuple[str, str]] = field(default_factory=set)
+    #: Сетевой экран и HIPS; None — секции HIPS в политике или профиле нет.
+    firewall: FirewallSettings | None = None
 
 
 #: Секции политики или профиля → записи.

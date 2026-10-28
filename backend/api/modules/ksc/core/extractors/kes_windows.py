@@ -7,6 +7,9 @@
 `position` правила — сквозной номер среди оставленных (не пропущенных) правил своего слоя: `packet` — по списку
 `firewall.networkPacketRules`, `app` — по всем группам доверия (сначала правила группы, затем её программ). `log` и
 `networkAdapters` пакетных правил в записи не переносятся.
+
+Кроме записей — `firewall`: состояние сетевого экрана и HIPS, зоны сетей, группы доверия (без программ) и замки листов;
+значения из «голых» секций, замки — из сырых (`find_setting`). Булевы — только `bool`, коды — только int (не bool), иначе None.
 """
 from __future__ import annotations
 
@@ -14,12 +17,16 @@ import base64
 import ipaddress
 from typing import Any
 
-from api.modules.ksc.core.policy_contents import bare_sections, truncate_value
+from api.modules.ksc.core.policy_contents import bare_sections, find_setting, truncate_value
 from api.modules.ksc.core.policy_model import (
     OBJECT,
     Address,
+    AppGroupDefault,
     Exclusion,
+    FirewallSettings,
+    Locks,
     NetRule,
+    NetworkZone,
     PolicyObjects,
     Scope,
 )
@@ -254,9 +261,61 @@ def _rules(items: list[dict[str, Any]], layer: str, start: int, owner: str = "")
     return out
 
 
+def _bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _zone(item: dict[str, Any]) -> NetworkZone:
+    address = _dict(item.get("address"))
+    return NetworkZone(name=_text(item.get("name")), kind=_int(item.get("type")),
+                       address=_octets_address(address.get("octets"), address.get("mask")))
+
+
+def _app_groups(groups: list[dict[str, Any]]) -> tuple[AppGroupDefault, ...]:
+    """Группы доверия в порядке выгрузки. `parent` — номер родителя в том же списке с 1, 0 — корень (прочтение по разведке
+    `recon.md` задачи 1: у групп нет id, стандартные идут цепочкой `parent` 0,1,2,3, своя группа — с `parent` 0); ссылка вне
+    списка или не int — верхний уровень. Правило доступа к сети — первое из `networkAccessRules`."""
+    parents = [_int(g.get("parent")) for g in groups]
+    out: list[AppGroupDefault] = []
+    for group, parent in zip(groups, parents, strict=True):
+        depth, seen, node = 0, set(), parent
+        while node is not None and 1 <= node <= len(groups) and node not in seen:  # seen — защита от цикла
+            seen.add(node)
+            depth += 1
+            node = parents[node - 1]
+        rule = next(iter(_items(group.get("networkAccessRules"))), {})
+        out.append(AppGroupDefault(name=_text(group.get("name")), parent=parent, depth=depth, allow=_bool(rule.get("allow")),
+                                   networks=_int(rule.get("networks")), inherited=_bool(rule.get("inherited"))))
+    return tuple(out)
+
+
+def _lock(sections: dict[str, Any], path: str) -> bool | None:
+    setting = find_setting(sections, HIPS, path)
+    return setting.locked if setting is not None else None
+
+
+def _firewall(sections: dict[str, Any], bare: dict[str, Any]) -> FirewallSettings | None:
+    """Сетевой экран и HIPS; None — секции HIPS нет (или она не словарь)."""
+    hips = bare.get(HIPS)
+    if not isinstance(hips, dict):
+        return None
+    return FirewallSettings(
+        enabled=_bool(_at(hips, "firewall.enabled")), notify_only=_bool(_at(hips, "firewall.notifyOnly")),
+        hips_enabled=_bool(_at(hips, "hips.enabled")), hips_notify_only=_bool(_at(hips, "hips.notifyOnly")),
+        zones=tuple(map(_zone, _items(_at(hips, "firewall.availableNetworks")))),
+        app_groups=_app_groups(_items(_at(hips, "hips.appGroups"))),
+        locks=Locks(packet=_lock(sections, "firewall.networkPacketRules"), networks=_lock(sections, "firewall.availableNetworks"),
+                    app=_lock(sections, "hips.appGroups")),
+    )
+
+
 def extract_kes(sections: dict[str, Any]) -> PolicyObjects:
     """Записи политики или профиля KES для Windows: исключения (`scanExclusions`), доверенные программы
-    (`trustedApplications`), пакетные правила сетевого экрана (слой `packet`) и правила групп доверия и программ (слой `app`)."""
+    (`trustedApplications`), пакетные правила сетевого экрана (слой `packet`), правила групп доверия и программ (слой `app`) и `firewall`."""
     bare = bare_sections(sections)
     zone, hips = _dict(_at(bare, f"{TRUSTED_ZONE}.{_ZONE}")), bare.get(HIPS)
     exclusions = [e for e in map(_scan_exclusion, _items(zone.get("scanExclusions"))) if e is not None]
@@ -268,4 +327,4 @@ def extract_kes(sections: dict[str, Any]) -> PolicyObjects:
         app_rules += _rules(_items(group.get("networkPacketRules")), "app", len(app_rules), _text(group.get("name")))
         for app in _items(group.get("applications")):
             app_rules += _rules(_items(app.get("networkPacketRules")), "app", len(app_rules), _text(app.get("name")))
-    return PolicyObjects(exclusions, net_rules + app_rules, set(CONSUMED))
+    return PolicyObjects(exclusions, net_rules + app_rules, set(CONSUMED), _firewall(sections, bare))
