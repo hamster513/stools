@@ -145,6 +145,8 @@ class PolicyObjects:
     consumed: set[tuple[str, str]] = field(default_factory=set)
     #: Сетевой экран и HIPS; None — секции HIPS в политике или профиле нет.
     firewall: FirewallSettings | None = None
+    #: Заполняет `policy_index.policy_objects`: профиль ("" — сама политика) → `firewall` его секций, без тех, где он None.
+    firewall_by_profile: dict[str, FirewallSettings] = field(default_factory=dict)
 
 
 #: Секции политики или профиля → записи.

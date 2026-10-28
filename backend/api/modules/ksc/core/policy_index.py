@@ -113,13 +113,15 @@ def profile_rows(export: KscExport) -> list[ProfileRow] | None:
 
 
 def policy_objects(export: KscExport, policy_id: str) -> tuple[PolicyObjects, bool]:
-    """Записи политики и её профилей (у записей профиля `profile` — имя профиля); bool — продукт описан."""
+    """Записи политики и её профилей (у записей профиля `profile` — имя профиля) и `firewall_by_profile`; bool — продукт описан."""
     policy = next((p for p in export.policies if _str(p.get("KLPOL_ID")) == policy_id), {})
     product = _str(policy.get("KLPOL_PRODUCT"))
     objs = extract(product, (export.policy_contents.get(policy_id) or {}).get("sections") or {})
     if objs is None:
         return PolicyObjects(), False
     out = PolicyObjects(list(objs.exclusions), list(objs.net_rules), set(objs.consumed))
+    if objs.firewall is not None:
+        out.firewall_by_profile[""] = objs.firewall
     entry = (export.policy_profiles or {}).get(policy_id) or {}
     for pr in entry.get("profiles") or []:
         name = _str(pr.get("name"))
@@ -129,4 +131,6 @@ def policy_objects(export: KscExport, policy_id: str) -> tuple[PolicyObjects, bo
         out.exclusions.extend(replace(e, profile=name) for e in found.exclusions)
         out.net_rules.extend(replace(r, profile=name) for r in found.net_rules)
         out.consumed |= found.consumed
+        if found.firewall is not None:
+            out.firewall_by_profile[name] = found.firewall
     return out, True

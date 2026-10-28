@@ -226,6 +226,28 @@ class KscNetRule(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     #: core/policy_model.net_rule_key — без политики, профиля и позиции.
     key: Mapped[str] = mapped_column(String(64), index=True)
+    #: Адреса структурой (core/policy_model.scope_to_json); None — строка записана до миграции, дозаполняется из выгрузки.
+    scope_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class KscPolicyFirewall(Base):
+    """Сетевой экран и HIPS политики или профиля (core/policy_model.FirewallSettings): строка есть, только если секция HIPS есть."""
+
+    __tablename__ = "ksc_policy_firewall"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
+    policy_id: Mapped[int] = mapped_column(Integer)
+    #: Имя профиля; "" — сама политика.
+    profile: Mapped[str] = mapped_column(String(255), default="")
+    #: None — листа нет или значение не bool.
+    enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    notify_only: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    hips_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    hips_notify_only: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    zones_json: Mapped[str] = mapped_column(Text, default="[]")
+    app_groups_json: Mapped[str] = mapped_column(Text, default="[]")
+    locks_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
 class KscChange(Base):

@@ -1,4 +1,4 @@
-"""Запись политик снапшота в таблицы: политики, привязка к группам, профили, исключения, сетевые правила.
+"""Запись политик снапшота в таблицы: политики, привязка к группам, профили, исключения, сетевые правила, сетевой экран.
 
 Вызывается из `snapshots._store` — при импорте и при пересчёте: строки снапшота удаляются и пишутся заново.
 Снапшоты, импортированные до появления таблиц, заполняются при первом чтении (`ensure_policy_tables`).
@@ -21,12 +21,18 @@ from api.modules.ksc.core.exclusion_risks import exclusion_risks
 from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_export_path
 from api.modules.ksc.core.policy_contents import flat_settings
 from api.modules.ksc.core.policy_index import policy_objects, policy_rows, profile_rows, scope_rows
-from api.modules.ksc.core.policy_model import exclusion_key, net_rule_key
+from api.modules.ksc.core.policy_model import (
+    exclusion_key,
+    firewall_to_json,
+    net_rule_key,
+    scope_to_json,
+)
 from api.modules.ksc.models import (
     KscExclusion,
     KscHost,
     KscNetRule,
     KscPolicy,
+    KscPolicyFirewall,
     KscPolicyScope,
     KscProfile,
     KscSnapshot,
@@ -35,7 +41,7 @@ from api.modules.ksc.services.settings import load_config
 
 log = logging.getLogger(__name__)
 
-TABLES = (KscPolicy, KscPolicyScope, KscProfile, KscExclusion, KscNetRule)
+TABLES = (KscPolicy, KscPolicyScope, KscProfile, KscExclusion, KscNetRule, KscPolicyFirewall)
 #: Первый ключ блокировки дозаполнения (второй — id снапшота): свой у модуля, чтобы не пересечься с чужими.
 BACKFILL_LOCK = 0x4B5343  # "KSC"
 
@@ -73,6 +79,7 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex, cfg: Ks
     policies: list[dict[str, Any]] = []
     exclusions: list[dict[str, Any]] = []
     net_rules: list[dict[str, Any]] = []
+    firewalls: list[dict[str, Any]] = []
     for p in policy_rows(idx):
         objs, described = policy_objects(export, str(p.policy_id))
         content = export.policy_contents.get(str(p.policy_id)) or {}
@@ -98,12 +105,21 @@ def store_policies(db: Session, snapshot: KscSnapshot, idx: ExportIndex, cfg: Ks
             {"snapshot_id": sid, "policy_id": p.policy_id, "profile": r.profile[:255], "layer": r.layer[:16], "position": r.position,
              "name": r.name[:255], "action": r.action[:32], "direction": r.direction[:32], "protocol": r.protocol[:32],
              "local_ports": r.local_ports[:255], "remote_ports": r.remote_ports[:255], "addresses": r.addresses, "enabled": r.enabled,
-             "key": net_rule_key(r)}
+             "key": net_rule_key(r), "scope_json": scope_to_json(r.scope)}
             for r in objs.net_rules
         )
+        for profile, fw in objs.firewall_by_profile.items():
+            data = firewall_to_json(fw)
+            firewalls.append({
+                "snapshot_id": sid, "policy_id": p.policy_id, "profile": profile[:255], "enabled": fw.enabled, "notify_only": fw.notify_only,
+                "hips_enabled": fw.hips_enabled, "hips_notify_only": fw.hips_notify_only,
+                "zones_json": json.dumps(data["zones"], ensure_ascii=False), "app_groups_json": json.dumps(data["app_groups"], ensure_ascii=False),
+                "locks_json": json.dumps(data["locks"], ensure_ascii=False),
+            })
     _insert(db, KscPolicy, policies)
     _insert(db, KscExclusion, exclusions)
     _insert(db, KscNetRule, net_rules)
+    _insert(db, KscPolicyFirewall, firewalls)
 
 
 def _profiles_count(entry: dict[str, Any] | None) -> int | None:
@@ -121,21 +137,32 @@ def _has_policies(db: Session, snapshot_id: int) -> bool:
     return db.scalar(select(KscPolicy.id).where(KscPolicy.snapshot_id == snapshot_id).limit(1)) is not None
 
 
+def needs_scope_backfill(db: Session, snapshot_id: int) -> bool:
+    """Есть сетевое правило снапшота без структуры адресов — записано до появления `scope_json`."""
+    return db.scalar(select(KscNetRule.id).where(KscNetRule.snapshot_id == snapshot_id, KscNetRule.scope_json.is_(None)).limit(1)) is not None
+
+
+def _filled(db: Session, snapshot_id: int) -> bool:
+    return _has_policies(db, snapshot_id) and not needs_scope_backfill(db, snapshot_id)
+
+
 def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> bool:
     """Таблицы политик снапшота, импортированного до их появления: пишутся из файла выгрузки при первом чтении,
-    вместе с группой у хостов. Находки, сводка и журнал изменений не трогаются. True — дозаполнено сейчас;
+    вместе с группой у хостов. Так же переписываются таблицы снапшота, у сетевых правил которого нет структуры адресов
+    (`needs_scope_backfill`: записаны до `scope_json`) — заодно появляются строки `ksc_policy_firewall`.
+    Находки, сводка и журнал изменений не трогаются. True — дозаполнено сейчас;
     False — строки уже были, файла нет или он не разобран/не записан (тогда экраны остаются пустыми, как раньше,
-    причина — в журнале API: чтение не должно падать из-за дозаполнения)."""
+    а `scope_json` — NULL; причина — в журнале API: чтение не должно падать из-за дозаполнения)."""
     from api.modules.ksc.services.snapshots import snapshot_path
 
-    if _has_policies(db, snapshot.id):
+    if _filled(db, snapshot.id):
         return False
     path = snapshot_path(data_dir, snapshot.id)
     if not path.exists():
         return False
     # Два одновременных первых чтения: второй ждёт первого и находит строки уже записанными.
     db.execute(text("SELECT pg_advisory_xact_lock(CAST(:ns AS integer), CAST(:sid AS integer))"), {"ns": BACKFILL_LOCK, "sid": snapshot.id})
-    if _has_policies(db, snapshot.id):
+    if _filled(db, snapshot.id):
         db.commit()
         return False
     try:
