@@ -25,18 +25,6 @@ from api.modules.vm.services.harbor_settings import (
 router = APIRouter(prefix="/harbor", tags=["vm"])
 
 
-class LastSyncView(BaseModel):
-    """Последний сбор образов; заполняет Task 4."""
-
-    model_config = {"extra": "allow"}
-
-
-class ScheduleView(BaseModel):
-    """Расписание сбора образов; заполняет Task 4."""
-
-    model_config = {"extra": "allow"}
-
-
 class HarborView(BaseModel):
     url: str
     robot_name: str
@@ -45,8 +33,9 @@ class HarborView(BaseModel):
     projects: list[str]
     tags_per_repo: int
     configured: bool
-    last_sync: LastSyncView | None = None
-    schedule: ScheduleView | None = None
+    #: Task 4 заменит на `LastSyncView | None` и `api.platform.schedule_views.ScheduleView | None`.
+    last_sync: None = None
+    schedule: None = None
 
 
 def _view(conn: HarborConnection) -> HarborView:
@@ -91,7 +80,7 @@ def _public_error(exc: BaseException) -> str:
         return str(exc)
     if isinstance(exc, HarborError):
         return exc.kind
-    if isinstance(exc, httpx.HTTPError):
+    if isinstance(exc.__cause__, httpx.HTTPError) or isinstance(exc, httpx.HTTPError):
         return TLS_FAILED if is_tls_error(exc) else NO_LINK
     return server_error(None)
 

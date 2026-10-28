@@ -6,14 +6,14 @@
 """
 from __future__ import annotations
 
-import datetime as dt
 import re
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from api.crypto import decrypt, encrypt, reseal
+from api.crypto import decrypt
 from api.db.models import AppSetting
+from api.platform.secret_fields import put_setting, seal_secrets, secrets_again
 
 SETTING_KEY = "vm_harbor"
 
@@ -120,21 +120,11 @@ def save_harbor(db: Session, incoming: HarborConnectionIn, updated_by: str | Non
     Исключение — смена адреса или робота: прежний секрет на новый адрес не уходит,
     его нужно ввести заново (`SecretsRequired`)."""
     old = load_harbor(db)
-    if incoming.url and any(getattr(incoming, f) != getattr(old, f) for f in ADDRESS_FIELDS) and any(
-        getattr(old, f) and not getattr(incoming, f) for f in SECRET_FIELDS
-    ):
+    if secrets_again(old, incoming, ADDRESS_FIELDS, SECRET_FIELDS):
         raise SecretsRequired(SECRETS_AGAIN)
     merged = HarborConnection(**incoming.model_dump())
     #: Новый секрет шифруется; прежний — тоже, если лежал открытым.
-    for f in SECRET_FIELDS:
-        new_value = getattr(merged, f)
-        setattr(merged, f, encrypt(new_value) if new_value else reseal(getattr(old, f)))
-    row = db.get(AppSetting, SETTING_KEY)
-    if row is None:
-        row = AppSetting(key=SETTING_KEY)
-        db.add(row)
-    row.value_json = merged.model_dump_json()
-    row.updated_at = dt.datetime.now(dt.UTC)
-    row.updated_by = updated_by
-    db.commit()
+    for f, value in seal_secrets(old, merged, SECRET_FIELDS).items():
+        setattr(merged, f, value)
+    put_setting(db, SETTING_KEY, merged.model_dump_json(), updated_by)
     return merged

@@ -119,3 +119,44 @@ def test_test_reports_class_only(auth_client: TestClient, monkeypatch: pytest.Mo
     state["deny"] = False
     r = auth_client.post("/api/vm/harbor/test")
     assert r.json()["ok"] is True and "v2.11.0" in r.json()["message"]
+
+
+def test_audit_summary_has_no_secret(auth_client: TestClient, db_session: Any) -> None:
+    from api.db.models import AuditEvent
+
+    assert auth_client.put("/api/vm/harbor", json=FIRST).status_code == 200
+    db_session.expire_all()
+    events = [e for e in db_session.query(AuditEvent).order_by(AuditEvent.id) if e.path == "/api/vm/harbor"]
+    summary = events[-1].summary or ""
+    assert "robot_secret" in summary and "url" in summary
+    assert "s3cret" not in summary and "harbor.example.test" not in summary and "robot$reader" not in summary
+
+
+def test_test_reports_no_link(auth_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from api.hosts import NO_LINK
+    from api.modules.vm.routers import harbor as router
+
+    assert auth_client.put("/api/vm/harbor", json=FIRST).status_code == 200
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom harbor.example.test", request=request)
+
+    monkeypatch.setattr(
+        router, "make_harbor_client", lambda conn, timeout=60.0: httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    r = auth_client.post("/api/vm/harbor/test")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": False, "message": NO_LINK}
+
+
+def test_test_reports_unreadable_secret(auth_client: TestClient, db_session: Any) -> None:
+    from api.crypto import SecretUnreadable
+    from api.db.models import AppSetting
+
+    assert auth_client.put("/api/vm/harbor", json=FIRST).status_code == 200
+    row = db_session.get(AppSetting, "vm_harbor")
+    row.value_json = json.dumps({**json.loads(row.value_json), "robot_secret": "enc:v1:garbage"})
+    db_session.commit()
+    r = auth_client.post("/api/vm/harbor/test")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": False, "message": str(SecretUnreadable())}
