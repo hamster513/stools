@@ -1,7 +1,7 @@
 """KSC: структура адресов сетевых правил (`scope_json`), настройки сетевого экрана и HIPS (`ksc_policy_firewall`), версия таблиц политик снапшота
 
 Revision ID: 4e7a9c1b3d5f
-Revises: 8aacd2621120
+Revises: 7e31b0364015
 Create Date: 2026-10-28 00:00:00.000000
 
 Строки `ksc_net_rule`, записанные до миграции, получают `scope_json` NULL, снапшоты — `policy_store_version` 0; такие снапшоты
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "4e7a9c1b3d5f"
-down_revision: str | Sequence[str] | None = "8aacd2621120"
+down_revision: str | Sequence[str] | None = "7e31b0364015"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
