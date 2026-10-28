@@ -1,10 +1,12 @@
 """Сетевой экран хоста из таблиц снапшота: политика KES хоста, её профили с активацией, правила и строки сетевого экрана.
 
 Сборка — `core/firewall/view`. Таблицы политик снапшота должны быть заполнены (`ensure_policy_tables`) — это делает маршрут.
+Строки сетевого экрана и правила сопоставляются с профилем по имени: в KSC имя профиля уникально внутри политики.
 """
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -74,8 +76,6 @@ def load_host_firewall(db: Session, snapshot_id: int, host_id: str) -> HostFirew
     rows = list(db.execute(
         select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id, KscNetRule.policy_id == pid).order_by(KscNetRule.position, KscNetRule.id)
     ).scalars())
-    if any(r.scope_json is None for r in rows):
-        notes.append(NOTE_NO_SCOPE)
     rules = [rule_view(r) for r in rows]
 
     def source(profile: str, priority: int | None, active: bool | None) -> Source:
@@ -84,4 +84,10 @@ def load_host_firewall(db: Session, snapshot_id: int, host_id: str) -> HostFirew
                       tuple(r for r in rules if r.profile == profile and r.layer == "app"))
 
     profiles = [source(r.name, r.priority, a.active) for r, a in scope.profiles if r.policy_id == pid]
-    return host_firewall(h.host_id, h.name, h.ip, pid, policy.name, source("", None, True), profiles, components, notes)
+    fw = host_firewall(h.host_id, h.name, h.ip, pid, policy.name, source("", None, True), profiles, components, notes)
+    # Оговорка — только о правилах, которые движок будет проверять (в действующих и неопределённых списках).
+    unread = {r.id for r in rows if r.scope_json is None}
+    sets = [fw.packet, fw.app, *fw.packet_profiles, *fw.packet_undetermined, *fw.app_profiles, *fw.app_undetermined]
+    if unread and any(r.row_id in unread for s in sets if s is not None for r in s.rules):
+        fw = replace(fw, notes=(*fw.notes, NOTE_NO_SCOPE))
+    return fw
