@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
@@ -68,6 +69,10 @@ class HarborConnectionIn(HarborConnection):
             raise ValueError("адрес Harbor — http:// или https://, например https://harbor.example.local")
         if url.endswith("/"):
             raise ValueError("адрес Harbor — без завершающего «/»")
+        parts = urlsplit(url)
+        if "@" in parts.netloc or "?" in url or "#" in url:
+            # Имя и пароль в адресе ушли бы в журнал и сообщения задач; робот задаётся полями ниже.
+            raise ValueError("адрес Harbor — без имени и пароля, «?…» и «#…», например https://harbor.example.local")
         return url
 
     @field_validator("robot_name")

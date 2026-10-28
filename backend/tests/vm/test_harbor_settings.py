@@ -91,6 +91,16 @@ def test_bad_fields_rejected(auth_client: TestClient, patch: dict[str, Any]) -> 
     assert auth_client.put("/api/vm/harbor", json={**FIRST, **patch}).status_code == 422
 
 
+@pytest.mark.parametrize(
+    "url", ["http://user:pass@harbor.example.test", "https://robot@harbor.example.test", "https://harbor.example.test?x=1",
+            "https://harbor.example.test#top"],
+)
+def test_url_with_credentials_query_or_fragment_rejected(auth_client: TestClient, url: str) -> None:
+    r = auth_client.put("/api/vm/harbor", json={**FIRST, "url": url})
+    assert r.status_code == 422
+    assert "без имени и пароля" in r.text
+
+
 def test_test_requires_configured(auth_client: TestClient) -> None:
     assert auth_client.post("/api/vm/harbor/test").status_code == 400
 

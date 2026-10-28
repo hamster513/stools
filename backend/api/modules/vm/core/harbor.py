@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -140,6 +141,17 @@ def _enc(name: str) -> str:
     return quote(quote(name, safe=""), safe="")
 
 
+def _tagged_digests(items: list[Any]) -> set[str]:
+    """Разные digest артефактов с тегами в сыром списке Harbor."""
+    found: set[str] = set()
+    for raw in items:
+        item = _dict(raw)
+        digest, tags = item.get("digest"), item.get("tags")
+        if isinstance(digest, str) and digest and isinstance(tags, list) and tags:
+            found.add(digest)
+    return found
+
+
 def _project_path(project: str) -> str:
     return f"/projects/{quote(project, safe='')}"
 
@@ -183,21 +195,31 @@ class HarborClient:
         except ValueError as exc:
             raise HarborError(BAD_FORMAT) from exc
 
-    def _pages(self, path: str, params: dict[str, Any] | None = None) -> list[Any]:
+    def _pages(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        page_size: int = PAGE_SIZE,
+        enough: Callable[[list[Any]], bool] | None = None,
+    ) -> list[Any]:
         """Все элементы списка: `page=1..`, пока `page * page_size < X-Total-Count`;
-        без заголовка — пока страница полная. Больше `MAX_PAGES` страниц — `BAD_FORMAT`. Сервер, игнорирующий `page`, отдаёт одну и ту же
-        страницу: первый элемент страницы повторил первый элемент предыдущей — конец списка."""
+        без заголовка — пока страница полная. Сервер, игнорирующий `page`, отдаёт одну и ту же
+        страницу: первый элемент страницы повторил первый элемент предыдущей — конец списка.
+        `enough(items)` — собранного достаточно, дальше не листать. Больше `MAX_PAGES`
+        страниц — `BAD_FORMAT`: усечённый список не выдаётся за полный."""
         items: list[Any] = []
         previous_first: Any = None
         for page in range(1, MAX_PAGES + 1):
-            data, headers = self._get(path, {**(params or {}), "page": page, "page_size": PAGE_SIZE})
+            data, headers = self._get(path, {**(params or {}), "page": page, "page_size": page_size})
             if not isinstance(data, list):
                 raise HarborError(BAD_FORMAT)
             if page > 1 and data and data[0] == previous_first:
                 break
             items.extend(data)
+            if enough is not None and enough(items):
+                break
             total = headers.get("X-Total-Count", "")
-            more = page * PAGE_SIZE < int(total) if total.isascii() and total.isdigit() else len(data) >= PAGE_SIZE
+            more = page * page_size < int(total) if total.isascii() and total.isdigit() else len(data) >= page_size
             if not more or not data:
                 break
             previous_first = data[0]
@@ -238,9 +260,18 @@ class HarborClient:
             )
         return repos
 
-    def artifacts(self, project: str, repo: str) -> list[HarborArtifact]:
+    def artifacts(self, project: str, repo: str, limit: int | None = None) -> list[HarborArtifact]:
+        """Тегированные артефакты репозитория, свежие первыми (`sort=-push_time`, `q=tags=*`).
+        `limit` — сколько разных тегированных digest нужно: дальше история не листается."""
         path = f"{_project_path(project)}/repositories/{_enc(repo)}/artifacts"
-        found = [self._artifact(_dict(raw)) for raw in self._pages(path, {"with_scan_overview": "true", "with_tag": "true"})]
+        params = {"with_scan_overview": "true", "with_tag": "true", "sort": "-push_time", "q": "tags=*"}
+
+        def enough(items: list[Any]) -> bool:
+            return limit is not None and len(_tagged_digests(items)) >= limit
+
+        page_size = min(PAGE_SIZE, limit) if limit is not None and limit > 0 else PAGE_SIZE
+        raws = self._pages(path, params, page_size, enough if limit is not None else None)
+        found = [self._artifact(_dict(raw)) for raw in raws]
         return [a for a in found if a.digest]
 
     @staticmethod

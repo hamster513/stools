@@ -201,9 +201,11 @@ def image_risk_card(
     cve = db.get(VmCve, vuln_id) if is_cve(vuln_id) else None
     if cve is not None:
         # Расчёт для образа: критичности, зоны и интернета нет — V базовая (`scoring.image_value`).
+        # «Внутри, без интернета и конфиденциальности» для образа — условие формулы, а не подстановка
+        # за неразмеченную зону: `zone_marked=True`.
         e = explain(
             cve_inputs(cve, kev_loaded=db.get(VmRefState, "kev") is not None),
-            None, internet=False, confidential=False, zone_marked=False, w=settings.weights,
+            None, internet=False, confidential=False, zone_marked=True, w=settings.weights,
         )
         # Пара ещё без риска (до пересчёта) — показываем расчёт.
         factors = risk_view(e, settings, row.risk if row.risk is not None else e.score,

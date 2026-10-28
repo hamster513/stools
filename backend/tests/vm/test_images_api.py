@@ -171,6 +171,9 @@ def test_image_vulns_filters_and_card(auth_client: TestClient, seeded: dict[str,
     assert factors["score"] == 80 and factors["level"] == "critical"
     assert factors["likelihood"]["value"] == 1.0
     assert factors["value"]["source"] and "likelihood_parts" in factors and "severity_parts" in factors
+    # «Хост внутри» для образа — условие формулы, а не подстановка за неразмеченную зону.
+    assert factors["severity_parts"]["reach"]["substituted"] is False
+    assert factors["value_parts"]["internet"]["substituted"] is False
     assert body["nvd_url"] == "https://nvd.nist.gov/vuln/detail/CVE-2024-1111"
 
     ghsa_card = auth_client.get(f"{base}/GHSA-aaaa-bbbb-cccc", params={"package": "pkg", "installed_version": "1.0"})

@@ -345,6 +345,98 @@ def test_join_platforms_drops_whole_names() -> None:
     assert join_platforms([]) is None
 
 
+def test_rescan_running_keeps_counters_and_findings(db_session: Any) -> None:
+    """Скан идёт: обзор Harbor без сводки (одни нули) — прежние находки, счётчики и сканер остаются."""
+    fake = fake_harbor()
+    assert _sync(fake)[0].status == "done"
+    before = _images(db_session)["library/debian"]
+    counters = (before.trivy_total, before.trivy_low, before.trivy_high, before.scanner, before.scanned_at)
+    assert before.trivy_total > 0 and before.scanner
+
+    arts = fixture("artifacts_library_debian.json")
+    arts[0]["scan_overview"] = {REPORT_MIME: {"scan_status": "Running", "start_time": "2026-10-29T10:00:00.000Z"}}
+    fake.routes[f"{LIB}/debian/artifacts"] = arts
+    job, result = _sync(fake)
+    assert job.status == "done" and result is not None and result.skipped_unscanned == 2
+
+    after = _images(db_session)["library/debian"]
+    assert after.id == before.id and after.scan_status == "running"
+    assert (after.trivy_total, after.trivy_low, after.trivy_high, after.scanner, after.scanned_at) == counters
+    assert len(_pairs(db_session, after.id)) == 25
+
+
+def test_report_error_keeps_counters(db_session: Any) -> None:
+    fake = fake_harbor()
+    assert _sync(fake)[0].status == "done"
+    before = _images(db_session)["library/debian"]
+    arts = fixture("artifacts_library_debian.json")
+    summary = arts[0]["scan_overview"][REPORT_MIME]
+    summary["end_time"] = "2026-10-29T10:00:00.000Z"
+    summary["summary"] = {"total": 1, "summary": {"Low": 1}}
+    fake.routes[f"{LIB}/debian/artifacts"] = arts
+    fake.routes[f"{LIB}/debian/artifacts/*"] = 500
+    assert _sync(fake)[0].status == "done"
+    after = _images(db_session)["library/debian"]
+    assert (after.trivy_total, after.trivy_low) == (before.trivy_total, before.trivy_low)
+
+
+def test_new_scan_updates_counters(db_session: Any) -> None:
+    fake = fake_harbor()
+    assert _sync(fake)[0].status == "done"
+    arts = fixture("artifacts_library_debian.json")
+    summary = arts[0]["scan_overview"][REPORT_MIME]
+    summary["end_time"] = "2026-10-29T10:00:00.000Z"
+    summary["summary"] = {"total": 25, "summary": {"Low": 25}}
+    fake.routes[f"{LIB}/debian/artifacts"] = arts
+    assert _sync(fake)[0].status == "done"
+    after = _images(db_session)["library/debian"]
+    assert (after.trivy_total, after.trivy_low) == (25, 25)
+
+
+def test_empty_project_list_refused_when_images_exist(db_session: Any) -> None:
+    fake = fake_harbor()
+    assert _sync(fake)[0].status == "done"
+    images = db_session.execute(select(func.count()).select_from(VmImage)).scalar()
+    syncs = db_session.execute(select(func.count()).select_from(VmImageSync)).scalar()
+
+    fake.routes[f"{API}/projects"] = []
+    job, result = _sync(fake)
+    assert job.status == "failed" and result is None
+    assert job.error == "Harbor не вернул ни одного проекта: проверьте права робота"
+    db_session.expire_all()
+    assert db_session.execute(select(func.count()).select_from(VmImage)).scalar() == images
+    assert db_session.execute(select(func.count()).select_from(VmImageSync)).scalar() == syncs
+
+
+def test_empty_project_list_on_empty_db_is_a_sync(db_session: Any) -> None:
+    job, result = _sync(fake_harbor({f"{API}/projects": []}))
+    assert job.status == "done" and result is not None and result.images == 0
+
+
+def test_duplicate_projects_and_repositories_listed_once(db_session: Any) -> None:
+    projects = fixture("projects.json")
+    repos = [r for r in fixture("repositories_library.json") if r["name"] == "library/debian"]
+    fake = fake_harbor({f"{API}/projects": projects + projects, LIB: repos + repos})
+    job, result = _sync(fake)
+    assert job.status == "done", job.error
+    assert result is not None and result.images == 2 and result.repositories == 2
+
+
+def test_artifacts_requested_with_limit(db_session: Any) -> None:
+    fake = fake_harbor()
+    seen: list[httpx.Request] = []
+    handler = fake.handler
+
+    def spy(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    fake.handler = spy  # type: ignore[method-assign]
+    assert _sync(fake, CONN.model_copy(update={"tags_per_repo": 3}))[0].status == "done"
+    listing = [r for r in seen if r.url.path.endswith("/artifacts")]
+    assert listing and all(r.url.params["page_size"] == "3" and r.url.params["q"] == "tags=*" for r in listing)
+
+
 def test_probe_failure_fails_job_untouched(db_session: Any) -> None:
     fake = fake_harbor()
     assert _sync(fake)[0].status == "done"

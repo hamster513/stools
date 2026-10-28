@@ -110,6 +110,50 @@ def test_pagination_beyond_max_pages_is_error() -> None:
     assert err.value.kind == BAD_FORMAT and len(calls) == MAX_PAGES
 
 
+def test_artifacts_asks_newest_tagged_first() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[], headers={"X-Total-Count": "0"})
+
+    client_for(handler, calls).artifacts("p", "r")
+    params = calls[0].url.params
+    assert params["sort"] == "-push_time" and params["q"] == "tags=*"
+    assert params["with_tag"] == "true" and params["with_scan_overview"] == "true"
+    # Harbor разбирает `q` после декодирования: `%2A` — та же звёздочка.
+    assert "q=tags%3D%2A" in calls[0].url.query.decode() and "sort=-push_time" in calls[0].url.query.decode()
+
+
+def test_artifacts_limit_stops_paging() -> None:
+    """Нужно 10 тегированных digest — читается одна страница по 10, а не вся история."""
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page, size = int(request.url.params["page"]), int(request.url.params["page_size"])
+        items = [{"digest": f"sha256:{page}-{i}", "tags": [{"name": f"t{page}-{i}"}]} for i in range(size)]
+        return httpx.Response(200, json=items, headers={"X-Total-Count": "5000"})
+
+    got = client_for(handler, calls).artifacts("p", "r", limit=10)
+    assert len(calls) == 1 and calls[0].url.params["page_size"] == "10"
+    assert len(got) == 10
+
+
+def test_artifacts_limit_counts_distinct_tagged_digests() -> None:
+    """Повтор digest и артефакт без тегов в лимит не идут: листается следующая страница."""
+    calls: list[httpx.Request] = []
+    pages = {
+        1: [{"digest": "sha256:a", "tags": [{"name": "1"}]}, {"digest": "sha256:a", "tags": [{"name": "1"}]}],
+        2: [{"digest": "sha256:b", "tags": []}, {"digest": "sha256:c", "tags": [{"name": "2"}]}],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=pages[int(request.url.params["page"])], headers={"X-Total-Count": "4"})
+
+    got = client_for(handler, calls).artifacts("p", "r", limit=2)
+    assert len(calls) == 2 and calls[0].url.params["page_size"] == "2"
+    assert [a.digest for a in got] == ["sha256:a", "sha256:a", "sha256:b", "sha256:c"]
+
+
 def test_pagination_ignores_non_ascii_total_count() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[{"name": "a"}], headers={"X-Total-Count": "١٢٣".encode()})

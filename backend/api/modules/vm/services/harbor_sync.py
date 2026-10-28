@@ -34,6 +34,7 @@ from api.modules.vm.core.harbor import (
     HarborClient,
     HarborConnectionLike,
     HarborError,
+    HarborRepo,
     HarborVuln,
     is_cve,
     make_harbor_client,
@@ -81,6 +82,15 @@ _UPDATED = (
     "platform", "tags", "size", "pushed_at", "scan_status", "scanned_at", "scanner",
     *(f"trivy_{c}" for c in _COUNTERS), "synced_at", "sync_error",
 )
+#: Сводка скана, которая описывает прежние находки: пока они сохранены (скан идёт, сломан,
+#: отчёт не прочитан), остаётся и она — обзор Harbor в это время без сводки, одни нули.
+_SCAN_SUMMARY = frozenset({"scanner", *(f"trivy_{c}" for c in _COUNTERS)})
+_UPDATED_KEEPING_SUMMARY = tuple(c for c in _UPDATED if c not in _SCAN_SUMMARY)
+EMPTY_PROJECTS = "Harbor не вернул ни одного проекта: проверьте права робота"
+
+
+class SyncRefused(RuntimeError):
+    """Ответ Harbor, по которому синхронизация удалила бы всё: задача падает, данные не трогаются."""
 
 Key = tuple[str, str, str]
 #: Записанный образ: id, время скана, есть ли у него пары.
@@ -120,6 +130,8 @@ class _Planned:
     #: Время скана к записи: при непрочитанном отчёте — прежнее, чтобы следующий прогон прочёл его снова.
     scanned_at: dt.datetime | None = None
     error: str | None = None
+    #: Прежние находки сохранены — сохраняются и счётчики Trivy со сканером.
+    keep_findings: bool = False
 
     @property
     def key(self) -> Key:
@@ -336,10 +348,15 @@ class _Sync:
 
     def _list(self) -> None:
         """Проекты (из настроек или все), репозитории, артефакты. Сбой входа или списка
-        проектов — `HarborError` наверх: ничего не записано."""
+        проектов — `HarborError` наверх, пустой список проектов при записанных образах —
+        `SyncRefused`: ничего не записано."""
         self.handle.stage("listing", message="проекты Harbor")
         self.client.probe()
-        self.projects = list(self.conn.projects) or self.client.projects()
+        # Постраничный список при сдвиге может повторить элемент: один проект — один раз.
+        self.projects = list(dict.fromkeys(self.conn.projects or self.client.projects()))
+        if not self.projects and self.db.scalar(select(func.count()).select_from(IMAGE_T)):
+            # Пустой список у Harbor, где образы были, — скорее права робота, чем пустой реестр.
+            raise SyncRefused(EMPTY_PROJECTS)
         count = 0
         for project in self.projects:
             try:
@@ -349,12 +366,16 @@ class _Sync:
                 self.failed_projects[project] = exc.kind
                 self._error(project)
                 continue
+            unique: dict[str, HarborRepo] = {}
+            for r in repos:
+                unique.setdefault(r.name, r)
+            repos = list(unique.values())
             self.listed[project] = {r.name for r in repos}
             for repo in repos:
                 count += 1
                 self.handle.tick(count, message=f"репозиториев: {count}")
                 try:
-                    artifacts = self.client.artifacts(project, repo.name)
+                    artifacts = self.client.artifacts(project, repo.name, limit=self.conn.tags_per_repo)
                 except HarborError as exc:
                     log.warning("Harbor: артефакты %s/%s не прочитаны: %s", project, repo.name, exc.kind)
                     self.failed_repos[(project, repo.name)] = exc.kind
@@ -380,9 +401,10 @@ class _Sync:
             old = known.get(p.key)
             if p.art.scan_status != "success":
                 skipped += 1
-                # Скан идёт, сломан или не запускался: прежние пары и их время скана остаются.
+                # Скан идёт, сломан или не запускался: прежние пары, их время скана и счётчики остаются.
                 if old is not None:
                     p.scanned_at = old[1]
+                    p.keep_findings = True
                 continue
             if old is None or old[1] != p.art.scanned_at or not old[2]:
                 need.append(p)
@@ -396,6 +418,7 @@ class _Sync:
                 p.error = exc.kind
                 old = known.get(p.key)
                 p.scanned_at = old[1] if old is not None else None
+                p.keep_findings = old is not None
                 self._error(f"{p.repo.project}/{p.repo.name}")
             self.handle.tick(i, message=f"образов: {i}/{total}")
         return skipped
@@ -439,14 +462,16 @@ class _Sync:
 
     def _upsert(self, planned: list[_Planned]) -> dict[Key, int]:
         ids: dict[Key, int] = {}
-        for chunk in batched(planned, UPSERT_CHUNK):
-            stmt = pg_insert(IMAGE_T).values([self._image_row(p) for p in chunk])
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_vm_image_ref", set_={c: stmt.excluded[c] for c in _UPDATED},
-            )
-            returning = stmt.returning(IMAGE_T.c.id, IMAGE_T.c.project, IMAGE_T.c.repository, IMAGE_T.c.digest)
-            for r in self.db.execute(returning):
-                ids[(r.project, r.repository, r.digest)] = r.id
+        for keep, columns in ((False, _UPDATED), (True, _UPDATED_KEEPING_SUMMARY)):
+            group = [p for p in planned if p.keep_findings is keep]
+            for chunk in batched(group, UPSERT_CHUNK):
+                stmt = pg_insert(IMAGE_T).values([self._image_row(p) for p in chunk])
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_vm_image_ref", set_={c: stmt.excluded[c] for c in columns},
+                )
+                returning = stmt.returning(IMAGE_T.c.id, IMAGE_T.c.project, IMAGE_T.c.repository, IMAGE_T.c.digest)
+                for r in self.db.execute(returning):
+                    ids[(r.project, r.repository, r.digest)] = r.id
         return ids
 
     def _image_row(self, p: _Planned) -> dict[str, Any]:
