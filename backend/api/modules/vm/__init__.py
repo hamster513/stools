@@ -14,6 +14,7 @@ from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job
 from api.modules.vm.routers import (
     harbor,
+    images,
     import_,
     jobs,
     overview,
@@ -33,6 +34,7 @@ router = APIRouter(prefix="/api/vm")
 for sub in (
     settings.router,
     harbor.router,
+    images.router,
     zones.router,
     jobs.router,
     import_.router,
