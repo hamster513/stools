@@ -9,16 +9,31 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from api.modules.ksc.core.policy_index import extract
+from api.modules.ksc.core.export import load_export
+from api.modules.ksc.core.policy_index import extract, policy_objects
 from api.modules.ksc.core.policy_model import Scope, firewall_to_json, scope_from_json
 from api.modules.ksc.models import KscNetRule, KscPolicyFirewall, KscSnapshot
 from api.modules.ksc.services.policy_store import POLICY_STORE_VERSION
 from api.modules.ksc.services.snapshots import snapshot_path
 from tests.ksc.kes11 import _APP_GROUPS, kes11_export, kes11_sections
 from tests.ksc.test_api import upload
+from tests.ksc.test_firewall_settings import _APP, _NETWORKS, _PACKET, _set_lock
 
 #: Выгрузка, где у политики 1 нет ни одного сетевого правила: пакетных нет, у групп доверия нет программ; секция HIPS есть.
 NO_RULES = {"cf9370d5/firewall.networkPacketRules": [], "cf9370d5/hips.appGroups": [{**g, "applications": []} for g in _APP_GROUPS]}
+
+
+def _profile_export() -> dict[str, Any]:
+    """`kes11_export()`, где у профиля «Ноутбуки» политики 1 секции — `kes11_sections()` без замков у трёх листов HIPS
+    (как в профиле, где замок не задан). Элемент списка профилей заменяется, общий `P_NOTEBOOKS` синтетики не меняется."""
+    raw = kes11_export()
+    sections = kes11_sections()
+    for path in (_PACKET, _NETWORKS, _APP):
+        _set_lock(sections, path, None)
+    profiles = raw["policy_profiles"]["1"]["profiles"]
+    assert profiles[0]["name"] == "Ноутбуки"
+    profiles[0] = {**profiles[0], "sections": sections}
+    return raw
 
 
 def _upload(client: TestClient, raw: dict[str, Any] | None = None) -> int:
@@ -71,6 +86,30 @@ def test_upload_writes_scope_and_firewall(auth_client: TestClient, db_session: S
     assert json.loads(row.locks_json) == expected["locks"] == {"packet": True, "networks": True, "app": True}
 
 
+def test_upload_writes_profile_firewall(auth_client: TestClient, db_session: Session) -> None:
+    """У профиля с секцией HIPS — своя строка: сначала политика, затем профили в порядке `policy_objects`; замки профиля
+    без признака — None, у политики — True."""
+    raw = _profile_export()
+    sid = _upload(auth_client, raw)
+    objs, _ = policy_objects(load_export(json.dumps(raw).encode()), "1")
+    assert list(objs.firewall_by_profile) == ["", "Ноутбуки"]
+    fw = _firewall(db_session, sid)
+    assert [(f.policy_id, f.profile) for f in fw] == [(1, ""), (1, "Ноутбуки")]
+    policy, profile = (json.loads(f.locks_json) for f in fw)
+    assert policy == {"packet": True, "networks": True, "app": True}
+    assert profile == {"packet": None, "networks": None, "app": None}
+    assert (fw[1].zones_json, fw[1].app_groups_json) == (fw[0].zones_json, fw[0].app_groups_json)
+
+
+def test_policy_objects_firewall_by_profile_keys() -> None:
+    """Ключи `firewall_by_profile`: "" — сама политика, имя — профиль с секцией HIPS; профиль без неё («Выключенный») — без ключа,
+    `firewall` у результата — None."""
+    objs, described = policy_objects(load_export(json.dumps(_profile_export()).encode()), "1")
+    assert described is True and objs.firewall is None
+    assert set(objs.firewall_by_profile) == {"", "Ноутбуки"}
+    assert objs.firewall_by_profile["Ноутбуки"].locks.packet is None and objs.firewall_by_profile[""].locks.packet is True
+
+
 def test_scope_backfill_on_first_read(auth_client: TestClient, db_session: Session) -> None:
     sid = _upload(auth_client)
     _forget(db_session, sid)
@@ -95,6 +134,13 @@ def test_backfill_is_not_repeated(auth_client: TestClient, db_session: Session) 
     first = [f.id for f in _firewall(db_session, sid)]
     assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules").status_code == 200
     assert [f.id for f in _firewall(db_session, sid)] == first
+    # Снапшот до миграции: первое чтение дозаполняет (id строк новые), второе — уже нет (id те же).
+    _forget(db_session, sid)
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules").status_code == 200
+    backfilled = [f.id for f in _firewall(db_session, sid)]
+    assert backfilled and backfilled != first
+    assert auth_client.get(f"/api/ksc/snapshots/{sid}/net-rules").status_code == 200
+    assert [f.id for f in _firewall(db_session, sid)] == backfilled
 
 
 def test_scope_backfill_without_file_is_noop(auth_client: TestClient, db_session: Session, app_settings: Any) -> None:
