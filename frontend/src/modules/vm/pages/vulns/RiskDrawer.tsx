@@ -32,7 +32,7 @@ function day(iso: string): string {
   return iso.split('-').reverse().join('.')
 }
 
-function FactorRow({ label, f, loaded, total }: { label: string; f: Factor; loaded?: string | null; total?: boolean }) {
+export function FactorRow({ label, f, loaded, total }: { label: string; f: Factor; loaded?: string | null; total?: boolean }) {
   return (
     <tr className="border-t border-grid/60 align-top">
       <td className={cn('py-1.5 pr-2', total ? 'font-medium text-text' : 'text-text-secondary')}>{label}</td>
