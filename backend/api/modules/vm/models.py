@@ -372,8 +372,9 @@ class VmImage(Base):
     #: Путь внутри проекта, например `web`.
     repository: Mapped[str] = mapped_column(String(255))
     digest: Mapped[str] = mapped_column(String(80))
-    #: os/arch дочернего манифеста мультиархитектурного образа; у обычного — NULL.
-    platform: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: Платформы мультиархитектурного индекса через запятую (`linux/amd64, linux/arm64`);
+    #: у обычного образа — NULL.
+    platform: Mapped[str | None] = mapped_column(String(255), nullable=True)
     #: JSON-список тегов.
     tags: Mapped[str] = mapped_column(Text, default="[]")
     size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

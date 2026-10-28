@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column("project", sa.String(255), nullable=False),
         sa.Column("repository", sa.String(255), nullable=False),
         sa.Column("digest", sa.String(80), nullable=False),
-        sa.Column("platform", sa.String(64), nullable=True),
+        sa.Column("platform", sa.String(255), nullable=True),
         sa.Column("tags", sa.Text(), nullable=False),
         sa.Column("size", sa.BigInteger(), nullable=True),
         sa.Column("pushed_at", sa.DateTime(timezone=True), nullable=True),
