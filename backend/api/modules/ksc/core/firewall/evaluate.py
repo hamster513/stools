@@ -1,5 +1,6 @@
 """Вердикт сетевого экрана хоста для пакета (спека §4.2, §4.4, §4.5): состояние экрана, пакетные правила (первое
-совпавшее решает), ответный пакет (только после разрешения правилом уровня пакета, не потока), слой правил программ; ветвление на неопределённостях.
+совпавшее решает), ответный пакет (только после разрешения правилом уровня пакета, не потока), слой правил программ;
+ветвление на неопределённостях.
 
 Точки ветвления по порядку (Ruling 2, R-A): способ наложения профиля на список политики («дополняет» — `merge`,
 «заменяет» — `replace`; только в режиме `auto` и только если у хоста есть профили с замком), активация каждого профиля
@@ -7,8 +8,11 @@
 не подошло). Обход в глубину; на одном пути не больше `MAX_MAYBES` точек «возможно», всего не больше `max_branches`
 ветвей — дальше путь кончается вердиктом «не определено» с `NOTE_TOO_MANY`.
 
-`depends_on` — точки, у которых множества вердиктов двух поддеревьев различаются: так в список попадает и точка, от
-которой вердикт зависит прямо, и внешняя точка, если внутри одной её ветви вердикт ещё зависит от чего-то другого.
+`depends_on` — точки, у которых множества вердиктов двух поддеревьев различаются или хотя бы одно поддерево неоднородно
+(с запасом: внешняя точка попадает в список, даже если обе её ветви расходятся одинаково, — иначе при расхождении на
+двух уровнях внешняя точка терялась бы). Порядок — прямой, как точки встречаются при обходе (модель → профили →
+правила). Листья-обрывы по `max_branches` в сравнении не участвуют: их вердикт — следствие предела, а не допущения;
+о пределе говорит оговорка `NOTE_TOO_MANY`.
 Без БД; `HostFirewall` собирает `view.host_firewall`.
 """
 from __future__ import annotations
@@ -149,7 +153,11 @@ class _Ctx:
     #: Открытые (ещё без листа) пути и выпущенные листья — для предела `max_branches`.
     open: int = 1
     emitted: int = 0
-    points: list[str] = field(default_factory=list)
+    #: Точки ветвления в прямом порядке обхода и те из них, от которых зависит вердикт.
+    order: list[str] = field(default_factory=list)
+    points: set[str] = field(default_factory=set)
+    #: id листьев-обрывов по `max_branches`.
+    budget_caps: set[int] = field(default_factory=set)
     sources: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     _matches: dict[tuple[int, bool], RuleMatch] = field(default_factory=dict)
@@ -169,11 +177,17 @@ class _Ctx:
     def can_split(self) -> bool:
         return self.emitted + self.open + 1 <= self.max_branches
 
+    def _verdicts(self, branches: list[Branch]) -> set[Verdict]:
+        return {x.verdict for x in branches if id(x) not in self.budget_caps}
+
     def split(self, point: str, left: Callable[[], list[Branch]], right: Callable[[], list[Branch]]) -> list[Branch]:
+        if point not in self.order:
+            self.order.append(point)
         self.open += 1
         a, b = left(), right()
-        if {x.verdict for x in a} != {x.verdict for x in b} and point not in self.points:
-            self.points.append(point)
+        va, vb = self._verdicts(a), self._verdicts(b)
+        if (va and vb and va != vb) or len(va) > 1 or len(vb) > 1:
+            self.points.add(point)
         return a + b
 
     def leaf(self, path: _Path, verdict: Verdict, decided_by: RuleView | None, layer: str, steps: tuple[Step, ...],
@@ -185,18 +199,27 @@ class _Ctx:
         self.notes += [n for n in notes if n not in self.notes]
         return [Branch(path.assumptions, verdict, decided_by, layer, steps, reply_steps, candidates, trust, "; ".join(notes))]
 
-    def cap(self, path: _Path, reply: bool = False, steps: tuple[Step, ...] = ()) -> list[Branch]:
-        """Путь обрывается: неопределённостей больше предела."""
+    def cap(self, path: _Path, reply: bool = False, steps: tuple[Step, ...] = (), *, budget: bool = True) -> list[Branch]:
+        """Путь обрывается: неопределённостей больше предела; `budget` — предел `max_branches`, иначе `MAX_MAYBES`."""
         first, second = (path.first, steps) if reply else (steps, ())
-        return self.leaf(path, Verdict.UNDETERMINED, None, "reply" if reply else "packet", first, second, notes=(NOTE_TOO_MANY,))
+        out = self.leaf(path, Verdict.UNDETERMINED, None, "reply" if reply else "packet", first, second, notes=(NOTE_TOO_MANY,))
+        if budget:
+            self.budget_caps.add(id(out[0]))
+        return out
 
 
 def _trust_groups(fw: HostFirewall, packet: Packet) -> tuple[tuple[str, bool | None], ...]:
-    """`allow` правила доступа группы для зоны назначения, иначе правила «любая сеть» (-1); зона неизвестна — только -1."""
+    """`allow` правила доступа группы для зоны, иначе правила «любая сеть» (-1). Зона неизвестна — правило -1, только если
+    ни одно правило группы не расходится с ним по `allow`, иначе None (без оптимистичного «да»).
+    Зона — удалённого адреса пакета (у входящего — источника): правила доступа группы описывают удалённую сеть."""
     zone = zone_of(packet.remote_ip, fw.zones) if packet.remote_ip else None
     out: list[tuple[str, bool | None]] = []
     for g in fw.trust_groups:
-        found = next((a for a in g.access if zone is not None and a.networks == zone), None) or next((a for a in g.access if a.networks == -1), None)
+        any_net = next((a for a in g.access if a.networks == -1), None)
+        if zone is not None:
+            found = next((a for a in g.access if a.networks == zone), None) or any_net
+        else:
+            found = any_net if any_net is not None and all(a.allow == any_net.allow for a in g.access) else None
         out.append((g.name, found.allow if found is not None else None))
     return tuple(out)
 
@@ -243,8 +266,10 @@ def _maybe(ctx: _Ctx, path: _Path, rules: tuple[RuleView, ...], j: int, reply: b
            m: RuleMatch) -> list[Branch]:
     """Правило `rules[j]` «возможно подошло»: ветви «подошло» и «не подошло» либо обрыв по пределу."""
     if path.maybes >= MAX_MAYBES or not ctx.can_split():
-        return ctx.cap(path, reply, steps + (Step(m, "maybe"),) + _rest(ctx, rules, j, reply))
-    key, label = (id(m.rule), m.assumption), f"{m.assumption}: правило №{m.rule.position}"
+        budget = path.maybes < MAX_MAYBES
+        return ctx.cap(path, reply, steps + (Step(m, "maybe"),) + _rest(ctx, rules, j, reply), budget=budget)
+    owner = f"профиля „{m.rule.profile}“" if m.rule.profile else "политики"
+    key, label = (id(m.rule), m.assumption), f"{m.assumption}: правило №{m.rule.position} {owner}"
     yes = path.assume(f"{label} подошло", maybes=path.maybes + 1, resolved=(*path.resolved, (key, True)))
     no = path.assume(f"{label} не подошло", maybes=path.maybes + 1, resolved=(*path.resolved, (key, False)))
     return ctx.split(m.assumption,
@@ -335,5 +360,5 @@ def evaluate_side(fw: HostFirewall, packet: Packet, *, profile_mode: str = "auto
                              lambda: _profiles(ctx, _Path(model="replace").assume(ASSUME_REPLACE), names))
     notes += [n for n in ctx.notes if n not in notes]
     verdict = _merge(branches)
-    depends = tuple(ctx.points) if verdict is Verdict.DEPENDS else ()
+    depends = tuple(p for p in ctx.order if p in ctx.points) if verdict is Verdict.DEPENDS else ()
     return SideResult(verdict, depends, tuple(branches), mode, tuple(notes), tuple(ctx.sources))

@@ -23,6 +23,7 @@ from api.modules.ksc.core.firewall.evaluate import (
     POINT_MODEL,
     effective_rules,
     evaluate_side,
+    note_unknown_action,
     point_profile,
 )
 from api.modules.ksc.core.firewall.model import (
@@ -171,10 +172,13 @@ def test_by_app_rules_goes_to_layer3() -> None:
     assert b.trust_groups == (("Тестовая доверенная", True), ("Тестовая ограниченная", False), ("Тестовая без правил", None))
 
 
-def test_trust_groups_unknown_zone_uses_any_network_rule() -> None:
-    res = evaluate_side(host(trust_groups=_groups()), packet(remote_ip="192.0.2.99"))
+def test_trust_groups_unknown_zone_without_optimism() -> None:
+    """Зона неизвестна: правило «любая сеть» (-1), только если правила зон группы не расходятся с ним по `allow`."""
+    groups = (*_groups(), AppGroupDefault("Тестовая согласованная", None, 0, (AccessRule(-1, True, False), AccessRule(2, True, False))))
+    res = evaluate_side(host(trust_groups=groups), packet(remote_ip="192.0.2.99"))
     (b,) = res.branches
-    assert b.trust_groups == (("Тестовая доверенная", True), ("Тестовая ограниченная", True), ("Тестовая без правил", None))
+    assert b.trust_groups == (("Тестовая доверенная", True), ("Тестовая ограниченная", None), ("Тестовая без правил", None),
+                              ("Тестовая согласованная", True))
 
 
 def test_no_match_goes_to_layer3() -> None:
@@ -295,9 +299,9 @@ def test_maybe_rule_branches() -> None:
     assert res.verdict is Verdict.DEPENDS and res.depends_on == (assumption,)
     hit, miss = res.branches
     assert hit.verdict is Verdict.DENY and hit.decided_by == rules[0] and statuses(hit.steps) == ["hit", "not_checked"]
-    assert hit.assumptions == (f"{assumption}: правило №1 подошло",)
+    assert hit.assumptions == (f"{assumption}: правило №1 политики подошло",)
     assert miss.verdict is Verdict.ALLOW and statuses(miss.steps) == ["maybe", "hit"]
-    assert miss.assumptions == (f"{assumption}: правило №1 не подошло",)
+    assert miss.assumptions == (f"{assumption}: правило №1 политики не подошло",)
     # В ответном пакете то же допущение о том же правиле не ветвится заново.
     assert statuses(miss.reply_steps) == ["maybe", "hit"]
 
@@ -350,3 +354,38 @@ def test_almost_matched_marked() -> None:
     first, hit, after = b.steps
     assert first.status == "no" and first.match.almost is not None and first.match.almost.name == "remote_ports"
     assert hit.status == "hit" and after.status == "not_checked" and after.match.almost is None
+
+
+def test_depends_on_two_level_divergence() -> None:
+    """Обе модели наложения дают и «разрешено», и «запрещено» в зависимости от имени узла: модель тоже в `depends_on`,
+    в прямом порядке точек."""
+    name = "Тестовый профиль"
+    policy = (rule(1, DENY, remote=UNKNOWN_HOST), rule(2, ALLOW, direction=2))
+    profile = (rule(1, ALLOW, profile=name, direction=2, remote=UNKNOWN_HOST), rule(2, DENY, profile=name))
+    res = evaluate_side(host(policy, packet_profiles=(src(profile, name, 1),)), packet())
+    assert [b.verdict for b in res.branches] == [Verdict.DENY, Verdict.ALLOW, Verdict.ALLOW, Verdict.DENY]
+    assert res.verdict is Verdict.DEPENDS and res.depends_on == (POINT_MODEL, "имя узла srv.example.test не проверено")
+    assert res.branches[2].assumptions == (ASSUME_REPLACE, f"имя узла srv.example.test не проверено: правило №1 профиля „{name}“ подошло")
+
+
+def test_unknown_action_undetermined() -> None:
+    rules = (rule(1, "код 7"), rule(2, DENY))
+    (b,) = evaluate_side(host(rules), packet()).branches
+    assert b.verdict is Verdict.UNDETERMINED and b.decided_by == rules[0] and b.note == note_unknown_action(rules[0])
+
+
+def test_by_app_rule_on_reply_goes_to_layer3() -> None:
+    rules = (rule(1, ALLOW, direction=1), rule(2, BY_APP, direction=0))
+    (b,) = evaluate_side(host(rules), packet()).branches
+    assert b.verdict is Verdict.APP and b.layer == "reply" and b.decided_by == rules[1] and NOTE_REPLY_APP in b.note
+    assert statuses(b.steps) == ["hit", "not_checked"] and statuses(b.reply_steps) == ["no", "hit"]
+
+
+def test_max_branches_cap_at_profile_point() -> None:
+    """Предел ветвей на точке профиля: путь обрывается; обрыв по пределу в `depends_on` не попадает."""
+    maybe = (src((), "Тестовый A", 1), src((), "Тестовый B", 2))
+    res = evaluate_side(host((rule(1, DENY),), packet_undetermined=maybe), packet(), profile_mode="merge", max_branches=3)
+    assert [b.verdict for b in res.branches] == [Verdict.DENY, Verdict.DENY, Verdict.UNDETERMINED]
+    last = res.branches[-1]
+    assert last.note == NOTE_TOO_MANY and last.assumptions == ("профиль „Тестовый A“ не активен",)
+    assert res.verdict is Verdict.DEPENDS and res.depends_on == ()
