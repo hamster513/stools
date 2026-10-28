@@ -24,6 +24,7 @@ export function HelpArticle({ article }: { article: Article }) {
   // Кнопка — по тем же правилам, что и сама страница (App, SettingsShell): см. core/open.ts.
   const open = openRule(article, settingsNeed)
   const target = open && me && (open.need === null || atLeast(me.access, open.need[0] as Area, open.need[1])) ? open.route : null
+  // У статей первой группы оглавления (без заголовка) и у «Что нового» крошки группы нет.
   const section = article.group === 'module' ? (findModule(article.module ?? '')?.title ?? article.module) : GROUP_TITLE[article.group]
 
   return (
@@ -32,8 +33,12 @@ export function HelpArticle({ article }: { article: Article }) {
         <Link to="/help" className={cn('rounded underline hover:text-text hover:no-underline', FOCUS)}>
           Справка
         </Link>
-        <ChevronRight size={12} aria-hidden />
-        <span>{section}</span>
+        {section && (
+          <>
+            <ChevronRight size={12} aria-hidden />
+            <span>{section}</span>
+          </>
+        )}
         <ChevronRight size={12} aria-hidden />
         <span aria-current="page" className="text-text">
           {article.title}
