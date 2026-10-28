@@ -59,7 +59,7 @@ def _ip(ip: str) -> IPAddress | None:
 
 
 @lru_cache(maxsize=4096)
-def _network(ip: str, mask: int | None) -> IPNetwork | None:
+def network_of(ip: str, mask: int | None) -> IPNetwork | None:
     """Сеть адреса правила; None — маска не подходит к адресу."""
     try:
         return ipaddress.ip_network(ip if mask is None else f"{ip}/{mask}", strict=False)
@@ -199,7 +199,7 @@ def _address(name: str, a: Address, ip: str | None, host: str, what: str) -> Cri
     shown = a.ip if a.mask is None else f"{a.ip}/{a.mask}"
     if ip is None:
         return Criterion(name, Tri.MAYBE, f"{what} не задан")
-    network = _network(a.ip, a.mask)
+    network = network_of(a.ip, a.mask)
     if network is None:
         return Criterion(name, Tri.MAYBE, f"адрес {shown}: маска не читается")
     addr = _ip(ip)
