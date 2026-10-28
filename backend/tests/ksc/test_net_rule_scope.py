@@ -87,6 +87,16 @@ def test_scope_unread_markers() -> None:
     assert _scope(protocol=TCP, icmp_type=3).unread == ()  # вид ICMP у TCP не критерий
 
 
+def test_icmp_empty_type_is_any_not_unread() -> None:
+    """`protocol.type` пустым объектом (так в выгрузках KES 11 у ICMP без вида) — вид любой, не маркер; `type` не объектом или
+    `value` не int — маркер."""
+    packet = packet_rule("Правило", action=0, direction=0, protocol=ICMP, icmp_type=8)
+    for value, unread in (({}, ()), ({"unique_id": -1759591770, "value": None}, ()), ("8", ("icmp_type",)), ({"value": "8"}, ("icmp_type",))):
+        packet["protocol"]["type"] = value
+        [rule] = extract_kes(kes11_sections(**{PACKET: [packet], GROUPS: []})).net_rules
+        assert (rule.scope.icmp_type, rule.scope.unread, rule.protocol) == (None, unread, "ICMP"), value
+
+
 def test_scope_ignores_bool_mask_and_non_int_networks() -> None:
     item = _address("192.0.2.53", mask=True)  # type: ignore[arg-type]
     packet = packet_rule("Правило", action=0, direction=0, remote=[item], networks=2)

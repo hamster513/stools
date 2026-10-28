@@ -233,6 +233,11 @@ def _mask_unread(item: dict[str, Any]) -> bool:
     return not _text(item.get("hostName")) and "octets" in item and item.get("mask") is not None and _int(item.get("mask")) is None
 
 
+def _icmp_type_present(kind: Any) -> bool:
+    """Вид ICMP задан: `type` не объект (и не null) или в нём есть `value` (не null). Пустой объект — вид любой."""
+    return kind.get("value") is not None if isinstance(kind, dict) else kind is not None
+
+
 def _scope(item: dict[str, Any], proto: dict[str, Any]) -> Scope:
     """Критерии правила и маркеры нечитаемого (`UNREAD`): значение есть (не null), но не прочиталось."""
     scope = _dict(item.get("scope"))
@@ -248,7 +253,7 @@ def _scope(item: dict[str, Any], proto: dict[str, Any]) -> Scope:
         "networks": networks is not None and _int(networks) is None,
         "mask": any(map(_mask_unread, addresses)),
         "ports": local_skipped or remote_skipped,
-        "icmp_type": label in ("ICMP", "ICMPv6") and proto.get("type") is not None and icmp_type is None,
+        "icmp_type": label in ("ICMP", "ICMPv6") and icmp_type is None and _icmp_type_present(proto.get("type")),
     }
     return Scope(
         networks=_int(networks), remote=_addresses(scope.get("remoteAddresses")), local=_addresses(scope.get("localAddresses")),
