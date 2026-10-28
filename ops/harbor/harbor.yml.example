@@ -1,0 +1,57 @@
+# Пример harbor.yml для Harbor 2.15.4 с Trivy — тестовый экземпляр по HTTP.
+#
+# Это не полный файл: здесь только то, что нужно для проверки STools. За основу
+# берите harbor.yml.tmpl из установщика (harbor-online-installer-v2.15.4.tgz):
+# скопируйте его в harbor.yml и приведите перечисленные ключи к значениям ниже.
+# Установка и подключение к STools — docs/vm/harbor.md.
+#
+# CHANGE_ME замените случайными паролями (например, `openssl rand -base64 24`),
+# права на готовый файл — 600. В git настоящие пароли не попадают.
+
+# Адрес, по которому клиенты (docker login/push, STools) обращаются к Harbor.
+# Для теста на своём компьютере — localhost; для сервера — имя из DNS.
+hostname: localhost
+
+# HTTP — для тестового экземпляра. Для рабочего включите https ниже и уберите http.
+http:
+  port: 8082
+
+# https:
+#   port: 443
+#   certificate: /data/harbor/cert/harbor.crt
+#   private_key: /data/harbor/cert/harbor.key
+
+# Пароль администратора Harbor (логин admin). Сменить можно в интерфейсе.
+harbor_admin_password: CHANGE_ME
+
+database:
+  password: CHANGE_ME
+  max_idle_conns: 100
+  max_open_conns: 900
+
+# Каталог данных Harbor (образы, база, база уязвимостей Trivy) — вне git и вне
+# домашнего каталога. На Docker Desktop путь должен быть разрешён в
+# Settings -> Resources -> File sharing.
+data_volume: /data/harbor
+
+trivy:
+  # false — показывать и уязвимости без исправления: отчёт полный.
+  ignore_unfixed: false
+  # false — база Trivy скачивается при первом скане (нужен доступ в интернет).
+  skip_update: false
+  # true — сканировать без доступа в интернет (база должна быть загружена заранее).
+  offline_scan: false
+  insecure: false
+
+jobservice:
+  max_job_workers: 10
+
+notification:
+  webhook_job_max_retry: 3
+
+log:
+  level: info
+  local:
+    rotate_count: 50
+    rotate_size: 200M
+    location: /var/log/harbor

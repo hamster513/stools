@@ -148,6 +148,128 @@ network_internal, adjacent, local}`, `reach_unknown` — для S;
 Веса старой схемы (множители первой итерации), сохранённые до обновления, не
 переводятся: действуют умолчания новой формулы, пока веса не сохранят заново.
 
+## Образы контейнеров
+
+Образы приходят из Harbor синхронизацией (раздел «Harbor» ниже; установка и
+ограничения — `docs/vm/harbor.md`); эти ручки только читают, уровень — `read`.
+Дизайн — `docs/superpowers/specs/2026-10-28-harbor-images-design.md`.
+
+```
+GET /images                       q, project, scan_status, level, trivy,
+                                  sort, limit≤1000 (200), offset
+                                  → {total|null, items[], facets|null}
+GET /images/{id}                  карточка образа + last_sync_at | 404
+GET /images/{id}/vulns            q, severity, level, fixed, sort,
+                                  limit≤1000 (200), offset
+                                  → {total|null, items[], facets|null} | 404
+GET /images/{id}/vulns/{cve_id}   package (обязателен), installed_version ("")
+                                  → {image, vuln, factors|null, nvd_url|null} | 404
+GET /images/export                format=csv|xlsx (csv), те же фильтры и `sort`,
+                                  что у списка образов, и image_id → файл
+```
+
+`total` и фасеты — только при `offset=0`, как у `/vulns`. Фасеты-фильтры
+(`project`, `scan_status`, `level`, `trivy` у образов; `severity`, `level` у
+находок) — повторением ключа: внутри фасета «или», между фасетами «и».
+Неизвестная `sort` — 422 «неизвестная сортировка».
+
+Образ — одна строка на `(project, repository, digest)`, `id` стабилен между
+синхронизациями. Элемент списка и карточка: `id, project, repository, name`
+(`project/repository`), `platform` (платформы мультиархитектурного индекса
+через «, » или `null`), `tags[]`, `digest_short` (12 знаков), `digest`, `size`,
+`pushed_at`, `scan_status`, `scanned_at`, `scanner`, `trivy{critical, high,
+medium, low, unknown, total}`, `risk_max`, `level`, `cves_scored`, `sync_error`
+(почему образ не обновлён в последней синхронизации). Карточка добавляет
+`last_sync_at`.
+
+- **Образы.** `q` — подстрока по `project/repository` и по тегам; `project` —
+  имена проектов; `scan_status` — `success | pending | running | error | none`;
+  `level` — `low | medium | high | critical` по `risk_max` с порогами
+  `weights.levels` настроек VM и `none` — у образа нет риска; `trivy` —
+  `critical | high`: есть хотя бы одна находка такой серьёзности. `sort`:
+  `risk_desc` (по умолчанию; образы без риска в конце), `name`, `pushed_desc`,
+  `trivy_desc` (по числу Critical, затем High и далее). Фасеты: `project`,
+  `scan_status`, `level` (с ключом `none`).
+- **Находки образа.** `q` — подстрока по идентификатору и пакету; `severity` —
+  оценка Trivy: `critical | high | medium | low | unknown`; `level` — по
+  `risk`, `none` — риска нет; `fixed=yes|no` — есть ли исправленная версия
+  (другое значение — 422). `sort`: `risk_desc` (по умолчанию), `severity_desc`,
+  `package`, `cve`; при равных значениях — по ключу находки, страницы по offset
+  не повторяют и не теряют строк. Элемент: `cve_id` (идентификатор из отчёта
+  как есть), `package`, `installed_version`, `fixed_version`, `trivy_severity`,
+  `trivy_cvss`, `risk`, `level`, `epss`, `kev` (`null`, если идентификатора нет
+  в витрине CVE), `cvss`, `cvss_source`, `description`, `link`, `is_cve`.
+  Фасеты: `severity`, `level`, `fixed{yes, no}`.
+- **Расчёт риска находки.** Находка — тройка `(cve_id, package,
+  installed_version)`: один CVE бывает в нескольких пакетах, поэтому `package`
+  в запросе обязателен. `factors` — те же L, S, V и их части, что в карточке
+  пары хоста, но с условиями образа: интернета нет, критичности и
+  конфиденциальности нет, ценность у всех образов одна. Для идентификатора не
+  из CVE (`GHSA-…`, `TEMP-…`, `GO-…`) и для CVE, которого нет в витрине,
+  `factors` — `null`, у не-CVE `nvd_url` тоже `null`; остаётся оценка Trivy.
+  Нет такой находки или образа — 404.
+- **Выгрузка** `/images/export` — любой роли, пишется в журнал действий, как
+  `/export` уязвимостей. CSV — UTF-8 с BOM, `;`, CRLF; XLSX — не больше 100 000
+  строк. Строка — образ × находка (образ без находок — одна строка с пустыми
+  колонками находки). Колонки: Образ, Платформа, Теги, CVE, Пакет, Установлена,
+  Исправлена, Trivy, CVSS Trivy, Риск, Уровень, EPSS, KEV («да» или пусто),
+  Статус скана, Дата скана. `image_id` ограничивает выгрузку одним образом.
+  Формат, не равный `csv` и `xlsx`, — 422. Имя файла —
+  `stools-vm-images-<ГГГГММДД-ЧЧММ>.<csv|xlsx>`.
+
+## Harbor
+
+Подключение к реестру Harbor с отчётами Trivy: одно на установку, как
+подключение к MaxPatrol (хранится в `app_setting['vm_harbor']`).
+
+```
+GET    /harbor            read    {url, robot_name, robot_secret_set, verify_tls,
+                                  projects[], tags_per_repo, configured,
+                                  last_sync|null, schedule|null}
+PUT    /harbor            admin   те же поля + robot_secret → тот же вид | 422
+POST   /harbor/test       admin   {ok, message} | 400 не настроено
+POST   /harbor/sync       write   202 {job_id} | 400 не настроено | 409
+GET    /harbor/schedule   read    ScheduleView | null
+PUT    /harbor/schedule   admin   {interval_hours 1..720, window_from?, window_to?,
+                                  enabled} → ScheduleView | 422
+DELETE /harbor/schedule   admin   204
+```
+
+- **Поля.** `url` — `http://` или `https://`, до 512 знаков, без завершающего
+  «/» (иначе 422); `robot_name` — имя робота вида `robot$<имя>`, до 128 знаков;
+  `robot_secret` — секрет робота, печатная латиница (иначе 422); `verify_tls` —
+  по умолчанию `true`; `projects` — имена проектов (строчные латинские буквы,
+  цифры, «.», «_», «-»), пусто — все проекты, доступные роботу;
+  `tags_per_repo` — 1..100, по умолчанию 10. `configured` — заданы адрес, имя
+  и секрет. Секрет хранится зашифрованным, наружу выходит только
+  `robot_secret_set`.
+- **Секрет и смена адреса.** Пустой `robot_secret` в `PUT` — оставить прежний.
+  Смена `url`, `robot_name` или `verify_tls` без нового секрета — 422 «при смене
+  адреса секрет робота нужно ввести заново»: прежний секрет на другой адрес не
+  уходит. В журнале действий — список изменённых полей без значений.
+- **`last_sync`** — итог последней записанной синхронизации: `finished_at,
+  images, cves` (пар), `repositories, skipped_unscanned` (образы без готового
+  скана), `errors[]` (проекты и репозитории `проект/репозиторий`, не
+  прочитанные в этот раз).
+- **`/test`** проверяет сохранённое подключение, а не поля формы: `GET
+  /api/v2.0/systeminfo`, затем чтение списка проектов под роботом. Ответ — 200:
+  `{ok: true, message: "Harbor <версия>"}` или `{ok: false, message: <класс
+  отказа>}` — `NO_LINK`, `TLS_FAILED`, `LOGIN_REJECTED`, `NO_RIGHTS`,
+  `server_error(<код>)`. Адрес и текст ответа Harbor в сообщение не попадают.
+  Частота проверок ограничена на пользователя, как у остальных подключений VM.
+- **`/sync`** — задача `harbor_sync`, прогресс и отмена через `/jobs/{id}`
+  (стадии — в разделе «Задачи»). 409 «идёт задача #N, синхронизация после неё»,
+  если идёт импорт VM, пересчёт, загрузка архива справочников или другая
+  синхронизация Harbor: все они пересобирают витрину CVE и риск. Расписание в
+  таком случае пропускает запуск. Не настроено — 400. Синхронизация не трогает
+  пары хостов, импорт VM не трогает образы.
+- **Расписание** — синглтон (`module = "vm"`, `kind = "harbor"`, `target_id =
+  0`); формат общий для платформы: окно `HH:MM` в поясе `STOOLS_TZ`, оба
+  поля пустые — без окна. Без настроенного подключения расписание
+  выключается с пометкой в `last`.
+- **Свежесть.** Строка `harbor` в сводке «Данные» (`/api/settings/data-status`):
+  «Образы контейнеров (Harbor)», устаревает через 7 дней.
+
 ## Задачи
 
 ```
@@ -159,7 +281,7 @@ POST /jobs/{id}/cancel  204 | 409 уже завершена
 ```
 
 `kind`: `import_vm | import_file | ref_epss | ref_nvd | ref_exploitdb | ref_msf |
-ref_attack | ref_kev | ref_bundle | recalculate | bulk_status`. После обновления
+ref_attack | ref_kev | ref_bundle | recalculate | bulk_status | harbor_sync`. После обновления
 формулы старт API сам ставит `recalculate` (`started_by` — «после обновления»),
 пока полный пересчёт не запишет версию формулы в `app_setting['vm_formula_version']`.
 Стадии импорта: `fetching → parsing → writing → enriching → scoring → done`;
@@ -168,3 +290,12 @@ ref_attack | ref_kev | ref_bundle | recalculate | bulk_status`. После об�
 его сбой импорт не роняет. Сообщение стадии — итог по семействам: «локальные
 группы: Windows — строк N, хостов M; Linux не получены (причина) — прежний
 снимок от ДД.ММ ЧЧ:ММ UTC»; с лимитом подключения — пометка «снимок неполный».
+
+Синхронизация Harbor (`harbor_sync`): стадии `listing → reports → writing →
+enriching → scoring → done`. `listing` — проекты, репозитории и артефакты
+(прогресс — число репозиториев); `reports` — отчёты Trivy у образов с новым
+сканом; `writing` — запись образов и их находок; `enriching` — витрина CVE по
+новым идентификаторам; `scoring` — риск находок образов. Отказ входа или списка
+проектов останавливает задачу, ничего не записав; сбой одного проекта,
+репозитория или отчёта задачу не роняет: образы остаются прежними с пометкой
+`sync_error`, а имя попадает в `errors` итога.
