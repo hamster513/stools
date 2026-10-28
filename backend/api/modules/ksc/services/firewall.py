@@ -124,7 +124,8 @@ class HostEffective:
 
     `packet`/`app` — профили действующих источников слоя по порядку применения ("" — политика): `merge` — политика и активные
     профили с замком списка, `replace` — профиль с наивысшим приоритетом (с правилами), иначе политика; `auto` — объединение
-    обоих, то есть как `merge`. Профили с неопределённой активацией сюда не входят и перекрытыми не считаются."""
+    обоих, то есть как `merge`. Профили с неопределённой активацией сюда не входят и перекрытыми не считаются. Набор не
+    действует у хоста — `reason`."""
     mode: str
     #: Действующая политика KES хоста; None — её нет.
     policy_id: int | None
@@ -136,19 +137,33 @@ class HostEffective:
     undetermined: dict[str, frozenset[str]]
     #: Профили с замком и правилами, которые накладываются на список политики (активные и неопределённые), по слою.
     overlays: dict[str, tuple[str, ...]]
+    #: Активные профили с замком списка, по слою.
+    locked: dict[str, tuple[str, ...]]
+
+    def _effective(self, layer: str) -> tuple[str, ...]:
+        return self.packet if layer == "packet" else self.app
+
+    def reason(self, policy_id: int, profile: str, layer: str) -> str:
+        """Почему набор у хоста не действует: `replaced` — в режиме `replace` его вытеснил профиль; `unlocked` — у активного
+        профиля список без замка (копия политики, движок его не применяет); `inactive` — набор не действующей политики KES
+        хоста (неактивная или другая политика группы; у хоста без политики KES — любая); "" — действует или не определено
+        (профиль с неопределённой активацией)."""
+        if policy_id != self.policy_id:
+            return "inactive"
+        if profile in self.undetermined.get(layer, frozenset()) or profile in self._effective(layer):
+            return ""
+        if not profile or profile in self.locked.get(layer, ()):
+            return "replaced"
+        return "unlocked"
 
     def overridden(self, policy_id: int, profile: str, layer: str) -> bool:
-        """Список набора у хоста не действует: в режиме `replace` его заменил профиль; в любом режиме — у активного профиля
-        список без замка (копия политики). Чужая политика и неопределённый профиль — не перекрыты."""
-        if policy_id != self.policy_id or profile in self.undetermined.get(layer, frozenset()):
-            return False
-        return profile not in (self.packet if layer == "packet" else self.app)
+        return self.reason(policy_id, profile, layer) != ""
 
     def overridden_by(self, policy_id: int, profile: str, layer: str) -> str:
-        """Профиль, который действует вместо набора; "" — не перекрыт или перекрыт не профилем (список без замка)."""
-        if not self.overridden(policy_id, profile, layer):
+        """Профиль, который действует вместо набора (только при `replaced`), иначе ""."""
+        if self.reason(policy_id, profile, layer) != "replaced":
             return ""
-        best = (self.packet if layer == "packet" else self.app)[:1]
+        best = self._effective(layer)[:1]
         return best[0] if best and best[0] != profile else ""
 
     def json(self) -> dict[str, object]:
@@ -162,7 +177,7 @@ class HostEffective:
 def host_effective(fw: HostFirewall, mode: str) -> HostEffective:
     model = "merge" if mode == "auto" else mode
     if fw.policy_id is None:
-        return HostEffective(mode, None, (), (), None, {}, {})
+        return HostEffective(mode, None, (), (), None, {}, {}, {})
     return HostEffective(
         mode=mode, policy_id=fw.policy_id,
         packet=tuple(s.profile for s in source_sets(fw, model, layer="packet")),
@@ -171,4 +186,5 @@ def host_effective(fw: HostFirewall, mode: str) -> HostEffective:
         undetermined={"packet": frozenset(s.profile for s in fw.packet_undetermined), "app": frozenset(s.profile for s in fw.app_undetermined)},
         overlays={"packet": tuple(s.profile for s in (*fw.packet_profiles, *fw.packet_undetermined) if s.rules),
                   "app": tuple(s.profile for s in (*fw.app_profiles, *fw.app_undetermined) if s.rules)},
+        locked={"packet": tuple(s.profile for s in fw.packet_profiles), "app": tuple(s.profile for s in fw.app_profiles)},
     )

@@ -2,17 +2,23 @@
 сетевых правил, тень и действующий набор в списке, режим наложения профиля из настроек модуля."""
 from __future__ import annotations
 
+import copy
 import ipaddress
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.modules.ksc.core.firewall.evaluate import POINT_MODEL
+from api.modules.ksc.core.firewall.model import Verdict
 from api.modules.ksc.models import KscPolicy
+from api.modules.ksc.routers.firewall import overall
 from tests.ksc.kes11 import TCP, kes11_export, kes11_sections, packet_rule
+from tests.ksc.synthetic import add_inactive_policy
 from tests.ksc.test_api import upload
+from tests.ksc.test_firewall_settings import _PACKET, _set_lock
 
 RULES = "cf9370d5/firewall.networkPacketRules"
 
@@ -33,10 +39,10 @@ OUTSIDE = "203.0.113.5"
 
 
 def _export(policy_rules: list[dict[str, Any]], *, profile_rules: list[dict[str, Any]] | None = None,
-            ips: dict[str, str] | None = None) -> dict[str, Any]:
+            ips: dict[str, str] | None = None, packet_lock: bool | None = True) -> dict[str, Any]:
     """`kes11_export()` с пакетными правилами политики 1 `policy_rules`; `profile_rules` — секции профиля «Ноутбуки» (активен
-    у WS01 по тегу VIP) из `kes11_sections` с этими правилами, листья HIPS под замком (иначе секции профиля из синтетики);
-    `ips` — адреса хостов по имени."""
+    у WS01 по тегу VIP) из `kes11_sections` с этими правилами, листья HIPS под замком, кроме пакетных правил при
+    `packet_lock` не True (иначе секции профиля из синтетики); `ips` — адреса хостов по имени."""
     raw = kes11_export(**{RULES: policy_rules})
     for h in raw["hosts"]:
         if (ip := (ips or IPS).get(h["KLHST_WKS_DN"])) is not None:
@@ -44,7 +50,10 @@ def _export(policy_rules: list[dict[str, Any]], *, profile_rules: list[dict[str,
     if profile_rules is not None:
         profiles = raw["policy_profiles"]["1"]["profiles"]
         assert profiles[0]["name"] == "Ноутбуки"
-        profiles[0] = {**profiles[0], "sections": kes11_sections(**{RULES: profile_rules})}
+        sections = kes11_sections(**{RULES: profile_rules})
+        if packet_lock is not True:
+            _set_lock(sections, _PACKET, packet_lock)
+        profiles[0] = {**profiles[0], "sections": sections}
     return raw
 
 
@@ -98,6 +107,10 @@ def test_check_deny_with_trace(auth_client: TestClient) -> None:
     for destination in ({}, {"host_id": "h-ws03", "address": OUTSIDE}, {"address": "не адрес"}):
         _check(auth_client, sid, "h-ws02", destination, status=422)
     _check(auth_client, sid, "h-ws02", {"address": OUTSIDE}, port=70000, status=422)
+    for icmp_type in (-1, 256):
+        r = auth_client.post(f"/api/ksc/snapshots/{sid}/firewall/check", json={"source_host_id": "h-ws02", "destination": {"address": OUTSIDE},
+                                                                               "protocol": "icmp", "icmp_type": icmp_type})
+        assert r.status_code == 422, r.text
     _check(auth_client, sid, "h-ws02", {"address": OUTSIDE}, protocol="sctp", status=422)
     assert auth_client.post("/api/ksc/snapshots/999999/firewall/check",
                             json={"source_host_id": "h-ws02", "destination": {"address": OUTSIDE}}).status_code == 404
@@ -134,10 +147,26 @@ def test_check_address_matching_several_hosts(auth_client: TestClient) -> None:
     assert body["destination"] is None and body["source"]["verdict"] == "allow" and body["overall"] == "allow"
     assert body["destination_hosts"] == [{"host_id": "h-ws03", "name": "WS03", "ip": "192.0.2.13"},
                                          {"host_id": "h-ws04", "name": "WS04", "ip": "192.0.2.13"}]
-    assert body["notes"] == ["адрес совпал с 2 хостами снапшота: сторона назначения не проверялась"]
+    assert body["notes"] == ["адрес совпал с несколькими хостами снапшота (2): сторона назначения не проверялась"]
     body = _check(auth_client, sid, "h-ws03", {"address": IPS["WS02"]}, port=443)
     assert body["destination"]["host"]["host_id"] == "h-ws02" and body["destination"]["direction"] == "in"
     assert body["destination_hosts"] == [{"host_id": "h-ws02", "name": "WS02", "ip": "192.0.2.12"}] and body["notes"] == []
+    # IPv4 в IPv6 — тот же адрес.
+    body = _check(auth_client, sid, "h-ws03", {"address": "::ffff:192.0.2.12"}, port=443)
+    assert body["destination"]["host"]["host_id"] == "h-ws02"
+    assert body["source"]["branches"][0]["steps"][0]["rule"]["name"] == SMB["name"]
+
+
+@pytest.mark.parametrize(("verdicts", "expected"), [
+    ([Verdict.ALLOW, Verdict.NOT_APPLIED], Verdict.ALLOW),
+    ([Verdict.NOT_APPLIED], Verdict.ALLOW),
+    ([Verdict.NOT_APPLIED, Verdict.DENY], Verdict.DENY),
+    ([Verdict.APP, Verdict.DEPENDS], Verdict.DEPENDS),
+    ([Verdict.APP, Verdict.ALLOW], Verdict.APP),
+    ([Verdict.UNDETERMINED, Verdict.ALLOW], Verdict.UNDETERMINED),
+])
+def test_overall_not_applied_does_not_block(verdicts: list[Verdict], expected: Verdict) -> None:
+    assert overall(verdicts) is expected
 
 
 def test_check_batch(auth_client: TestClient) -> None:
@@ -152,7 +181,9 @@ def test_check_batch(auth_client: TestClient) -> None:
     assert ws02["decided_by"]["name"] == SMB["name"] and ws03["decided_by"]["name"] == SMB["name"] and ws03["verdict"] == "deny"
     assert nope == {"host_id": "nope", "name": "", "verdict": "undetermined", "decided_by": None, "depends_on": [], "error": "хост не найден"}
     too_many = {"sources": [f"h-{n}" for n in range(51)], "destination": {"address": OUTSIDE}, "protocol": "tcp", "port": 445}
-    assert auth_client.post(url, json=too_many).status_code == 422
+    r = auth_client.post(url, json=too_many)
+    assert r.status_code == 422 and "источников: 51, предел 50" in r.text
+    assert auth_client.post(url, json={**too_many, "sources": []}).status_code == 422
     assert auth_client.post(url, json={**too_many, "sources": ["h-ws02"], "destination": {}}).status_code == 422
 
 
@@ -196,7 +227,8 @@ def test_sections_counts_and_overridden(auth_client: TestClient, db_session: Ses
     assert [_key(s) for s in sections] == [("packet", 1, ""), ("packet", 1, "Ноутбуки"), ("app", 1, ""), ("app", 1, "Ноутбуки")]
     policy, profile = sections[0], sections[1]
     assert policy == {"layer": "packet", "policy_id": 1, "policy_name": "KES workstations", "profile": "", "priority": None, "rules": 4,
-                      "shadowed": 1, "hosts": hosts, "hosts_kind": "policy", "locked": True, "overridden": False, "overridden_by": ""}
+                      "shadowed": 1, "hosts": hosts, "hosts_kind": "policy", "locked": True, "overridden": False, "overridden_by": "",
+                      "overridden_reason": ""}
     assert (profile["priority"], profile["rules"], profile["shadowed"], profile["locked"]) == (0, 1, 0, True)
     assert sections[2]["rules"] == 1 and sections[2]["locked"] is True
     # Фильтр: счётчики по отфильтрованному, тень копии — по всему списку (SMB отфильтрован, а копия всё равно в тени).
@@ -210,9 +242,9 @@ def test_sections_counts_and_overridden(auth_client: TestClient, db_session: Ses
         (("app", 1, "Ноутбуки"), False, None)]
     _set_mode(auth_client, "replace")
     ws01 = _sections(auth_client, sid, "host_id=h-ws01")
-    assert [(_key(s), s["overridden"], s["overridden_by"]) for s in ws01] == [
-        (("packet", 1, ""), True, "Ноутбуки"), (("packet", 1, "Ноутбуки"), False, ""), (("app", 1, ""), True, "Ноутбуки"),
-        (("app", 1, "Ноутбуки"), False, "")]
+    assert [(_key(s), s["overridden"], s["overridden_by"], s["overridden_reason"]) for s in ws01] == [
+        (("packet", 1, ""), True, "Ноутбуки", "replaced"), (("packet", 1, "Ноутбуки"), False, "", ""),
+        (("app", 1, ""), True, "Ноутбуки", "replaced"), (("app", 1, "Ноутбуки"), False, "", "")]
     # WS02: профиль не активен — секций профиля нет, политика не перекрыта.
     ws02 = _sections(auth_client, sid, "host_id=h-ws02")
     assert [(_key(s), s["overridden"], s["overlay"]) for s in ws02] == [(("packet", 1, ""), False, None), (("app", 1, ""), False, None)]
@@ -242,6 +274,7 @@ def test_list_shadowed_by_and_effective(auth_client: TestClient) -> None:
     assert body["effective"] == {"packet": profile, "app": profile, "networks": {"policy_id": 1, "profile": "Ноутбуки"}, "mode": "replace"}
     assert {i["profile"] for i in body["items"] if i["overridden"]} == {""} and all(i["overridden"] != (i["profile"] == "Ноутбуки")
                                                                                  for i in body["items"])
+    assert {i["overridden_reason"] for i in body["items"]} == {"replaced", ""}
     body = auth_client.get(f"{url}?host_id=h-ws02").json()
     policy = [{"policy_id": 1, "profile": ""}]
     assert body["effective"] == {"packet": policy, "app": policy, "networks": {"policy_id": 1, "profile": ""}, "mode": "replace"}
@@ -249,3 +282,29 @@ def test_list_shadowed_by_and_effective(auth_client: TestClient) -> None:
     # Хост без политики KES — пустые наборы.
     body = auth_client.get(f"{url}?host_id=h-srv01").json()
     assert body["effective"] == {"packet": [], "app": [], "networks": None, "mode": "replace"} and body["items"] == []
+
+
+def test_overridden_reason_unlocked_and_inactive(auth_client: TestClient) -> None:
+    """`unlocked` — у активного профиля список без замка (движок его не применяет) в любом режиме; `inactive` — строки
+    неактивной политики KES группы хоста; у действующих строк причины нет."""
+    raw = add_inactive_policy(_export([SMB], profile_rules=[WEB_OUT], packet_lock=None))
+    raw["effective_policies"]["2"].append(dict(raw["policies"][-1], KLPOL_INHERITED=True))
+    raw["policy_contents"]["9"] = copy.deepcopy(raw["policy_contents"]["1"])
+    sid = _upload(auth_client, raw)
+    url = f"/api/ksc/snapshots/{sid}/net-rules"
+    body = auth_client.get(f"{url}?host_id=h-ws01").json()
+    reasons = {(i["policy_id"], i["profile"], i["layer"]): (i["overridden"], i["overridden_reason"]) for i in body["items"]}
+    assert reasons[(1, "", "packet")] == (False, "") and reasons[(1, "Ноутбуки", "app")] == (False, "")
+    assert reasons[(1, "Ноутбуки", "packet")] == (True, "unlocked")
+    assert reasons[(9, "", "packet")] == (True, "inactive") and reasons[(9, "", "app")] == (True, "inactive")
+    assert body["effective"]["packet"] == [{"policy_id": 1, "profile": ""}]
+    sections = {_key(s): (s["overridden_reason"], s["overridden_by"]) for s in _sections(auth_client, sid, "host_id=h-ws01")}
+    assert sections[("packet", 1, "Ноутбуки")] == ("unlocked", "") and sections[("packet", 9, "")] == ("inactive", "")
+    assert sections[("packet", 1, "")] == ("", "")
+    _set_mode(auth_client, "replace")
+    sections = {_key(s): s["overridden_reason"] for s in _sections(auth_client, sid, "host_id=h-ws01")}
+    # Пакетный список профиля без замка ничего не вытесняет; правила программ профиля под замком — вытесняют политику.
+    assert (sections[("packet", 1, "")], sections[("packet", 1, "Ноутбуки")], sections[("app", 1, "")]) == ("", "unlocked", "replaced")
+    # Пустая строка `layer` — без фильтра.
+    assert auth_client.get(f"{url}?layer=").json()["total"] == auth_client.get(url).json()["total"]
+    assert auth_client.get(f"{url}?layer=other").status_code == 422

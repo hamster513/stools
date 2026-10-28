@@ -35,7 +35,7 @@ ERROR_NO_HOST = "хост не найден"
 
 
 def note_several(n: int) -> str:
-    return f"адрес совпал с {n} хостами снапшота: сторона назначения не проверялась"
+    return f"адрес совпал с несколькими хостами снапшота ({n}): сторона назначения не проверялась"
 
 
 class Destination(BaseModel):
@@ -49,9 +49,12 @@ class Destination(BaseModel):
             raise ValueError("назначение — либо host_id, либо address")
         if self.address is not None:
             try:
-                self.address = str(ipaddress.ip_address(self.address.strip()))
+                ip = ipaddress.ip_address(self.address.strip())
             except ValueError:
                 raise ValueError("адрес назначения не разобран") from None
+            # IPv4 в IPv6 (::ffff:a.b.c.d) — тот же IPv4: так он записан у хостов снапшота и в правилах.
+            mapped = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) else None
+            self.address = str(mapped or ip)
         return self
 
 
@@ -72,8 +75,10 @@ class BatchRequest(_Check):
     @field_validator("sources")
     @classmethod
     def _limit(cls, sources: list[str]) -> list[str]:
+        if not sources:
+            raise ValueError("нужен хотя бы один источник")
         if len(sources) > MAX_SOURCES:
-            raise ValueError(f"не больше {MAX_SOURCES} хостов за запрос")
+            raise ValueError(f"источников: {len(sources)}, предел {MAX_SOURCES}")
         return sources
 
 

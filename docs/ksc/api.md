@@ -520,14 +520,14 @@ GET  /snapshots/{id}/net-rules?q=&policy_id=&profile=&layer=&action=&direction=&
                                         {total, items: [{id, policy_id, policy_name, profile, layer, position, name, action,
                                                          direction, protocol, local_ports, remote_ports, addresses, enabled, key,
                                                          scope, shadowed_by: {row_id, position, name, same_action}|null,
-                                                         overridden — только с host_id}],
+                                                         overridden, overridden_reason — только с host_id}],
                                         facets: {policy, action, direction, layer, enabled}|null, undescribed: [код продукта],
                                         partial: [policy_id], undetermined: [{policy_id, policy_name, profile}] — только с host_id,
                                         effective: {packet: [{policy_id, profile}], app: [{policy_id, profile}],
                                                     networks: {policy_id, profile}|null, mode} — только с host_id}
 GET  /snapshots/{id}/net-rules/sections?<те же фильтры, без limit/offset>
                                         [{layer, policy_id, policy_name, profile, priority|null, rules, shadowed, hosts,
-                                          hosts_kind: "policy", locked: bool|null, overridden, overridden_by,
+                                          hosts_kind: "policy", locked: bool|null, overridden, overridden_by, overridden_reason,
                                           overlay: "auto"|"merge"|"replace"|null — только с host_id}]
 GET  /snapshots/{id}/net-rules/{row_id}   {…элемент списка, same_in: [{row_id, policy_id, policy_name, profile, enabled}],
                                         policy_hosts, policy_partial}
@@ -544,7 +544,8 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
 Многозначные (повторением ключа, внутри фасета — «или», `all` — не задан): у исключений — `policy_id`, `kind`, `dup`
 (`?policy_id=12&policy_id=15&dup=multi`), у сетевых правил — `policy_id`, `action`, `direction`, у изменений —
 `kind`, `action`, `policy_id`, `snapshot_id`; `policy_id` и `snapshot_id` — числа. Остальные параметры однозначные;
-`layer` сетевых правил — `packet` | `app` (у списка, выгрузки и сводки секций).
+`layer` сетевых правил — `packet` | `app` (у списка, выгрузки и сводки секций; пустое значение — без фильтра, другое —
+`422`). Выгрузка тень и действующие у хоста наборы не считает.
 Выгрузки — все записи под фильтрами списка без `limit`/`offset`, в его порядке, любой роли; формат — общая
 «Выгрузка списков» (`docs/api-contract.md`: CSV — UTF-8 с BOM, `;`, CRLF, потоком; XLSX — не больше 100 000 строк и
 строка-предупреждение).
@@ -704,9 +705,11 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
 активные профили с замком списка по приоритету, `replace` — профиль с наивысшим приоритетом, у которого есть правила,
 иначе политика, `auto` — объединение обоих (как `merge`); `networks` — чьи зоны сетей действуют (профиль с замком зон
 или политика; `null` — политики KES у хоста нет, тогда и списки пусты); `mode` — настройка. Профили с неопределённой
-активацией (`undetermined`) в `effective` не входят. `overridden` у элемента — набор у хоста не действует: в режиме
-`replace` его заменил профиль; в любом режиме — список активного профиля без замка (копия политики). Строки чужой
-политики и неопределённых профилей не помечаются.
+активацией (`undetermined`) в `effective` не входят. `overridden` у элемента — набор у хоста не действует, причина —
+`overridden_reason`: `replaced` — в режиме `replace` его вытеснил профиль; `unlocked` — список активного профиля без
+замка (копия политики, движок его не применяет; в любом режиме); `inactive` — строка политики KES, которая у хоста не
+действует (неактивная или другая политика группы; у хоста без политики KES — любая); `""` — действует. Строки профилей с
+неопределённой активацией не помечаются.
 
 `net-rules/sections` — сводка секций без строк для страницы «Сетевые правила»: секция — (слой, политика, профиль), под
 теми же фильтрами, что список (секция без отобранных правил не показывается). Порядок: слой (`packet`, затем `app`),
@@ -714,8 +717,9 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
 в тени; `priority` — приоритет профиля (`null` у политики); `hosts` — хостов под политикой и у профиля тоже
 (`hosts_kind: "policy"`: число хостов с активным профилем не считается); `locked` — замок листа секции
 (`packet` / `app` из `ksc_policy_firewall.locks_json` этой пары, `null` — признака или строки нет). Без `host_id`
-`overridden` false, `overridden_by` `""`, ключа `overlay` нет. С `host_id`: `overridden` — как у элемента списка,
-`overridden_by` — профиль, который действует вместо (`""` — не перекрыт или список профиля без замка); `overlay` у
+`overridden` false, `overridden_by` и `overridden_reason` `""`, ключа `overlay` нет. Профиль без приоритета — последним. С
+`host_id`: `overridden` и `overridden_reason` — как у элемента списка, `overridden_by` — профиль, который действует вместо
+(только при `replaced`, иначе `""`); `overlay` у
 списка самой политики хоста, на который накладываются профили с замком и правилами (активные или с неопределённой
 активацией), — режим из настроек (`auto` / `merge` / `replace`: «дополняется / заменяется профилем»), иначе `null`.
 
@@ -726,7 +730,7 @@ POST /snapshots/{id}/firewall/check        {source_host_id, destination: {host_i
                                             port: 0..65535|null, icmp_type: 0..255|null}
                                         → {source: Side, destination: Side|null, destination_hosts: [{host_id, name, ip}],
                                            overall: Verdict, depends_on: [str], notes: [str]}
-POST /snapshots/{id}/firewall/check/batch  {sources: [host_id] (≤ 50), destination, protocol, port, icmp_type}
+POST /snapshots/{id}/firewall/check/batch  {sources: [host_id] (1..50), destination, protocol, port, icmp_type}
                                         → [{host_id, name, verdict, decided_by: Rule|null, depends_on, error — у неизвестного хоста}]
 Side   = {host: {host_id, name, ip}, direction: "out"|"in", verdict: Verdict, depends_on: [str], mode: ""|"notify_only",
           notes: [str], effective_sources: [str], branches: [Branch]}
@@ -747,8 +751,9 @@ Verdict = "allow"|"deny"|"app"|"depends"|"not_applied"|"undetermined"
 имя — FQDN или имя хоста назначения. Сторона назначения — входящий пакет с того же источника: локальный порт — `port`,
 удалённый адрес и имя — источника. Сторона назначения считается, если назначение — хост снапшота: `host_id` или адрес,
 совпавший с `ip` ровно одного хоста. `destination_hosts` — хосты, которыми назначение может быть (при `host_id` — он
-сам; при адресе — все хосты снапшота с этим `ip`, по имени); если их нет или больше одного — `destination: null` и строка
-в `notes` («назначение не из хостов снапшота…» / «адрес совпал с N хостами…»). `overall`: `allow`, если все посчитанные
+сам; при адресе — все хосты снапшота с этим `ip`, по имени; IPv4 в IPv6 вида `::ffff:a.b.c.d` приводится к IPv4); если их
+нет или больше одного — `destination: null` и строка в `notes` («назначение не из хостов снапшота…» / «адрес совпал с
+несколькими хостами снапшота (N)…»). `overall`: `allow`, если все посчитанные
 стороны разрешают (`not_applied` — правила не применяются — блокировкой не считается); иначе `deny`, если хоть одна
 запрещает; иначе `depends`, иначе `app`, иначе `undetermined`. `depends_on` — точки ветвления обеих сторон без повторов.
 Вердикт стороны `depends` с пустым `depends_on` — ветви обрезаны пределом, причина в `notes`.
@@ -756,7 +761,8 @@ Verdict = "allow"|"deny"|"app"|"depends"|"not_applied"|"undetermined"
 `decided_by` в пакетной проверке — решающее правило, если оно одно на все ветви, иначе `null`. Ошибки: `404` — снапшот,
 хост-источник или хост назначения (`destination.host_id`) не найден («хост не найден»; в пакетной проверке неизвестный
 источник — строка с `verdict: "undetermined"` и `error`); `422` — в назначении не ровно одно из `host_id` / `address`,
-адрес не разобран, порт вне 0..65535, протокол не из списка, источников больше 50. Любая роль.
+адрес не разобран, порт вне 0..65535, `icmp_type` вне 0..255, протокол не из списка, источников нет или больше 50
+(«источников: N, предел 50»). Любая роль.
 
 ## Сервер KSC
 

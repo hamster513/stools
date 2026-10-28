@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -331,12 +331,17 @@ def _net_rule_item(r: KscNetRule, name: str, shadow: Shadow | None) -> dict[str,
     }
 
 
+#: Фильтр слоя сетевых правил; пустая строка — без фильтра, как у `q`.
+NetLayer = Literal["packet", "app", ""] | None
+
+
 class _NetRules:
     """Отбор сетевых правил под фильтрами списка (общий для списка, выгрузки и сводки секций)."""
 
     def __init__(self, db: Session, snapshot_id: int, q: str, policy_id: QueryInts, profile: str | None, action: QueryList,
-                 direction: QueryList, enabled: bool | None, host_id: str | None, layer: str | None) -> None:
+                 direction: QueryList, enabled: bool | None, host_id: str | None, layer: NetLayer) -> None:
         policy_ids, actions, directions = multi_int(policy_id), multi(action), multi(direction)
+        layer = layer or None
         self.host = _HostFilter(db, snapshot_id, host_id) if host_id else None  # пустая строка — фильтра нет, как у q/kind
         self.policies = _policies(db, snapshot_id)
         self.rows = list(db.execute(select(KscNetRule).where(KscNetRule.snapshot_id == snapshot_id)).scalars())
@@ -376,13 +381,13 @@ def list_net_rules(
     host_id: str | None = None,
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
-    layer: str | None = None,
+    layer: NetLayer = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Фасеты `policy_id, action, direction` — повтором ключа, внутри фасета «или». С `host_id` — действующие у хоста наборы
-    (`effective`) и у элемента `overridden`."""
+    (`effective`) и у элемента `overridden`, `overridden_reason`."""
     _snapshot(db, snapshot_id, settings)
     sel = _NetRules(db, snapshot_id, q, policy_id, profile, action, direction, enabled, host_id, layer)
     host, policies, kept = sel.host, sel.policies, sel.kept
@@ -400,7 +405,8 @@ def list_net_rules(
     items = [_net_rule_item(r, _name(policies, r.policy_id), sel.shadow(r)) for r in page]
     if effective is not None:
         for item in items:
-            item["overridden"] = effective.overridden(item["policy_id"], item["profile"], item["layer"])
+            item["overridden_reason"] = effective.reason(item["policy_id"], item["profile"], item["layer"])
+            item["overridden"] = item["overridden_reason"] != ""
     return {
         "total": len(kept), "items": items, "facets": facets, "undescribed": _undescribed(policies), "partial": _partial(policies),
         **({"undetermined": host.undetermined} if host is not None else {}),
@@ -425,20 +431,21 @@ def export_net_rules(
     direction: QueryList = None,
     enabled: bool | None = None,
     host_id: str | None = None,
-    layer: str | None = None,
+    layer: NetLayer = None,
     fmt: str = Query(default="csv", alias="format"),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
-    user: AppUser = Depends(get_current_user),
+    _user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    """Сетевые правила под фильтрами списка, в его порядке — тот же отбор (`list_net_rules`) без страницы."""
-    page = list_net_rules(snapshot_id, q, policy_id, profile, action, direction, enabled, host_id, limit=EXPORT_ALL, offset=0, layer=layer,
-                          db=db, settings=settings, _user=user)
+    """Сетевые правила под фильтрами списка, в его порядке — тот же отбор (`_NetRules`) без страницы; тень и действующие у
+    хоста наборы в выгрузку не идут и не считаются."""
+    _snapshot(db, snapshot_id, settings)
+    sel = _NetRules(db, snapshot_id, q, policy_id, profile, action, direction, enabled, host_id, layer)
     rows = [
-        {"name": r["name"], "index": r["position"], "action": r["action"], "direction": r["direction"], "protocol": r["protocol"],
-         "local_ports": r["local_ports"], "remote_ports": r["remote_ports"], "addresses": r["addresses"],
-         "enabled": "да" if r["enabled"] else "нет", "policy": policy_cell(r["policy_name"], r["profile"])}
-        for r in page["items"]
+        {"name": r.name, "index": r.position, "action": r.action, "direction": r.direction, "protocol": r.protocol,
+         "local_ports": r.local_ports, "remote_ports": r.remote_ports, "addresses": r.addresses,
+         "enabled": "да" if r.enabled else "нет", "policy": policy_cell(_name(sel.policies, r.policy_id), r.profile)}
+        for r in sel.kept
     ]
     return export_response(fmt, NET_RULE_COLUMNS, rows, module="ksc", name="net-rules")
 
@@ -456,7 +463,7 @@ def net_rule_sections(
     direction: QueryList = None,
     enabled: bool | None = None,
     host_id: str | None = None,
-    layer: str | None = None,
+    layer: NetLayer = None,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
@@ -464,7 +471,7 @@ def net_rule_sections(
     """Сводка секций (слой, политика, профиль) под фильтрами списка, без строк: слой (пакетные, затем программ), политика по
     имени, сама политика, затем профили по приоритету. Секция без отобранных правил не показывается. `hosts` — хостов под
     политикой (`hosts_kind` "policy"), и у профиля тоже; `shadowed` — отобранные правила в тени (тень — по всему набору).
-    С `host_id`: `overridden` — набор у хоста не действует (см. `HostEffective.overridden`), `overlay` — у списка политики,
+    С `host_id`: `overridden` — набор у хоста не действует, причина — `overridden_reason` (`HostEffective.reason`), `overlay` — у списка политики,
     на который накладываются профили хоста с замком, — режим наложения из настроек, иначе null."""
     _snapshot(db, snapshot_id, settings)
     sel = _NetRules(db, snapshot_id, q, policy_id, profile, action, direction, enabled, host_id, layer)
@@ -479,7 +486,9 @@ def net_rule_sections(
     def order(key: tuple[str, int, str]) -> tuple[Any, ...]:
         lay, pid, prof = key
         priority = profiles.get((pid, prof))
-        return (_LAYERS.get(lay, len(_LAYERS)), lay, *_order(sel.policies, pid), prof != "", priority if priority is not None else 0, prof.lower(), prof)
+        # Профиль без приоритета — последним, как в `evaluate._sources`.
+        rank = priority if priority is not None else 1 << 31
+        return (_LAYERS.get(lay, len(_LAYERS)), lay, *_order(sel.policies, pid), prof != "", rank, prof.lower(), prof)
 
     out: list[dict[str, Any]] = []
     for key in sorted(groups, key=order):
@@ -492,10 +501,11 @@ def net_rule_sections(
             "priority": profiles.get((pid, prof)) if prof else None, "rules": len(rows), "shadowed": sum(sel.shadow(r) is not None for r in rows),
             "hosts": p.hosts if p is not None else 0, "hosts_kind": "policy",
             "locked": getattr(lock, lay, None) if lock is not None and lay in _LAYERS else None,
-            "overridden": False, "overridden_by": "",
+            "overridden": False, "overridden_by": "", "overridden_reason": "",
         }
         if effective is not None:
-            row["overridden"] = effective.overridden(pid, prof, lay)
+            row["overridden_reason"] = effective.reason(pid, prof, lay)
+            row["overridden"] = row["overridden_reason"] != ""
             row["overridden_by"] = effective.overridden_by(pid, prof, lay)
             overlaid = not prof and pid == effective.policy_id and bool(effective.overlays.get(lay))
             row["overlay"] = effective.mode if overlaid else None
