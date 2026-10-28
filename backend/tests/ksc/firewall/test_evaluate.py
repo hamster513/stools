@@ -18,6 +18,7 @@ from api.modules.ksc.core.firewall.evaluate import (
     NOTE_HIPS_OFF,
     NOTE_NOTIFY_ONLY,
     NOTE_REPLY_APP,
+    NOTE_STREAM_ALLOW,
     NOTE_TOO_MANY,
     POINT_MODEL,
     effective_rules,
@@ -119,11 +120,20 @@ def test_reply_allowed_keeps_first_rule_as_decider() -> None:
     assert statuses(b.reply_steps) == ["no", "hit"]
 
 
-def test_stream_rule_skipped_on_reply() -> None:
-    """Правило потока разрешает соединение и в ответном прогоне не участвует; ответ разрешает правило пакета."""
-    rules = (rule(1, ALLOW, direction=4), rule(2, ALLOW, direction=0))
+def test_stream_allow_skips_reply_pass() -> None:
+    """Правило потока учитывает состояние соединения (Ruling 9): разрешает его целиком, ответного прогона нет."""
+    rules = (rule(1, ALLOW, direction=4), rule(2, DENY, direction=0))
     (b,) = evaluate_side(host(rules), packet()).branches
-    assert b.verdict is Verdict.ALLOW and statuses(b.reply_steps) == ["skipped", "hit"]
+    assert b.verdict is Verdict.ALLOW and b.decided_by == rules[0] and b.layer == "packet"
+    assert b.reply_steps == () and statuses(b.steps) == ["hit", "not_checked"] and b.note == NOTE_STREAM_ALLOW
+
+
+def test_packet_allow_runs_reply_pass() -> None:
+    """Правило уровня пакета разрешило первый пакет — ответный прогон; правила потока в нём пропускаются."""
+    rules = (rule(1, ALLOW, direction=1), rule(2, ALLOW, direction=4), rule(3, ALLOW, direction=0))
+    (b,) = evaluate_side(host(rules), packet()).branches
+    assert b.verdict is Verdict.ALLOW and b.decided_by == rules[0] and b.note == ""
+    assert statuses(b.reply_steps) == ["no", "skipped", "hit"]
 
 
 def test_reply_without_packet_rule_goes_to_app_rules() -> None:

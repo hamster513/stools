@@ -1,5 +1,5 @@
 """Вердикт сетевого экрана хоста для пакета (спека §4.2, §4.4, §4.5): состояние экрана, пакетные правила (первое
-совпавшее решает), ответный пакет, слой правил программ; ветвление на неопределённостях.
+совпавшее решает), ответный пакет (только после разрешения правилом уровня пакета, не потока), слой правил программ; ветвление на неопределённостях.
 
 Точки ветвления по порядку (Ruling 2, R-A): способ наложения профиля на список политики («дополняет» — `merge`,
 «заменяет» — `replace`; только в режиме `auto` и только если у хоста есть профили с замком), активация каждого профиля
@@ -44,6 +44,7 @@ NOTE_FIREWALL_OFF = "сетевой экран выключен в действ�
 NOTE_FIREWALL_UNKNOWN = "состояние сетевого экрана в выгрузке неизвестно"
 NOTE_NOTIFY_ONLY = "режим „только уведомлять“: блокировки не будет"
 NOTE_REPLY_APP = "ответный пакет не подошёл под разрешающее пакетное правило: решают правила программ"
+NOTE_STREAM_ALLOW = "правило потока разрешает соединение целиком"
 ASSUME_MERGE = "профиль дополняет список политики"
 ASSUME_REPLACE = "профиль заменяет список политики"
 POINT_MODEL = "способ наложения профиля на список политики"
@@ -230,6 +231,9 @@ def _decide(ctx: _Ctx, path: _Path, rules: tuple[RuleView, ...], j: int, reply: 
         return ctx.leaf(path, Verdict.UNDETERMINED, rule, "reply" if reply else "packet", first, second, notes=(note_unknown_action(rule),))
     if reply:
         return ctx.leaf(path, Verdict.ALLOW, path.first_rule, "packet", path.first, done)
+    if rule.scope.direction in _STREAM:
+        # Правила потока учитывают состояние соединения: ответный прогон не нужен (Ruling 9).
+        return ctx.leaf(path, Verdict.ALLOW, rule, "packet", done, notes=(NOTE_STREAM_ALLOW,))
     if ctx.packet.protocol in _NO_REPLY:
         return ctx.leaf(path, Verdict.ALLOW, rule, "packet", done)
     return _walk(ctx, replace(path, first=done, first_rule=rule), rules, 0, True, ())
