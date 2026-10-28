@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -50,7 +51,88 @@ def client_for(handler: Handler, calls: list[httpx.Request] | None = None) -> Ha
 def test_make_client_uses_basic_auth_and_no_redirects() -> None:
     http = make_harbor_client(Conn())
     assert http.follow_redirects is False
-    assert http.auth is not None
+    assert isinstance(http.auth, httpx.BasicAuth)
+    request = http.build_request("GET", "https://harbor.corp/api/v2.0/systeminfo")
+    sent = next(http.auth.auth_flow(request))
+    assert sent.headers["Authorization"] == "Basic " + base64.b64encode(b"robot$stools:s3cret").decode()
+
+
+def test_make_client_propagates_verify_tls() -> None:
+    class Insecure(Conn):
+        verify_tls = False
+
+    called: dict[str, Any] = {}
+    real = httpx.Client
+
+    def spy(**kwargs: Any) -> httpx.Client:
+        called.update(kwargs)
+        return real(**kwargs)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(httpx, "Client", spy)
+        make_harbor_client(Insecure())
+    assert called["verify"] is False
+    assert called["auth"] == ("robot$stools", "s3cret")
+
+
+def test_invalid_url_is_no_link() -> None:
+    class Bad(Conn):
+        url = "http://[not-an-ip"
+
+    with pytest.raises(HarborError) as exc:
+        HarborClient(Bad(), httpx.Client()).projects()
+    assert exc.value.kind == NO_LINK
+
+
+def test_pagination_stops_when_server_ignores_page() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"name": f"p{i}"} for i in range(100)])
+
+    names = client_for(handler, calls).projects()
+    assert len(calls) == 2
+    assert names == [f"p{i}" for i in range(100)]
+
+
+def test_pagination_ignores_non_ascii_total_count() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"name": "a"}], headers={"X-Total-Count": "١٢٣".encode()})
+
+    assert client_for(handler).projects() == ["a"]
+
+
+def test_severity_vocabulary_is_closed() -> None:
+    def item(sev: object) -> dict[str, Any]:
+        return {"id": "CVE-2024-0001", "package": "p", "version": "1", "severity": sev, "links": []}
+
+    report = {REPORT_MIME: {"vulnerabilities": [item(s) for s in ("Critical", "HIGH", "Negligible", "None", "", None, 5)]}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=report)
+
+    got = [v.severity for v in client_for(handler).vulnerabilities("p", "r", "sha256:1")]
+    assert got == ["critical", "high", "unknown", "unknown", "unknown", "unknown", "unknown"]
+
+
+def test_scan_status_whitelist_and_null_tags() -> None:
+    def art(status: str | None) -> dict[str, Any]:
+        raw = fixture("artifacts_stools_web.json")[0]
+        raw["tags"] = None
+        if status is None:
+            raw["scan_overview"][REPORT_MIME].pop("scan_status")
+        else:
+            raw["scan_overview"][REPORT_MIME]["scan_status"] = status
+        return raw
+
+    cases = [("Success", "success"), ("Scheduled", "pending"), ("Stopped", "error"), ("Running", "running"), ("Weird", "none"), (None, "none")]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[art(s) for s, _ in cases], headers={"X-Total-Count": str(len(cases))})
+
+    got = client_for(handler).artifacts("p", "r")
+    assert [a.scan_status for a in got] == [want for _, want in cases]
+    assert all(a.tags == () for a in got)
 
 
 def test_probe_reads_version() -> None:

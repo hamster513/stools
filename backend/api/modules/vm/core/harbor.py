@@ -26,11 +26,13 @@ REPORT_MIME_OLD = "application/vnd.security.vulnerability.report; version=1.0"
 
 BAD_FORMAT = "BAD_FORMAT"
 PAGE_SIZE = 100
-#: Предохранитель от бесконечной пагинации при неисправном `X-Total-Count`.
-MAX_PAGES = 10_000
+#: Предохранитель от бесконечной пагинации при неисправном `X-Total-Count`
+#: (200 страниц по 100 — 20 000 записей в одном списке).
+MAX_PAGES = 200
 DESCRIPTION_LIMIT = 2000
 SEVERITIES = ("critical", "high", "medium", "low", "unknown")
-_CVE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
+_CVE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE | re.ASCII)
+_SCAN_STATUSES = frozenset({"success", "pending", "running", "error", "none"})
 #: Harbor отдаёт обзор скана только тому, кто сказал, какие отчёты он понимает.
 _ACCEPT = f"{REPORT_MIME}, {REPORT_MIME_OLD}"
 #: Статусы скана Harbor, которых нет в словаре `success|pending|running|error|none`.
@@ -138,6 +140,10 @@ def _enc(name: str) -> str:
     return quote(quote(name, safe=""), safe="")
 
 
+def _project_path(project: str) -> str:
+    return f"/projects/{quote(project, safe='')}"
+
+
 class HarborClient:
     def __init__(self, conn: HarborConnectionLike, http: httpx.Client) -> None:
         self.conn = conn
@@ -170,7 +176,7 @@ class HarborClient:
             raise
         except ResponseTooLarge as exc:
             raise HarborError(BAD_FORMAT) from exc
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
             raise HarborError(TLS_FAILED if is_tls_error(exc) else NO_LINK) from exc
         try:
             return json.loads(body), response_headers
@@ -179,17 +185,22 @@ class HarborClient:
 
     def _pages(self, path: str, params: dict[str, Any] | None = None) -> list[Any]:
         """Все элементы списка: `page=1..`, пока `page * page_size < X-Total-Count`;
-        без заголовка — пока страница полная."""
+        без заголовка — пока страница полная. Сервер, игнорирующий `page`, отдаёт одну и ту же
+        страницу: первый элемент страницы повторил первый элемент предыдущей — конец списка."""
         items: list[Any] = []
+        previous_first: Any = None
         for page in range(1, MAX_PAGES + 1):
             data, headers = self._get(path, {**(params or {}), "page": page, "page_size": PAGE_SIZE})
             if not isinstance(data, list):
                 raise HarborError(BAD_FORMAT)
+            if page > 1 and data and data[0] == previous_first:
+                break
             items.extend(data)
             total = headers.get("X-Total-Count", "")
-            more = page * PAGE_SIZE < int(total) if total.isdigit() else len(data) >= PAGE_SIZE
+            more = page * PAGE_SIZE < int(total) if total.isascii() and total.isdigit() else len(data) >= PAGE_SIZE
             if not more or not data:
                 break
+            previous_first = data[0]
         return items
 
     def probe(self) -> HarborInfo:
@@ -208,7 +219,7 @@ class HarborClient:
     def repositories(self, project: str) -> list[HarborRepo]:
         prefix = f"{project}/"
         repos: list[HarborRepo] = []
-        for raw in self._pages(f"/projects/{quote(project, safe='')}/repositories"):
+        for raw in self._pages(f"{_project_path(project)}/repositories"):
             item = _dict(raw)
             full = item.get("name")
             if not isinstance(full, str) or not full:
@@ -224,7 +235,7 @@ class HarborClient:
         return repos
 
     def artifacts(self, project: str, repo: str) -> list[HarborArtifact]:
-        path = f"/projects/{quote(project, safe='')}/repositories/{_enc(repo)}/artifacts"
+        path = f"{_project_path(project)}/repositories/{_enc(repo)}/artifacts"
         found = [self._artifact(_dict(raw)) for raw in self._pages(path, {"with_scan_overview": "true", "with_tag": "true"})]
         return [a for a in found if a.digest]
 
@@ -249,6 +260,8 @@ class HarborClient:
         scan_status = "none"
         if isinstance(status, str) and status:
             scan_status = _STATUS_ALIASES.get(status.lower(), status.lower())
+            if scan_status not in _SCAN_STATUSES:
+                scan_status = "none"
         scanner_info = _dict(report.get("scanner"))
         scanner = " ".join(str(scanner_info[k]) for k in ("name", "version") if scanner_info.get(k)) or None
         summary = _dict(report.get("summary"))
@@ -273,7 +286,7 @@ class HarborClient:
 
     def vulnerabilities(self, project: str, repo: str, digest: str) -> list[HarborVuln]:
         path = (
-            f"/projects/{quote(project, safe='')}/repositories/{_enc(repo)}"
+            f"{_project_path(project)}/repositories/{_enc(repo)}"
             f"/artifacts/{quote(digest, safe=':')}/additions/vulnerabilities"
         )
         data, _ = self._get(path)
@@ -299,7 +312,7 @@ class HarborClient:
                     package=str(item.get("package") or ""),
                     installed_version=str(item.get("version") or ""),
                     fixed_version=fixed if isinstance(fixed, str) and fixed else None,
-                    severity=severity.lower() if isinstance(severity, str) and severity else "unknown",
+                    severity=severity.lower() if isinstance(severity, str) and severity.lower() in SEVERITIES else "unknown",
                     cvss=float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else None,
                     description=description[:DESCRIPTION_LIMIT] if isinstance(description, str) and description else None,
                     link=links[0] if links else None,
