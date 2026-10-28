@@ -16,7 +16,6 @@ export function HelpButton({ open, onToggle, buttonRef }: { open: boolean; onTog
       onClick={onToggle}
       aria-label="Справка"
       title="Справка по этой странице"
-      aria-pressed={open}
       aria-expanded={open}
       aria-controls={HELP_PANEL_ID}
       className={cn(

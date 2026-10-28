@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ReactNode } from 'react'
+import { Children, isValidElement, useMemo, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Link } from '@/lib/router'
@@ -16,13 +16,20 @@ function headingId(text: string): string {
 
 const LINK = 'text-text underline hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 
-const components: Components = {
-  a({ href, children }) {
-    if (href?.startsWith('help:')) return <Link to={`/help/${href.slice(5)}`} className={LINK}>{children}</Link>
-    if (href?.startsWith('/')) return <Link to={href} className={LINK}>{children}</Link>
+/** Ссылка из текста статьи: `help:` и адреса приложения — внутри SPA, http(s) — в новой вкладке, прочее — текстом. */
+function anchor(onHelpNavigate?: () => void): Components['a'] {
+  return function A({ href, children }) {
+    if (href?.startsWith('help:')) return <Link to={`/help/${href.slice(5)}`} onNavigate={onHelpNavigate} className={LINK}>{children}</Link>
+    // `//host` и `/\host` браузер понимает как чужой сайт: это не адрес приложения.
+    if (href && /^\/(?![/\\])/.test(href)) return <Link to={href} className={LINK}>{children}</Link>
     if (href && /^https?:\/\//.test(href)) return <a href={href} target="_blank" rel="noopener noreferrer" className={LINK}>{children}</a>
     return <>{children}</>
-  },
+  }
+}
+
+const components: Components = {
+  // Картинок в справке нет: внешний адрес картинки грузился бы при открытии статьи.
+  img: () => null,
   h2: ({ children }) => <h2 id={headingId(textOf(children))} className="mt-5 mb-2 text-base font-semibold text-text first:mt-0">{children}</h2>,
   h3: ({ children }) => <h3 className="mt-4 mb-1.5 text-sm font-semibold text-text">{children}</h3>,
   p: ({ children }) => <p className="my-2 leading-relaxed">{children}</p>,
@@ -38,12 +45,16 @@ const components: Components = {
   td: ({ children }) => <td className="border border-grid px-2 py-1 align-top">{children}</td>,
 }
 
-/** Текст статьи справки: markdown с таблицами (GFM) и внутренними ссылками `help:<slug>`. */
-export function Markdown({ source }: { source: string }) {
+/**
+ * Текст статьи справки: markdown с таблицами (GFM) и внутренними ссылками `help:<slug>`.
+ * `onHelpNavigate` вызывается после перехода по ссылке `help:` (панель так закрывается).
+ */
+export function Markdown({ source, onHelpNavigate }: { source: string; onHelpNavigate?: () => void }) {
+  const all = useMemo<Components>(() => ({ ...components, a: anchor(onHelpNavigate) }), [onHelpNavigate])
   // По умолчанию react-markdown вырезает неизвестные схемы, включая help:; допустимые адреса отбирает компонент `a`.
   return (
     <div className="text-sm text-text-secondary">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={(url) => url}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={all} urlTransform={(url) => url}>
         {source}
       </ReactMarkdown>
     </div>

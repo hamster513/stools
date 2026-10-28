@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type RefObject } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { Link, useRouter } from '@/lib/router'
@@ -40,8 +40,11 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
     return () => window.removeEventListener('keydown', onKey, true)
   }, [open, onClose])
 
-  // helpFor пишет предупреждение в dev: считаем один раз на адрес, а не на каждый рендер.
-  const article = useMemo(() => (open ? helpFor(path).article : null), [open, path])
+  // helpFor пишет предупреждение в dev: считаем один раз на адрес, а не на каждый рендер. Пока панель
+  // закрыта, адрес не пересчитываем: при закрытии статья остаётся на месте, пока панель уезжает.
+  const [shownPath, setShownPath] = useState<string | null>(open ? path : null)
+  if (open && shownPath !== path) setShownPath(path)
+  const article = useMemo(() => (shownPath === null ? null : helpFor(shownPath).article), [shownPath])
   const what = article?.sections['Что это']
 
   return (
@@ -70,7 +73,7 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
             {what && (
               <section className="mb-4">
                 <div className={BLOCK_TITLE}>Что это</div>
-                <Markdown source={what} />
+                <Markdown source={what} onHelpNavigate={onClose} />
               </section>
             )}
             <LevelsBlock article={article} />
@@ -80,7 +83,7 @@ export function HelpPanel({ open, onClose, buttonRef }: { open: boolean; onClose
                 <ul className="flex flex-wrap gap-1.5">
                   {article.concepts.map((slug) => (
                     <li key={slug}>
-                      <Link to={`/help/${slug}`} className={cn('inline-block rounded-full border border-grid px-2.5 py-0.5 text-text hover:bg-row-hover', FOCUS)}>
+                      <Link to={`/help/${slug}`} onNavigate={onClose} className={cn('inline-block rounded-full border border-grid px-2.5 py-0.5 text-text hover:bg-row-hover', FOCUS)}>
                         {BY_SLUG.get(slug)?.title ?? slug}
                       </Link>
                     </li>
