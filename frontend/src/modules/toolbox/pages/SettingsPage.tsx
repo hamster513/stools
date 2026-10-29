@@ -77,7 +77,8 @@ function SettingsForm({ initial }: { initial: ToolboxSettings }) {
 
   return (
     <form onSubmit={submit} className="h-full overflow-y-auto p-6">
-      <h1 className="mb-4 text-base font-semibold text-text">{moduleTitle('toolbox')}</h1>
+      <h1 className="text-base font-semibold text-text">{moduleTitle('toolbox')}</h1>
+      <p className="mb-4 text-xs text-text-secondary">Настройки Blindspot — очистки файлов и текста. Остальным инструментам модуля настройки не нужны.</p>
       <div className="max-w-3xl space-y-4">
         <Section id="words" title="Слова" about="Свои слова: названия проектов, площадок, систем. Слово ищется как часть слова, без учёта регистра — короткое слово заменится и внутри других слов. Псевдоним можно не задавать — тогда он будет вида word-NNNN.">
           <PairEditor cfg={WORDS} rows={words} setRows={setWords} mk={mk} onChange={touch} invalid={noWord} />

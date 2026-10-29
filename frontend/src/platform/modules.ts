@@ -78,7 +78,7 @@ export const MODULES: readonly ModuleSpec[] = [
     code: 'TBX',
     title: 'ToolBox',
     description:
-      'Утилиты для ИБ-специалиста: очистка файлов и текста от адресов, имён, учёток и секретов перед передачей наружу.',
+      'Утилиты для ИБ-специалиста: Blindspot — очистка файлов и текста перед передачей наружу, Base64, IP-калькулятор, Unix time и разбор cron.',
     icon: Wrench,
     status: 'available',
   },

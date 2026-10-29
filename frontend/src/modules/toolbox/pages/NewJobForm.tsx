@@ -57,8 +57,8 @@ export function NewJobForm() {
 
   return (
     <form onSubmit={submit} className="h-full overflow-y-auto p-6">
-      <Link to="/toolbox" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text"><ArrowLeft size={13} aria-hidden />Очистка файлов</Link>
-      <h1 className="mb-4 text-base font-semibold text-text">Новое задание</h1>
+      <Link to="/toolbox" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text"><ArrowLeft size={13} aria-hidden />Задания</Link>
+      <h2 className="mb-4 text-base font-semibold text-text">Новое задание</h2>
       <div className="max-w-3xl space-y-4">
         <Section title="Что очистить" about="Текстовые форматы и архивы с ними: json, json.gz, gz, zip (и вложенные), csv, txt, log, xml, conf, ini, yaml. Офисные документы и pdf не поддерживаются.">
           <div className="mb-3 inline-flex gap-1 rounded border border-border p-0.5" role="tablist">

@@ -80,7 +80,7 @@ function AliasesTable() {
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-base font-semibold text-text">Соответствия</h1>
+            <h2 className="text-base font-semibold text-text">Соответствия</h2>
             <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
             <ExportButton href={(fmt) => aliasesExportUrl({ q: q || undefined, kind: kind || undefined }, fmt)} total={total} disabled={aliases.isLoading} />
             <div className="relative">

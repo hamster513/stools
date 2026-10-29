@@ -69,7 +69,7 @@ export function ScrubJobsPage() {
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-base font-semibold text-text">Очистка файлов</h1>
+            <h2 className="text-base font-semibold text-text">Задания очистки</h2>
             <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
           </div>
           <p className="max-w-2xl text-xs text-text-secondary">

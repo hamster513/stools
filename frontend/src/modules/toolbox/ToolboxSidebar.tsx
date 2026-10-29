@@ -1,18 +1,11 @@
-import { BookKey, Eraser, Undo2 } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import { TOOLBOX_SECTIONS } from './nav'
 
 const LINK =
   'flex items-center gap-2.5 rounded px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 
-const ITEMS = [
-  // Карточка и форма задания живут под /toolbox/scrub/… — это тоже «Очистка файлов».
-  { to: '/toolbox', label: 'Очистка файлов', icon: Eraser, match: (p: string) => p === '/toolbox' || p.startsWith('/toolbox/scrub/') },
-  { to: '/toolbox/reverse', label: 'Обратный перевод', icon: Undo2, match: (p: string) => p === '/toolbox/reverse' },
-  { to: '/toolbox/aliases', label: 'Соответствия', icon: BookKey, match: (p: string) => p === '/toolbox/aliases' },
-]
-
-/** Второй уровень навигации модуля ToolBox. */
+/** Второй уровень навигации модуля ToolBox: по пункту на инструмент, вкладки инструмента — сверху над страницей. */
 export function ToolboxSidebar() {
   const { path } = useRouter()
   const linkClass = (on: boolean) =>
@@ -25,7 +18,7 @@ export function ToolboxSidebar() {
         <div className="text-xs text-text-secondary">утилиты ИБ-специалиста</div>
       </div>
       <nav className="flex flex-col gap-0.5 px-2" aria-label="Разделы">
-        {ITEMS.map(({ to, label, icon: Icon, match }) => (
+        {TOOLBOX_SECTIONS.map(({ to, label, icon: Icon, match }) => (
           <Link key={to} to={to} className={linkClass(match(path))} aria-current={match(path) ? 'page' : undefined}>
             <Icon size={16} strokeWidth={2} aria-hidden />
             {label}
