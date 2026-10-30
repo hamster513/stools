@@ -724,6 +724,26 @@ export interface ExclusionsResponse {
   undetermined?: UndeterminedProfile[]
 }
 
+export type FirewallProfileMode = 'auto' | 'merge' | 'replace'
+export interface NetRuleAddress {
+  host: string; ip: string; mask: number | null; ips: NetRuleAddress[]; hidden: '' | 'secret' | 'unparsed'
+}
+export interface NetRuleScope {
+  networks: number | null; remote: NetRuleAddress[]; local: NetRuleAddress[]; icmp_type: number | null
+  direction: number | null; protocol: number | null; local_ports: [number, number][]; remote_ports: [number, number][]; unread: string[]
+}
+export interface NetRuleShadow { row_id: number; position: number; name: string; same_action: boolean }
+export interface NetRuleSection {
+  layer: string; policy_id: number; policy_name: string; profile: string; priority: number | null
+  rules: number; shadowed: number; hosts: number; hosts_kind: 'policy'; locked: boolean | null
+  overridden: boolean; overridden_by: string; overridden_reason: '' | 'replaced' | 'unlocked' | 'inactive'
+  overlay?: FirewallProfileMode | null
+}
+export interface NetRuleEffective {
+  packet: { policy_id: number; profile: string }[]; app: { policy_id: number; profile: string }[]
+  networks: { policy_id: number; profile: string } | null; mode: FirewallProfileMode
+}
+
 export interface NetRuleItem {
   id: number
   policy_id: number
@@ -740,6 +760,10 @@ export interface NetRuleItem {
   addresses: string
   enabled: boolean
   key: string
+  scope: NetRuleScope | null
+  shadowed_by: NetRuleShadow | null
+  overridden?: boolean
+  overridden_reason?: NetRuleSection['overridden_reason']
 }
 
 /** Карточка сетевого правила (`/net-rules/{row_id}`). */
@@ -758,6 +782,9 @@ export interface NetRulesQuery {
   enabled?: boolean
   /** Записи, действующие на хост: его политик и активных на нём профилей. */
   host_id?: string
+  layer?: 'packet' | 'app'
+  /** Пустая строка — только сама политика; undefined — все профили. */
+  profile?: string
   limit?: number
   offset?: number
 }
@@ -776,6 +803,7 @@ export interface NetRulesResponse {
   undescribed: string[]
   /** Политики описанного продукта, содержимое которых собрано не полностью: их правила могут быть неполными. */
   partial: number[]
+  effective?: NetRuleEffective
   /** Только с `host_id`. */
   undetermined?: UndeterminedProfile[]
 }
@@ -934,6 +962,7 @@ export interface ConnectionIn {
 }
 
 export interface KscConfig {
+  firewall_profile_mode: FirewallProfileMode
   agent_silent_days: number
   bases_old_days: number
   fullscan_days: number

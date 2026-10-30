@@ -1,3 +1,4 @@
+import { ScopeChips, RuleFlags, PortsCell } from '../netrules/RuleCells'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
@@ -125,13 +126,20 @@ function NetRuleBody({ d, serverId, onOpen }: { d: NetRuleDetail; serverId: numb
         <Field label="Действие">{d.action || '—'}</Field>
         <Field label="Направление">{d.direction || '—'}</Field>
         <Field label="Протокол">{d.protocol || '—'}</Field>
-        <Field label="Локальные порты" mono>{d.local_ports || '—'}</Field>
-        <Field label="Удалённые порты" mono>{d.remote_ports || '—'}</Field>
-        <Field label="Адреса" mono>{d.addresses || '—'}</Field>
+        <Field label="Порты"><PortsCell item={d} /></Field>
+        <Field label="Адреса"><ScopeChips item={d} /></Field>
         <Field label="Включено">{d.enabled ? 'да' : 'нет'}</Field>
         <PolicyFields d={d} serverId={serverId} />
         <Field label="Ключ сравнения" mono>{d.key}</Field>
       </dl>
+      <section className="mb-4 rounded border border-grid p-3" aria-label="Срабатывание правила">
+        <h3 className="mb-2 font-semibold text-text">Срабатывание</h3>
+        {d.shadowed_by ? <>
+          <p className="text-text-secondary">Более раннее правило полностью покрывает это. Действие {d.shadowed_by.same_action ? 'то же' : 'другое'}.</p>
+          <button type="button" onClick={() => onOpen(d.shadowed_by!.row_id)} className="mt-2 rounded text-left text-primary hover:underline focus-visible:ring-2 focus-visible:ring-focus-ring">Открыть правило №{d.shadowed_by.position} «{d.shadowed_by.name}»</button>
+        </> : <p className="text-text-secondary">Доказанного затенения более ранним правилом не найдено. Это не подтверждение срабатывания для конкретного пакета.</p>}
+        <RuleFlags item={d} />
+      </section>
       <SameIn items={d.same_in} serverId={serverId} onOpen={onOpen} />
     </>
   )

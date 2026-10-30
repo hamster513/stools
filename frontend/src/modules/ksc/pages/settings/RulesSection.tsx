@@ -1,3 +1,4 @@
+import { MODE_LABELS } from '../netrules/model'
 import { useEffect, useState } from 'react'
 import { RotateCcw, Save } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
@@ -73,6 +74,7 @@ function toggleCode(selected: string[], code: string, on: boolean): string[] {
 function ReadOnlyView({ config }: { config: KscConfig }) {
   return (
     <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+      <div className="sm:col-span-2"><dt className="text-text-secondary">Наложение профилей сетевого экрана</dt><dd className="text-text">{MODE_LABELS[config.firewall_profile_mode ?? 'auto']}</dd></div>
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Агент молчит, дней</dt><dd className="font-mono text-text">{config.agent_silent_days}</dd></div>
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Базы устарели, дней</dt><dd className="font-mono text-text">{config.bases_old_days}</dd></div>
       <div className="flex justify-between gap-2 sm:block"><dt className="text-text-secondary">Нет полного поиска, дней</dt><dd className="font-mono text-text">{config.fullscan_days}</dd></div>
@@ -134,6 +136,13 @@ export function RulesSection({ settings }: { settings: SettingsView }) {
         <ReadOnlyView config={cfg} />
       ) : (
         <>
+          <div className="mb-4 max-w-xl">
+            <Field label="Наложение профилей сетевого экрана" hint="Авто проверяет обе модели. Если результаты различаются, движок сообщает неопределённость. Настройка действует сразу при чтении правил, пересчёт снапшота не нужен.">
+              <select className={FIELD} value={cfg.firewall_profile_mode ?? 'auto'} onChange={e => patch({ firewall_profile_mode: e.target.value as KscConfig['firewall_profile_mode'] })}>
+                {Object.entries(MODE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </Field>
+          </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Агент молчит, дней" hint="по умолчанию 7"><input className={FIELD} type="number" min={1} value={cfg.agent_silent_days} onChange={(e) => patch({ agent_silent_days: Number(e.target.value) })} /></Field>

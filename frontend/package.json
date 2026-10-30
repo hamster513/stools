@@ -9,6 +9,7 @@
     "check:help": "node scripts/check-help.ts",
     "lint": "eslint .",
     "test:help": "node --test \"src/help/core/*.test.ts\"",
+    "test:ksc": "node --test \"src/modules/ksc/pages/netrules/*.test.ts\"",
     "test:toolbox": "node --test \"src/modules/toolbox/lib/*.test.ts\"",
     "preview": "vite preview"
   },

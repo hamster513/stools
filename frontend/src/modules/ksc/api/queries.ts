@@ -1,3 +1,4 @@
+import { netRulesSearch } from './netRulesQuery'
 /** Хуки TanStack Query модуля KSC. */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
@@ -21,6 +22,7 @@ import type {
   Job,
   KscConfig,
   NetRuleDetail,
+  NetRuleSection,
   NetRulesQuery,
   NetRulesResponse,
   Overview,
@@ -48,7 +50,7 @@ export const OBJECTS_PAGE_SIZE = 200
 function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
   for (const key of ['ksc-servers', 'ksc-snapshots', 'ksc-overview', 'ksc-hosts', 'ksc-host', 'ksc-host-profiles', 'ksc-findings', 'ksc-finding', 'ksc-policies', 'ksc-policy-contents', 'ksc-policy-list', 'ksc-policy',
     'ksc-policy-scope', 'ksc-policy-settings', 'ksc-policy-findings', 'ksc-policy-profiles', 'ksc-tasks', 'ksc-server', 'ksc-connections', 'ksc-jobs',
-    'ksc-exclusions', 'ksc-net-rules', 'ksc-changes', 'ksc']) {
+    'ksc-exclusions', 'ksc-net-rules', 'ksc-net-rule-sections', 'ksc-net-rule-summary', 'ksc-changes', 'ksc']) {
     qc.invalidateQueries({ queryKey: [key] })
   }
 }
@@ -260,10 +262,26 @@ export function useNetRules(snapshotId: number | undefined, query: Omit<NetRules
     queryKey: ['ksc-net-rules', snapshotId, query],
     initialPageParam: 0,
     queryFn: ({ pageParam }) =>
-      api.get(`/api/ksc/snapshots/${snapshotId}/net-rules${buildQuery({ ...query, limit: OBJECTS_PAGE_SIZE, offset: pageParam as number })}`),
+      api.get(`/api/ksc/snapshots/${snapshotId}/net-rules${netRulesSearch({ ...query, limit: OBJECTS_PAGE_SIZE, offset: pageParam as number })}`),
     getNextPageParam: nextPageOffset,
     enabled: snapshotId !== undefined,
     placeholderData: (prev) => prev,
+  })
+}
+
+export function useNetRuleSections(snapshotId: number | undefined, query: NetRulesQuery) {
+  return useQuery<NetRuleSection[], ApiRequestError>({
+    queryKey: ['ksc-net-rule-sections', snapshotId, query],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/net-rules/sections${netRulesSearch(query)}`),
+    enabled: snapshotId !== undefined,
+  })
+}
+
+export function useNetRuleSummary(snapshotId: number | undefined, query: NetRulesQuery) {
+  return useQuery<NetRulesResponse, ApiRequestError>({
+    queryKey: ['ksc-net-rule-summary', snapshotId, query],
+    queryFn: () => api.get(`/api/ksc/snapshots/${snapshotId}/net-rules${netRulesSearch({ ...query, limit: 1, offset: 0 })}`),
+    enabled: snapshotId !== undefined,
   })
 }
 
@@ -354,7 +372,9 @@ export function useSaveKscSettings() {
   const qc = useQueryClient()
   return useMutation<{ config: KscConfig }, ApiRequestError, KscConfig>({
     mutationFn: (cfg) => api.put('/api/ksc/settings', cfg),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ksc-settings'] }),
+    onSuccess: () => {
+      for (const key of ['ksc-settings', 'ksc-net-rules', 'ksc-net-rule-summary', 'ksc-net-rule-sections']) qc.invalidateQueries({ queryKey: [key] })
+    },
   })
 }
 
