@@ -2,6 +2,7 @@
  * Типы запросов и ответов API модуля Vulnerability Management.
  * Источник — спека §8 и роутеры backend/api/modules/vm/routers.
  */
+import type { ScheduleView } from '@/platform/collector/types'
 import type { FindingStatus, FindingSummary } from '@/platform/findings/types'
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical'
@@ -297,10 +298,13 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   ref_bundle: 'Архив справочников',
   recalculate: 'Пересчёт риска',
   bulk_status: 'Массовая смена статусов',
+  harbor_sync: 'Синхронизация Harbor',
 }
 
 export const STAGE_LABELS: Record<string, string> = {
   pending: 'ожидание',
+  listing: 'обход реестра',
+  reports: 'чтение отчётов',
   fetching: 'экспорт из VM',
   parsing: 'разбор',
   writing: 'запись',
@@ -332,4 +336,190 @@ export interface RefState {
   detail: string
   stale: boolean
   active_job_id: number | null
+}
+
+// ---- Образы контейнеров (Harbor) -------------------------------------------------
+
+export type ImageScanStatus = 'success' | 'pending' | 'running' | 'error' | 'none'
+
+export const SCAN_STATUS_LABELS: Record<ImageScanStatus, string> = {
+  success: 'успешно',
+  pending: 'ожидает',
+  running: 'идёт',
+  error: 'ошибка',
+  none: 'не сканировался',
+}
+
+export const SCAN_STATUSES = Object.keys(SCAN_STATUS_LABELS) as ImageScanStatus[]
+
+/** Оценка Trivy — нижним регистром, как её отдаёт API. */
+export type TrivySeverity = 'critical' | 'high' | 'medium' | 'low' | 'unknown'
+
+export const TRIVY_SEVERITIES: TrivySeverity[] = ['critical', 'high', 'medium', 'low', 'unknown']
+
+export const TRIVY_SEVERITY_LABELS: Record<TrivySeverity, string> = {
+  critical: 'критическая',
+  high: 'высокая',
+  medium: 'средняя',
+  low: 'низкая',
+  unknown: 'неизвестная',
+}
+
+/** Уровень в фасетах и фильтрах образов и их находок: `none` — риска нет. */
+export type ImageLevel = RiskLevel | 'none'
+
+export const IMAGE_LEVELS: ImageLevel[] = [...LEVELS, 'none']
+
+export const IMAGE_LEVEL_LABELS: Record<ImageLevel, string> = { ...LEVEL_LABELS, none: 'нет оценки' }
+
+/** Подсказка к «—» вместо риска образа: почему балла нет. */
+export const NO_RISK_TITLE = 'нет оценённых пар: образ не сканировался, в отчёте нет CVE или строки витрины нет. Если справочники (NVD, EPSS, KEV) не загружены, риск показывается как 0, а не «—»'
+
+export interface ImageItem {
+  id: number
+  project: string
+  repository: string
+  /** `project/repository`. */
+  name: string
+  /** Платформы мультиархитектурного индекса через «, ». */
+  platform: string | null
+  tags: string[]
+  digest_short: string
+  digest: string
+  /** Байты. */
+  size: number | null
+  pushed_at: string | null
+  scan_status: ImageScanStatus
+  scanned_at: string | null
+  scanner: string | null
+  trivy: Record<TrivySeverity | 'total', number>
+  /** Наибольший риск пар образа; null — оценённых пар нет. */
+  risk_max: number | null
+  level: RiskLevel | null
+  cves_scored: number
+  /** Почему образ не обновлён в последней синхронизации. */
+  sync_error: string | null
+}
+
+/** Карточка образа: элемент списка и время последней синхронизации. */
+export interface ImageDetail extends ImageItem {
+  last_sync_at: string | null
+}
+
+export interface ImagesFacets {
+  project: Record<string, number>
+  scan_status: Partial<Record<ImageScanStatus, number>>
+  level: Record<ImageLevel, number>
+}
+
+export interface ImagesResponse {
+  /** Только у первой страницы (offset=0), как и фасеты. */
+  total: number | null
+  items: ImageItem[]
+  facets: ImagesFacets | null
+}
+
+export type ImageSort = 'risk_desc' | 'name' | 'pushed_desc' | 'trivy_desc'
+
+export interface ImagesQuery {
+  q?: string
+  project?: string[]
+  scan_status?: ImageScanStatus[]
+  level?: ImageLevel[]
+  /** Есть хотя бы одна находка такой оценки Trivy. */
+  trivy?: ('critical' | 'high')[]
+  sort?: ImageSort
+  limit?: number
+  offset?: number
+}
+
+export interface ImageVulnItem {
+  /** Идентификатор из отчёта как есть: CVE-…, GHSA-…, TEMP-… */
+  cve_id: string
+  package: string
+  installed_version: string
+  fixed_version: string | null
+  trivy_severity: TrivySeverity
+  trivy_cvss: number | null
+  risk: number | null
+  level: RiskLevel | null
+  epss: number | null
+  /** null — идентификатора нет в витрине CVE. */
+  kev: boolean | null
+  cvss: number | null
+  cvss_source: CvssSource | null
+  description: string | null
+  link: string | null
+  is_cve: boolean
+}
+
+export interface ImageVulnsFacets {
+  severity: Partial<Record<TrivySeverity, number>>
+  level: Record<ImageLevel, number>
+  fixed: { yes: number; no: number }
+}
+
+export interface ImageVulnsResponse {
+  total: number | null
+  items: ImageVulnItem[]
+  facets: ImageVulnsFacets | null
+}
+
+export type ImageVulnSort = 'risk_desc' | 'severity_desc' | 'package' | 'cve'
+
+export interface ImageVulnsQuery {
+  q?: string
+  severity?: TrivySeverity[]
+  level?: ImageLevel[]
+  fixed?: 'yes' | 'no'
+  sort?: ImageVulnSort
+  limit?: number
+  offset?: number
+}
+
+/** Находка образа и расчёт её риска; `factors` — null для не-CVE и CVE вне витрины. */
+export interface ImageRiskCard {
+  image: ImageItem
+  vuln: ImageVulnItem
+  /** Те же L, S, V, что у пары хоста, с условиями образа: интернета, критичности и конфиденциальности нет. */
+  factors: RiskCard['risk'] | null
+  nvd_url: string | null
+}
+
+export interface LastSyncView {
+  finished_at: string
+  images: number
+  /** Пар образ–находка. */
+  cves: number
+  repositories: number
+  /** Образы без готового скана. */
+  skipped_unscanned: number
+  /** `проект` или `проект/репозиторий`, не прочитанные в этой синхронизации. */
+  errors: string[]
+}
+
+export interface HarborView {
+  url: string
+  robot_name: string
+  /** Секрет робота задан; само значение наружу не отдаётся. */
+  robot_secret_set: boolean
+  verify_tls: boolean
+  /** Пусто — все проекты, доступные роботу. */
+  projects: string[]
+  tags_per_repo: number
+  /** Заданы адрес, имя и секрет робота. */
+  configured: boolean
+  last_sync: LastSyncView | null
+  schedule: ScheduleView | null
+}
+
+export interface HarborUpdate {
+  url: string
+  robot_name: string
+  /** Пусто — оставить прежний секрет; при смене адреса нужен новый (иначе 422). */
+  robot_secret: string
+  verify_tls: boolean
+  projects: string[]
+  /** 1..100. */
+  tags_per_repo: number
 }

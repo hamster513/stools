@@ -8,7 +8,14 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.vm.routers.import_ import JobStarted
-from api.modules.vm.services.jobs import JobHandle, active_job, lock_job_start, run_job, start_job
+from api.modules.vm.services.jobs import (
+    DATA_KINDS,
+    JobHandle,
+    active_job,
+    lock_job_start,
+    run_job,
+    start_job,
+)
 from api.modules.vm.services.scoring import recalculate
 from api.modules.vm.services.settings import load_settings
 
@@ -24,7 +31,7 @@ def start_recalculate(
     # Под блокировкой запуска задач VM, как импорт: массовая смена статусов выбирает пары
     # кусками, и пересчёт риска посреди неё сдвинул бы выбор по фильтру.
     lock_job_start(db)
-    running = active_job(db, ["recalculate", "import_vm", "import_file", "ref_bundle"])
+    running = active_job(db, DATA_KINDS)
     if running is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, пересчёт после неё")
     if active_job(db, ["bulk_status"]) is not None:

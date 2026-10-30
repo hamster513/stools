@@ -5,7 +5,7 @@ group: module
 module: toolbox
 order: 3
 routes: ["/toolbox/reverse"]
-where: Модуль TBX → «Обратный перевод»
+where: Модуль TBX → Blindspot → вкладка «Обратный перевод»
 levels:
   write: Переводить текст с псевдонимами обратно в настоящие значения и копировать результат.
 concepts: [alias, scrubbing]

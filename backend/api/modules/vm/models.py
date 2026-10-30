@@ -8,13 +8,18 @@
 настроек при чтении.
 
 Справочники `vm_ref_*` хранятся сырыми и заменяются целиком; `vm_cve` —
-витрина, которая собирается из них для CVE, встречающихся у хостов.
+витрина, которая собирается из них для CVE, встречающихся у хостов и образов.
+
+Образы контейнеров из Harbor (`vm_image`, `vm_image_cve`) — вторая сторона пар:
+находки Trivy получают риск по той же витрине `vm_cve`, но без внешнего ключа на неё
+(в отчёте бывают не-CVE идентификаторы, у них риска нет).
 """
 from __future__ import annotations
 
 import datetime as dt
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -346,3 +351,92 @@ class VmStagePair(Base):
     hostname: Mapped[str] = mapped_column(String(255))
     ip: Mapped[str] = mapped_column(String(64), default="")
     cve_id: Mapped[str] = mapped_column(String(32))
+
+
+class VmImage(Base):
+    """Образ контейнера из Harbor: один тегированный артефакт. Мультиархитектурный индекс —
+    одна строка (отчёт Trivy Harbor хранит на самом индексе), его платформы — в `platform`.
+
+    `id` стабилен между синхронизациями: запись — upsert по (проект, репозиторий, digest),
+    чтобы ссылки на карточку образа жили.
+    """
+
+    __tablename__ = "vm_image"
+    __table_args__ = (
+        UniqueConstraint("project", "repository", "digest", name="uq_vm_image_ref"),
+        Index("ix_vm_image_repo", "project", "repository"),
+        Index("ix_vm_image_risk", "risk_max"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project: Mapped[str] = mapped_column(String(255))
+    #: Путь внутри проекта, например `web`.
+    repository: Mapped[str] = mapped_column(String(255))
+    digest: Mapped[str] = mapped_column(String(80))
+    #: Платформы мультиархитектурного индекса через «, » (`linux/amd64, linux/arm64`), в пределах
+    #: столбца — лишние платформы отбрасываются целиком; у обычного образа — NULL.
+    platform: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: JSON-список тегов.
+    tags: Mapped[str] = mapped_column(Text, default="[]")
+    size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    pushed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: success | pending | running | error | none
+    scan_status: Mapped[str] = mapped_column(String(16), default="none")
+    scanned_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scanner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trivy_critical: Mapped[int] = mapped_column(Integer, default=0)
+    trivy_high: Mapped[int] = mapped_column(Integer, default=0)
+    trivy_medium: Mapped[int] = mapped_column(Integer, default=0)
+    trivy_low: Mapped[int] = mapped_column(Integer, default=0)
+    trivy_unknown: Mapped[int] = mapped_column(Integer, default=0)
+    trivy_total: Mapped[int] = mapped_column(Integer, default=0)
+    #: Наибольший риск по парам образа; NULL — ни одна пара не получила риск.
+    risk_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Сколько пар получили риск по формуле.
+    cves_scored: Mapped[int] = mapped_column(Integer, default=0)
+    #: Синхронизация, которой образ виден.
+    synced_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    #: Почему образ не обновлён в последней синхронизации.
+    sync_error: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class VmImageCve(Base):
+    """Находка Trivy в образе. `cve_id` — идентификатор из отчёта как есть, не внешний
+    ключ на `vm_cve`: пересчёт соединяет по нему, а не-CVE (GHSA-…) остаются без риска."""
+
+    __tablename__ = "vm_image_cve"
+
+    image_id: Mapped[int] = mapped_column(
+        ForeignKey("vm_image.id", ondelete="CASCADE"), primary_key=True
+    )
+    cve_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    package: Mapped[str] = mapped_column(String(255), primary_key=True)
+    #: Пустая строка, если в отчёте версии нет: часть ключа не бывает NULL.
+    installed_version: Mapped[str] = mapped_column(String(128), primary_key=True, default="")
+    fixed_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: critical | high | medium | low | unknown (строчными) — оценка Trivy, в риск не входит.
+    trivy_severity: Mapped[str] = mapped_column(String(16))
+    trivy_cvss: Mapped[float | None] = mapped_column(Float, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    link: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    #: NULL — идентификатора нет в витрине `vm_cve` (не CVE или витрина пуста).
+    risk_raw: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+
+class VmImageSync(Base):
+    """Журнал синхронизаций с Harbor; последняя запись описывает текущее состояние."""
+
+    __tablename__ = "vm_image_sync"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    finished_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    images: Mapped[int] = mapped_column(Integer, default=0)
+    #: Пар «образ × идентификатор».
+    cves: Mapped[int] = mapped_column(Integer, default=0)
+    repositories: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_unscanned: Mapped[int] = mapped_column(Integer, default=0)
+    #: Краткий перечень репозиториев с ошибкой.
+    errors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_by: Mapped[str] = mapped_column(String(64), default="")

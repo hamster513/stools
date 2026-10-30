@@ -5,7 +5,7 @@ group: module
 module: toolbox
 order: 4
 routes: ["/toolbox/aliases"]
-where: Модуль TBX → «Соответствия»
+where: Модуль TBX → Blindspot → вкладка «Соответствия»
 levels:
   write: Смотреть и искать таблицу соответствий, экспортировать её в CSV или XLSX.
   admin: Забывать псевдоним.

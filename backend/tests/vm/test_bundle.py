@@ -83,7 +83,7 @@ def test_bundle_loads_all_and_rescores_once(
     before = {p.host_id: p.risk_raw for p in db_session.query(VmHostCve).filter_by(cve_id=LOG4J)}
 
     calls = {"rebuild": 0, "rescore": 0}
-    real_rebuild, real_rescore = bundle_service.rebuild_cves, bundle_service.rescore_pairs
+    real_rebuild, real_rescore = bundle_service.rebuild_cves, bundle_service.rescore_all
 
     def rebuild(*args: Any, **kwargs: Any) -> int:
         calls["rebuild"] += 1
@@ -94,7 +94,7 @@ def test_bundle_loads_all_and_rescores_once(
         return real_rescore(*args, **kwargs)
 
     monkeypatch.setattr(bundle_service, "rebuild_cves", rebuild)
-    monkeypatch.setattr(bundle_service, "rescore_pairs", rescore)
+    monkeypatch.setattr(bundle_service, "rescore_all", rescore)
     data = _zip(
         {
             "refs/epss_scores-current.csv.gz": gzip.compress(_fx("epss.csv")),
@@ -221,7 +221,7 @@ def test_bundle_first_file_broken_still_rebuilds(
     """Первый же файл упал: до него ничего не загружено, но его таблица могла остаться
     наполовину новой (загрузчик коммитит пакетами) — пересборка и пересчёт всё равно идут."""
     calls = {"rebuild": 0, "rescore": 0}
-    real_rebuild, real_rescore = bundle_service.rebuild_cves, bundle_service.rescore_pairs
+    real_rebuild, real_rescore = bundle_service.rebuild_cves, bundle_service.rescore_all
 
     def rebuild(*args: Any, **kwargs: Any) -> int:
         calls["rebuild"] += 1
@@ -232,7 +232,7 @@ def test_bundle_first_file_broken_still_rebuilds(
         return real_rescore(*args, **kwargs)
 
     monkeypatch.setattr(bundle_service, "rebuild_cves", rebuild)
-    monkeypatch.setattr(bundle_service, "rescore_pairs", rescore)
+    monkeypatch.setattr(bundle_service, "rescore_all", rescore)
     data = _zip({"epss_scores-current.csv.gz": b"\x1f\x8b" + b"broken" * 10, "known_exploited_vulnerabilities.json": _fx("kev.json")})
     job = _job(db_session, _post(auth_client, data))
     assert job.status == "failed" and job.error.startswith("epss_scores-current.csv.gz: ")

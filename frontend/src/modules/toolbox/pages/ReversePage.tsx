@@ -54,7 +54,7 @@ export function ReversePage() {
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <h1 className="text-base font-semibold text-text">Обратный перевод</h1>
+      <h2 className="text-base font-semibold text-text">Обратный перевод</h2>
       <p className="mb-4 max-w-2xl text-xs text-text-secondary">
         Вставьте ответ, полученный по очищенному тексту: псевдонимы из таблицы соответствий заменятся настоящими значениями. Забытые псевдонимы не переводятся.
       </p>

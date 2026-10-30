@@ -12,6 +12,11 @@ export class ApiRequestError extends Error {
   }
 }
 
+/** Текст ошибки запроса для подписи у кнопки: ответ API как есть, иначе запасной; без ошибки — null. */
+export function errorText(error: unknown, fallback: string): string | null {
+  return error instanceof ApiRequestError ? error.message : error ? fallback : null
+}
+
 /**
  * Ошибка проверки схемы (422) приходит списком `[{loc, msg, …}]`, а не строкой:
  * показываем тексты `msg`. Наши валидаторы пишут их по-русски, pydantic

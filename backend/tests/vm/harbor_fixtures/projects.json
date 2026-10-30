@@ -1,0 +1,44 @@
+[
+    {
+        "creation_time": "2026-10-28T10:34:39.348Z",
+        "current_user_role_ids": null,
+        "cve_allowlist": {
+            "creation_time": "0001-01-01T00:00:00.000Z",
+            "id": 1,
+            "items": [],
+            "project_id": 1,
+            "update_time": "0001-01-01T00:00:00.000Z"
+        },
+        "metadata": {
+            "auto_scan": "true",
+            "public": "true"
+        },
+        "name": "library",
+        "owner_id": 1,
+        "owner_name": "admin",
+        "project_id": 1,
+        "repo_count": 5,
+        "update_time": "2026-10-28T10:34:39.348Z"
+    },
+    {
+        "creation_time": "2026-10-28T10:35:45.040Z",
+        "current_user_role_ids": null,
+        "cve_allowlist": {
+            "creation_time": "0001-01-01T00:00:00.000Z",
+            "id": 2,
+            "items": [],
+            "project_id": 2,
+            "update_time": "0001-01-01T00:00:00.000Z"
+        },
+        "metadata": {
+            "auto_scan": "true",
+            "public": "false"
+        },
+        "name": "stools",
+        "owner_id": 1,
+        "owner_name": "admin",
+        "project_id": 2,
+        "repo_count": 2,
+        "update_time": "2026-10-28T10:35:45.040Z"
+    }
+]

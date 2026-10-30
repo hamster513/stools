@@ -8,17 +8,17 @@
 """
 from __future__ import annotations
 
-import datetime as dt
 import json
 import logging
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
-from api.crypto import decrypt, encrypt, reseal
+from api.crypto import decrypt
 from api.db.models import AppSetting
 from api.hosts import validate_host
 from api.modules.vm.core.weights import DEFAULT_THRESHOLD, Weights
+from api.platform.secret_fields import put_setting, seal_secrets, secrets_again
 
 VM_KEY = "vm"
 
@@ -147,10 +147,7 @@ def save_settings(db: Session, incoming: VmSettingsIn, login: str | None) -> VmS
     Исключение — смена адреса или учётной записи: прежние секреты на новый
     адрес не уходят, их нужно ввести заново (`SecretsRequired`)."""
     current = load_settings(db)
-    new, old = incoming.connection, current.connection
-    if new.host and any(getattr(new, f) != getattr(old, f) for f in ADDRESS_FIELDS) and any(
-        getattr(old, f) and not getattr(new, f) for f in SECRET_FIELDS
-    ):
+    if secrets_again(current.connection, incoming.connection, ADDRESS_FIELDS, SECRET_FIELDS):
         raise SecretsRequired(SECRETS_AGAIN)
     merged = VmSettings(
         connection=Connection(**incoming.connection.model_dump()),
@@ -159,15 +156,7 @@ def save_settings(db: Session, incoming: VmSettingsIn, login: str | None) -> VmS
         attack_min_risk=current.attack_min_risk if incoming.attack_min_risk is None else incoming.attack_min_risk,
     )
     #: Новые секреты шифруются; прежние — тоже, если лежали открытыми.
-    for f in SECRET_FIELDS:
-        new_value = getattr(merged.connection, f)
-        setattr(merged.connection, f, encrypt(new_value) if new_value else reseal(getattr(current.connection, f)))
-    row = db.get(AppSetting, VM_KEY)
-    if row is None:
-        row = AppSetting(key=VM_KEY)
-        db.add(row)
-    row.value_json = merged.model_dump_json()
-    row.updated_at = dt.datetime.now(dt.UTC)
-    row.updated_by = login
-    db.commit()
+    for f, value in seal_secrets(current.connection, merged.connection, SECRET_FIELDS).items():
+        setattr(merged.connection, f, value)
+    put_setting(db, VM_KEY, merged.model_dump_json(), login)
     return merged

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { ExternalLink, X } from 'lucide-react'
 import { useRiskCard } from '@/modules/vm/api/queries'
-import type { Factor, VulnItem } from '@/modules/vm/api/types'
+import type { VulnItem } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { AssetLink } from '@/modules/assets/AssetLink'
@@ -9,6 +9,7 @@ import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
 import { Spinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
+import { FactorRow, FormulaBlock, SectionTitle } from './RiskParts'
 
 interface Props {
   item: VulnItem | null
@@ -17,33 +18,9 @@ interface Props {
   onChanged?: () => void
 }
 
-function num(v: number): string {
-  // Значащие цифры, а не знаки после запятой: типичный EPSS 0,0004 иначе показывался бы как «0».
-  return v.toLocaleString('ru-RU', { maximumSignificantDigits: 3 })
-}
-
-/** Члены формулы — ровно два знака, как в строке `0,82 × 0,98 × 1,00 × 100 = 81`. */
-function num2(v: number): string {
-  return v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
 /** `YYYY-MM-DD` → `ДД.ММ.ГГГГ` без Date: разбор через Date сдвигал бы дату на день западнее UTC. */
 function day(iso: string): string {
   return iso.split('-').reverse().join('.')
-}
-
-function FactorRow({ label, f, loaded, total }: { label: string; f: Factor; loaded?: string | null; total?: boolean }) {
-  return (
-    <tr className="border-t border-grid/60 align-top">
-      <td className={cn('py-1.5 pr-2', total ? 'font-medium text-text' : 'text-text-secondary')}>{label}</td>
-      <td className={cn('py-1.5 pr-2 text-right font-mono tabular-nums', f.substituted ? 'text-risk-medium' : 'text-text')}>{num(f.value)}</td>
-      <td className="py-1.5 text-text-secondary">
-        {f.source}
-        {f.substituted && <span className="ml-1 text-[10px] text-risk-medium">подставлено</span>}
-        {loaded && <span className="ml-1 text-[10px]">· справочник от {new Date(loaded).toLocaleDateString('ru-RU')}</span>}
-      </td>
-    </tr>
-  )
 }
 
 /**
@@ -96,16 +73,7 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                     <span className="text-[11px] text-text-secondary">порог {r.threshold}{r.score >= r.threshold ? ' — требует действия' : ''}</span>
                   </div>
 
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Формула</div>
-                  <code className="mb-1 block rounded border border-grid bg-app-bg px-2 py-1.5 font-mono text-[11px] text-text">
-                    {num2(r.likelihood.value)} × {num2(r.severity.value)} × {num2(r.value.value)} × 100 = {r.score}
-                  </code>
-                  <p className="mb-3 text-[11px] text-text-secondary">
-                    вероятность эксплуатации × тяжесть × ценность хоста
-                    {/* Балл — сохранённый при последнем пересчёте, части — по текущим весам: после смены весов они расходятся до пересчёта.
-                        Порядок умножения и округление — как в SQL пересчёта, иначе половинки давали бы ложное расхождение. */}
-                    {Math.floor(r.likelihood.value * r.severity_parts.cvss.value * r.severity_parts.reach.value * r.value.value * 100 + 0.5) !== r.score && ' · части посчитаны по текущим весам, балл — по последнему пересчёту'}
-                  </p>
+                  <FormulaBlock r={r} valueLabel="ценность хоста" />
                   <table className="mb-4 w-full">
                     <tbody>
                       <FactorRow label="Вероятность эксплуатации" f={r.likelihood} total />
@@ -131,7 +99,7 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                     </p>
                   )}
 
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">CVE</div>
+                  <SectionTitle>CVE</SectionTitle>
                   <p className="mb-2 leading-relaxed text-text">{d.cve.description ?? <span className="text-text-secondary">описания нет — CVE отсутствует в загруженном NVD</span>}</p>
                   <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-text-secondary">
                     <dt>CVSS</dt><dd className="font-mono text-text">{d.cve.cvss ?? '—'} <span className="text-[10px] text-text-secondary">{CVSS_SOURCE_LABELS[d.cve.cvss_source]}</span></dd>
@@ -172,7 +140,7 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                     </>
                   )}
 
-                  <div className="mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">Хост</div>
+                  <SectionTitle>Хост</SectionTitle>
                   <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-text-secondary">
                     <dt>ОС</dt><dd className="text-text">{d.host.os_name || '—'}</dd>
                     <dt>Критичность</dt><dd className="text-text">{d.host.criticality || 'не задана'}</dd>

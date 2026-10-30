@@ -1,7 +1,8 @@
 """Обогащение витрины `vm_cve`, ценность хостов и пересчёт пар (спека 2026-10-21 §9).
 
 Порядок всегда один: справочники → `vm_cve.likelihood`, `cvss10`, `av_class`, KEV;
-зоны и веса → `vm_host.value`, `internet`; затем `vm_host_cve` одним UPDATE.
+зоны и веса → `vm_host.value`, `internet`; затем `vm_host_cve` и `vm_image_cve` —
+каждая одним UPDATE (`rescore_all`).
 Каждая функция идемпотентна: её можно звать после любого изменения входа.
 """
 from __future__ import annotations
@@ -15,9 +16,10 @@ from typing import Any
 from typing import cast as typing_cast
 
 from sqlalchemy import Integer as SaInteger
-from sqlalchemy import Table, bindparam, case, cast, delete, func, select, update
+from sqlalchemy import Table, bindparam, case, cast, delete, exists, func, null, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from api.db.models import AppSetting
 from api.llm_settings import read_setting
@@ -34,6 +36,8 @@ from api.modules.vm.models import (
     VmCve,
     VmHost,
     VmHostCve,
+    VmImage,
+    VmImageCve,
     VmRefEpss,
     VmRefExploitdb,
     VmRefExploitdbCve,
@@ -62,6 +66,8 @@ BATCH = 5000
 CVE_T = typing_cast(Table, VmCve.__table__)
 HOST_T = typing_cast(Table, VmHost.__table__)
 PAIR_T = typing_cast(Table, VmHostCve.__table__)
+IMAGE_T = typing_cast(Table, VmImage.__table__)
+IMAGE_PAIR_T = typing_cast(Table, VmImageCve.__table__)
 
 
 def _chunks(items: Sequence[str], size: int = BATCH) -> Iterable[Sequence[str]]:
@@ -84,9 +90,13 @@ def ensure_cves(db: Session, cve_ids: Iterable[str]) -> list[str]:
 
 
 def drop_orphan_cves(db: Session) -> int:
-    """CVE, у которых не осталось ни одной пары, витрине не нужны."""
-    used = select(VmHostCve.cve_id).distinct()
-    result = typing_cast(CursorResult[Any], db.execute(delete(CVE_T).where(CVE_T.c.cve_id.not_in(used))))
+    """CVE, у которых не осталось ни одной пары — ни с хостом, ни с образом, — витрине не нужны."""
+    on_hosts = select(VmHostCve.cve_id).distinct()
+    on_images = select(VmImageCve.cve_id).distinct()
+    result = typing_cast(
+        CursorResult[Any],
+        db.execute(delete(CVE_T).where(CVE_T.c.cve_id.not_in(on_hosts), CVE_T.c.cve_id.not_in(on_images))),
+    )
     db.commit()
     return int(result.rowcount or 0)
 
@@ -272,17 +282,12 @@ def rescore_pairs(db: Session, weights: Weights) -> int:
         else_=w.reach_unknown,
     )
     raw = CVE_T.c.likelihood * func.coalesce(CVE_T.c.cvss10, w.cvss_missing) * reach * HOST_T.c.value
-    clamped = case(
-        (raw >= 1.0, 100),
-        (raw <= 0.0, 0),
-        else_=cast(func.floor(raw * 100.0 + 0.5), SaInteger),
-    )
     result = typing_cast(
         CursorResult[Any],
         db.execute(
             update(PAIR_T)
             .where(HOST_T.c.id == PAIR_T.c.host_id, CVE_T.c.cve_id == PAIR_T.c.cve_id)
-            .values(risk_raw=raw, risk=clamped)
+            .values(risk_raw=raw, risk=_clamped(raw))
         ),
     )
     db.commit()
@@ -293,6 +298,67 @@ def rescore_pairs(db: Session, weights: Weights) -> int:
     return int(result.rowcount or 0)
 
 
+def _clamped(raw: ColumnElement[Any]) -> ColumnElement[Any]:
+    """risk = round(100 × raw) в 0..100; почему FLOOR(x + 0.5) — в `rescore_pairs`."""
+    return case(
+        (raw >= 1.0, 100),
+        (raw <= 0.0, 0),
+        else_=cast(func.floor(raw * 100.0 + 0.5), SaInteger),
+    )
+
+
+def image_value(w: Weights) -> float:
+    """V образа: базовая ценность — у образа нет ни критичности, ни зоны. Одна функция,
+    чтобы потом заменить её ценностью из Assets."""
+    return host_value(None, False, False, w)
+
+
+def rescore_image_pairs(db: Session, weights: Weights) -> int:
+    """Риск пар «образ × CVE» по той же формуле, что у хостов: одним
+    `UPDATE vm_image_cve … FROM vm_cve`, reach — как у хоста без доступа из интернета,
+    V — `image_value`. Пары, чьего идентификатора нет в витрине (GHSA-…, пустые
+    справочники), получают NULL. Затем на образе — наибольший риск и число пар с риском.
+    Возвращает число пар, получивших риск.
+    """
+    w = weights
+    reach = case(
+        (CVE_T.c.av_class == "network", w.reach.network_internal),
+        (CVE_T.c.av_class == "adjacent", w.reach.adjacent),
+        (CVE_T.c.av_class == "local", w.reach.local),
+        else_=w.reach_unknown,
+    )
+    raw = CVE_T.c.likelihood * func.coalesce(CVE_T.c.cvss10, w.cvss_missing) * reach * image_value(w)
+    in_mart = exists().where(CVE_T.c.cve_id == IMAGE_PAIR_T.c.cve_id)
+    db.execute(
+        update(IMAGE_PAIR_T)
+        .where(~in_mart, IMAGE_PAIR_T.c.risk_raw.is_not(None) | IMAGE_PAIR_T.c.risk.is_not(None))
+        .values(risk_raw=null(), risk=null())
+    )
+    result = typing_cast(
+        CursorResult[Any],
+        db.execute(
+            update(IMAGE_PAIR_T)
+            .where(CVE_T.c.cve_id == IMAGE_PAIR_T.c.cve_id)
+            .values(risk_raw=raw, risk=_clamped(raw))
+        ),
+    )
+    pairs = IMAGE_PAIR_T.alias("p")
+    of_image = pairs.c.image_id == IMAGE_T.c.id
+    db.execute(
+        update(IMAGE_T).values(
+            risk_max=select(func.max(pairs.c.risk)).where(of_image).scalar_subquery(),
+            cves_scored=select(func.count(pairs.c.risk)).where(of_image).scalar_subquery(),
+        )
+    )
+    db.commit()
+    return int(result.rowcount or 0)
+
+
+def rescore_all(db: Session, weights: Weights) -> int:
+    """Полный пересчёт риска: пары хостов и пары образов. Возвращает сумму пар."""
+    return rescore_pairs(db, weights) + rescore_image_pairs(db, weights)
+
+
 def recalculate(db: Session, handle: JobHandle, weights: Weights) -> None:
     """Задача `recalculate`: после смены весов или разметки зон."""
     handle.stage("cves", message="вероятность и тяжесть CVE")
@@ -300,7 +366,7 @@ def recalculate(db: Session, handle: JobHandle, weights: Weights) -> None:
     handle.stage("hosts", message="ценность хостов")
     rebuild_hosts_value(db, weights, handle)
     handle.stage("pairs", message="риск пар")
-    n = rescore_pairs(db, weights)
+    n = rescore_all(db, weights)
     # Маркер — только после полного прохода: прерванный пересчёт оставит его старым,
     # и следующий старт API поставит пересчёт заново.
     write_formula_version(db)

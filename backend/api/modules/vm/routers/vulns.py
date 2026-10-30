@@ -14,8 +14,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.vm.core.refs import REF_NAMES
-from api.modules.vm.core.risk import LEVEL_WORD, CveInputs, explain
-from api.modules.vm.core.risk import level as risk_level
+from api.modules.vm.core.risk import explain
 from api.modules.vm.models import (
     VmCve,
     VmHost,
@@ -40,6 +39,7 @@ from api.modules.vm.services.query import (
     status_facets,
     status_filter,
 )
+from api.modules.vm.services.risk_view import cve_inputs, risk_view
 from api.modules.vm.services.settings import load_settings
 from api.modules.vm.services.stats import load_stats
 from api.platform.export import Column, export_response
@@ -125,10 +125,6 @@ def list_vulns(
     return VulnsResponse(total=sum(fac["level"].values()), items=_with_names(db, page_items(db, f, sort, limit, 0)), facets=fac)
 
 
-def _factor(fac: Any) -> dict[str, Any]:
-    return {"value": fac.value, "source": fac.source, "substituted": fac.substituted}
-
-
 @router.get("/vulns/{host_id}/{cve_id}")
 def risk_card(
     host_id: int,
@@ -145,16 +141,7 @@ def risk_card(
     zone = db.get(VmZone, host.zone) if host.zone else None
     settings = load_settings(db)
     refs = {s.name: s.loaded_at for s in db.execute(select(VmRefState)).scalars()}
-    inputs = CveInputs(
-        epss=cve.epss,
-        cvss=cve.cvss,
-        av=cve.v3_av or cve.v2_av,
-        exploitdb_type=cve.exploitdb_type,
-        msf_rank=cve.msf_rank,
-        kev=cve.kev,
-        kev_added=cve.kev_added,
-        kev_loaded="kev" in refs,
-    )
+    inputs = cve_inputs(cve, kev_loaded="kev" in refs)
     e = explain(
         inputs,
         host.criticality or None,
@@ -163,7 +150,6 @@ def risk_card(
         zone_marked=bool(zone and zone.marked),
         w=settings.weights,
     )
-    lvl = risk_level(pair.risk, settings.weights.levels)
     exploits = db.execute(
         select(VmRefExploitdb.exploit_id, VmRefExploitdb.type, VmRefExploitdb.verified, VmRefExploitdb.published)
         .join(VmRefExploitdbCve, VmRefExploitdbCve.exploit_id == VmRefExploitdb.exploit_id)
@@ -211,21 +197,7 @@ def risk_card(
             ],
             "msf_modules": [{"fullname": r.fullname, "name": r.name, "rank": r.rank} for r in modules],
         },
-        # Балл и уровень — сохранённые пары (по ним список и фильтры); части — расчёт по текущим
-        # весам: после смены весов до пересчёта они могут разойтись с баллом.
-        "risk": {
-            "score": pair.risk,
-            "raw": pair.risk_raw,
-            "level": lvl,
-            "level_word": LEVEL_WORD[lvl],
-            "threshold": settings.threshold,
-            "likelihood": _factor(e.likelihood),
-            "likelihood_parts": {k: _factor(v) for k, v in e.likelihood_parts.items()},
-            "severity": _factor(e.severity),
-            "severity_parts": {k: _factor(v) for k, v in e.severity_parts.items()},
-            "value": _factor(e.value),
-            "value_parts": {k: _factor(v) for k, v in e.value_parts.items()},
-        },
+        "risk": risk_view(e, settings, pair.risk, pair.risk_raw),
         # Все справочники, в том числе незагруженные (null): карточка показывает и KEV.
         "refs_loaded_at": {n: (refs[n].isoformat() if refs.get(n) else None) for n in REF_NAMES},
     }

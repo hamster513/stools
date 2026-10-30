@@ -1,0 +1,47 @@
+[
+    {
+        "artifact_count": 1,
+        "creation_time": "2026-10-28T10:37:47.632Z",
+        "id": 7,
+        "name": "library/alpine",
+        "project_id": 1,
+        "pull_count": 14,
+        "update_time": "2026-10-28T10:38:03.855Z"
+    },
+    {
+        "artifact_count": 1,
+        "creation_time": "2026-10-28T10:36:35.766Z",
+        "id": 4,
+        "name": "library/debian",
+        "project_id": 1,
+        "pull_count": 2,
+        "update_time": "2026-10-28T10:36:43.837Z"
+    },
+    {
+        "artifact_count": 1,
+        "creation_time": "2026-10-28T10:36:25.703Z",
+        "id": 3,
+        "name": "library/python",
+        "project_id": 1,
+        "pull_count": 2,
+        "update_time": "2026-10-28T10:36:43.836Z"
+    },
+    {
+        "artifact_count": 1,
+        "creation_time": "2026-10-28T10:36:10.008Z",
+        "id": 2,
+        "name": "library/nginx",
+        "project_id": 1,
+        "pull_count": 2,
+        "update_time": "2026-10-28T10:36:33.833Z"
+    },
+    {
+        "artifact_count": 1,
+        "creation_time": "2026-10-28T10:36:02.387Z",
+        "id": 1,
+        "name": "library/busybox",
+        "project_id": 1,
+        "pull_count": 2,
+        "update_time": "2026-10-28T10:36:33.832Z"
+    }
+]

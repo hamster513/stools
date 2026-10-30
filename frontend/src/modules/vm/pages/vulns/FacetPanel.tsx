@@ -12,7 +12,7 @@ const CRITICALITIES = ['Critical', 'High', 'Medium', 'Low', 'None', '']
 
 const has = (list: readonly string[] | undefined, value: string) => list?.includes(value) ?? false
 
-function Row({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
+export function Row({ active, count, onClick, children }: { active: boolean; count: number | undefined; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
@@ -27,12 +27,13 @@ function Row({ active, count, onClick, children }: { active: boolean; count: num
       aria-pressed={active}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      <span className="font-mono text-[11px] tabular-nums text-text-secondary">{(count ?? 0).toLocaleString('ru-RU')}</span>
+      {/* Без счётчика (фильтр без фасета на сервере, как «Trivy» у образов) число не рисуется. */}
+      {count !== undefined && <span className="font-mono text-[11px] tabular-nums text-text-secondary">{count.toLocaleString('ru-RU')}</span>}
     </button>
   )
 }
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+export function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <div className="border-b border-grid px-2 py-3">
       <div className="mb-1.5 px-2 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{title}</div>

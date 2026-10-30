@@ -43,7 +43,7 @@ from api.modules.vm.models import (
 )
 from api.modules.vm.services.bulk import bulk_insert
 from api.modules.vm.services.jobs import JobHandle
-from api.modules.vm.services.scoring import rebuild_cves, rescore_pairs
+from api.modules.vm.services.scoring import rebuild_cves, rescore_all
 
 #: CTID отдаёт размётку двумя кусками: свежий раздел KEV и архив
 #: attack_to_cve. Они дополняют друг друга, поэтому грузятся подряд в один
@@ -326,7 +326,7 @@ def rebuild_after_ref(db: Session, handle: JobHandle, name: str, weights: Weight
     handle.stage("enriching", message="пересборка витрины CVE")
     rebuild_cves(db, weights, None, handle)
     handle.stage("scoring", message="риск пар")
-    rescore_pairs(db, weights)
+    rescore_all(db, weights)
 
 
 def run_ref_file(db: Session, handle: JobHandle, name: str, paths: list[Path], weights: Weights) -> None:

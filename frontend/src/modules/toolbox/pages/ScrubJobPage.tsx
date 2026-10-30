@@ -105,12 +105,12 @@ export function ScrubJobPage({ id }: { id: number }) {
 
   return (
     <div className="h-full overflow-y-auto p-6">
-      <Link to="/toolbox" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text"><ArrowLeft size={13} aria-hidden />Очистка файлов</Link>
+      <Link to="/toolbox" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text"><ArrowLeft size={13} aria-hidden />Задания</Link>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-base font-semibold text-text">
+          <h2 className="text-base font-semibold text-text">
             Задание <span className="font-mono">#{j.id}</span> · {JOB_KIND_LABELS[j.kind] ?? j.kind} · <span className={STATUS_CLASS[j.status]}>{STATUS_LABELS[j.status]}</span>
-          </h1>
+          </h2>
           <p className="text-xs text-text-secondary">
             {i.input_kind === 'text' ? 'вставленный текст' : <span className="font-mono text-text">{i.input_name}</span>}
             {' · '}{size(i.input_size)}

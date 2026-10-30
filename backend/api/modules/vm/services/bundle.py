@@ -23,7 +23,7 @@ from api.modules.vm.core.weights import Weights
 from api.modules.vm.services import refs as refs_service
 from api.modules.vm.services.attack_layer import refresh as refresh_attack_layer
 from api.modules.vm.services.jobs import JobCancelled, JobHandle
-from api.modules.vm.services.scoring import rebuild_cves, rescore_pairs
+from api.modules.vm.services.scoring import rebuild_cves, rescore_all
 from kbaudit import safe_io
 
 log = logging.getLogger(__name__)
@@ -179,7 +179,7 @@ def _rebuild(db: Session, handle: JobHandle, loaded: set[str], weights: Weights)
         handle.stage("enriching", message="пересборка витрины CVE")
         rebuild_cves(db, weights, None, handle)
         handle.stage("scoring", message="риск пар")
-        rescore_pairs(db, weights)
+        rescore_all(db, weights)
 
 
 def _rebuild_after_failure(db: Session, handle: JobHandle, touched: set[str], weights: Weights, name: str) -> None:

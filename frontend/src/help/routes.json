@@ -70,10 +70,16 @@
   "/siem/snapshots/:id/rules",
   "/toolbox",
   "/toolbox/aliases",
+  "/toolbox/base64",
+  "/toolbox/ip",
+  "/toolbox/linux",
+  "/toolbox/linux/cron",
   "/toolbox/reverse",
   "/toolbox/scrub/:id",
   "/toolbox/scrub/new",
   "/vm",
+  "/vm/images",
+  "/vm/images/:id",
   "/vm/jobs",
   "/vm/vulns"
 ]
