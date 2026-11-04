@@ -57,7 +57,8 @@ OPEN_SETTINGS_READS = frozenset({"/api/settings/llm", "/api/settings/findings", 
 
 def needed(method: str, path: str) -> tuple[str, str] | None:
     """Область и уровень, которые нужны запросу; None — любой вошедший."""
-    read = method in READ_METHODS
+    # Расчёт по снапшоту не меняет конфигурацию и доступен аудитору.
+    read = method in READ_METHODS or (method == "POST" and re.fullmatch(r"/api/ksc/snapshots/[0-9]+/firewall/check(?:/batch)?", path) is not None)
     if path.startswith("/api/auth/"):
         return None
     parts = path.split("/")

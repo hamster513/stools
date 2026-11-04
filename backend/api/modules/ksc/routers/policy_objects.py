@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Callable
+
+from api.modules.ksc.core.firewall.compare import compare_rules, list_signature
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -359,6 +361,7 @@ class _NetRules:
                 return False
             return not needle or any(needle in f.lower() for f in (r.name, r.addresses, r.local_ports, r.remote_ports))
 
+        self.matches = keep
         self.kept = sorted((r for r in self.rows if keep(r)), key=lambda r: (*_order(self.policies, r.policy_id), r.profile, r.layer, r.position, r.id))
         #: Тень — по всем строкам набора, не по отобранным.
         self.shadow = shadow_lookup(self.rows)
@@ -382,6 +385,7 @@ def list_net_rules(
     limit: int = Query(default=200, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     layer: NetLayer = None,
+    changes: bool = False,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _user: AppUser = Depends(get_current_user),
@@ -389,6 +393,26 @@ def list_net_rules(
     """Фасеты `policy_id, action, direction` — повтором ключа, внутри фасета «или». С `host_id` — действующие у хоста наборы
     (`effective`) и у элемента `overridden`, `overridden_reason`."""
     _snapshot(db, snapshot_id, settings)
+    if changes:
+        ids = multi_int(policy_id)
+        if not profile or ids is None or len(ids) != 1 or layer not in ('packet', 'app'):
+            raise HTTPException(422, detail='Для сравнения нужны одна политика, профиль и слой')
+        sel = _NetRules(db, snapshot_id, q, policy_id, None, action, direction, enabled, host_id, layer)
+        pid = next(iter(ids))
+        source = sorted((r for r in sel.rows if r.policy_id == pid and r.layer == layer), key=lambda r: (r.position, r.id))
+        compared = compare_rules([r for r in source if not r.profile], [r for r in source if r.profile == profile])
+        deltas = [d for d in compared.deltas if sel.matches(d.row) or (d.previous is not None and sel.matches(d.previous))]
+        effective = _effective(db, snapshot_id, host_id) if host_id else None
+        items = []
+        for d in deltas[offset:offset + limit]:
+            item = _net_rule_item(d.row, _name(sel.policies, pid), sel.shadow(d.row))
+            item['change'] = {'kind': d.kind, 'fields': d.fields, 'moved': d.moved,
+                              'previous': _net_rule_item(d.previous, _name(sel.policies, pid), sel.shadow(d.previous)) if d.previous else None}
+            if effective is not None:
+                item['overridden_reason'] = effective.reason(pid, d.row.profile, layer)
+                item['overridden'] = item['overridden_reason'] != ''
+            items.append(item)
+        return {'total': len(deltas), 'items': items, 'facets': None, 'undescribed': _undescribed(sel.policies), 'partial': _partial(sel.policies)}
     sel = _NetRules(db, snapshot_id, q, policy_id, profile, action, direction, enabled, host_id, layer)
     host, policies, kept = sel.host, sel.policies, sel.kept
     effective = _effective(db, snapshot_id, host_id) if host_id else None
@@ -469,7 +493,7 @@ def net_rule_sections(
     _user: AppUser = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """Сводка секций (слой, политика, профиль) под фильтрами списка, без строк: слой (пакетные, затем программ), политика по
-    имени, сама политика, затем профили по приоритету. Секция без отобранных правил не показывается. `hosts` — хостов под
+    имени, сама политика, затем профили по приоритету. Секция сохраняется также при совпадении фильтра с отсутствующим или прежним правилом политики. `hosts` — хостов под
     политикой (`hosts_kind` "policy"), и у профиля тоже; `shadowed` — отобранные правила в тени (тень — по всему набору).
     С `host_id`: `overridden` — набор у хоста не действует, причина — `overridden_reason` (`HostEffective.reason`), `overlay` — у списка политики,
     на который накладываются профили хоста с замком, — режим наложения из настроек, иначе null."""
@@ -477,11 +501,17 @@ def net_rule_sections(
     sel = _NetRules(db, snapshot_id, q, policy_id, profile, action, direction, enabled, host_id, layer)
     effective = _effective(db, snapshot_id, host_id) if host_id else None
     groups: dict[tuple[str, int, str], list[KscNetRule]] = defaultdict(list)
-    for r in sel.kept:
+    for r in sorted(sel.rows, key=lambda r: (r.position, r.id)):
         groups[(r.layer, r.policy_id, r.profile)].append(r)
     profiles = {(p.policy_id, p.name): p.priority for p in db.execute(select(KscProfile).where(KscProfile.snapshot_id == snapshot_id)).scalars()}
     locks = {(f.policy_id, f.profile): locks_from_json(f.locks_json)
              for f in db.execute(select(KscPolicyFirewall).where(KscPolicyFirewall.snapshot_id == snapshot_id)).scalars()}
+
+    for (pid, prof), lock in locks.items():
+        if prof:
+            for lay in ('packet', 'app'):
+                if getattr(lock, lay) is True and (lay, pid, '') in groups:
+                    groups.setdefault((lay, pid, prof), [])
 
     def order(key: tuple[str, int, str]) -> tuple[Any, ...]:
         lay, pid, prof = key
@@ -493,11 +523,26 @@ def net_rule_sections(
     out: list[dict[str, Any]] = []
     for key in sorted(groups, key=order):
         lay, pid, prof = key
-        rows = groups[key]
+        all_rows = groups[key]
+        rows = [r for r in all_rows if sel.matches(r)]
+        base = groups.get((lay, pid, ''), [])
+        comparison = compare_rules(base, all_rows) if prof else None
+        differences = sum(sel.matches(d.row) or (d.previous is not None and sel.matches(d.previous)) for d in comparison.deltas) if comparison else 0
+        # Ограничения источника действуют и на пустой список профиля.
+        ids = multi_int(policy_id)
+        if (ids is not None and pid not in ids) or (profile is not None and prof != profile) or (layer and lay != layer):
+            continue
+        if sel.host is not None and not sel.host.keep(pid, prof):
+            continue
+        if not rows and not differences:
+            continue
         p = sel.policies.get(pid)
         lock = locks.get((pid, prof))
         row: dict[str, Any] = {
             "layer": lay, "policy_id": pid, "policy_name": _name(sel.policies, pid), "profile": prof,
+            "content_key": list_signature(all_rows),
+            "comparison": {**comparison.summary, "base_rules": len(base), "base_known": bool(base) or (pid, '') in locks,
+                           "differences": differences} if comparison else None,
             "priority": profiles.get((pid, prof)) if prof else None, "rules": len(rows), "shadowed": sum(sel.shadow(r) is not None for r in rows),
             "hosts": p.hosts if p is not None else 0, "hosts_kind": "policy",
             "locked": getattr(lock, lay, None) if lock is not None and lay in _LAYERS else None,

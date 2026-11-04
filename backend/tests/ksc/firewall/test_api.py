@@ -226,13 +226,15 @@ def test_sections_counts_and_overridden(auth_client: TestClient, db_session: Ses
     sections = _sections(auth_client, sid)
     assert [_key(s) for s in sections] == [("packet", 1, ""), ("packet", 1, "Ноутбуки"), ("app", 1, ""), ("app", 1, "Ноутбуки")]
     policy, profile = sections[0], sections[1]
-    assert policy == {"layer": "packet", "policy_id": 1, "policy_name": "KES workstations", "profile": "", "priority": None, "rules": 4,
+    assert len(policy["content_key"]) == 64 and policy["comparison"] is None
+    assert {k: v for k, v in policy.items() if k not in {"content_key", "comparison"}} == {"layer": "packet", "policy_id": 1, "policy_name": "KES workstations", "profile": "", "priority": None, "rules": 4,
                       "shadowed": 1, "hosts": hosts, "hosts_kind": "policy", "locked": True, "overridden": False, "overridden_by": "",
                       "overridden_reason": ""}
     assert (profile["priority"], profile["rules"], profile["shadowed"], profile["locked"]) == (0, 1, 0, True)
     assert sections[2]["rules"] == 1 and sections[2]["locked"] is True
     # Фильтр: счётчики по отфильтрованному, тень копии — по всему списку (SMB отфильтрован, а копия всё равно в тени).
-    [only] = _sections(auth_client, sid, "q=%D0%BA%D0%BE%D0%BF%D0%B8%D1%8F")  # «копия»
+    only, profile_diff = _sections(auth_client, sid, "q=%D0%BA%D0%BE%D0%BF%D0%B8%D1%8F")  # «копия»: также отсутствие в профиле
+    assert profile_diff["rules"] == 0 and profile_diff["comparison"]["differences"] == 1
     assert (_key(only), only["rules"], only["shadowed"]) == (("packet", 1, ""), 1, 1)
     assert [_key(s) for s in _sections(auth_client, sid, "layer=app")] == [("app", 1, ""), ("app", 1, "Ноутбуки")]
     # С хостом WS01 (профиль активен): режим auto — не перекрыто, помечено наложение.
@@ -308,3 +310,12 @@ def test_overridden_reason_unlocked_and_inactive(auth_client: TestClient) -> Non
     # Пустая строка `layer` — без фильтра.
     assert auth_client.get(f"{url}?layer=").json()["total"] == auth_client.get(url).json()["total"]
     assert auth_client.get(f"{url}?layer=other").status_code == 422
+
+
+def test_auditor_can_calculate_firewall_without_write_access(auth_client, client_as):
+    sid = _upload(auth_client, _export([SMB, WEB_IN, WEB_OUT]))
+    auditor = client_as('auditor')
+    result = _check(auditor, sid, 'h-ws02', {'address': OUTSIDE})
+    assert result['overall'] == 'deny'
+    assert result['source']['branches'][0]['decided_by']['name'] == SMB['name']
+    assert auditor.put('/api/ksc/settings', json={}).status_code == 403

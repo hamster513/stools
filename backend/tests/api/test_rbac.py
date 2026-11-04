@@ -26,3 +26,12 @@ def test_analyst_writes_in_modules_but_not_settings(client_as: Callable[[str], T
 
 def test_everyone_may_log_out(client_as: Callable[[str], TestClient]) -> None:
     assert client_as("auditor").post("/api/auth/logout").status_code == 204
+
+
+def test_firewall_calculation_is_read_only_permission():
+    from api.rbac import needed
+    assert needed('POST', '/api/ksc/snapshots/14/firewall/check') == ('ksc', 'read')
+    assert needed('POST', '/api/ksc/snapshots/14/firewall/check/batch') == ('ksc', 'read')
+    assert needed('PUT', '/api/ksc/settings') == ('ksc', 'admin')
+    assert needed('POST', '/api/ksc/snapshots/14/reanalyze') == ('ksc', 'write')
+    assert needed('POST', '/api/ksc/snapshots/14/firewall/check/other') == ('ksc', 'write')

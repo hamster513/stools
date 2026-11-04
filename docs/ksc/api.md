@@ -725,6 +725,8 @@ GET  /servers/{id}/changes/export?format=csv|xlsx&<те же фильтры>    
 
 ## Сетевой экран: проверка пакета
 
+Оба POST-запроса выполняют расчёт по снапшоту и требуют права `ksc:read`. Они не меняют настройки и не отправляют пакеты в сеть.
+
 ```
 POST /snapshots/{id}/firewall/check        {source_host_id, destination: {host_id}|{address}, protocol: "tcp"|"udp"|"icmp"|"icmpv6"|"any",
                                             port: 0..65535|null, icmp_type: 0..255|null}

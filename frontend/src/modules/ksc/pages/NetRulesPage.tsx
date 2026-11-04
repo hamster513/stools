@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useId, useMemo, useState } from 'react'
 import { FilterX, Search } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useRouter } from '@/lib/router'
@@ -17,11 +17,14 @@ import { FacetPanel, FacetRow, FacetSection } from './policies/Facets'
 import { ObjectDrawer } from './objects/ObjectDrawer'
 import { ObjectsEmpty, PartialNote, PartialPoliciesNote, PolicyFacet, SnapshotSection, UndescribedNote, UndeterminedNote } from './objects/ObjectsParts'
 import { HostPicker } from './netrules/HostPicker'
+import { FirewallCheckPanel } from './netrules/FirewallCheckPanel'
 import { SectionTable } from './netrules/SectionTable'
 import { mergeSections, MODE_LABELS, readFilters, writeFilters, type Filters } from './netrules/model'
 
 export function NetRulesTable({ snapshotId, serverId, policyId, partial = false, hostId, policyIds, syncUrl = false }: { snapshotId: number; serverId: number; policyId?: number; partial?: boolean; hostId?: string; policyIds?: number[]; syncUrl?: boolean }) {
   const inPolicy = policyId !== undefined
+  const checkId = useId()
+  const [checkOpen, setCheckOpen] = useState(false)
   const router = useRouter()
   const [localFilters, setLocalFilters] = useState<Filters>({})
   const filters = useMemo(() => syncUrl ? readFilters(router.search) : localFilters, [syncUrl, router.search, localFilters])
@@ -75,6 +78,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
   return <div className="flex h-full min-h-0 flex-col">
     <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
       <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
+      <button type="button" aria-expanded={checkOpen} aria-controls={checkId} onClick={() => setCheckOpen(v => !v)} className="rounded border border-border px-2 py-1.5 text-xs text-primary hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-focus-ring">Проверить связь</button>
       <ExportButton href={exportHref(`/api/ksc/snapshots/${snapshotId}/net-rules/export`, args)} total={first?.total} disabled={loading} />
       {!inPolicy && hostId === undefined && <HostPicker snapshotId={snapshotId} value={selectedHost} onChange={id => update({ host_id: id })} />}
       <div className="relative max-w-sm min-w-40 flex-1">
@@ -82,7 +86,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
         <input value={filters.q ?? ''} onChange={e => update({ q: e.target.value || undefined })} placeholder="Название, адрес, порт" aria-label="Поиск сетевых правил" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
       </div>
       {(hasFilters || (hostId === undefined && selectedHost)) && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
-      <div className="font-mono text-xs tabular-nums text-text-secondary">{first?.total ?? '…'}</div>
+      <div className="font-mono text-xs tabular-nums text-text-secondary">{first?.total ?? '…'} записей в источниках</div>
       {!filtersPanel.open && <FilterChips chips={chips} />}
     </div>
     <div className="flex min-h-0 flex-1">
@@ -93,6 +97,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
         <FacetSection title="Включено">{([true, false] as const).map(v => <FacetRow key={String(v)} active={filters.enabled === v} count={facets?.enabled[v ? 'true' : 'false']} onClick={() => update({ enabled: filters.enabled === v ? undefined : v })}>{v ? 'включённые' : 'выключенные'}</FacetRow>)}</FacetSection>
       </FacetPanel>}
       <div className="min-w-0 flex-1 overflow-auto bg-app-bg">
+        {checkOpen && <FirewallCheckPanel key={scopeKey} id={checkId} snapshotId={snapshotId} serverId={serverId} initialHost={selectedHost} onOpenRule={setOpenRowId} onClose={() => setCheckOpen(false)} />}
         {loading && <FullPageSpinner />}
         {errorMessage && <div className="p-6"><ErrorState message={errorMessage} onRetry={() => { baseline.refetch(); filtered.refetch(); summary.refetch() }} /></div>}
         {!loading && !errorMessage && <>
@@ -102,7 +107,7 @@ export function NetRulesTable({ snapshotId, serverId, policyId, partial = false,
           {selectedHost && first?.effective && <div className="border-b border-grid px-4 py-2 text-xs text-text-secondary">Режим наложения профилей: {MODE_LABELS[first.effective.mode]}. Причина неактивности указана у каждого набора.</div>}
           {sections.length === 0 ? <ObjectsEmpty snapshotId={snapshotId} policyId={policyId} undescribed={first?.undescribed ?? []} hasFilters={hasFilters} what="сетевые правила" none={selectedHost ? 'Для хоста нет собранных сетевых правил' : 'Сетевых правил нет'} nothing="Ни одно правило не подходит под фильтры." /> : <>
             {first?.total === 0 && <p className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Ни одно правило не подходит под фильтры. Секции сохранены для сравнения.</p>}
-            <SectionTable key={scopeKey} storageKey={`ksc-net-rules-sections-v2:${scopeKey}`} snapshotId={snapshotId} sections={sections} args={args} openRowId={openRowId} onOpen={setOpenRowId} maybe={maybe} />
+            <SectionTable key={scopeKey} storageKey={`ksc-net-rules-sections-v3:${scopeKey}`} snapshotId={snapshotId} sections={sections} args={args} openRowId={openRowId} onOpen={setOpenRowId} maybe={maybe} />
           </>}
         </>}
       </div>

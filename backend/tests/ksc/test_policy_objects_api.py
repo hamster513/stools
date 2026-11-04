@@ -425,3 +425,53 @@ def test_net_rules_layer_filter_and_shadowed_by(auth_client: TestClient, db_sess
     db_session.execute(update(KscNetRule).where(KscNetRule.snapshot_id == sid).values(scope_json=None))
     db_session.commit()
     assert all(i["shadowed_by"] is None for i in _net_rules(auth_client, sid)["items"])
+
+
+def test_profile_comparison_sections_and_filtered_removed_rules(auth_client: TestClient, db_session: Session, sid: int) -> None:
+    base = list(db_session.scalars(select(KscNetRule).where(KscNetRule.snapshot_id == sid, KscNetRule.policy_id == 1, KscNetRule.profile == '', KscNetRule.layer == 'packet').order_by(KscNetRule.position)))
+    fields = ('layer', 'position', 'name', 'action', 'direction', 'protocol', 'local_ports', 'remote_ports', 'addresses', 'enabled', 'key', 'scope_json')
+    for profile in ('Copy', 'Changed'):
+        for index, row in enumerate(base):
+            data = {key: getattr(row, key) for key in fields}
+            if profile == 'Changed':
+                if index == 0:
+                    data['action'] = 'block'
+                else:
+                    data.update(name='HTTPS', remote_ports='443', enabled=True)
+            db_session.add(KscNetRule(snapshot_id=sid, policy_id=1, profile=profile, **data))
+    db_session.commit()
+    url = f'/api/ksc/snapshots/{sid}/net-rules'
+    sections = auth_client.get(url + '/sections', params={'policy_id': 1, 'layer': 'packet'}).json()
+    by_profile = {s['profile']: s for s in sections}
+    assert by_profile['']['content_key'] == by_profile['Copy']['content_key']
+    assert by_profile['Changed']['content_key'] != by_profile['']['content_key']
+    assert by_profile['Copy']['comparison']['unchanged'] == 2
+    diff = by_profile['Changed']['comparison']
+    assert (diff['added'], diff['removed'], diff['changed']) == (1, 1, 1)
+    params = dict(policy_id=1, layer='packet', profile='Changed', changes=True)
+    response = auth_client.get(url, params=params)
+    assert response.status_code == 200
+    data = response.json()
+    assert data['total'] == 3
+    changed = next(r for r in data['items'] if r['change']['kind'] == 'changed')
+    assert changed['change']['previous']['action'] == 'allow'
+    assert changed['change']['fields'] == ['action']
+    removed = auth_client.get(url, params={**params, 'q': 'SMB'}).json()
+    assert removed['total'] == 1 and removed['items'][0]['change']['kind'] == 'removed'
+    filtered = auth_client.get(url + '/sections', params={'policy_id': 1, 'layer': 'packet', 'q': 'SMB'}).json()
+    assert next(s for s in filtered if s['profile'] == 'Changed')['comparison']['differences'] == 1
+    assert auth_client.get(url, params={**params, 'limit': 1, 'offset': 2}).json()['total'] == 3
+    assert auth_client.get(url, params={'changes': True}).status_code == 422
+
+
+def test_empty_locked_profile_keeps_removed_base_rules(auth_client: TestClient, db_session: Session, sid: int) -> None:
+    from api.modules.ksc.models import KscPolicyFirewall
+    db_session.add(KscPolicyFirewall(snapshot_id=sid, policy_id=1, profile='Empty', locks_json='{"packet":true,"app":false}'))
+    db_session.commit()
+    url = f'/api/ksc/snapshots/{sid}/net-rules'
+    sections = auth_client.get(url + '/sections', params={'policy_id': 1, 'layer': 'packet'}).json()
+    empty = next(s for s in sections if s['profile'] == 'Empty')
+    assert empty['rules'] == 0 and empty['locked'] is True
+    assert empty['comparison']['removed'] == empty['comparison']['differences'] == 2
+    result = auth_client.get(url, params={'policy_id': 1, 'layer': 'packet', 'profile': 'Empty', 'changes': True}).json()
+    assert result['total'] == 2 and all(r['change']['kind'] == 'removed' for r in result['items'])

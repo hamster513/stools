@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { NetRuleSection, NetRuleScope } from '../../api/types.ts'
+import type { NetRuleSection, NetRuleScope, NetRuleAddress } from '../../api/types.ts'
 
 let model: typeof import('./model.ts') | undefined
 try { model = await import('./model.ts') } catch (error) {
@@ -69,4 +69,42 @@ test('состояние секций по умолчанию закрыто; п
   assert.deepEqual(api().readOpenSections(null), [])
   assert.deepEqual(api().readOpenSections('{broken'), [])
   assert.deepEqual(api().readOpenSections('["a",2,true,"b"]'), ['a', 'b'])
+})
+
+test('одинаковые списки объединяются внутри политики и слоя, без замка — отдельно', () => {
+  const s = (profile: string, patch = {}) => ({ ...section(profile), total: 5, content_key: 'same', ...patch })
+  const groups = api().groupPolicies([s(''), s('A'), s('B'), s('Unlocked', { locked: false }), s('Other', { policy_id: 2 }), s('Application', { layer: 'app' })])
+  assert.equal(groups.length, 2)
+  assert.equal(groups[0].layers.length, 2)
+  assert.equal(groups[0].layers[0].base?.profile, '')
+  assert.deepEqual(groups[0].layers[0].groups[0].members.map(s => s.profile), ['A', 'B'])
+  assert.deepEqual(groups[0].layers[0].unlocked[0].members.map(s => s.profile), ['Unlocked'])
+})
+test('фильтр не меняет объединение списков и не теряет нулевые совпадения', () => {
+  const base = [{ ...section('A'), content_key: 'same' }, { ...section('B'), content_key: 'same' }]
+  const sections = api().mergeSections(base, [])
+  const groups = api().groupPolicies(sections)
+  assert.equal(groups[0].layers[0].groups[0].members.length, 2)
+  assert.equal(groups[0].layers[0].groups[0].members[0].rules, 0)
+})
+
+
+const addr = (patch: Partial<NetRuleAddress> = {}): NetRuleAddress => ({ host: '', ip: '', mask: null, hidden: '', ips: [], ...patch })
+test('вложенные IP без имени раскрываются в отдельные адресные плашки', () => {
+  const tokens = api().scopeTokens(scope({ remote: [addr({ ips: [addr({ ip: '192.0.2.10' }), addr({ ip: '2001:db8::', mask: 64 })] })] }), '')
+  assert.deepEqual(tokens.map(t => t.text), ['192.0.2.10', '2001:db8::/64'])
+  assert.ok(tokens.every(t => t.kind !== 'warning'))
+})
+test('вложенные локальные IP сохраняют сторону, скрытые и непрочитанные значения', () => {
+  const tokens = api().scopeTokens(scope({ local: [addr({ ips: [addr({ ip: '198.51.100.0', mask: 24 }), addr({ hidden: 'secret' }), addr({ hidden: 'unparsed' }), addr()] })] }), '')
+  assert.deepEqual(tokens.map(t => t.text), ['лок. 198.51.100.0/24', 'лок. адрес скрыт', 'лок. адрес не прочитан', 'лок. адрес не определён'])
+})
+test('вложенные IP именованного или скрытого узла не раскрываются отдельными плашками', () => {
+  const ips = [addr({ ip: '192.0.2.10' })]
+  const host = api().scopeTokens(scope({ remote: [addr({ host: 'app.example.test', ips })] }), '')
+  assert.equal(host.length, 1)
+  assert.equal(host[0].text, 'app.example.test')
+  assert.equal(host[0].title, '192.0.2.10')
+  const hidden = api().scopeTokens(scope({ remote: [addr({ hidden: 'secret', ips })] }), '')
+  assert.deepEqual(hidden.map(t => t.text), ['адрес скрыт'])
 })

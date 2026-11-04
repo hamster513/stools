@@ -3,7 +3,7 @@ import { ChevronDown, X } from 'lucide-react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useHostDetail, useHosts } from '../../api/queries'
 
-export function HostPicker({ snapshotId, value, onChange }: { snapshotId: number; value?: string; onChange: (id: string | undefined) => void }) {
+export function HostPicker({ snapshotId, value, onChange, labelPrefix = 'Хост', emptyLabel = 'Все хосты' }: { snapshotId: number; value?: string; onChange: (id: string | undefined) => void; labelPrefix?: string; emptyLabel?: string }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const q = useDebouncedValue(search, 250)
@@ -20,14 +20,14 @@ export function HostPicker({ snapshotId, value, onChange }: { snapshotId: number
     return () => document.removeEventListener('mousedown', outside)
   }, [open])
   const close = () => { setOpen(false); button.current?.focus() }
-  const label = value ? selected.data?.name || value : 'Все хосты'
+  const label = value ? selected.data?.name || value : emptyLabel
   return <div ref={root} className="relative flex items-center gap-1" onKeyDown={e => { if (e.key === 'Escape' && open) { e.stopPropagation(); close() } }}>
     <button ref={button} type="button" aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(!open)} className="flex max-w-64 items-center gap-2 rounded border border-border px-2 py-1.5 text-xs text-text hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-focus-ring">
-      <span className="truncate">Хост: {label}</span><ChevronDown size={12} aria-hidden />
+      <span className="truncate">{labelPrefix}: {label}</span><ChevronDown size={12} aria-hidden />
     </button>
-    {value && <button type="button" aria-label="Снять фильтр хоста" onClick={() => onChange(undefined)} className="rounded p-1 text-text-secondary hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"><X size={14} aria-hidden /></button>}
-    {open && <div role="dialog" aria-label="Выбор хоста" className="absolute top-full left-0 z-30 mt-1 w-80 max-w-[calc(100vw-2rem)] rounded border border-border bg-surface p-2 shadow-lg">
-      <input ref={input} aria-label="Поиск хоста" placeholder="Имя или адрес хоста" value={search} onChange={e => setSearch(e.target.value)} className="mb-2 w-full rounded border border-border bg-app-bg px-2 py-1.5 text-xs text-text focus-visible:ring-2 focus-visible:ring-focus-ring" />
+    {value && <button type="button" aria-label={labelPrefix === 'Хост' ? 'Снять фильтр хоста' : `Очистить: ${labelPrefix}`}  onClick={() => onChange(undefined)} className="rounded p-1 text-text-secondary hover:text-text focus-visible:ring-2 focus-visible:ring-focus-ring"><X size={14} aria-hidden /></button>}
+    {open && <div role="dialog" aria-label={`Выбор хоста: ${labelPrefix}`} className="absolute top-full left-0 z-30 mt-1 w-80 max-w-[calc(100vw-2rem)] rounded border border-border bg-surface p-2 shadow-lg">
+      <input ref={input} aria-label={labelPrefix === 'Хост' ? 'Поиск хоста' : `Поиск хоста: ${labelPrefix}`}  placeholder="Имя или адрес хоста" value={search} onChange={e => setSearch(e.target.value)} className="mb-2 w-full rounded border border-border bg-app-bg px-2 py-1.5 text-xs text-text focus-visible:ring-2 focus-visible:ring-focus-ring" />
       <div className="max-h-64 overflow-y-auto text-xs">
         {(hosts.isLoading || hosts.isPlaceholderData) && <p className="p-2 text-text-secondary" role="status">Загрузка хостов…</p>}
         {hosts.isError && <button type="button" onClick={() => hosts.refetch()} className="p-2 text-risk-medium">Не удалось загрузить хосты. Повторить</button>}

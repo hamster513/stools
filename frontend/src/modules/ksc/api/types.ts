@@ -733,7 +733,12 @@ export interface NetRuleScope {
   direction: number | null; protocol: number | null; local_ports: [number, number][]; remote_ports: [number, number][]; unread: string[]
 }
 export interface NetRuleShadow { row_id: number; position: number; name: string; same_action: boolean }
+export interface NetRuleComparison {
+  unchanged: number; added: number; removed: number; changed: number; moved: number
+  base_rules: number; base_known: boolean; differences: number
+}
 export interface NetRuleSection {
+  content_key?: string; comparison?: NetRuleComparison | null
   layer: string; policy_id: number; policy_name: string; profile: string; priority: number | null
   rules: number; shadowed: number; hosts: number; hosts_kind: 'policy'; locked: boolean | null
   overridden: boolean; overridden_by: string; overridden_reason: '' | 'replaced' | 'unlocked' | 'inactive'
@@ -762,6 +767,7 @@ export interface NetRuleItem {
   key: string
   scope: NetRuleScope | null
   shadowed_by: NetRuleShadow | null
+  change?: { kind: 'added' | 'removed' | 'changed' | 'moved'; fields: string[]; moved: boolean; previous: NetRuleItem | null }
   overridden?: boolean
   overridden_reason?: NetRuleSection['overridden_reason']
 }
@@ -774,6 +780,7 @@ export interface NetRuleDetail extends NetRuleItem {
 }
 
 export interface NetRulesQuery {
+  changes?: boolean
   q?: string
   /** Многозначные фасеты уходят повторением ключа (buildQuery). */
   policy_id?: number[]

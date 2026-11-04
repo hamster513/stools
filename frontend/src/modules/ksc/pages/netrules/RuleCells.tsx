@@ -1,4 +1,4 @@
-import { Check, X, ListOrdered, Globe, Monitor, Server, EyeOff, TriangleAlert } from 'lucide-react'
+import { Check, X, ListOrdered, EyeOff, TriangleAlert } from 'lucide-react'
 import type { NetRuleItem } from '../../api/types'
 import { cn } from '@/lib/cn'
 import { inactiveLabel, portsText, scopeTokens } from './model'
@@ -14,9 +14,9 @@ export function ActionCell({ action }: { action: string }) {
 export function ScopeChips({ item }: { item: Pick<NetRuleItem, 'scope' | 'addresses'> }) {
   return <div className="flex flex-wrap gap-1">
     {scopeTokens(item.scope, item.addresses).map((token, index) => {
-      const Icon = token.kind === 'network' ? Globe : token.kind === 'host' ? Server : token.kind === 'hidden' ? EyeOff : token.kind === 'warning' ? TriangleAlert : Monitor
+      const Icon = token.kind === 'hidden' ? EyeOff : token.kind === 'warning' ? TriangleAlert : null
       return <span key={index} title={token.title} className={cn('inline-flex max-w-full items-start gap-1 rounded border border-grid px-1.5 py-0.5', token.kind === 'warning' ? 'text-risk-medium' : 'text-text-secondary')}>
-        <Icon size={12} className="mt-0.5 shrink-0" aria-hidden /><span className="min-w-0 break-all">{token.text}</span>
+        {Icon && <Icon size={12} className="mt-0.5 shrink-0" aria-hidden />}<span className="min-w-0 break-all">{token.text}</span>
       </span>
     })}
   </div>
@@ -34,7 +34,7 @@ export function RuleFlags({ item }: { item: NetRuleItem }) {
   const inactive = inactiveLabel(item.overridden_reason)
   return <div className="mt-1 flex flex-wrap gap-1">
     {shadow && <span className="rounded border border-risk-medium/40 px-1 text-risk-medium" title={`Правило №${shadow.position} «${shadow.name}» полностью покрывает это правило; действие ${shadow.same_action ? 'то же' : 'другое'}.`}>
-      {shadow.same_action ? 'дублирует' : 'в тени'} №{shadow.position}
+      {shadow.same_action ? 'покрывается' : 'в тени'} №{shadow.position}
     </span>}
     {!item.enabled && <span className="rounded border border-grid px-1 text-text-secondary">выключено</span>}
     {inactive && <span className="rounded border border-grid px-1 text-text-secondary">{inactive}</span>}
