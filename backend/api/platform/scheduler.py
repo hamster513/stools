@@ -46,6 +46,8 @@ class PlatformSchedule(Base):
     kind: Mapped[str] = mapped_column(String(32))
     target_id: Mapped[int] = mapped_column(Integer)
     interval_hours: Mapped[int] = mapped_column(Integer)
+    weekdays: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    run_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
     #: HH:MM, оба пустые — без окна.
     window_from: Mapped[str | None] = mapped_column(String(5), nullable=True)
     window_to: Mapped[str | None] = mapped_column(String(5), nullable=True)
@@ -111,6 +113,25 @@ def next_run(
     return opening.astimezone(dt.UTC)
 
 
+def next_calendar_run(after: dt.datetime, weekdays: str, run_time: str, tz: str) -> dt.datetime:
+    """Первое будущее вхождение по местному календарю. При переводе часов пропускаем
+    несуществующую минуту, повторяющуюся минуту исполняем только один раз."""
+    if not re.fullmatch(r"[0-6]{1,7}", weekdays) or not _HHMM.fullmatch(run_time):
+        raise ValueError("задайте дни недели и время ЧЧ:ММ")
+    zone = ZoneInfo(tz)
+    today = after.astimezone(zone).date()
+    time = dt.time.fromisoformat(run_time)
+    for offset in range(15):
+        day = today + dt.timedelta(days=offset)
+        if str(day.weekday()) not in weekdays:
+            continue
+        wall = dt.datetime.combine(day, time)
+        candidate = wall.replace(tzinfo=zone, fold=0).astimezone(dt.UTC)
+        if candidate > after and candidate.astimezone(zone).replace(tzinfo=None) == wall:
+            return candidate
+    raise ValueError("нет ближайшей даты в расписании")
+
+
 def tick(db: Session, now: dt.datetime, *, period_s: float = 60, tz: str = "UTC") -> list[int]:
     """Одна итерация: выбрать enabled с next_run_at <= now, вызвать обработчик, записать
     last_run_at/last_job_id, next_run_at; вернуть id запущенных задач. Каждое расписание —
@@ -129,7 +150,8 @@ def tick(db: Session, now: dt.datetime, *, period_s: float = 60, tz: str = "UTC"
         module, kind = sched.module, sched.kind
         # До обработчика: с битым окном срок не посчитать, и задача запускалась бы каждый тик.
         try:
-            nxt = next_run(now, sched.interval_hours, sched.window_from, sched.window_to, tz)
+            nxt = (next_calendar_run(now, sched.weekdays, sched.run_time or "", tz) if sched.weekdays
+                   else next_run(now, sched.interval_hours, sched.window_from, sched.window_to, tz))
         except ValueError as exc:
             log.warning("расписание %s (%s/%s) выключено: %s", schedule_id, module, kind, exc)
             sched.enabled = False
@@ -177,6 +199,8 @@ def upsert_schedule(
     window_from: str | None,
     window_to: str | None,
     enabled: bool,
+    weekdays: str | None = None,
+    run_time: str | None = None,
     now: dt.datetime | None = None,
     tz: str | None = None,
 ) -> PlatformSchedule:
@@ -191,17 +215,20 @@ def upsert_schedule(
             PlatformSchedule.module == module, PlatformSchedule.kind == kind, PlatformSchedule.target_id == target_id,
         )
     ).scalar_one_or_none()
-    timing = (interval_hours, window_from, window_to)
+    if bool(weekdays) != bool(run_time) or (weekdays and window_from):
+        raise ValueError("выберите один режим расписания")
+    timing = (interval_hours, window_from, window_to, weekdays, run_time)
     if sched is None:
         sched = PlatformSchedule(module=module, kind=kind, target_id=target_id)
         db.add(sched)
         changed = True
     else:
-        changed = (sched.interval_hours, sched.window_from, sched.window_to) != timing or (enabled and not sched.enabled)
-    sched.interval_hours, sched.window_from, sched.window_to = timing
+        changed = (sched.interval_hours, sched.window_from, sched.window_to, sched.weekdays, sched.run_time) != timing or (enabled and not sched.enabled)
+    sched.interval_hours, sched.window_from, sched.window_to, sched.weekdays, sched.run_time = timing
     sched.enabled = enabled
     if changed:
-        sched.next_run_at = next_run(now, interval_hours, window_from, window_to, tz)
+        sched.next_run_at = (next_calendar_run(now, weekdays, run_time or "", tz) if weekdays
+                             else next_run(now, interval_hours, window_from, window_to, tz))
     db.flush()
     return sched
 

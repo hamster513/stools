@@ -1,17 +1,11 @@
 import {
-  useCollect, useConnections, useDeleteConnection, useDeleteConnectionSchedule, useSaveConnection, useSaveConnectionSchedule, useTestConnection,
+  useCollect, useConnections, useDeleteConnection, useSaveConnection, useTestConnection,
 } from '@/modules/ksc/api/queries'
 import type { Connection, ConnectionIn } from '@/modules/ksc/api/types'
 import { CollectorConnectionsSection } from '@/platform/collector/ConnectionsSection'
 import { Field, FIELD } from '@/platform/collector/ui'
 
 const EMPTY: ConnectionIn = { title: '', host: '', port: 13299, username: '', password: '', verify_tls: true, internal: true, domain: '', skip_policy_contents: false }
-
-const SCHEDULE = {
-  useSave: useSaveConnectionSchedule,
-  useDelete: useDeleteConnectionSchedule,
-  note: 'Запуск откладывается, пока идёт другая задача модуля; без пароля расписание выключается.',
-}
 
 export function ConnectionsSection() {
   const list = useConnections()
@@ -26,7 +20,6 @@ export function ConnectionsSection() {
       collect={collect}
       remove={remove}
       useSaveConnection={useSaveConnection}
-      schedule={SCHEDULE}
       empty={EMPTY}
       toForm={(c) => ({ ...c, password: '' })}
       title="Подключения к KSC (онлайн-режим)"

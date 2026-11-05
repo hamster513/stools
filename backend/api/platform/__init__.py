@@ -11,12 +11,17 @@ from api.platform.routers import attack, audit, groups, llm, oidc, roles, securi
 
 # Под псевдонимом: имя `data_status` в пакете принадлежит модулю реестра api.platform.data_status.
 from api.platform.routers import data_status as data_status_router
+from api.platform.routers import schedules
+from api.platform.scheduler import register_schedule_kind
+from api.platform.sync_jobs import scheduled
 
 router = APIRouter(prefix="/api/settings")
 for sub in (
     users.router, groups.router, roles.router, security.router, audit.router, llm.router, attack.router, oidc.router,
-    data_status_router.router,
+    data_status_router.router, schedules.router,
 ):
     router.include_router(sub)
+
+register_schedule_kind("attack", "download", scheduled(attack.start_download))
 
 __all__ = ["router"]

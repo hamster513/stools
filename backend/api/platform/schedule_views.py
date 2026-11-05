@@ -22,6 +22,8 @@ class ScheduleIn(BaseModel):
 
 
 class ScheduleView(BaseModel):
+    weekdays: list[int] = []
+    run_time: str | None = None
     id: int
     interval_hours: int
     window_from: str | None
@@ -36,6 +38,6 @@ class ScheduleView(BaseModel):
 
 def schedule_view(s: PlatformSchedule) -> ScheduleView:
     return ScheduleView(
-        id=s.id, interval_hours=s.interval_hours, window_from=s.window_from, window_to=s.window_to, enabled=s.enabled,
+        weekdays=[int(day) for day in s.weekdays or ""], run_time=s.run_time, id=s.id, interval_hours=s.interval_hours, window_from=s.window_from, window_to=s.window_to, enabled=s.enabled,
         next_run_at=s.next_run_at, last_run_at=s.last_run_at, last_job_id=s.last_job_id, tz=get_settings().tz,
     )

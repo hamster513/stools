@@ -35,6 +35,7 @@ from api.modules.siem.routers import (
 # Под другим именем: `hunting` в этом пакете — подпакет с моделями и сервисами, имя нельзя занимать.
 from api.modules.siem.routers.hunting import router as hunting_router
 from api.modules.siem.services.attack_layer import LAYER as ATTACK_LAYER
+from api.platform.sync_jobs import scheduled
 from api.platform import scheduler
 from api.platform.findings.adapters import register_adapter, register_bulk_filter
 
@@ -66,5 +67,6 @@ register_adapter(FINDINGS_ADAPTER)
 register_adapter(TH_ADAPTER)
 register_bulk_filter(TH_ADAPTER.module, keys_by_filter)
 # Ночной прогон заводит задачу; диспетчер очереди работает в тике (без своей задачи).
+scheduler.register_schedule_kind("siem", "kb_collect", scheduled(kb.start_kb_collect))
 scheduler.register_schedule_kind("siem", "th_nightly", nightly_handler)
 scheduler.register_schedule_kind("siem", "th_dispatch", dispatch_handler, jobless=True)

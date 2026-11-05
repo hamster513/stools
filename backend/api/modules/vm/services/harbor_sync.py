@@ -57,7 +57,7 @@ from api.modules.vm.services.scoring import (
     rescore_image_pairs,
 )
 from api.modules.vm.services.settings import load_settings
-from api.platform.scheduler import PlatformSchedule, upsert_schedule
+from api.platform.scheduler import PlatformSchedule
 
 log = logging.getLogger(__name__)
 
@@ -539,10 +539,7 @@ def harbor_schedule_handler(db: Session, schedule: PlatformSchedule) -> int | No
     conn = load_harbor(db)
     if not conn.configured:
         log.warning("расписание %s (vm/harbor): подключение к Harbor не настроено — расписание выключено", schedule.id)
-        upsert_schedule(
-            db, module="vm", kind=SCHEDULE_KIND, target_id=SCHEDULE_TARGET_ID, interval_hours=schedule.interval_hours,
-            window_from=schedule.window_from, window_to=schedule.window_to, enabled=False,
-        )
+        schedule.enabled = False
         return None
     lock_job_start(db)
     if active_job(db, SYNC_CONFLICTS) is not None:

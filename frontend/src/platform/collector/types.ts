@@ -192,6 +192,8 @@ export interface FindingFilters extends FindingFacetFilters {
 
 /** Расписание задачи планировщика (скан сети, DNS, синхронизация, сбор по подключению); окно — местное время пояса STOOLS_TZ (`tz`). */
 export interface ScheduleView {
+  weekdays?: number[]
+  run_time?: string | null
   id: number
   interval_hours: number
   window_from: string | null
@@ -204,6 +206,8 @@ export interface ScheduleView {
 }
 
 export interface ScheduleIn {
+  weekdays?: number[]
+  run_time?: string | null
   interval_hours: number
   window_from: string | null
   window_to: string | null

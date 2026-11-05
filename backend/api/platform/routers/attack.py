@@ -19,11 +19,13 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.platform.sync_jobs import Submit
 from api.jobs import active_job, cancel_job, run_job, start_job
 from api.limits import ATTACK_BUNDLE_UPLOAD, check_upload_size
 from api.llm_settings import load_llm
@@ -141,11 +143,16 @@ def download_bundle(
     user: AppUser = Depends(get_current_user),
 ) -> dict[str, int]:
     """Скачать бандл с сайта MITRE. Применится только после подтверждения."""
+    return {"job_id": start_download(db, user.login, background_tasks.add_task)}
+
+
+def start_download(db: Session, login: str, submit: Submit) -> int:
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('attack_download'))"))
     if active_job(db, AttackJob, ["download"]) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="загрузка уже идёт")
-    job_id = start_job(db, AttackJob, "download", user.login, message="скачивание бандла ATT&CK")
-    background_tasks.add_task(run_job, AttackJob, job_id, download_job.run_download)
-    return {"job_id": job_id}
+    job_id = start_job(db, AttackJob, "download", login, message="скачивание бандла ATT&CK")
+    submit(lambda: run_job(AttackJob, job_id, download_job.run_download))
+    return job_id
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)

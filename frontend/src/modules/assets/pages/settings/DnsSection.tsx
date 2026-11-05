@@ -3,15 +3,15 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Play, Plus, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import {
-  useAdConnections, useDeleteDns, useDeleteDnsSchedule, useDnsServers, useJob, useRunDns, useSaveDns, useSaveDnsSchedule,
+  useAdConnections, useDeleteDns, useDnsServers, useJob, useRunDns, useSaveDns,
 } from '@/modules/assets/api/queries'
-import type { AdConnectionRef, DnsIn, DnsServer, NetworkSchedule } from '@/modules/assets/api/types'
+import type { AdConnectionRef, DnsIn, DnsServer } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
-import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
+import { scheduleText } from '@/platform/settings/scheduleText'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -47,13 +47,6 @@ function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—'
 }
 
-function scheduleText(s: NetworkSchedule | null): string {
-  if (!s) return 'вручную'
-  const every = s.interval_hours % 24 === 0 ? `раз в ${s.interval_hours / 24} сут` : `раз в ${s.interval_hours} ч`
-  const window = s.window_from && s.window_to ? `, ${s.window_from}–${s.window_to} ${s.tz}` : ''
-  if (!s.enabled) return `выключено (${every}${window})`
-  return `${every}${window}; следующий ${when(s.next_run_at)}`
-}
 
 function whatText(d: DnsServer, connections: AdConnectionRef[]): string {
   if (d.mode === 'ad') {
@@ -98,13 +91,6 @@ function RunButton({ dns }: { dns: DnsServer }) {
 }
 
 /** Расписание обновления через DNS: своя запись планировщика. */
-function DnsSchedule({ dns }: { dns: DnsServer }) {
-  return (
-    <ScheduleBlock title="Расписание" enableLabel="Обновлять по расписанию" current={dns.schedule}
-      note="Выключенный сервер по расписанию не запускается."
-      save={useSaveDnsSchedule(dns.id)} remove={useDeleteDnsSchedule(dns.id)} />
-  )
-}
 
 function DnsForm({ dns, connections, onDone }: { dns: DnsServer | null; connections: AdConnectionRef[]; onDone: () => void }) {
   const save = useSaveDns()
@@ -167,7 +153,7 @@ function DnsForm({ dns, connections, onDone }: { dns: DnsServer | null; connecti
         {check('Включён', 'enabled')}
       </div>
 
-      {dns ? <DnsSchedule dns={dns} /> : <p className="mt-3 text-xs text-text-secondary">Расписание задаётся после сохранения.</p>}
+      {dns ? <Link to="/settings/schedules" className="text-sm text-primary hover:underline">Расписание синхронизаций</Link> : <p className="mt-3 text-xs text-text-secondary">Расписание задаётся после сохранения.</p>}
 
       <div className="mt-4 flex items-center gap-2">
         <Button variant="primary" loading={save.isPending} onClick={() => save.mutate({ id: dns?.id, body: body() }, { onSuccess: onDone })}>Сохранить</Button>

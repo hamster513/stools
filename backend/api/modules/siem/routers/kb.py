@@ -8,6 +8,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from sqlalchemy import text
+
+from api.platform.sync_jobs import Submit
 from api.audit import changes_summary
 from api.db.base import get_db
 from api.db.models import AppUser
@@ -117,11 +120,16 @@ def collect(
     background_tasks: BackgroundTasks, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
     """Сбор из базы знаний в фоне: инвентарь, экспорт, разбор. Одновременно — один."""
+    return JobStarted(job_id=start_kb_collect(db, _user.login, background_tasks.add_task))
+
+
+def start_kb_collect(db: Session, _login: str, submit: Submit) -> int:
     if not load_connection(db).configured:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=NOT_CONFIGURED)
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('siem_kb_collect'))"))
     running = active_collect(db)
     if running is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, дождитесь её")
     job_id = start_collect(db)
-    background_tasks.add_task(process_collect, job_id)
-    return JobStarted(job_id=job_id)
+    submit(lambda: process_collect(job_id))
+    return job_id

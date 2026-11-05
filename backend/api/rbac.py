@@ -52,7 +52,7 @@ MODULE_ADMIN_WRITES: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in 
     r"(PUT|DELETE) /api/assets/sync/schedule",
 ))
 #: Чтение под /api/settings/, открытое любому вошедшему: его показывают страницы модулей.
-OPEN_SETTINGS_READS = frozenset({"/api/settings/llm", "/api/settings/findings", "/api/settings/data-status"})
+OPEN_SETTINGS_READS = frozenset({"/api/settings/llm", "/api/settings/findings", "/api/settings/data-status", "/api/settings/schedules"})
 
 
 def needed(method: str, path: str) -> tuple[str, str] | None:
@@ -67,6 +67,9 @@ def needed(method: str, path: str) -> tuple[str, str] | None:
             return parts[2], "read"
         line = f"{method} {path}"
         return parts[2], "admin" if any(p.fullmatch(line) for p in MODULE_ADMIN_WRITES) else "write"
+    sync = re.fullmatch(r"/api/settings/schedules/(ad|ksc|assets|vm|siem|attack)/[a-z_]+/[0-9]+", path)
+    if sync:
+        return sync[1], "read" if read else "admin"
     if path.startswith("/api/settings/attack"):
         # Состояние базы ATT&CK показывают страницы всех модулей; меняет его администратор модуля ATT&CK.
         return None if read else ("attack", "admin")

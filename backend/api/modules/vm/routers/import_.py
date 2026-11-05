@@ -19,6 +19,7 @@ from api.modules.vm.routers.jobs import JobView
 from api.modules.vm.services.harbor_sync import SYNC_KIND
 from api.modules.vm.services.importer import run_import
 from api.modules.vm.services.jobs import (
+    REF_KINDS,
     JobHandle,
     active_job,
     fail_job,
@@ -27,6 +28,7 @@ from api.modules.vm.services.jobs import (
     start_job,
 )
 from api.modules.vm.services.settings import load_settings
+from api.platform.sync_jobs import Submit
 from api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/import", tags=["vm"])
@@ -69,9 +71,9 @@ def _reject_if_running(db: Session) -> None:
     if active_job(db, ["bulk_status"]) is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="идёт массовая смена статусов")
     # Архив справочников в конце пересчитывает риск всех пар — замена пар посреди него смешала бы данные.
-    bundle = active_job(db, ["ref_bundle"])
+    bundle = active_job(db, ["ref_bundle", *REF_KINDS])
     if bundle is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт загрузка архива справочников (задача #{bundle.id})")
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт загрузка справочников (задача #{bundle.id})")
     # Синхронизация образов пополняет ту же витрину CVE, которую импорт чистит от сирот.
     harbor = active_job(db, [SYNC_KIND])
     if harbor is not None:
@@ -85,18 +87,22 @@ def import_from_vm(
     settings: Settings = Depends(get_settings),
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
+    return JobStarted(job_id=start_vm_import(db, user.login, background_tasks.add_task, settings))
+
+
+def start_vm_import(db: Session, login: str, submit: Submit, settings: Settings | None = None) -> int:
     vm = load_settings(db)
     if not vm.connection.configured:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="подключение к MaxPatrol VM не настроено")
     _reject_if_running(db)
-    job_id = start_job(db, "import_vm", user.login, message=vm.connection.host)
-    data_dir = settings.data_dir
+    job_id = start_job(db, "import_vm", login, message=vm.connection.host)
+    data_dir = (settings or get_settings()).data_dir
 
     def work(session: Session, handle: JobHandle) -> None:
         run_import(session, handle, "vm", None, load_settings(session), data_dir)
 
-    background_tasks.add_task(run_job, job_id, work)
-    return JobStarted(job_id=job_id)
+    submit(lambda: run_job(job_id, work))
+    return job_id
 
 
 @router.post("/file", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)

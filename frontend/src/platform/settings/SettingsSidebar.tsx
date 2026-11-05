@@ -1,6 +1,7 @@
 import {
   Bot,
   Database,
+  CalendarClock,
   KeyRound,
   ListChecks,
   ScrollText,
@@ -87,6 +88,7 @@ export function SettingsSidebar() {
         {/* Всем: сводка свежести баз и выгрузок модулей пользователя. */}
         <NavItem to="/settings" label="Данные" icon={Database} />
         <div className={cn(GROUP, 'mt-2 border-t border-grid pt-3')}>Платформа</div>
+        <NavItem to="/settings/schedules" label="Расписание" icon={CalendarClock} />
         {platformItems.map(({ key, label, icon }) => (
           <NavItem key={key} to={`/settings/${key}`} label={label} icon={icon} />
         ))}

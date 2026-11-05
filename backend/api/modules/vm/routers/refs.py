@@ -30,6 +30,7 @@ from api.modules.vm.services.jobs import (
 from api.modules.vm.services.refs import nvd_years_default, run_ref_download, run_ref_file
 from api.modules.vm.services.refs_view import RefView, ref_views
 from api.modules.vm.services.settings import load_settings
+from api.platform.sync_jobs import Submit
 from api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/refs", tags=["vm"])
@@ -43,16 +44,17 @@ def _check_name(name: str) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="неизвестный справочник")
 
 
-def _reject_if_running(db: Session, name: str) -> None:
+def _reject_if_running(db: Session) -> None:
     # Архив грузит те же таблицы: справочник в одиночку посреди него перемешал бы два набора.
-    running = active_job(db, [f"ref_{name}", "ref_bundle"])
+    lock_job_start(db)
+    running = active_job(db, BUNDLE_CONFLICTS)
     if running is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"загрузка уже идёт (задача #{running.id})")
 
 
 #: С архивом не идёт ни одна задача данных VM и ни одна загрузка справочника (спека §8):
 #: пересборка витрины и пересчёт риска в конце архива задели бы их всех.
-BUNDLE_CONFLICTS = (*DATA_KINDS, "bulk_status", *(f"ref_{n}" for n in REF_NAMES))
+BUNDLE_CONFLICTS = (*DATA_KINDS, "bulk_status")
 NO_KNOWN_REFS = "в архиве нет известных справочников"
 
 
@@ -131,18 +133,23 @@ def download_ref(
     db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
+    return JobStarted(job_id=start_download(db, user.login, background_tasks.add_task, name=name,
+                                            years=payload.years if payload else None))
+
+
+def start_download(db: Session, login: str, submit: Submit, *, name: str, years: list[int] | None = None) -> int:
     _check_name(name)
-    _reject_if_running(db, name)
-    years = (payload.years if payload else None) or (nvd_years_default() if name == "nvd" else None)
+    _reject_if_running(db)
+    years = years or (nvd_years_default() if name == "nvd" else None)
     if name == "nvd" and years and any(y < 1999 or y > dt.datetime.now(dt.UTC).year for y in years):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="год вне диапазона фидов NVD")
-    job_id = start_job(db, f"ref_{name}", user.login, message="из сети")
+    job_id = start_job(db, f"ref_{name}", login, message="из сети")
 
     def work(session: Session, handle: JobHandle) -> None:
         run_ref_download(session, handle, name, load_settings(session).weights, years)
 
-    background_tasks.add_task(run_job, job_id, work)
-    return JobStarted(job_id=job_id)
+    submit(lambda: run_job(job_id, work))
+    return job_id
 
 
 @router.post("/{name}/upload", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
@@ -155,7 +162,7 @@ async def upload_ref(
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
     _check_name(name)
-    _reject_if_running(db, name)
+    _reject_if_running(db)
     if not files:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="файлы не переданы")
     job_id = start_job(db, f"ref_{name}", user.login, message=", ".join(f.filename or "?" for f in files))

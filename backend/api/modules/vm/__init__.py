@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from functools import partial
+
 from fastapi import APIRouter
 
 from api.modules.attack.layers import register_layer
@@ -27,6 +29,8 @@ from api.modules.vm.routers import (
 from api.modules.vm.services.attack_layer import LAYER as ATTACK_LAYER
 from api.modules.vm.services.harbor_sync import SCHEDULE_KIND as HARBOR_SCHEDULE_KIND
 from api.modules.vm.services.harbor_sync import harbor_schedule_handler
+from api.modules.vm.core.refs import REF_NAMES
+from api.platform.sync_jobs import scheduled
 from api.platform import scheduler
 from api.platform.findings.adapters import register_adapter, register_bulk_filter, register_bulk_job
 
@@ -57,5 +61,9 @@ register_bulk_job("vm", start_bulk_job)
 
 # Синхронизация образов из Harbor по расписанию — общий планировщик платформы.
 scheduler.register_schedule_kind("vm", HARBOR_SCHEDULE_KIND, harbor_schedule_handler)
+
+scheduler.register_schedule_kind("vm", "import_vm", scheduled(import_.start_vm_import))
+for name in REF_NAMES:
+    scheduler.register_schedule_kind("vm", f"ref_{name}", scheduled(partial(refs.start_download, name=name)))
 
 __all__ = ["router"]

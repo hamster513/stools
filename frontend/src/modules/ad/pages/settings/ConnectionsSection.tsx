@@ -1,17 +1,11 @@
 import {
-  useCollect, useConnections, useDeleteConnection, useDeleteConnectionSchedule, useSaveConnection, useSaveConnectionSchedule, useTestConnection,
+  useCollect, useConnections, useDeleteConnection, useSaveConnection, useTestConnection,
 } from '@/modules/ad/api/queries'
 import type { Connection, ConnectionIn } from '@/modules/ad/api/types'
 import { CollectorConnectionsSection } from '@/platform/collector/ConnectionsSection'
 import { Field, FIELD } from '@/platform/collector/ui'
 
 const EMPTY: ConnectionIn = { title: '', host: '', port: 636, use_ssl: true, verify_tls: true, username: '', password: '', base_dn: '', collect_sysvol: true, page_size: 500, pause_ms: 500 }
-
-const SCHEDULE = {
-  useSave: useSaveConnectionSchedule,
-  useDelete: useDeleteConnectionSchedule,
-  note: 'Запуск откладывается, пока идёт другая задача модуля; без пароля расписание выключается.',
-}
 
 // Пустое числовое поле — NaN, а не 0: уходит как null, и API отвечает русским текстом о допустимых границах,
 // вместо того чтобы молча сохранить ноль.
@@ -31,7 +25,6 @@ export function ConnectionsSection() {
       collect={collect}
       remove={remove}
       useSaveConnection={useSaveConnection}
-      schedule={SCHEDULE}
       empty={EMPTY}
       toForm={(c) => ({ ...c, password: '' })}
       title="Подключения к доменам (онлайн-режим)"

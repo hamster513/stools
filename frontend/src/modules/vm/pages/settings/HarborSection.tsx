@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, PlugZap, RefreshCw, Save, XCircle } from 'lucide-react'
 import { errorText } from '@/api/client'
-import { useHarbor, useRemoveHarborSchedule, useSaveHarbor, useSaveHarborSchedule, useTestHarbor } from '@/modules/vm/api/queries'
+import { useHarbor, useSaveHarbor, useTestHarbor } from '@/modules/vm/api/queries'
 import type { HarborView } from '@/modules/vm/api/types'
 import { HarborSyncStatus } from '../images/HarborSyncStatus'
 import { useHarborSync } from '../images/useHarborSync'
@@ -10,7 +10,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
+import { Link } from '@/lib/router'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
 
 const ABOUT =
@@ -46,8 +46,6 @@ function HarborForm({ h }: { h: HarborView }) {
   const save = useSaveHarbor()
   const test = useTestHarbor()
   const harborSync = useHarborSync()
-  const saveSchedule = useSaveHarborSchedule()
-  const removeSchedule = useRemoveHarborSchedule()
 
   const projectsText = h.projects.join(', ')
   const [form, setForm] = useState({
@@ -156,11 +154,7 @@ function HarborForm({ h }: { h: HarborView }) {
       </p>
 
       {admin && (
-        <ScheduleBlock
-          title="Расписание синхронизации" enableLabel="Синхронизировать по расписанию"
-          note="Пока подключение не настроено или идёт другая задача VM, запуск по расписанию пропускается."
-          current={h.schedule} save={saveSchedule} remove={removeSchedule}
-        />
+        <Link to="/settings/schedules" className="text-sm text-primary hover:underline">Расписание синхронизаций</Link>
       )}
     </>
   )

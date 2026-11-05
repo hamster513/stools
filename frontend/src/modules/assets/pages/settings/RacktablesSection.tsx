@@ -3,15 +3,15 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Play, Plus, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import {
-  useCheckRacktables, useDeleteRacktables, useDeleteRacktablesSchedule, useJob, useRacktables, useRunRacktables, useSaveRacktables, useSaveRacktablesSchedule,
+  useCheckRacktables, useDeleteRacktables, useJob, useRacktables, useRunRacktables, useSaveRacktables,
 } from '@/modules/assets/api/queries'
-import type { NetworkSchedule, Racktables, RacktablesIn } from '@/modules/assets/api/types'
+import type { Racktables, RacktablesIn } from '@/modules/assets/api/types'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { Link } from '@/lib/router'
-import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
+import { scheduleText } from '@/platform/settings/scheduleText'
 import { Field, FIELD, Section } from '@/platform/collector/ui'
 import { ColGroup, ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
@@ -37,13 +37,6 @@ function when(iso: string | null): string {
   return iso ? new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : '—'
 }
 
-function scheduleText(s: NetworkSchedule | null): string {
-  if (!s) return 'вручную'
-  const every = s.interval_hours % 24 === 0 ? `раз в ${s.interval_hours / 24} сут` : `раз в ${s.interval_hours} ч`
-  const window = s.window_from && s.window_to ? `, ${s.window_from}–${s.window_to} ${s.tz}` : ''
-  if (!s.enabled) return `выключено (${every}${window})`
-  return `${every}${window}; следующий ${when(s.next_run_at)}`
-}
 
 /** «Проверить» — версия API сохранёнными учётными данными; «запустить» — проход с номером задачи и итогом. */
 function Actions({ rt, admin }: { rt: Racktables; admin: boolean }) {
@@ -84,13 +77,6 @@ function Actions({ rt, admin }: { rt: Racktables; admin: boolean }) {
   )
 }
 
-function RacktablesSchedule({ rt }: { rt: Racktables }) {
-  return (
-    <ScheduleBlock title="Расписание" enableLabel="Проходить по расписанию" current={rt.schedule}
-      note="Выключенное подключение по расписанию не запускается."
-      save={useSaveRacktablesSchedule(rt.id)} remove={useDeleteRacktablesSchedule(rt.id)} />
-  )
-}
 
 function RacktablesForm({ rt, onDone }: { rt: Racktables | null; onDone: () => void }) {
   const save = useSaveRacktables()
@@ -121,7 +107,7 @@ function RacktablesForm({ rt, onDone }: { rt: Racktables | null; onDone: () => v
         {check('Включено', 'enabled')}
       </div>
 
-      {rt ? <RacktablesSchedule rt={rt} /> : <p className="mt-3 text-xs text-text-secondary">Расписание задаётся после сохранения.</p>}
+      {rt ? <Link to="/settings/schedules" className="text-sm text-primary hover:underline">Расписание синхронизаций</Link> : <p className="mt-3 text-xs text-text-secondary">Расписание задаётся после сохранения.</p>}
 
       <div className="mt-4 flex items-center gap-2">
         <Button variant="primary" loading={save.isPending} disabled={!f.url.trim()} onClick={() => save.mutate({ id: rt?.id, body: f }, { onSuccess: onDone })}>Сохранить</Button>

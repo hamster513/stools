@@ -11,6 +11,7 @@ from api.jobs import active_job as _active_job
 from api.jobs import fail_job as _fail_job
 from api.jobs import run_job as _run_job
 from api.jobs import start_job as _start_job
+from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.models import VmJob
 
 __all__ = ["DATA_KINDS", "JobCancelled", "JobHandle", "active_job", "fail_job", "lock_job_start", "run_job", "start_job"]
@@ -18,7 +19,8 @@ __all__ = ["DATA_KINDS", "JobCancelled", "JobHandle", "active_job", "fail_job", 
 #: Задачи, которые заменяют или пересчитывают пары: массовая смена статусов с ними одновременно не идёт.
 #: Архив справочников — тоже: в конце он пересчитывает риск всех пар. Синхронизация образов
 #: из Harbor пополняет витрину CVE и пересчитывает риск пар образов.
-DATA_KINDS = ("import_vm", "import_file", "recalculate", "ref_bundle", "harbor_sync")
+REF_KINDS = tuple(f"ref_{name}" for name in REF_NAMES)
+DATA_KINDS = ("import_vm", "import_file", "recalculate", "ref_bundle", "harbor_sync", *REF_KINDS)
 
 
 def lock_job_start(db: Session) -> None:
