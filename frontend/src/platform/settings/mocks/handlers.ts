@@ -235,7 +235,7 @@ const unprocessable = (detail: string) => HttpResponse.json({ detail }, { status
 // --- Роли и группы доступа ----------------------------------------------
 
 const matrix = (module: Level, platform: Level) =>
-  Object.fromEntries(AREAS.map((a) => [a, a === 'platform' ? platform : module])) as Access
+  Object.fromEntries(AREAS.map((a) => [a, a === 'platform' || a === 'irp' ? platform : module])) as Access
 
 let nextRoleId = 4
 const roles: Array<Omit<RoleRow, 'groups'>> = [

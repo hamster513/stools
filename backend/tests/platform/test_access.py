@@ -53,7 +53,7 @@ def test_access_is_max_over_groups(db_session: Any) -> None:
     access = access_for(db_session, user.id)
     assert access == {
         "attack": "deny", "siem": "write", "vm": "admin", "ad": "deny", "ksc": "deny",
-        "assets": "deny", "toolbox": "deny", "platform": "read",
+        "assets": "deny", "toolbox": "deny", "irp": "deny", "platform": "read",
     }
     assert set(access) == set(AREAS)
 
@@ -99,9 +99,10 @@ def test_builtin_levels(db_session: Any) -> None:
         ("Администратор", "admin", "admin"), ("Аналитик", "write", "deny"), ("Аудитор", "read", "deny"),
     ):
         assert set(levels[name]) == set(AREAS)
-        assert {a: lv for a, lv in levels[name].items() if a != "platform"} == {
-            a: module_level for a in AREAS if a != "platform"
+        assert {a: lv for a, lv in levels[name].items() if a not in {"irp", "platform"}} == {
+            a: module_level for a in AREAS if a not in {"irp", "platform"}
         }
+        assert levels[name]["irp"] == ("admin" if platform_level == "admin" else "deny")
         assert levels[name]["platform"] == platform_level
 
 

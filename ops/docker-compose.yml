@@ -36,6 +36,9 @@ services:
       STOOLS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kbaudit}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kbaudit}
       STOOLS_SESSION_SECRET: ${STOOLS_SESSION_SECRET:?задайте STOOLS_SESSION_SECRET в .env}
       STOOLS_DATA_DIR: /data
+      STOOLS_SESSION_COOKIE_NAME: ${STOOLS_SESSION_COOKIE_NAME:-stools_session}
+      STOOLS_IRP_SERVICE_TOKEN: ${STOOLS_IRP_SERVICE_TOKEN:-}
+      STOOLS_IRP_ENRICHMENT_SCOPES: ${STOOLS_IRP_ENRICHMENT_SCOPES:-}
       # Часовой пояс окон расписаний (планировщик платформы); next_run_at хранится в UTC.
       STOOLS_TZ: ${STOOLS_TZ:-UTC}
       # Инструмент хранит инвентарь внутренней инфраструктуры — модель
@@ -86,6 +89,8 @@ services:
       # Пустое значение заменяется на ":80" здесь: заданную, но пустую
       # переменную Caddy подставляет как есть, и конфиг не разбирается.
       STOOLS_SITE_ADDRESS: ${STOOLS_SITE_ADDRESS:-:80}
+      STOOLS_IRP_WEB_UPSTREAM: ${STOOLS_IRP_WEB_UPSTREAM:-irp-web:80}
+      STOOLS_IRP_API_UPSTREAM: ${STOOLS_IRP_API_UPSTREAM:-irp-api:8000}
       # Откуда сертификат: auto | internal | files (ops/Caddyfile, README «TLS»).
       STOOLS_TLS: ${STOOLS_TLS:-auto}
     volumes:

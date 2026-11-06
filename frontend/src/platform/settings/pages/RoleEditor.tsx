@@ -31,6 +31,7 @@ const ROWS: Array<{ area: Area; title: string; levels: Level[] }> = [
     title: m.title,
     levels: MODULE_LEVELS,
   })),
+  { area: 'irp', title: 'IRP', levels: MODULE_LEVELS },
   { area: 'platform', title: 'Платформа', levels: PLATFORM_LEVELS },
 ]
 

@@ -68,7 +68,7 @@ let displayName: string | null = 'Аналитик'
 function currentAccess(): { access: Access; groups: MeGroup[] } {
   const stored = window.localStorage.getItem('stools-mock-role') ?? 'admin'
   const matrix = (module: Level, platform: Level) =>
-    Object.fromEntries(AREAS.map((a) => [a, a === 'platform' ? platform : module])) as Access
+    Object.fromEntries(AREAS.map((a) => [a, a === 'platform' || a === 'irp' ? platform : module])) as Access
   if (stored === 'analyst')
     return { access: matrix('write', 'deny'), groups: [{ id: 2, name: 'Аналитики', source: 'local' }] }
   if (stored === 'auditor')

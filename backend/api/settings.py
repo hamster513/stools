@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     session_ttl_hours: int = 12
 
     session_cookie_name: str = "stools_session"
+
+    irp_service_token: SecretStr = SecretStr("")
+    irp_enrichment_scopes: str = ""
+
     #: Secure-флаг cookie. По умолчанию включён (инструмент хранит инвентарь
     #: инфраструктуры — модель доступа не слабее, чем к самому SIEM); для
     #: локальной разработки без TLS можно выключить через

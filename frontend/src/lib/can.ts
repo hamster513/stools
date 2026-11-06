@@ -17,7 +17,7 @@ export interface Can {
   anyWrite: boolean
 }
 
-const MODULE_AREAS = AREAS.filter((a) => a !== 'platform')
+const MODULE_AREAS = AREAS.filter((a) => a !== 'platform' && a !== 'irp')
 
 /** Модуль текущего адреса: /<модуль>/… и страница его настроек /settings/<модуль>. */
 function areaOfPath(path: string): Area | null {

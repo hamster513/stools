@@ -53,6 +53,19 @@
 	@https expression `{scheme} == "https"`
 	header @https Strict-Transport-Security "max-age=31536000"
 
+	# IRP deploys independently and keeps both path prefixes.
+	handle /irp/* {
+		reverse_proxy {$STOOLS_IRP_WEB_UPSTREAM:irp-web:80} {
+			header_up -Cookie
+		}
+	}
+	handle /api/irp/* {
+		reverse_proxy {$STOOLS_IRP_API_UPSTREAM:irp-api:8000} {
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Real-IP {client_ip}
+		}
+	}
+
 	# API проксируется как есть, префикс сохраняется.
 	# Потолок тела — наибольший из лимитов API (500 МБ у VM) с запасом
 	# на multipart; точные лимиты по путям держит сам API (api/limits.py).

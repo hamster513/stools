@@ -7,7 +7,8 @@
 сначала проверяется сессия (401), затем — роль (403, `api/rbac.py`).
 Роутеры модулей берутся из реестра
 `api.modules.MODULE_ROUTERS` и монтируются тем же способом, так что новый
-модуль защищён по умолчанию.
+модуль защищён по умолчанию. Роутер интеграции IRP отдельно проверяет
+сессию пользователя или служебный bearer в зависимости от ручки.
 tests/api/test_auth_boundary.py перебирает `app.routes` и проверяет это
 для каждого зарегистрированного маршрута, а не по выписанному вручную списку.
 
@@ -55,7 +56,7 @@ from api.platform.findings.router import router as findings_router
 from api.platform.scheduler import Scheduler
 from api.platform.services.access import ensure_builtin
 from api.rbac import require_access
-from api.routers import auth, oidc
+from api.routers import auth, irp_integration, oidc
 from api.settings import get_settings
 
 #: Планировщик платформы (api/platform/scheduler.py): один на процесс, живёт между стартом и остановкой.
@@ -107,6 +108,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.public_router)
     #: Тоже без сессии: вход через провайдера как раз её и выдаёт.
     app.include_router(oidc.router)
+    # IRP separates browser session checks from bearer-only service access.
+    app.include_router(irp_integration.router)
     app.include_router(auth.router, dependencies=[Depends(require_access)])
     app.include_router(settings_router, dependencies=[Depends(require_access)])
     app.include_router(findings_router, dependencies=[Depends(require_access)])

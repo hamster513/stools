@@ -33,7 +33,11 @@ Access = dict[str, str]
 
 
 def _matrix(module_level: str, platform_level: str) -> dict[str, str]:
-    return {**dict.fromkeys(MODULE_IDS, module_level), "platform": platform_level}
+    return {
+        **dict.fromkeys(MODULE_IDS, module_level),
+        "irp": "admin" if module_level == platform_level == "admin" else "deny",
+        "platform": platform_level,
+    }
 
 
 #: Встроенные роли. «Администратор» не редактируется — ensure_builtin

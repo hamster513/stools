@@ -1,5 +1,5 @@
 import type { Ref } from 'react'
-import { ListChecks, Settings2, Shield } from 'lucide-react'
+import { ListChecks, Settings2 } from 'lucide-react'
 import { useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
@@ -7,6 +7,7 @@ import { firstReadableModule, useCan } from '@/lib/can'
 import { atLeast, type Area } from '@/platform/access/types'
 import { useMyFindingsCount } from './findings/queries'
 import { MODULES } from './modules'
+import { AppSwitcher } from './AppSwitcher'
 import { UserMenu } from './UserMenu'
 
 const FOCUS =
@@ -41,21 +42,10 @@ export function ModuleRail({
 
   return (
     <nav aria-label="Модули" className="flex w-16 shrink-0 flex-col border-r border-grid bg-app-bg">
-      {/* Логотип ведёт на матрицу ATT&CK: это общий экран всех модулей,
-          и он же — точка входа в продукт. Матрица закрыта — на первый
-          открытый модуль, а без модулей — в профиль. */}
-      <Link
-        to={home ? `/${home}` : '/settings/profile'}
-        className={cn(
-          'flex h-14 flex-col items-center justify-center gap-0.5 border-b border-grid text-primary',
-          FOCUS,
-        )}
-        aria-label={home === 'attack' ? 'Security Tools, к матрице ATT&CK' : 'Security Tools'}
-        title="Security Tools"
-      >
-        <Shield size={22} strokeWidth={2} aria-hidden />
-        <span className="text-[10px] font-semibold tracking-wide text-text">STools</span>
-      </Link>
+      <AppSwitcher
+        home={home ? `/${home}` : '/settings/profile'}
+        irp={Boolean(me && atLeast(me.access, 'irp', 'read'))}
+      />
 
       <ul className="flex flex-col gap-1 px-1.5 py-2">
         {modules.map((m) => {
