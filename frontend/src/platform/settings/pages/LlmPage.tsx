@@ -5,7 +5,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Field, FIELD } from '@/components/ui/Field'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
-import { useLlm, useSaveLlm, useTestLlm } from '@/platform/settings/api/queries'
+import { useLlm, useLlmModels, useSaveLlm, useTestLlm } from '@/platform/settings/api/queries'
 import type { LlmSettings } from '@/platform/settings/api/types'
 
 /**
@@ -21,6 +21,26 @@ export function LlmPage() {
   const [form, setForm] = useState<LlmSettings | null>(null)
   const [dirty, setDirty] = useState(false)
   const [saved, setSaved] = useState(false)
+  const address = form?.base_url.trim().replace(/\/+$/, '') ?? ''
+  const [modelsAddress, setModelsAddress] = useState('')
+  useEffect(() => {
+    const timer = setTimeout(() => setModelsAddress(address), 400)
+    return () => clearTimeout(timer)
+  }, [address])
+  const models = useLlmModels(modelsAddress)
+  const matchingAddress = address === modelsAddress
+  const names = matchingAddress ? models.data?.models ?? [] : []
+
+  function modelOptions(value: string) {
+    const alias = !value.includes(':') && names.includes(value + ':latest')
+    return <>
+      {!value && <option value="">Выберите модель</option>}
+      {value && !names.includes(value) && <option value={value}>
+        {value}{alias ? ' (:latest)' : models.isSuccess && matchingAddress ? ' — отсутствует на сервере' : ' — сохранённая'}
+      </option>}
+      {names.map((name) => <option key={name} value={name}>{name}</option>)}
+    </>
+  }
 
   useEffect(() => {
     if (llm.data) setForm(llm.data)
@@ -39,6 +59,7 @@ export function LlmPage() {
   if (!form) return <FullPageSpinner />
 
   function patch(change: Partial<LlmSettings>) {
+    test.reset()
     setDirty(true)
     setSaved(false)
     setForm((prev) => (prev ? { ...prev, ...change } : prev))
@@ -103,22 +124,29 @@ export function LlmPage() {
             />
           </Field>
 
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <Button variant="ghost" disabled={!address || !matchingAddress} loading={models.isFetching}
+              onClick={() => models.refetch()}>Обновить список моделей</Button>
+            {(!matchingAddress || models.isFetching) && address && <span role="status">Загрузка моделей…</span>}
+            {matchingAddress && models.isError && <span role="alert" className="text-kind-1">{models.error.message}</span>}
+            {matchingAddress && models.isSuccess && !names.length && <span>На сервере нет установленных моделей.</span>}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Модель выбора техник">
-              <input
+            <Field label="Модель выбора техник" hint="Читает описание правила SIEM и выбирает подходящие техники MITRE ATT&CK из найденных кандидатов. Также переводит описания техник. Выберите языковую модель, например qwen3.5:9b или qwen3:8b-q4_K_M.">
+              <select
                 className={FIELD}
                 value={form.model}
                 onChange={(e) => patch({ model: e.target.value })}
-                spellCheck={false}
-              />
+                disabled={!matchingAddress || models.isFetching || !names.length}
+              >{modelOptions(form.model)}</select>
             </Field>
-            <Field label="Модель эмбеддингов" hint="Отбор кандидатов, без неё разметка не идёт">
-              <input
+            <Field label="Модель эмбеддингов" hint="Находит техники, близкие по смыслу к правилу SIEM, и передаёт кандидатов языковой модели. Для этого преобразует тексты в числовые векторы. Выберите модель эмбеддингов, например bge-m3:latest.">
+              <select
                 className={FIELD}
                 value={form.embed_model}
                 onChange={(e) => patch({ embed_model: e.target.value })}
-                spellCheck={false}
-              />
+                disabled={!matchingAddress || models.isFetching || !names.length}
+              >{modelOptions(form.embed_model)}</select>
             </Field>
           </div>
 

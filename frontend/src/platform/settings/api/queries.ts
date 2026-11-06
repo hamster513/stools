@@ -91,6 +91,16 @@ export function useLlm() {
   })
 }
 
+export function useLlmModels(baseUrl: string) {
+  return useQuery<{ models: string[] }, ApiRequestError>({
+    queryKey: ['settings-llm-models', baseUrl],
+    queryFn: () => api.post('/api/settings/llm/models', { base_url: baseUrl }),
+    enabled: !!baseUrl,
+    retry: false,
+    staleTime: 60_000,
+  })
+}
+
 export function useSaveLlm() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, LlmSettings>({

@@ -6,9 +6,13 @@
 """
 from __future__ import annotations
 
+import json
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -19,6 +23,32 @@ from api.llm_settings import LLM_KEY, LlmSettings, load_llm
 from kbaudit.attack.provider import ModelError, OllamaCompletion, OllamaSettings
 
 router = APIRouter(prefix="/llm", tags=["settings"])
+
+
+class ModelsRequest(BaseModel):
+    base_url: str
+
+
+@router.post("/models")
+def list_models(payload: ModelsRequest, _user: AppUser = Depends(get_current_user)) -> dict[str, list[str]]:
+    url = payload.base_url.strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
+        raise HTTPException(422, "Укажите адрес Ollama в формате http://хост:11434")
+    try:
+        with urllib.request.urlopen(url + "/api/tags", timeout=10) as response:
+            raw = response.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise ValueError("too large")
+        data = json.loads(raw)
+        models = data["models"]
+        if not isinstance(models, list) or any(not isinstance(m, dict) or not isinstance(m.get("name"), str) or not m["name"].strip() for m in models):
+            raise ValueError("invalid models")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise HTTPException(502, f"Не удалось получить список моделей Ollama ({type(exc).__name__})") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(502, "Ollama вернул некорректный список моделей") from None
+    return {"models": sorted({m["name"] for m in models})}
 
 
 class TestLlmRequest(BaseModel):

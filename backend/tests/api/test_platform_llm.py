@@ -29,3 +29,36 @@ def test_siem_settings_keep_only_attack_section(auth_client: TestClient) -> None
     assert auth_client.put("/api/siem/settings", json={"attack": {"top_k": 20}}).status_code == 204
     assert auth_client.get("/api/siem/settings").json()["attack"]["top_k"] == 20
     assert auth_client.post("/api/siem/settings/test-llm", json={}).status_code == 404
+
+
+def test_models_use_unsaved_address_and_preserve_settings(auth_client, monkeypatch, db_session):
+    import io
+    import json
+
+    from api.platform.routers import llm
+
+    calls = []
+    def get(url, timeout):
+        calls.append((url, timeout))
+        return io.BytesIO(json.dumps({"models": [{"name": "bge-m3:latest"}, {"name": "qwen3:8b"}, {"name": "qwen3:8b"}]}).encode())
+    monkeypatch.setattr(llm.urllib.request, "urlopen", get)
+    before = load_llm(db_session)
+    result = auth_client.post("/api/settings/llm/models", json={"base_url": " http://ollama:11434/ "})
+    assert result.status_code == 200
+    assert result.json() == {"models": ["bge-m3:latest", "qwen3:8b"]}
+    assert calls == [("http://ollama:11434/api/tags", 10)]
+    assert load_llm(db_session) == before
+
+
+def test_models_reject_invalid_response_and_non_admin(auth_client, client_as, monkeypatch):
+    import io
+
+    from api.platform.routers import llm
+
+    url = "/api/settings/llm/models"
+    assert client_as("auditor").post(url, json={"base_url": "http://ollama:11434"}).status_code == 403
+    assert auth_client.post(url, json={"base_url": "file:///etc/passwd"}).status_code == 422
+    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda *a, **kw: io.BytesIO(b'{"models":null}'))
+    assert auth_client.post(url, json={"base_url": "http://ollama:11434"}).status_code == 502
+    monkeypatch.setattr(llm.urllib.request, "urlopen", lambda *a, **kw: io.BytesIO(b'{"models":[]}'))
+    assert auth_client.post(url, json={"base_url": "http://ollama:11434"}).json() == {"models": []}
