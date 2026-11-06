@@ -1,3 +1,5 @@
+import { useTrendBadges } from '../../api/trends'
+import { TrendBadge } from '../../components/TrendBadge'
 import { useEffect, useRef } from 'react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -47,6 +49,7 @@ interface Props {
 }
 
 export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: Props) {
+  const trends = useTrendBadges(items.map(item => item.cve_id))
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 12 })
 
@@ -102,6 +105,7 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary">{item.ip}</div>
               <div className="flex min-w-0 items-center gap-1.5 px-2">
                 <span className="min-w-0 truncate font-mono text-text">{item.cve_id}</span>
+                {trends.data?.[item.cve_id] && <TrendBadge id={item.cve_id} reason={trends.data[item.cve_id].reason} />}
                 {/* Колонки KEV нет (спека §5): признак — бейдж у CVE, вымогатели — в подсказке; при узкой колонке обрезается номер, а не бейдж. */}
                 {item.kev && <span className="shrink-0 text-[10px] font-semibold text-risk-critical" title={item.kev_ransomware ? 'CISA KEV · ransomware' : 'CISA KEV'}>KEV</span>}
               </div>

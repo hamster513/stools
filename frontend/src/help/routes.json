@@ -81,5 +81,6 @@
   "/vm/images",
   "/vm/images/:id",
   "/vm/jobs",
+  "/vm/trends",
   "/vm/vulns"
 ]

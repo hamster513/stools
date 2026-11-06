@@ -1,0 +1,826 @@
+[
+  {
+    "name": "CERT-FR alerts",
+    "publisher_id": "cert-fr",
+    "language": "fr",
+    "region": "EU",
+    "adapter": "rss",
+    "url": "https://cert.cyber.gouv.fr/alerte/feed/"
+  },
+  {
+    "name": "CERT-FR advisories",
+    "publisher_id": "cert-fr",
+    "language": "fr",
+    "region": "EU",
+    "adapter": "rss",
+    "url": "https://cert.cyber.gouv.fr/avis/feed/"
+  },
+  {
+    "name": "CERT-EU",
+    "publisher_id": "cert-eu",
+    "language": "en",
+    "region": "EU",
+    "adapter": "rss",
+    "url": "https://cert.europa.eu/publications/security-advisories-rss"
+  },
+  {
+    "name": "NCSC NL",
+    "publisher_id": "ncsc-nl",
+    "language": "nl",
+    "region": "EU",
+    "adapter": "rss",
+    "url": "https://advisories.ncsc.nl/rss/advisories"
+  },
+  {
+    "name": "Heise Security",
+    "publisher_id": "heise",
+    "language": "de",
+    "region": "EU",
+    "adapter": "rss",
+    "url": "https://www.heise.de/security/feed.xml"
+  },
+  {
+    "name": "ESET WeLiveSecurity",
+    "publisher_id": "eset",
+    "language": "en",
+    "region": "EU",
+    "adapter": "rss",
+    "url": "https://www.welivesecurity.com/en/rss/feed/"
+  },
+  {
+    "name": "Seebug Paper",
+    "publisher_id": "knownsec",
+    "language": "zh",
+    "region": "CN",
+    "adapter": "rss",
+    "url": "https://paper.seebug.org/rss"
+  },
+  {
+    "name": "NSFOCUS",
+    "publisher_id": "nsfocus",
+    "language": "zh",
+    "region": "CN",
+    "adapter": "rss",
+    "url": "https://blog.nsfocus.net/feed/"
+  },
+  {
+    "name": "360CERT",
+    "publisher_id": "360",
+    "language": "zh",
+    "region": "CN",
+    "adapter": "rss",
+    "url": "https://cert.360.cn/daily/feed"
+  },
+  {
+    "name": "CNCERT",
+    "publisher_id": "cncert",
+    "language": "zh",
+    "region": "CN",
+    "adapter": "cncert",
+    "url": "https://www.cert.org.cn/"
+  },
+  {
+    "name": "Securelist",
+    "publisher_id": "kaspersky",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "rss",
+    "url": "https://securelist.ru/feed/"
+  },
+  {
+    "name": "SecurityLab",
+    "publisher_id": "securitylab",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "rss",
+    "url": "https://www.securitylab.ru/_services/export/rss/"
+  },
+  {
+    "name": "BleepingComputer",
+    "publisher_id": "bleepingcomputer",
+    "language": "en",
+    "region": "GLOBAL",
+    "adapter": "rss",
+    "url": "https://www.bleepingcomputer.com/feed/"
+  },
+  {
+    "name": "The Hacker News",
+    "publisher_id": "thehackernews",
+    "language": "en",
+    "region": "GLOBAL",
+    "adapter": "rss",
+    "url": "https://feeds.feedburner.com/TheHackersNews"
+  },
+  {
+    "name": "CISA KEV",
+    "publisher_id": "cisa",
+    "language": "en",
+    "region": "GLOBAL",
+    "adapter": "kev",
+    "url": "https://raw.githubusercontent.com/cisagov/kev-data/main/known_exploited_vulnerabilities.json"
+  },
+  {
+    "name": "Microsoft MSRC",
+    "publisher_id": "microsoft",
+    "language": "en",
+    "region": "GLOBAL",
+    "adapter": "msrc",
+    "url": "https://api.msrc.microsoft.com/cvrf/v3.0/updates"
+  },
+  {
+    "name": "PT SWARM",
+    "publisher_id": "pt",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/ptswarm"
+  },
+  {
+    "name": "3DNews",
+    "publisher_id": "3dnews",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://3dnews.ru/news/rss/",
+    "adapter": "rss"
+  },
+  {
+    "name": "AWS Security Blog",
+    "publisher_id": "amazon",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://aws.amazon.com/blogs/security/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Intigriti Blog",
+    "publisher_id": "intigriti",
+    "language": "en",
+    "region": "EU",
+    "url": "https://www.intigriti.com/blog/feed",
+    "adapter": "rss"
+  },
+  {
+    "name": "JetBrains Security",
+    "publisher_id": "jetbrains",
+    "language": "en",
+    "region": "EU",
+    "url": "https://blog.jetbrains.com/security/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Cisco Talos Intelligence",
+    "publisher_id": "cisco",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://blog.talosintelligence.com/rss/",
+    "adapter": "rss"
+  },
+  {
+    "name": "YesWeHack Blog",
+    "publisher_id": "yeswehack",
+    "language": "en",
+    "region": "EU",
+    "url": "https://www.yeswehack.com/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Cisco Security Blog",
+    "publisher_id": "cisco",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://blogs.cisco.com/security/feed",
+    "adapter": "rss"
+  },
+  {
+    "name": "VMware Security",
+    "publisher_id": "broadcom",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://blogs.vmware.com/security/feed",
+    "adapter": "rss"
+  },
+  {
+    "name": "Bug Alert Critical",
+    "publisher_id": "bugalert",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://bugalert.org/feeds/critical-severity.atom.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "CVEFeed Recent Vulnerabilities",
+    "publisher_id": "cvefeed",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://cvefeed.io/rssfeed/latest.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "DEV Security",
+    "publisher_id": "devto",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://dev.to/feed/tag/security",
+    "adapter": "rss"
+  },
+  {
+    "name": "Google Developers Blog",
+    "publisher_id": "google",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://developers.googleblog.com/feeds/posts/default/",
+    "adapter": "rss"
+  },
+  {
+    "name": "InfoQ",
+    "publisher_id": "infoq",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://feed.infoq.com/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Ars Technica",
+    "publisher_id": "condenast",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://feeds.arstechnica.com/arstechnica/index",
+    "adapter": "rss"
+  },
+  {
+    "name": "Troy Hunt",
+    "publisher_id": "troyhunt",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://feeds.feedburner.com/TroyHunt",
+    "adapter": "rss"
+  },
+  {
+    "name": "Fortinet Threat Research",
+    "publisher_id": "fortinet",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://feeds.fortinet.com/fortinet/blog/threat-research",
+    "adapter": "rss"
+  },
+  {
+    "name": "Fortinet PSIRT",
+    "publisher_id": "fortinet",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://filestore.fortinet.com/fortiguard/rss/ir.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "ForkLog",
+    "publisher_id": "forklog",
+    "language": "ru",
+    "region": "GLOBAL",
+    "url": "https://forklog.com/feed",
+    "adapter": "rss"
+  },
+  {
+    "name": "GBHackers",
+    "publisher_id": "gbhackers",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://gbhackers.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "GitHub Security",
+    "publisher_id": "microsoft",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://github.blog/security/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Habr Information Security",
+    "publisher_id": "habr",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://habr.com/ru/rss/hubs/infosecurity/articles/all/?fl=ru",
+    "adapter": "rss"
+  },
+  {
+    "name": "Inc Russia",
+    "publisher_id": "incrussia",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://incrussia.ru/feed/all/",
+    "adapter": "rss"
+  },
+  {
+    "name": "SANS Internet Storm Center",
+    "publisher_id": "sans",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://isc.sans.edu/rssfeed.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Krebs on Security",
+    "publisher_id": "krebsonsecurity",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://krebsonsecurity.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Kubernetes Security Announcements",
+    "publisher_id": "cncf",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://kubernetes.io/docs/reference/issues-security/official-cve-feed/feed.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Lobsters Security",
+    "publisher_id": "lobsters",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://lobste.rs/t/security.rss",
+    "adapter": "rss"
+  },
+  {
+    "name": "InfoSec Write-ups",
+    "publisher_id": "infosecwriteups",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://medium.com/feed/bugbountywriteup",
+    "adapter": "rss"
+  },
+  {
+    "name": "Knownsec 404 Medium",
+    "publisher_id": "knownsec",
+    "language": "en",
+    "region": "CN",
+    "url": "https://medium.com/feed/@knownsec404team",
+    "adapter": "rss"
+  },
+  {
+    "name": "SSD Secure Disclosure",
+    "publisher_id": "ssd",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://medium.com/feed/ssd-secure-disclosure",
+    "adapter": "rss"
+  },
+  {
+    "name": "Tenable Tech Blog",
+    "publisher_id": "tenable",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://medium.com/feed/tenable-techblog",
+    "adapter": "rss"
+  },
+  {
+    "name": "Symantec Threat Intelligence",
+    "publisher_id": "broadcom",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://medium.com/feed/threat-intel",
+    "adapter": "rss"
+  },
+  {
+    "name": "Dr.Web Threat Alerts",
+    "publisher_id": "drweb",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://news.drweb.ru/rss/get/?c=23",
+    "adapter": "rss"
+  },
+  {
+    "name": "PortSwigger Research",
+    "publisher_id": "portswigger",
+    "language": "en",
+    "region": "EU",
+    "url": "https://portswigger.net/research/rss",
+    "adapter": "rss"
+  },
+  {
+    "name": "Google Project Zero",
+    "publisher_id": "google",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://projectzero.google/feed.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "ProjectDiscovery Nuclei Templates Releases",
+    "publisher_id": "projectdiscovery",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://github.com/projectdiscovery/nuclei-templates/releases.atom",
+    "adapter": "rss"
+  },
+  {
+    "name": "Check Point Research",
+    "publisher_id": "checkpoint",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://research.checkpoint.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Slashdot",
+    "publisher_id": "slashdot",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://rss.slashdot.org/Slashdot/slashdotMain",
+    "adapter": "rss"
+  },
+  {
+    "name": "Schneier on Security",
+    "publisher_id": "schneier",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.schneier.com/feed/atom/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Cisco Security Advisories",
+    "publisher_id": "cisco",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Okta Security",
+    "publisher_id": "okta",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://sec.okta.com/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Security Affairs",
+    "publisher_id": "securityaffairs",
+    "language": "en",
+    "region": "EU",
+    "url": "https://securityaffairs.com/feed",
+    "adapter": "rss"
+  },
+  {
+    "name": "Stack Overflow Blog",
+    "publisher_id": "stackoverflow",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://stackoverflow.blog/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "TechCrunch Security",
+    "publisher_id": "techcrunch",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://techcrunch.com/category/security/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "The DFIR Report",
+    "publisher_id": "thedfirreport",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://thedfirreport.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Tproger",
+    "publisher_id": "tproger",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://tproger.ru/feed",
+    "adapter": "rss"
+  },
+  {
+    "name": "Ubuntu Security Notices",
+    "publisher_id": "canonical",
+    "language": "en",
+    "region": "EU",
+    "url": "https://ubuntu.com/security/notices/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Unit 42",
+    "publisher_id": "paloalto",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://unit42.paloaltonetworks.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "VC.ru",
+    "publisher_id": "vc",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://vc.ru/rss",
+    "adapter": "rss"
+  },
+  {
+    "name": "Anti-Malware.ru",
+    "publisher_id": "anti-malware",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://www.anti-malware.ru/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "CNCF Blog",
+    "publisher_id": "cncf",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.cncf.io/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "CNews Security",
+    "publisher_id": "cnews",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://www.cnews.ru/inc/rss/news.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Cobalt Blog",
+    "publisher_id": "cobalt",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.cobalt.io/blog/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Comss Security",
+    "publisher_id": "comss",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://www.comss.ru/rss.php",
+    "adapter": "rss"
+  },
+  {
+    "name": "CSO Online",
+    "publisher_id": "csoonline",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.csoonline.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Dark Reading",
+    "publisher_id": "darkreading",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.darkreading.com/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Debian Security Advisories",
+    "publisher_id": "debian",
+    "language": "en",
+    "region": "EU",
+    "url": "https://www.debian.org/security/dsa",
+    "adapter": "rss"
+  },
+  {
+    "name": "Docker Blog",
+    "publisher_id": "docker",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.docker.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Exploit Database",
+    "publisher_id": "exploit-db",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.exploit-db.com/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "HackRead",
+    "publisher_id": "hackread",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://hackread.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Help Net Security",
+    "publisher_id": "helpnetsecurity",
+    "language": "en",
+    "region": "EU",
+    "url": "https://www.helpnetsecurity.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Infosecurity Magazine",
+    "publisher_id": "infosecurity-magazine",
+    "language": "en",
+    "region": "EU",
+    "url": "https://www.infosecurity-magazine.com/rss/news/",
+    "adapter": "rss"
+  },
+  {
+    "name": "iXBT News",
+    "publisher_id": "ixbt",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://www.ixbt.com/export/news/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Kaspersky Blog",
+    "publisher_id": "kaspersky",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://www.kaspersky.ru/blog/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "KitPloit",
+    "publisher_id": "kitploit",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://kitploit.com/en/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Malwarebytes Labs",
+    "publisher_id": "malwarebytes",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.malwarebytes.com/blog/feed/index.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Google Mandiant Threat Intelligence",
+    "publisher_id": "google",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://feeds.feedburner.com/threatintelligence/pvexyqv7v0v",
+    "adapter": "rss"
+  },
+  {
+    "name": "Microsoft Security Blog",
+    "publisher_id": "microsoft",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.microsoft.com/en-us/security/blog/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "OpenNET Security",
+    "publisher_id": "opennet",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://www.opennet.ru/opennews/opennews_sec.rss",
+    "adapter": "rss"
+  },
+  {
+    "name": "Palo Alto Networks Blog",
+    "publisher_id": "paloalto",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.paloaltonetworks.com/blog/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Rapid7 Blog",
+    "publisher_id": "rapid7",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.rapid7.com/rss.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "Security Magazine Cybersecurity",
+    "publisher_id": "securitymagazine",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.securitymagazine.com/rss/topic/2236-cybersecurity",
+    "adapter": "rss"
+  },
+  {
+    "name": "SecurityWeek",
+    "publisher_id": "securityweek",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.securityweek.com/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "SentinelOne Blog",
+    "publisher_id": "sentinelone",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.sentinelone.com/blog/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "The Register Security",
+    "publisher_id": "theregister",
+    "language": "en",
+    "region": "EU",
+    "url": "https://api.theregister.com/api/v1/article?orderBy=published&site_id=2&remapper=rss&query=tag:security",
+    "adapter": "rss"
+  },
+  {
+    "name": "The Verge",
+    "publisher_id": "theverge",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.theverge.com/rss/index.xml",
+    "adapter": "rss"
+  },
+  {
+    "name": "WIRED Security",
+    "publisher_id": "condenast",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.wired.com/feed/category/security/latest/rss",
+    "adapter": "rss"
+  },
+  {
+    "name": "ZDNET Security",
+    "publisher_id": "zdnet",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.zdnet.com/rss/news/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Zero Day Initiative Advisories",
+    "publisher_id": "trendmicro",
+    "language": "en",
+    "region": "GLOBAL",
+    "url": "https://www.zerodayinitiative.com/rss/published/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Хакер",
+    "publisher_id": "xakep",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://xakep.ru/feed/",
+    "adapter": "rss"
+  },
+  {
+    "name": "Техключи",
+    "publisher_id": "techkeys",
+    "language": "ru",
+    "region": "RU",
+    "url": "https://xn--e1agfe6atq9c.xn--p1ai/rss/",
+    "adapter": "rss"
+  },
+  {
+    "name": "CISA Advisories",
+    "publisher_id": "cisa",
+    "language": "en",
+    "region": "GLOBAL",
+    "adapter": "rss",
+    "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml"
+  },
+  {
+    "name": "GitHub Reviewed Advisories",
+    "publisher_id": "microsoft",
+    "language": "en",
+    "region": "GLOBAL",
+    "adapter": "github",
+    "url": "https://api.github.com/advisories"
+  },
+  {
+    "name": "BI.ZONE",
+    "publisher_id": "bizone",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/bizone_channel"
+  },
+  {
+    "name": "SecurityLab Telegram",
+    "publisher_id": "securitylab",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/SecLabNews"
+  },
+  {
+    "name": "Dr.Web Telegram",
+    "publisher_id": "drweb",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/DrWeb_antivirus"
+  },
+  {
+    "name": "Kaspersky purple shift",
+    "publisher_id": "kaspersky",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/purpleshift"
+  }
+]

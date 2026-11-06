@@ -1,0 +1,16 @@
+services:
+  threat-collector:
+    image: stools-threat-collector:${COLLECTOR_TAG:-local}
+    build: ../collector
+    restart: unless-stopped
+    ports:
+      - "${COLLECTOR_BIND:-127.0.0.1}:${COLLECTOR_PORT:-8443}:8443"
+    volumes:
+      - collector-data:/data
+      - ${COLLECTOR_CERT_DIR:-./collector/certs}:/certs:ro
+    environment:
+      COLLECTOR_HTTP_PROXY: ${COLLECTOR_HTTP_PROXY:-}
+      COLLECTOR_CA_FILE: ${COLLECTOR_CA_FILE:-}
+    stop_grace_period: 150s
+volumes:
+  collector-data:

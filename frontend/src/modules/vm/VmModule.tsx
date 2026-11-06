@@ -7,6 +7,7 @@ import { VulnsPage } from './pages/VulnsPage'
 import { ImagesPage } from './pages/ImagesPage'
 import { ImagePage } from './pages/ImagePage'
 import { JobsPage } from './pages/JobsPage'
+import { TrendsPage } from './pages/TrendsPage'
 
 /** Маршруты модуля VM — всё под /vm. Сессию платформа уже проверила. */
 export function VmModule() {
@@ -19,6 +20,7 @@ export function VmModule() {
   else if (section === 'images' && sub === '') page = <ImagesPage />
   else if (section === 'images' && /^\d+$/.test(sub)) page = <ImagePage id={Number(sub)} />
   else if (section === 'jobs') page = <JobsPage />
+  else if (section === 'trends') page = <TrendsPage />
   else return <Redirect to="/vm" />
 
   return (

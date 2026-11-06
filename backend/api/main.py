@@ -77,6 +77,9 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     ensure_hunting_schedules()
     # После миграции новой формулы риска риск пар VM устарел: пересчёт ставится сам, один раз.
     ensure_vm_rescored()
+    from api.collector_routes import spawn
+    from api.modules.vm.services.trends.analyze import resume_pending
+    spawn(resume_pending)
     try:
         yield
     finally:

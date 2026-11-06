@@ -8,6 +8,7 @@ import { ZonesSection } from './settings/ZonesSection'
 import { WeightsSection } from './settings/WeightsSection'
 import { AttackThresholdSection } from './settings/AttackThresholdSection'
 import { ReferencesSection } from './settings/ReferencesSection'
+import { TrendsSection } from './settings/TrendsSection'
 
 /** Всё, что человек настраивает и загружает в модуль, — в одном месте. */
 export function SettingsPage() {
@@ -18,6 +19,7 @@ export function SettingsPage() {
         <>
           <VmConnection settings={data} />
           <HarborSection />
+          <TrendsSection />
           <FileImport />
           <ZonesSection />
           <WeightsSection settings={data} />

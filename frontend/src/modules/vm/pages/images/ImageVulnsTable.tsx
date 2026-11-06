@@ -1,3 +1,5 @@
+import { useTrendBadges } from '../../api/trends'
+import { TrendBadge } from '../../components/TrendBadge'
 import { useEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Check, ChevronRight } from 'lucide-react'
@@ -42,6 +44,7 @@ interface Props {
 
 /** Находки образа: строка открывает дровер расчёта риска; j/k и Enter — на странице. */
 export function ImageVulnsTable({ items, rowKey, selectedIndex, sort, onSort, onSelectIndex, onOpen, onReachEnd }: Props) {
+  const trends = useTrendBadges(items.map(item => item.cve_id))
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 12 })
 
@@ -82,7 +85,7 @@ export function ImageVulnsTable({ items, rowKey, selectedIndex, sort, onSort, on
               )}
               style={{ ...cols.gridStyle, height: ROW_HEIGHT, transform: `translateY(${v.start}px)` }}
             >
-              <div className={cn('min-w-0 truncate px-2 font-mono text-text', !item.is_cve && 'italic')} title={item.cve_id}>{item.cve_id}</div>
+              <div className="flex min-w-0 items-center gap-1 px-2"><span className={cn('min-w-0 truncate font-mono text-text', !item.is_cve && 'italic')} title={item.cve_id}>{item.cve_id}</span>{trends.data?.[item.cve_id] && <TrendBadge id={item.cve_id} reason={trends.data[item.cve_id].reason} />}</div>
               <div className="min-w-0 truncate px-2 font-mono text-text" title={item.package}>{item.package}</div>
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary" title={item.installed_version}>{item.installed_version || '—'}</div>
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary" title={item.fixed_version ?? undefined}>

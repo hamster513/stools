@@ -43,6 +43,7 @@ def _sources(db: Session, module: str) -> list[Target]:
         from api.modules.vm.services.refs_view import TITLES
 
         return [Target("import_vm", 0, "Импорт MaxPatrol VM"), Target("harbor", 0, "Синхронизация Harbor"),
+                Target("trends_pull", 0, "Получение трендовых уязвимостей"),
                 *(Target(f"ref_{name}", 0, title) for name, title in TITLES.items())]
     if module == "siem":
         return [Target("kb_collect", 0, "Сбор базы знаний MaxPatrol SIEM")]

@@ -25,6 +25,7 @@ from api.modules.vm.routers import (
     settings,
     vulns,
     zones,
+    trends,
 )
 from api.modules.vm.services.attack_layer import LAYER as ATTACK_LAYER
 from api.modules.vm.services.harbor_sync import SCHEDULE_KIND as HARBOR_SCHEDULE_KIND
@@ -37,6 +38,7 @@ from api.platform.findings.adapters import register_adapter, register_bulk_filte
 router = APIRouter(prefix="/api/vm")
 for sub in (
     settings.router,
+    trends.router,
     harbor.router,
     images.router,
     zones.router,
@@ -63,6 +65,8 @@ register_bulk_job("vm", start_bulk_job)
 scheduler.register_schedule_kind("vm", HARBOR_SCHEDULE_KIND, harbor_schedule_handler)
 
 scheduler.register_schedule_kind("vm", "import_vm", scheduled(import_.start_vm_import))
+from api.modules.vm.services.trends.sync import start_trend_sync
+scheduler.register_schedule_kind("vm", "trends_pull", scheduled(start_trend_sync))
 for name in REF_NAMES:
     scheduler.register_schedule_kind("vm", f"ref_{name}", scheduled(partial(refs.start_download, name=name)))
 
