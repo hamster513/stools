@@ -20,9 +20,9 @@
 .PARAMETER Out
   Путь к архиву. По умолчанию vm-references-ГГГГММДД.zip в текущей папке.
 .PARAMETER Years
-  Годы NVD: списком (2024,2025) или диапазоном (2022-2026). По умолчанию последние пять: архив укладывается в лимит загрузки (500 МБ).
+  Ограничить годы NVD: списком (2024,2025) или диапазоном (2022-2026). По умолчанию все годы, с 2002 (архив ~400 МБ, в лимит загрузки 500 МБ укладывается).
 .PARAMETER AllYears
-  NVD за все годы, с 2002.
+  NVD за все годы, с 2002 (то же, что по умолчанию; перекрывает -Years).
 .PARAMETER Skip
   Какие справочники не качать: epss, nvd, exploitdb, msf, attack, kev.
 .PARAMETER NoProxy
@@ -98,7 +98,7 @@ if ($AllYears) {
 } elseif ($Years.Count -gt 0) {
   $yearList = @(Get-Years $Years)
 } else {
-  $yearList = @(($thisYear - 4)..$thisYear)
+  $yearList = @(2002..$thisYear)
 }
 
 if (-not $Out) { $Out = "vm-references-{0}.zip" -f (Get-Date -Format "yyyyMMdd") }

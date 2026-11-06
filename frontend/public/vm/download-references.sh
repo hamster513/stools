@@ -8,8 +8,8 @@
 # Нужны curl и zip (или python3). Прокси curl берёт сам из https_proxy / HTTPS_PROXY.
 # Настройки — переменными окружения:
 #   OUT=refs.zip            путь к архиву (по умолчанию vm-references-ГГГГММДД.zip)
-#   NVD_YEARS="2024 2025"   годы NVD (по умолчанию последние пять — архив укладывается в 500 МБ)
-#   ALL_YEARS=1             NVD за все годы, с 2002
+#   NVD_YEARS="2024 2025"   ограничить годы NVD (по умолчанию все, с 2002 — архив ~400 МБ)
+#   ALL_YEARS=1             NVD за все годы (то же, что по умолчанию; перекрывает NVD_YEARS)
 #   SKIP="epss msf"         не качать: epss nvd exploitdb msf attack kev
 # Пример: NVD_YEARS="2024 2025" SKIP=msf sh download-references.sh
 set -u
@@ -49,15 +49,10 @@ else
 fi
 
 this_year=$(date +%Y)
-if [ "${ALL_YEARS:-}" = 1 ]; then
-  first=2002
-  YEARS=""
-else
-  first=$((this_year - 4))
-  YEARS="${NVD_YEARS:-}"
-fi
+YEARS="${NVD_YEARS:-}"
+[ "${ALL_YEARS:-}" = 1 ] && YEARS=""
 if [ -z "$YEARS" ]; then
-  y=$first
+  y=2002
   while [ "$y" -le "$this_year" ]; do YEARS="$YEARS $y"; y=$((y + 1)); done
 fi
 
