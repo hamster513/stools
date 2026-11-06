@@ -166,6 +166,7 @@ def test_sync_writes_images_and_pairs(auth_client: TestClient, db_session: Any) 
     images = _images(db_session)
     assert set(images) == {"library/alpine", "library/debian", "library/busybox", "stools/stools-web"}
     alpine = images["library/alpine"]
+    assert alpine.registry_url == CONN.url
     assert alpine.platform is not None and "linux/amd64" in alpine.platform
     assert json.loads(alpine.tags) == ["3.18"]
     assert images["library/debian"].platform is None

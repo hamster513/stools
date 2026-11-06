@@ -11,7 +11,9 @@ from fastapi import APIRouter
 
 from api.modules.attack.layers import register_layer
 from api.modules.vm import data_status as data_status  # регистрирует провайдера свежести данных
+from api.modules.vm import docker_models as docker_models
 from api.modules.vm import models as models  # таблицы должны попасть в metadata
+from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job
 from api.modules.vm.routers import (
@@ -23,17 +25,16 @@ from api.modules.vm.routers import (
     recalc,
     refs,
     settings,
+    trends,
     vulns,
     zones,
-    trends,
 )
 from api.modules.vm.services.attack_layer import LAYER as ATTACK_LAYER
 from api.modules.vm.services.harbor_sync import SCHEDULE_KIND as HARBOR_SCHEDULE_KIND
 from api.modules.vm.services.harbor_sync import harbor_schedule_handler
-from api.modules.vm.core.refs import REF_NAMES
-from api.platform.sync_jobs import scheduled
 from api.platform import scheduler
 from api.platform.findings.adapters import register_adapter, register_bulk_filter, register_bulk_job
+from api.platform.sync_jobs import scheduled
 
 router = APIRouter(prefix="/api/vm")
 for sub in (
@@ -66,6 +67,7 @@ scheduler.register_schedule_kind("vm", HARBOR_SCHEDULE_KIND, harbor_schedule_han
 
 scheduler.register_schedule_kind("vm", "import_vm", scheduled(import_.start_vm_import))
 from api.modules.vm.services.trends.sync import start_trend_sync
+
 scheduler.register_schedule_kind("vm", "trends_pull", scheduled(start_trend_sync))
 for name in REF_NAMES:
     scheduler.register_schedule_kind("vm", f"ref_{name}", scheduled(partial(refs.start_download, name=name)))

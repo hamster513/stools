@@ -138,7 +138,23 @@ def image_detail(
 ) -> dict[str, Any]:
     image = _image(db, image_id)
     sync = last_sync(db)
-    return {**q.image_item(image, _levels(db)), "last_sync_at": sync.finished_at if sync else None}
+    from api.modules.vm.services.image_hosts import summaries
+
+    return {**q.image_item(image, _levels(db)), **summaries(db, [image])[image.id],
+            "last_sync_at": sync.finished_at if sync else None}
+
+
+@router.get("/images/{image_id}/hosts")
+def image_hosts(
+    image_id: int, limit: int = Query(default=100, ge=1, le=200), offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    from api.modules.vm.services.image_hosts import host_views
+
+    image = _image(db, image_id)
+    view = host_views(db, [image])[image.id]
+    items = view.pop("items")
+    return {**view, "total": len(items), "items": items[offset:offset + limit], "limit": limit, "offset": offset}
 
 
 def _vuln_filters(

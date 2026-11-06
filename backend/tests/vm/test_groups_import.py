@@ -199,8 +199,8 @@ def test_vm_import_writes_groups_of_both_families(db_session: Any, tmp_path: Pat
     fake = FakeVm()
     handle = _run_vm(db_session, tmp_path, monkeypatch, fake)
     assert _message(db_session, handle) == "локальные группы: Windows — строк 3, хостов 1; Linux — строк 3, хостов 1"
-    assert len(fake.pdql) == 3
-    assert fake.pdql[0].startswith("select(@Host") and fake.pdql[1].startswith("select(WindowsHost") and fake.pdql[2].startswith("select(UnixHost")
+    assert len(fake.pdql) == 5
+    assert fake.pdql[0].startswith("select(@Host") and fake.pdql[3].startswith("select(WindowsHost") and fake.pdql[4].startswith("select(UnixHost")
     assert _groups(db_session) == [
         ("linux", "srv02.corp.local", "adm", ""),
         ("linux", "srv02.corp.local", "wheel", "pcadmin"),

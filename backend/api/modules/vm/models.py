@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     Date,
@@ -373,6 +374,12 @@ class VmImage(Base):
     #: Путь внутри проекта, например `web`.
     repository: Mapped[str] = mapped_column(String(255))
     digest: Mapped[str] = mapped_column(String(80))
+    #: Адрес реестра на момент получения, без учётных данных; старые строки — пусто до синхронизации.
+    registry_url: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    #: Verified root/child manifest and runnable configuration hashes for host matching.
+    runtime_ids: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    runtime_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    runtime_error: Mapped[str] = mapped_column(Text, default="", server_default="")
     #: Платформы мультиархитектурного индекса через «, » (`linux/amd64, linux/arm64`), в пределах
     #: столбца — лишние платформы отбрасываются целиком; у обычного образа — NULL.
     platform: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -10,6 +10,7 @@ import { SortableTh } from '@/platform/table/SortableTh'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { date, megabytes } from './format'
 import { TrivyCounts } from './TrivyCounts'
+import { ImageHostsButton } from './ImageHostsButton'
 
 const ROW_HEIGHT = 40
 const SHOWN_TAGS = 3
@@ -17,6 +18,7 @@ const SHOWN_TAGS = 3
 const COLUMNS: ColumnDef[] = [
   { key: 'image', label: 'Образ', width: 280, flex: true },
   { key: 'tags', label: 'Теги', width: 200 },
+  { key: 'running_hosts', label: 'Запущен на хостах', width: 150 },
   { key: 'risk', label: 'Риск', width: 208 },
   { key: 'trivy', label: 'Trivy', width: 200 },
   { key: 'scan', label: 'Скан', width: 176 },
@@ -97,6 +99,7 @@ export function ImagesTable({ items, selectedIndex, sort, onSort, onSelectIndex,
                 {item.tags.length === 0 ? '—' : item.tags.slice(0, SHOWN_TAGS).join(', ')}
                 {extra > 0 && <span className="ml-1 text-[10px]">+{extra}</span>}
               </div>
+              <div className="min-w-0 px-2"><ImageHostsButton image={item} /></div>
               <div className="min-w-0 overflow-hidden px-2">
                 {item.risk_max !== null && item.level !== null
                   ? <RiskBadge score={item.risk_max} level={item.level} />

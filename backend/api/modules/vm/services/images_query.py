@@ -164,7 +164,11 @@ def image_item(img: VmImage, levels: Levels) -> dict[str, Any]:
 
 def page_images(db: Session, f: ImageFilters, sort: str, limit: int, offset: int) -> list[dict[str, Any]]:
     stmt = select(VmImage).where(*image_conditions(f)).order_by(*IMAGE_SORTS[sort]).limit(limit).offset(offset)
-    return [image_item(img, f.levels) for img in db.scalars(stmt)]
+    from api.modules.vm.services.image_hosts import summaries
+
+    images = list(db.scalars(stmt))
+    runtime = summaries(db, images)
+    return [{**image_item(img, f.levels), **runtime[img.id]} for img in images]
 
 
 def count_images(db: Session, f: ImageFilters) -> int:

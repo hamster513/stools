@@ -20,6 +20,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { date, megabytes } from './images/format'
 import { ImageRiskDrawer } from './images/ImageRiskDrawer'
+import { ImageHostsButton } from './images/ImageHostsButton'
+import { useCan } from '@/lib/can'
 import { ImageVulnsFacetPanel, type ImageVulnFilters } from './images/ImageVulnsFacetPanel'
 import { ImageVulnsTable } from './images/ImageVulnsTable'
 import { TrivyCounts } from './images/TrivyCounts'
@@ -93,6 +95,7 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
 }
 
 function ImageHeader({ image }: { image: ImageDetail }) {
+  const { read: assetsRead } = useCan('assets')
   return (
     <div className="flex flex-col gap-2 text-xs">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
@@ -102,6 +105,8 @@ function ImageHeader({ image }: { image: ImageDetail }) {
             : <span className="flex flex-wrap gap-1">{image.tags.map((t) => <span key={t} className="rounded border border-border px-1.5 py-0.5 font-mono text-[11px] text-text">{t}</span>)}</span>}
         </Meta>
         <Meta label="Digest"><DigestCopy short={image.digest_short} full={image.digest} /></Meta>
+        <Meta label="Запущен на хостах"><ImageHostsButton image={image} /></Meta>
+        {assetsRead && <Link className="text-text underline" to={`/assets/container-images?source=harbor&image=${image.id}`}>Образ в активах</Link>}
         <Meta label="Платформа"><span className="font-mono text-text">{image.platform ?? '—'}</span></Meta>
         <Meta label="Размер"><span className="font-mono tabular-nums text-text">{megabytes(image.size)}</span></Meta>
         <Meta label="Отправлен"><span className="font-mono tabular-nums text-text">{date(image.pushed_at)}</span></Meta>

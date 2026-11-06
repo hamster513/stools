@@ -79,7 +79,8 @@ _CVE_ID_MAX = 32
 _COUNTERS = (*SEVERITIES, "total")
 #: Поля образа, которые синхронизация обновляет; риск считает `rescore_image_pairs`.
 _UPDATED = (
-    "platform", "tags", "size", "pushed_at", "scan_status", "scanned_at", "scanner",
+    "runtime_ids", "runtime_checked_at", "runtime_error",
+    "registry_url", "platform", "tags", "size", "pushed_at", "scan_status", "scanned_at", "scanner",
     *(f"trivy_{c}" for c in _COUNTERS), "synced_at", "sync_error",
 )
 #: Сводка скана, которая описывает прежние находки: пока они сохранены (скан идёт, сломан,
@@ -132,6 +133,9 @@ class _Planned:
     error: str | None = None
     #: Прежние находки сохранены — сохраняются и счётчики Trivy со сканером.
     keep_findings: bool = False
+    runtime_ids: list[str] = field(default_factory=list)
+    runtime_checked_at: dt.datetime | None = None
+    runtime_error: str = ""
 
     @property
     def key(self) -> Key:
@@ -318,6 +322,7 @@ class _Sync:
             for art in newest_tagged(repo.artifacts, self.conn.tags_per_repo)
         ]
         skipped = self._read_reports(planned, known)
+        self._read_runtime(planned)
         self._write(planned, known)
 
         self.handle.stage("enriching", message="витрина CVE")
@@ -423,6 +428,27 @@ class _Sync:
             self.handle.tick(i, message=f"образов: {i}/{total}")
         return skipped
 
+    def _read_runtime(self, planned: list[_Planned]) -> None:
+        # Content-addressed manifests are immutable; reuse successfully verified graphs.
+        old = {(r.project, r.repository, r.digest): r for r in self.db.execute(select(
+            IMAGE_T.c.project, IMAGE_T.c.repository, IMAGE_T.c.digest,
+            IMAGE_T.c.runtime_ids, IMAGE_T.c.runtime_checked_at,
+        ))}
+        self.handle.stage("runtime", total=len(planned) or None, message="сопоставление образов с хостами")
+        for index, p in enumerate(planned, 1):
+            previous = old.get(p.key)
+            if previous and previous.runtime_ids:
+                p.runtime_ids = previous.runtime_ids
+                p.runtime_checked_at = previous.runtime_checked_at
+            else:
+                try:
+                    p.runtime_ids = self.client.runtime_image_ids(p.repo.project, p.repo.name, p.art.digest)
+                    p.runtime_checked_at = self.started_at
+                except HarborError as exc:
+                    # Scanning can still succeed when registry pull permission is absent.
+                    p.runtime_error = exc.kind
+            self.handle.tick(index)
+
     # -- writing ---------------------------------------------------------------
 
     def _write(self, planned: list[_Planned], known: Known) -> None:
@@ -481,6 +507,10 @@ class _Sync:
             "project": project,
             "repository": repository,
             "digest": digest,
+            "registry_url": public_url(self.conn.url),
+            "runtime_ids": p.runtime_ids,
+            "runtime_checked_at": p.runtime_checked_at,
+            "runtime_error": p.runtime_error,
             "platform": join_platforms(a.platforms),
             "tags": json.dumps(list(a.tags), ensure_ascii=False),
             "size": a.size,

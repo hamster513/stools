@@ -1,4 +1,4 @@
-import { LayoutDashboard, ListChecks, Monitor, Network, Users, UsersRound } from 'lucide-react'
+import { Boxes, LayoutDashboard, ListChecks, Monitor, Network, Users, UsersRound } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
@@ -8,6 +8,7 @@ const LINK =
 const ITEMS = [
   { to: '/assets', label: 'Обзор', icon: LayoutDashboard, exact: true },
   { to: '/assets/list', label: 'Активы', icon: Monitor, exact: false },
+  { to: '/assets/container-images', label: 'Образы контейнеров', icon: Boxes, exact: false },
   { to: '/assets/users', label: 'Пользователи', icon: Users, exact: false },
   { to: '/assets/groups', label: 'Группы', icon: UsersRound, exact: false },
   { to: '/assets/networks', label: 'Сети', icon: Network, exact: false },

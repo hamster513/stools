@@ -15,6 +15,7 @@ from api.modules.assets.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.assets.models import AssetJob
 from api.modules.assets.routers import (
     assets,
+    container_images,
     dns,
     groups,
     networks,
@@ -36,6 +37,7 @@ from api.platform.findings.adapters import register_adapter
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 # zone_rules — до networks: иначе `/networks/{network_id}` перехватит `/networks/zone-rules`.
 for sub in (
+    container_images.router,
     assets.router, dns.router, groups.router, zone_rules.router, networks.router, overview.router, racktables.router, settings.router, users.router, zones.router,
     make_jobs_router(AssetJob, "assets"),
 ):

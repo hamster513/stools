@@ -126,17 +126,33 @@ def _host_names(hostname: str) -> tuple[str, str, str]:
 
 
 def observations_from_vm(db: Session) -> Iterator[Observed]:
+    from api.modules.vm.docker_models import VmDockerImage
     from api.modules.vm.models import VmHost, VmHostCve, VmImport
 
     seen_at = db.execute(select(func.max(VmImport.finished_at))).scalar() or utcnow()
     cves = dict(db.execute(select(VmHostCve.host_id, func.count()).group_by(VmHostCve.host_id)).tuples().all())
+    known = set()
     for h in db.execute(select(VmHost).order_by(VmHost.id)).scalars():
+        known.add((h.hostname, h.ip))
         name, fqdn, domain = _host_names(h.hostname)
         yield Observed(
             source="vm", source_key=f"{h.hostname}|{h.ip}", name=name, fqdn=fqdn, domain=domain, ip=h.ip,
             ips=[h.ip] if h.ip else [], os=h.os_name, seen_at=seen_at,
             extra={"zone": h.zone, "groups": h.groups, "cve_count": int(cves.get(h.id, 0))},
         )
+    # Docker inventory includes servers without CVEs; they still belong in Assets.
+    for image in db.scalars(select(VmDockerImage)):
+        for host in image.details["hosts"]:
+            key = (host["hostname"], host["ip"])
+            if key in known:
+                continue
+            known.add(key)
+            name, fqdn, domain = _host_names(host["hostname"])
+            yield Observed(
+                source="vm", source_key=f"{host['hostname']}|{host['ip']}", name=name, fqdn=fqdn,
+                domain=domain, ip=host["ip"], ips=[host["ip"]] if host["ip"] else [],
+                os=host["os_name"], seen_at=image.collected_at, extra={"docker_inventory": True},
+            )
 
 
 def observations_from_ksc(db: Session) -> Iterator[Observed]:

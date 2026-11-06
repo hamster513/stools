@@ -160,6 +160,12 @@ class HarborClient:
     def __init__(self, conn: HarborConnectionLike, http: httpx.Client) -> None:
         self.conn = conn
         self.http = http
+        self._registry_tokens: dict[str, str] = {}
+
+    def runtime_image_ids(self, project: str, repository: str, digest: str) -> list[str]:
+        from api.modules.vm.core.registry_manifests import image_ids
+
+        return image_ids(self, project, repository, digest)
 
     @property
     def base(self) -> str:

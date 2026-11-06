@@ -299,10 +299,14 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   recalculate: 'Пересчёт риска',
   bulk_status: 'Массовая смена статусов',
   harbor_sync: 'Синхронизация Harbor',
+  trends_sync: 'Получение трендов',
+  trends_import: 'Импорт пакета трендов',
 }
 
 export const STAGE_LABELS: Record<string, string> = {
   pending: 'ожидание',
+  receiving: 'получение публикаций',
+  analyzing: 'анализ сигналов',
   listing: 'обход реестра',
   reports: 'чтение отчётов',
   fetching: 'экспорт из VM',
@@ -318,6 +322,8 @@ export const STAGE_LABELS: Record<string, string> = {
   pairs: 'риск пар',
   status: 'смена статусов',
   groups: 'локальные группы',
+  docker: 'образы и контейнеры Docker',
+  runtime: 'сопоставление образов с хостами',
   done: 'готово',
 }
 
@@ -399,6 +405,9 @@ export interface ImageItem {
   cves_scored: number
   /** Почему образ не обновлён в последней синхронизации. */
   sync_error: string | null
+  /** Уникальные хосты с running-контейнерами; null — нет снимка или сопоставления. */
+  running_host_count?: number | null
+  runtime_state?: 'ready' | 'mapping_missing' | 'snapshot_missing'
 }
 
 /** Карточка образа: элемент списка и время последней синхронизации. */

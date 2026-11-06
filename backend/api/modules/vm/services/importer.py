@@ -365,6 +365,7 @@ def run_import(
 ) -> ImportStats:
     temp: Path | None = None
     client: MpVmClient | None = None
+    docker_collected = False
     try:
         if source == "vm":
             conn = settings.connection.unsealed()
@@ -380,6 +381,11 @@ def run_import(
             path = temp
             filename = f"{conn.host}: PDQL"
         assert path is not None
+        if client is not None:
+            from api.modules.vm.services.docker_inventory import collect_inventory
+
+            handle.stage("docker", message="образы и контейнеры Docker")
+            docker_collected = collect_inventory(db, client, conn, data_dir)
         _clear_stage(db)
         hosts, _ = _parse_into_stage(db, handle, path)
         if not hosts:
@@ -419,8 +425,13 @@ def run_import(
                 log.exception("локальные группы VM не получены")
                 handle.stage("groups", message=f"локальные группы не получены: {exc.__class__.__name__}")
         _notify_assets(db)
+        docker_collected = False
         return stats
     finally:
+        if docker_collected:
+            # Inventory remains useful even if there are no vulnerable hosts.
+            db.rollback()
+            _notify_assets(db)
         if temp is not None and temp.exists():
             os.unlink(temp)
         if source == "file" and path is not None and path.exists():
