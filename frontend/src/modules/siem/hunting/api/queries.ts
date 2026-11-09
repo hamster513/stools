@@ -35,6 +35,7 @@ import {
   type ThFindingView,
   type ThJob,
   type CatalogQuery,
+  type FilterCatalog,
   type SavedFilter,
   type ThSettings,
   type ThSettingsView,
@@ -463,7 +464,7 @@ export function usePublishFilter() {
 }
 
 export function useFilterCatalog(enabled = true) {
-  return useQuery<{ items: { id: string; name: string }[] }, ApiRequestError>({
+  return useQuery<FilterCatalog, ApiRequestError>({
     queryKey: ['th', 'filter-catalog'],
     queryFn: () => api.get(`${BASE}/filters/catalog`),
     enabled, retry: false, staleTime: 0,

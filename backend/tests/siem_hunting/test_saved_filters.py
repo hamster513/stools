@@ -170,7 +170,7 @@ def test_folders_are_nested_and_malformed_replies_are_errors():
     ]}]}
     with httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=response))) as http:
         folders, _ = sf.FiltersClient(conn, http).hierarchy()
-    assert {"id": FOLDER, "name": "User / Hunts"} in folders
+    assert any(item["id"] == FOLDER and item["name"] == "User / Hunts" for item in folders)
     with (
         httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, text="<html>login</html>"))) as http,
         pytest.raises(sf.FilterError, match="формат"),

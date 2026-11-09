@@ -25,7 +25,7 @@ def get_catalog(db: Session = Depends(get_db), _user: AppUser = Depends(get_curr
     result = saved_filters.catalog(db, force=True, commit=True)
     if result["error"]:
         raise HTTPException(502, result["error"])
-    return {"items": result["items"]}
+    return {"items": result["items"], "folders": result["folders"]}
 
 
 @router.get("/catalog/{filter_id}")

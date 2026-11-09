@@ -150,7 +150,8 @@ class FiltersClient:
                                 "folder": parent_id, "ancestors": ancestors})
             elif node.get("type") == "folder_node":
                 path = " / ".join(x for x in (parent_path, node.get("name", "")) if x)
-                folders.append({"id": str(node["id"]), "name": path})
+                folders.append({"id": str(node["id"]), "name": path, "label": node.get("name", ""),
+                                "parent": parent_id, "ancestors": ancestors})
                 stack.extend((child, str(node["id"]), path, (*ancestors, str(node["id"])))
                              for child in node.get("children") or [])
         return sorted(folders, key=lambda item: item["name"]), filters
@@ -170,10 +171,10 @@ def catalog(db: Session, *, force: bool = False, commit: bool = False) -> dict:
     conn = load_connection(db)
     host, folder = server_host(conn), load_th_settings(db).filter_folder_id
     cached = _state(db, CATALOG_KEY)
-    if (not force and cached.get("recursive") and cached.get("host") == host
+    if (not force and cached.get("tree") and cached.get("host") == host
             and cached.get("folder") == folder and time.time() - cached.get("at", 0) < 30):
         return cached
-    result = {"host": host, "folder": folder, "at": time.time(), "items": [], "error": None, "recursive": True}
+    result = {"host": host, "folder": folder, "at": time.time(), "items": [], "error": None, "folders": [], "tree": True}
     try:
         if not conn.configured:
             raise FilterError("Подключение к MaxPatrol не настроено")
@@ -184,6 +185,10 @@ def catalog(db: Session, *, force: bool = False, commit: bool = False) -> dict:
             available, remote = FiltersClient(conn, http).hierarchy()
         if folder not in {item["id"] for item in available}:
             raise FilterError("Выбранная папка SIEM недоступна")
+        result["folders"] = [
+            {"id": item["id"], "name": item["label"], "parent": None if item["id"] == folder else item["parent"]}
+            for item in available if item["id"] == folder or folder in item["ancestors"]
+        ]
         result["items"] = sorted(
             [{"id": item["id"], "name": item["name"], "folder": item["folder"]}
              for item in remote if folder in item["ancestors"]],
@@ -232,7 +237,7 @@ def bind_selected(db: Session, query: ThQuery, filter_id: str) -> None:
 def folders(db: Session) -> list[dict]:
     conn = load_connection(db).unsealed()
     with make_client(conn) as http:
-        return FiltersClient(conn, http).hierarchy()[0]
+        return [{"id": item["id"], "name": item["name"]} for item in FiltersClient(conn, http).hierarchy()[0]]
 
 
 def publish(db: Session, kind: Kind, entity_id: int, login: str) -> dict:

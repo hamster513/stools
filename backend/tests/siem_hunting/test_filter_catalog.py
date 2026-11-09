@@ -227,3 +227,16 @@ def test_nested_filter_moved_outside_subtree_is_rejected(auth_client, nested_cat
     # The hierarchy is an older snapshot, but details already show a move outside.
     data["details"][data["deep"]]["folderId"] = data["sibling"]
     assert auth_client.get(f"/api/siem/hunting/filters/catalog/{data['deep']}").status_code == 404
+
+
+def test_catalog_exposes_tree_scoped_to_selected_folder(auth_client, nested_catalog):
+    data = nested_catalog
+    response = auth_client.get("/api/siem/hunting/filters/catalog")
+    assert response.status_code == 200
+    folders = {item["id"]: item for item in response.json()["folders"]}
+    assert folders[FOLDER] == {"id": FOLDER, "name": "Hunts", "parent": None}
+    assert folders[data["child"]]["parent"] == FOLDER
+    deep_folder = data["details"][data["deep"]]["folderId"]
+    assert folders[deep_folder]["parent"] == data["child"]
+    assert data["sibling"] not in folders
+    assert len(folders) == 3

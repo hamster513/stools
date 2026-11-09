@@ -467,3 +467,8 @@ export interface CatalogQuery {
   fields_label: string
   is_full_pdql: boolean
 }
+
+export interface FilterCatalog {
+  items: { id: string; name: string; folder?: string }[]
+  folders?: { id: string; name: string; parent: string | null }[]
+}
