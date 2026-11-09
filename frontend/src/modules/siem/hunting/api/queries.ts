@@ -35,6 +35,7 @@ import {
   type ThFindingView,
   type ThJob,
   type CatalogQuery,
+  type DeleteThFindingsIn,
   type FilterCatalog,
   type SavedFilter,
   type ThSettings,
@@ -482,5 +483,17 @@ export function useRefreshFilters() {
   return useMutation({
     mutationFn: () => api.get(`${BASE}/filters/catalog`),
     onSettled: () => qc.invalidateQueries({queryKey: ['th']}),
+  })
+}
+
+export function useDeleteThFindings() {
+  const qc = useQueryClient()
+  return useMutation<{ deleted: number }, ApiRequestError, DeleteThFindingsIn>({
+    mutationFn: body => api.post(`${TH_FINDINGS_PATH}/delete`, body),
+    onSuccess: () => {
+      for (const key of ['th', 'finding-state', 'finding-summary', 'findings-mine']) {
+        qc.invalidateQueries({ queryKey: [key] })
+      }
+    },
   })
 }

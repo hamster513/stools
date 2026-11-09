@@ -472,3 +472,9 @@ export interface FilterCatalog {
   items: { id: string; name: string; folder?: string }[]
   folders?: { id: string; name: string; parent: string | null }[]
 }
+
+export interface DeleteThFindingsIn {
+  ids?: number[]
+  filter?: Pick<ThFindingsFilters, 'status' | 'hunt' | 'date_from' | 'date_to' | 'limit_hit'>
+  expected_count: number
+}

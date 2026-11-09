@@ -14,7 +14,7 @@ import json
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -31,6 +31,7 @@ from api.modules.siem.hunting.findings_adapter import (
     facets,
     parse_statuses,
 )
+from api.modules.siem.hunting.findings_delete import DeleteFindingsIn, delete_findings
 from api.modules.siem.hunting.models import ThDeepHunt, ThEvent, ThFinding, ThHunt, ThRun
 from api.modules.siem.hunting.nightly import TH_MODULE, TH_SCOPE, finding_key
 from api.platform.export import Column, export_response
@@ -245,6 +246,14 @@ def finding_detail(db: Session, finding: ThFinding) -> FindingDetail:
             updated_by=row.updated_by if row else "", updated_at=row.updated_at if row else None,
         ),
     )
+
+
+@router.post("/delete")
+def remove_findings(payload: DeleteFindingsIn, request: Request, db: Session = Depends(get_db),
+                    _user: AppUser = Depends(get_current_user)) -> dict:
+    deleted = delete_findings(db, payload)
+    request.state.audit_summary = f"Удалено ночных находок Threat Hunting: {deleted}; с событиями и историей обработки"
+    return {"deleted": deleted}
 
 
 @router.get("/{finding_id}", response_model=FindingDetail)

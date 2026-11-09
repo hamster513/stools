@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Radar } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Radar, Trash2 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
@@ -20,9 +20,10 @@ import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { STATUSES, STATUS_TITLES, type FindingStatus } from '@/platform/findings/types'
 import { ResizableHeader } from '@/platform/table/ResizableHeader'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
-import { TH_FINDINGS_KEY, TH_FINDINGS_PATH, thFindingsParams, useThFindings } from '../api/queries'
-import type { ThFindingSort, ThFindingsFilters } from '../api/types'
+import { TH_FINDINGS_KEY, TH_FINDINGS_PATH, thFindingsParams, useDeleteThFindings, useThFindings } from '../api/queries'
+import type { DeleteThFindingsIn, ThFindingSort, ThFindingsFilters } from '../api/types'
 import { ruDay, ruStamp } from '../format'
+import { DeleteFindingsDialog } from '../components/DeleteFindingsDialog'
 
 const PAGE_SIZE = 100
 const ROW_HEIGHT = 36
@@ -74,6 +75,9 @@ export function FindingsPage() {
   const cols = useColumnWidths('siem-th-findings-columns', write ? WITH_CHECK : COLUMNS)
   const query = useThFindings({ ...filters, limit: PAGE_SIZE, offset })
   const qc = useQueryClient()
+  const remove = useDeleteThFindings()
+  const [deleteSelection, setDeleteSelection] = useState<DeleteThFindingsIn | null>(null)
+  const [deletedCount, setDeletedCount] = useState<number | null>(null)
   // Отмеченные находки (id); «всё по фильтру» уводит в массовую смену фильтр вместо ключей.
   const [checked, setChecked] = useState<ReadonlySet<number>>(new Set())
   const [allByFilter, setAllByFilter] = useState(false)
@@ -149,9 +153,20 @@ export function FindingsPage() {
           filter={allByFilter ? bulkFilter : undefined}
           onDone={() => { clearChecked(); qc.invalidateQueries({ queryKey: TH_FINDINGS_KEY }) }}
           onClear={clearChecked}
+          actions={<Button variant="danger" className="px-2 py-1 text-xs" disabled={query.isFetching || remove.isPending}
+            onClick={() => {
+              remove.reset()
+              setDeleteSelection(allByFilter ? { filter: bulkFilter, expected_count: total } : { ids: [...checked], expected_count: checked.size })
+            }}><Trash2 size={13} aria-hidden /> Удалить выбранные</Button>}
         />
       )}
 
+      {deletedCount !== null && <p role="status" className="border-b border-grid px-4 py-2 text-xs text-kind-accepted">Удалено находок: {deletedCount}</p>}
+      {deleteSelection && <DeleteFindingsDialog count={deleteSelection.expected_count} allByFilter={deleteSelection.filter !== undefined}
+        pending={remove.isPending} error={remove.error?.message} onCancel={() => setDeleteSelection(null)}
+        onConfirm={() => remove.mutate(deleteSelection, { onSuccess: result => {
+          setDeleteSelection(null); clearChecked(); setOffset(0); setDeletedCount(result.deleted)
+        } })} />}
       <div className="flex min-h-0 flex-1">
         {filtersPanel.open && (
           <div className="flex h-full w-60 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">

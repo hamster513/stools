@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ApiRequestError } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
@@ -20,7 +20,7 @@ const SMALL = cn(FIELD, 'w-auto py-1 text-xs')
  * фасеты в `filter` — списками (VM: `level: ['high', 'critical']`), как их
  * держит страница. Без права записи полосы нет.
  */
-export function BulkBar({ module, scopeId, keys, total, onSelectAll, filter, onJob, onDone, onClear }: {
+export function BulkBar({ module, scopeId, keys, total, onSelectAll, filter, onJob, onDone, onClear, actions }: {
   module: string
   scopeId: number
   keys: string[]
@@ -30,6 +30,7 @@ export function BulkBar({ module, scopeId, keys, total, onSelectAll, filter, onJ
   onJob?: (jobId: number) => void
   onDone: (changed: number) => void
   onClear: () => void
+  actions?: ReactNode
 }) {
   const { write } = useCan(findingArea(module))
   const directory = useUsersDirectory(module, write)
@@ -88,6 +89,7 @@ export function BulkBar({ module, scopeId, keys, total, onSelectAll, filter, onJ
         placeholder={needsReason ? 'Обоснование (обязательно)' : 'Комментарий'} />
       <Button variant="primary" className="px-2.5 py-1 text-xs" onClick={apply} disabled={blocked} loading={bulk.isPending}>Применить</Button>
       <Button variant="ghost" className="px-2 py-1 text-xs" onClick={onClear}>Снять выделение</Button>
+      {actions}
       {bulk.error && <span className="basis-full text-kind-1">{bulk.error instanceof ApiRequestError ? bulk.error.message : 'Не удалось применить'}</span>}
     </div>
   )

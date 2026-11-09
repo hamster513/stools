@@ -219,6 +219,7 @@ BUCKET: dict[tuple[str, str], str] = {
     ("PUT", "/api/siem/hunting/scheduler"): "admin",
     ("PUT", "/api/siem/hunting/scheduler/order"): "admin",
     ("PUT", "/api/siem/hunting/settings"): "admin",
+    ("POST", "/api/siem/hunting/findings/delete"): "write",
     ("PUT", "/api/siem/mp"): "admin",
     ("POST", "/api/siem/mp/collect"): "write",
     ("POST", "/api/siem/mp/test"): "admin",
