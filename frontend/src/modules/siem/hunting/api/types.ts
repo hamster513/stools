@@ -40,7 +40,21 @@ export interface HuntsFilters {
 /** Статус запроса в прогоне: ok | failed | skipped | aborted. */
 export type HuntQueryStatus = 'ok' | 'failed' | 'skipped' | 'aborted'
 
+export interface SavedFilter {
+  id?: string | null
+  status?: 'not_published' | 'available' | 'missing' | 'modified' | 'unknown'
+  kind: 'query' | 'deep'
+  entity_id: number
+  url: string | null
+  error: string | null
+  stale: boolean
+}
+
 export interface QueryView {
+  name?: string
+  description?: string
+  is_full_pdql?: boolean
+  saved_filter?: SavedFilter | null
   id: number
   query_id: string
   position: number
@@ -95,6 +109,10 @@ export interface HuntView {
 }
 
 export interface QueryIn {
+  name?: string
+  description?: string
+  is_full_pdql?: boolean
+  siem_filter_id?: string
   query_id: string
   query: string
   fields: string
@@ -117,6 +135,7 @@ export interface HuntIn {
 export type CheckWindow = '1h' | '24h' | '7d'
 
 export interface CheckQueryIn {
+  is_full_pdql?: boolean
   query: string
   fields: string
   fields_label?: string
@@ -168,6 +187,7 @@ export interface ImportResult {
 // --- Настройки ---------------------------------------------------------------
 
 export interface ThSettings {
+  filter_folder_id: string
   nightly_enabled: boolean
   /** Время старта ночного прогона, ЧЧ:ММ по поясу сервера; конец окна сервер выводит сам. */
   window_from: string
@@ -286,6 +306,7 @@ export interface ThStateBrief {
 }
 
 export interface ThFindingView extends ThFindingListItem {
+  saved_filter?: SavedFilter | null
   /** Ключ в платформе статусов: `th:<id>`. */
   key: string
   kind: 'nightly' | 'deep'
@@ -397,6 +418,8 @@ export interface DeepView {
 }
 
 export interface DeepDetail extends DeepView {
+  is_full_pdql?: boolean
+  saved_filter?: SavedFilter | null
   query: string
   fields: string[]
   labels: string[]
@@ -413,6 +436,7 @@ export interface DeepDetail extends DeepView {
  * либо `query` + `fields`. Период — `period_from` и `period_to` вместе либо `months` назад от сейчас.
  */
 export interface DeepCreate {
+  is_full_pdql?: boolean
   title?: string
   hunt_query_id?: number
   query?: string
@@ -433,3 +457,13 @@ export interface DeepSaveIn {
 
 /** Задача раздела (`kind`: nightly | deep). Отмена — через прогон или большой хант, у задачи её нет. */
 export type ThJob = Job
+
+export interface CatalogQuery {
+  siem_filter_id: string
+  name: string
+  description: string
+  query: string
+  fields: string
+  fields_label: string
+  is_full_pdql: boolean
+}

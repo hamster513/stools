@@ -1,0 +1,835 @@
+{
+  "origin": "SOC-Toolks sources.json",
+  "sha256": "7e1418598c81269430ab390bf9eae1707728bb88dafb8bc58fb79b0ac75905cd",
+  "rows": [
+    {
+      "origin_index": 0,
+      "origin_name": "Habr",
+      "origin_url": "https://habr.com/ru/rss/articles/",
+      "catalog_key": "feed-45ccb78ddd56619f",
+      "action": "added"
+    },
+    {
+      "origin_index": 1,
+      "origin_name": "Hackware",
+      "origin_url": "https://hackware.ru/?feed=rss2",
+      "catalog_key": "feed-1e2dfd00295d3471",
+      "action": "added"
+    },
+    {
+      "origin_index": 2,
+      "origin_name": "Dsec",
+      "origin_url": "https://dsec.ru/blog/rss/",
+      "catalog_key": "feed-786ebbebc166c675",
+      "action": "added"
+    },
+    {
+      "origin_index": 3,
+      "origin_name": "Xakep",
+      "origin_url": "https://xakep.ru/feed/",
+      "catalog_key": "feed-62893c519a43397e",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 4,
+      "origin_name": "Anti-Malware",
+      "origin_url": "https://www.anti-malware.ru/rss.xml",
+      "catalog_key": "feed-ab1649b8e89fc56f",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 5,
+      "origin_name": "Kaspersky",
+      "origin_url": "https://www.kaspersky.ru/blog/feed/",
+      "catalog_key": "feed-4014f9ab2590dbd8",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 6,
+      "origin_name": "SecurityLab",
+      "origin_url": "https://www.securitylab.ru/_services/export/rss/",
+      "catalog_key": "feed-1f81d68bb668721d",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 7,
+      "origin_name": "Dr.Web",
+      "origin_url": "https://news.drweb.ru/rss/get/?c=5&lng=ru",
+      "catalog_key": "feed-6004885c0b7fbc23",
+      "action": "added"
+    },
+    {
+      "origin_index": 8,
+      "origin_name": "Sophos News",
+      "origin_url": "https://news.sophos.com/en-us/feed/",
+      "catalog_key": "feed-372abc94a900cccf",
+      "action": "added"
+    },
+    {
+      "origin_index": 9,
+      "origin_name": "The Hacker News",
+      "origin_url": "https://feeds.feedburner.com/TheHackersNews",
+      "catalog_key": "feed-636032c91a0b4c9a",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 10,
+      "origin_name": "Avleonov",
+      "origin_url": "https://avleonov.com/feed/",
+      "catalog_key": "feed-e83e8d3e2365be8d",
+      "action": "added"
+    },
+    {
+      "origin_index": 11,
+      "origin_name": "CNews",
+      "origin_url": "https://www.cnews.ru/inc/rss/news.xml",
+      "catalog_key": "feed-4b0fc88ca966365d",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 12,
+      "origin_name": "OpenNET",
+      "origin_url": "https://www.opennet.ru/opennews/opennews_all_utf.rss",
+      "catalog_key": "feed-4919fec1c2be1067",
+      "action": "added"
+    },
+    {
+      "origin_index": 13,
+      "origin_name": "iXBT",
+      "origin_url": "https://www.ixbt.com/export/news.rss",
+      "catalog_key": "feed-353e135c3b82b3e3",
+      "action": "added"
+    },
+    {
+      "origin_index": 14,
+      "origin_name": "3DNews",
+      "origin_url": "https://3dnews.ru/breaking/rss",
+      "catalog_key": "feed-c52a2b075442f3ad",
+      "action": "added"
+    },
+    {
+      "origin_index": 15,
+      "origin_name": "COMSS",
+      "origin_url": "https://www.comss.ru/rss.php",
+      "catalog_key": "feed-325145f0325b1d4a",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 16,
+      "origin_name": "SecurityMedia.ru",
+      "origin_url": "https://securitymedia.ru/feed",
+      "catalog_key": "feed-25245385dc18730d",
+      "action": "added"
+    },
+    {
+      "origin_index": 17,
+      "origin_name": "Dark Reading",
+      "origin_url": "https://www.darkreading.com/rss.xml",
+      "catalog_key": "feed-a05c33a040436e2d",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 18,
+      "origin_name": "Krebs on Security",
+      "origin_url": "https://krebsonsecurity.com/feed/",
+      "catalog_key": "feed-9f2d692b80a4d47b",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 19,
+      "origin_name": "Schneier",
+      "origin_url": "https://schneier.com/blog/atom.xml",
+      "catalog_key": "feed-8c0e784bd01a3b1c",
+      "action": "merged_alias"
+    },
+    {
+      "origin_index": 20,
+      "origin_name": "CERT-EU Security Advisories",
+      "origin_url": "https://cert.europa.eu/publications/security-advisories-rss",
+      "catalog_key": "feed-2f06909effebe4c4",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 21,
+      "origin_name": "Bleeping Computer",
+      "origin_url": "https://www.bleepingcomputer.com/feed/",
+      "catalog_key": "feed-50fbf262f48afdcf",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 22,
+      "origin_name": "Security Affairs",
+      "origin_url": "https://securityaffairs.com/feed",
+      "catalog_key": "feed-7394e78beb2f2e9a",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 23,
+      "origin_name": "SANS ISC Diary",
+      "origin_url": "https://isc.sans.edu/rssfeed.xml",
+      "catalog_key": "feed-7152508e7789b9fb",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 24,
+      "origin_name": "Threatpost",
+      "origin_url": "https://threatpost.com/feed/",
+      "catalog_key": "feed-a3728bc250627a3a",
+      "action": "added"
+    },
+    {
+      "origin_index": 25,
+      "origin_name": "Help Net Security",
+      "origin_url": "https://www.helpnetsecurity.com/feed/",
+      "catalog_key": "feed-674fb947e30dbf9e",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 26,
+      "origin_name": "Sophos Naked Security",
+      "origin_url": "https://nakedsecurity.sophos.com/feed/",
+      "catalog_key": "feed-2a104b44649cb84a",
+      "action": "added"
+    },
+    {
+      "origin_index": 27,
+      "origin_name": "Hackread",
+      "origin_url": "https://www.hackread.com/feed/",
+      "catalog_key": "feed-78ef10eb73401b34",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 28,
+      "origin_name": "GBHackers",
+      "origin_url": "https://gbhackers.com/feed/",
+      "catalog_key": "feed-d6b2730ca0f4c447",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 29,
+      "origin_name": "SANS ISC Full",
+      "origin_url": "https://isc.sans.edu/rssfeed_full.xml",
+      "catalog_key": "feed-fb6a3ec633d94a60",
+      "action": "added"
+    },
+    {
+      "origin_index": 30,
+      "origin_name": "Kitploit",
+      "origin_url": "https://www.kitploit.com/feeds/posts/default",
+      "catalog_key": "feed-03d4af199c6e3394",
+      "action": "added"
+    },
+    {
+      "origin_index": 31,
+      "origin_name": "Palo Alto Networks",
+      "origin_url": "https://www.paloaltonetworks.com/blog/feed",
+      "catalog_key": "feed-03864289b497b55b",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 32,
+      "origin_name": "Mandiant",
+      "origin_url": "https://www.mandiant.com/resources/blog/rss.xml",
+      "catalog_key": "feed-f5172a00e9671e52",
+      "action": "added"
+    },
+    {
+      "origin_index": 33,
+      "origin_name": "Fortinet Threat Research",
+      "origin_url": "https://feeds.fortinet.com/fortinet/blog/threat-research",
+      "catalog_key": "feed-2440ad173eddba6d",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 34,
+      "origin_name": "Cobalt",
+      "origin_url": "https://www.cobalt.io/blog/rss.xml",
+      "catalog_key": "feed-b9590a4fcf548600",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 35,
+      "origin_name": "Intigriti",
+      "origin_url": "https://blog.intigriti.com/feed/",
+      "catalog_key": "feed-896fc52901d1be6a",
+      "action": "added"
+    },
+    {
+      "origin_index": 36,
+      "origin_name": "YesWeHack",
+      "origin_url": "https://blog.yeswehack.com/",
+      "catalog_key": "feed-bb14a19c82cdc80c",
+      "action": "added"
+    },
+    {
+      "origin_index": 37,
+      "origin_name": "SecurityMagazine",
+      "origin_url": "https://www.securitymagazine.com/rss/topic/2236-cyber-security-news",
+      "catalog_key": "feed-70c14074448b1645",
+      "action": "added"
+    },
+    {
+      "origin_index": 38,
+      "origin_name": "Infosecurity Magazine",
+      "origin_url": "https://www.infosecurity-magazine.com/rss/news/",
+      "catalog_key": "feed-496803617126d09c",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 39,
+      "origin_name": "US-CERT Alerts",
+      "origin_url": "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+      "catalog_key": "feed-94b44da475489c7a",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 40,
+      "origin_name": "CISA Known Exploited Vulnerabilities",
+      "origin_url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+      "catalog_key": "feed-c0890e748a0b6578",
+      "action": "merged_alias"
+    },
+    {
+      "origin_index": 41,
+      "origin_name": "The Register Security",
+      "origin_url": "https://www.theregister.com/security/headlines.atom",
+      "catalog_key": "feed-e4163f13026c3567",
+      "action": "added"
+    },
+    {
+      "origin_index": 42,
+      "origin_name": "USENIX Security",
+      "origin_url": "https://www.usenix.org/blog/feed",
+      "catalog_key": "feed-729e366c4ab4b2b6",
+      "action": "added"
+    },
+    {
+      "origin_index": 43,
+      "origin_name": "McAfee Labs",
+      "origin_url": "https://www.mcafee.com/blogs/feed/",
+      "catalog_key": "feed-5a677c9f3ade66f9",
+      "action": "added"
+    },
+    {
+      "origin_index": 44,
+      "origin_name": "VMware Security Blog",
+      "origin_url": "https://blogs.vmware.com/security/feed/",
+      "catalog_key": "feed-2d8619a93995b24e",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 45,
+      "origin_name": "Check Point Research",
+      "origin_url": "https://research.checkpoint.com/feed/",
+      "catalog_key": "feed-775d7028d700e914",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 46,
+      "origin_name": "Elastic Security Labs",
+      "origin_url": "https://www.elastic.co/security-labs/rss/feed.xml",
+      "catalog_key": "feed-671e3cb19c43de49",
+      "action": "added"
+    },
+    {
+      "origin_index": 47,
+      "origin_name": "Google Cloud Security",
+      "origin_url": "https://cloud.google.com/blog/topics/security/rss",
+      "catalog_key": "feed-7c729533438f7762",
+      "action": "added"
+    },
+    {
+      "origin_index": 48,
+      "origin_name": "Okta Security",
+      "origin_url": "https://sec.okta.com/rss.xml",
+      "catalog_key": "feed-7ca81928e56a9cd5",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 49,
+      "origin_name": "NVD Analyzed CVE Feed",
+      "origin_url": "https://nvd.nist.gov/feeds/xml/cve/misc/nvd-rss-analyzed.xml",
+      "catalog_key": "feed-a8a57149d31deee4",
+      "action": "retired_replaced",
+      "reason": "Legacy NVD feed/severity-restricted catalog replaced by incremental NVD API"
+    },
+    {
+      "origin_index": 50,
+      "origin_name": "BDU FSTEC",
+      "origin_url": "https://bdu.fstec.ru/ubi/vul/rss",
+      "catalog_key": "feed-47db0a7299e9be88",
+      "action": "added"
+    },
+    {
+      "origin_index": 51,
+      "origin_name": "BDU FSTEC (Опасные)",
+      "origin_url": "https://bdu.fstec.ru/ubi/vul/danger/rss",
+      "catalog_key": "feed-7a7d7bbda95ce6fa",
+      "action": "added"
+    },
+    {
+      "origin_index": 52,
+      "origin_name": "BDU FSTEC (Инциденты)",
+      "origin_url": "https://bdu.fstec.ru/ubi/vul/incident/rss",
+      "catalog_key": "feed-9b6b313173637440",
+      "action": "added"
+    },
+    {
+      "origin_index": 53,
+      "origin_name": "BDU FSTEC (Угрозы)",
+      "origin_url": "https://bdu.fstec.ru/ubi/threat/rss",
+      "catalog_key": "feed-02fecf91802e24a1",
+      "action": "added"
+    },
+    {
+      "origin_index": 54,
+      "origin_name": "CERT-FR",
+      "origin_url": "https://www.cert.ssi.gouv.fr/feed/",
+      "catalog_key": "feed-4119cd0e71592b68",
+      "action": "added"
+    },
+    {
+      "origin_index": 55,
+      "origin_name": "GovCERT.ch",
+      "origin_url": "https://govcert.ch/feed/",
+      "catalog_key": "feed-66a4e13f83096a99",
+      "action": "added"
+    },
+    {
+      "origin_index": 56,
+      "origin_name": "The DFIR Report",
+      "origin_url": "https://thedfirreport.com/feed/",
+      "catalog_key": "feed-4a349ec95eeb8804",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 57,
+      "origin_name": "Malwarebytes Labs",
+      "origin_url": "https://www.malwarebytes.com/blog/feed",
+      "catalog_key": "feed-8a2e974b28c7ba7b",
+      "action": "merged_alias"
+    },
+    {
+      "origin_index": 58,
+      "origin_name": "Cisco Security Blog",
+      "origin_url": "https://blogs.cisco.com/security/feed",
+      "catalog_key": "feed-7fb4d8472f9b0073",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 59,
+      "origin_name": "Group-IB Blog",
+      "origin_url": "https://www.group-ib.com/blog/rss.xml",
+      "catalog_key": "feed-6ca4ec1a9528aa13",
+      "action": "added"
+    },
+    {
+      "origin_index": 60,
+      "origin_name": "WeLiveSecurity",
+      "origin_url": "https://www.welivesecurity.com/feed/",
+      "catalog_key": "feed-0a38b673280a59f7",
+      "action": "added"
+    },
+    {
+      "origin_index": 61,
+      "origin_name": "Microsoft Security Blog",
+      "origin_url": "https://www.microsoft.com/en-us/security/blog/feed/",
+      "catalog_key": "feed-d9797ada9149e396",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 62,
+      "origin_name": "Rapid7 Blog",
+      "origin_url": "https://www.rapid7.com/blog/rss/",
+      "catalog_key": "feed-eeb49163d938513e",
+      "action": "merged_alias"
+    },
+    {
+      "origin_index": 63,
+      "origin_name": "Project Zero",
+      "origin_url": "https://projectzero.google/feed.xml",
+      "catalog_key": "feed-2b62007173a6f617",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 64,
+      "origin_name": "Unit 42",
+      "origin_url": "https://unit42.paloaltonetworks.com/feed/",
+      "catalog_key": "feed-5feda8a4ed64053a",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 65,
+      "origin_name": "JetBrains Blog",
+      "origin_url": "https://blog.jetbrains.com/feed/",
+      "catalog_key": "feed-ed85ad123a96da65",
+      "action": "added"
+    },
+    {
+      "origin_index": 66,
+      "origin_name": "Citrix Security Bulletins",
+      "origin_url": "https://support.citrix.com/s/security-bulletins?language=en_US",
+      "catalog_key": "feed-fd694943bb333036",
+      "action": "added"
+    },
+    {
+      "origin_index": 67,
+      "origin_name": "NVIDIA Product Security",
+      "origin_url": "https://nvidia.custhelp.com/app/answers/list/kw/security%20bulletin",
+      "catalog_key": "feed-0e68808e21c352a8",
+      "action": "added"
+    },
+    {
+      "origin_index": 68,
+      "origin_name": "Exploit Database",
+      "origin_url": "https://www.exploit-db.com/rss.xml",
+      "catalog_key": "feed-e0db670cb97c01bb",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 69,
+      "origin_name": "CSO Online",
+      "origin_url": "https://www.csoonline.com/rss/",
+      "catalog_key": "feed-f6881d7d2eab6186",
+      "action": "added"
+    },
+    {
+      "origin_index": 70,
+      "origin_name": "SentinelOne Blog",
+      "origin_url": "https://www.sentinelone.com/blog/feed/",
+      "catalog_key": "feed-cd1ae604774efdf8",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 71,
+      "origin_name": "Talos Security",
+      "origin_url": "https://blog.talosintelligence.com/feed/",
+      "catalog_key": "feed-7e6e6cdbd15ded86",
+      "action": "merged_alias"
+    },
+    {
+      "origin_index": 72,
+      "origin_name": "Dev.to",
+      "origin_url": "https://dev.to/feed",
+      "catalog_key": "feed-6dc544294b7f21f9",
+      "action": "added"
+    },
+    {
+      "origin_index": 73,
+      "origin_name": "InfoQ",
+      "origin_url": "https://feed.infoq.com/",
+      "catalog_key": "feed-151808e9ea0f0daa",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 74,
+      "origin_name": "TechCrunch",
+      "origin_url": "https://techcrunch.com/feed/",
+      "catalog_key": "feed-7c18f6f341324035",
+      "action": "added"
+    },
+    {
+      "origin_index": 75,
+      "origin_name": "Ars Technica",
+      "origin_url": "https://feeds.arstechnica.com/arstechnica/index",
+      "catalog_key": "feed-7170fc473d11956d",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 76,
+      "origin_name": "The Register (IT)",
+      "origin_url": "https://www.theregister.com/headlines.atom",
+      "catalog_key": "feed-217ddb7817328149",
+      "action": "added"
+    },
+    {
+      "origin_index": 77,
+      "origin_name": "GitHub Blog",
+      "origin_url": "https://github.blog/feed/",
+      "catalog_key": "feed-f73fd9169bbe6212",
+      "action": "added"
+    },
+    {
+      "origin_index": 78,
+      "origin_name": "GitHub Security Advisories",
+      "origin_url": "https://api.github.com/advisories?per_page=50&sort=published&direction=desc",
+      "catalog_key": "feed-55e7e96ff6bb72f2",
+      "action": "merged_alias"
+    },
+    {
+      "origin_index": 79,
+      "origin_name": "Stack Overflow Blog",
+      "origin_url": "https://stackoverflow.blog/feed/",
+      "catalog_key": "feed-21549c0b576a4b80",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 80,
+      "origin_name": "The Verge",
+      "origin_url": "https://www.theverge.com/rss/index.xml",
+      "catalog_key": "feed-8eb61941edd3dfcf",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 81,
+      "origin_name": "Wired",
+      "origin_url": "https://www.wired.com/feed/rss",
+      "catalog_key": "feed-bcd998793f0fea92",
+      "action": "added"
+    },
+    {
+      "origin_index": 82,
+      "origin_name": "Google Developers Blog",
+      "origin_url": "https://developers.googleblog.com/feeds/posts/default",
+      "catalog_key": "feed-d9bfd43d294b1f79",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 83,
+      "origin_name": "AWS Blog",
+      "origin_url": "https://aws.amazon.com/blogs/aws/feed/",
+      "catalog_key": "feed-017a74fc55c66bb7",
+      "action": "added"
+    },
+    {
+      "origin_index": 84,
+      "origin_name": "Docker Blog",
+      "origin_url": "https://www.docker.com/blog/feed/",
+      "catalog_key": "feed-44451a8610940721",
+      "action": "added"
+    },
+    {
+      "origin_index": 85,
+      "origin_name": "Kubernetes Blog",
+      "origin_url": "https://kubernetes.io/feed.xml",
+      "catalog_key": "feed-74a7d8675f99f917",
+      "action": "added"
+    },
+    {
+      "origin_index": 86,
+      "origin_name": "CNCF Blog",
+      "origin_url": "https://www.cncf.io/feed/",
+      "catalog_key": "feed-c657f58393567a43",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 87,
+      "origin_name": "Lobsters",
+      "origin_url": "https://lobste.rs/rss",
+      "catalog_key": "feed-f46e074ae5500043",
+      "action": "added"
+    },
+    {
+      "origin_index": 88,
+      "origin_name": "Slashdot Developers",
+      "origin_url": "https://rss.slashdot.org/Slashdot/slashdotDevelopers",
+      "catalog_key": "feed-6ed3459124cc89fc",
+      "action": "added"
+    },
+    {
+      "origin_index": 89,
+      "origin_name": "Netflix Tech Blog",
+      "origin_url": "https://medium.com/feed/netflix-techblog",
+      "catalog_key": "feed-2b7b9607f2ed1ca4",
+      "action": "added"
+    },
+    {
+      "origin_index": 90,
+      "origin_name": "Tproger",
+      "origin_url": "https://tproger.ru/feed/",
+      "catalog_key": "feed-a83da321fc3894bd",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 91,
+      "origin_name": "VC.ru",
+      "origin_url": "https://vc.ru/rss/all",
+      "catalog_key": "feed-998b988983ad9013",
+      "action": "added"
+    },
+    {
+      "origin_index": 92,
+      "origin_name": "Habr — Информационная безопасность",
+      "origin_url": "https://habr.com/ru/rss/hub/infosecurity/all/?fl=ru",
+      "catalog_key": "feed-67c1afb569308d2a",
+      "action": "merged_alias"
+    },
+    {
+      "origin_index": 93,
+      "origin_name": "Securelist (RU)",
+      "origin_url": "https://securelist.ru/feed/",
+      "catalog_key": "feed-bbb7eda27c748ca5",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 94,
+      "origin_name": "Forklog",
+      "origin_url": "https://forklog.com/feed/",
+      "catalog_key": "feed-00ccaac43d3fc7cc",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 95,
+      "origin_name": "incrussia.ru",
+      "origin_url": "https://incrussia.ru/feed/",
+      "catalog_key": "feed-b165bb92a8d3df47",
+      "action": "added"
+    },
+    {
+      "origin_index": 96,
+      "origin_name": "Microsoft MSRC Update Guide",
+      "origin_url": "https://api.msrc.microsoft.com/update-guide/rss",
+      "catalog_key": "feed-5dea443ab3ff0b42",
+      "action": "added"
+    },
+    {
+      "origin_index": 97,
+      "origin_name": "Cisco Security Advisories",
+      "origin_url": "https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml",
+      "catalog_key": "feed-8a3b81ee3853c884",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 98,
+      "origin_name": "Fortinet PSIRT Advisories",
+      "origin_url": "https://filestore.fortinet.com/fortiguard/rss/ir.xml",
+      "catalog_key": "feed-3903b1582d75bc31",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 99,
+      "origin_name": "Palo Alto Security Advisories",
+      "origin_url": "https://security.paloaltonetworks.com/rss.xml",
+      "catalog_key": "feed-f5cd398ad9aad659",
+      "action": "added"
+    },
+    {
+      "origin_index": 100,
+      "origin_name": "Ubuntu Security Notices",
+      "origin_url": "https://ubuntu.com/security/notices/rss.xml",
+      "catalog_key": "feed-b53fef74a3c7e31c",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 101,
+      "origin_name": "Debian Security Advisories",
+      "origin_url": "https://www.debian.org/security/dsa",
+      "catalog_key": "feed-be342d056ff528b7",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 102,
+      "origin_name": "Chrome Releases",
+      "origin_url": "https://chromereleases.googleblog.com/feeds/posts/default",
+      "catalog_key": "feed-3223901d28249716",
+      "action": "added"
+    },
+    {
+      "origin_index": 103,
+      "origin_name": "Zero Day Initiative Advisories",
+      "origin_url": "https://www.zerodayinitiative.com/rss/published/",
+      "catalog_key": "feed-40780822b6acd62f",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 104,
+      "origin_name": "Kaspersky ICS CERT Advisories",
+      "origin_url": "https://ics-cert.kaspersky.ru/feed-advisories/",
+      "catalog_key": "feed-f8b4329c6bc6084a",
+      "action": "added"
+    },
+    {
+      "origin_index": 105,
+      "origin_name": "CCCS Canada Alerts and Advisories",
+      "origin_url": "https://www.cyber.gc.ca/api/cccs/rss/v1/get?feed=alerts_advisories&lang=en",
+      "catalog_key": "feed-3a4d2dfaa4e568cb",
+      "action": "added"
+    },
+    {
+      "origin_index": 106,
+      "origin_name": "CERT/CC Vulnerability Notes",
+      "origin_url": "https://kb.cert.org/vuls/atomfeed/",
+      "catalog_key": "feed-61ae2d5f1f02d6ad",
+      "action": "added"
+    },
+    {
+      "origin_index": 107,
+      "origin_name": "Ivanti Security Advisories",
+      "origin_url": "https://www.ivanti.com/blog/topics/security-advisory/rss",
+      "catalog_key": "feed-8ea7252042476348",
+      "action": "added"
+    },
+    {
+      "origin_index": 108,
+      "origin_name": "NVD CVE API (Critical)",
+      "origin_url": "https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate={since}&pubEndDate={until}&resultsPerPage=200&cvssV3Severity=CRITICAL",
+      "catalog_key": "feed-a8a57149d31deee4",
+      "action": "retired_replaced",
+      "reason": "Legacy NVD feed/severity-restricted catalog replaced by incremental NVD API"
+    },
+    {
+      "origin_index": 109,
+      "origin_name": "NVD CVE API (High)",
+      "origin_url": "https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate={since}&pubEndDate={until}&resultsPerPage=200&cvssV3Severity=HIGH",
+      "catalog_key": "feed-a8a57149d31deee4",
+      "action": "retired_replaced",
+      "reason": "Legacy NVD feed/severity-restricted catalog replaced by incremental NVD API"
+    },
+    {
+      "origin_index": 110,
+      "origin_name": "NVD CVE API",
+      "origin_url": "https://services.nvd.nist.gov/rest/json/cves/2.0?lastModStartDate={since}&lastModEndDate={until}&resultsPerPage=500",
+      "catalog_key": "feed-a8a57149d31deee4",
+      "action": "added"
+    },
+    {
+      "origin_index": 111,
+      "origin_name": "Telegram: Управление уязвимостями (avleonovrus)",
+      "origin_url": "https://t.me/s/avleonovrus",
+      "catalog_key": "feed-769af4b608a82bbc",
+      "action": "added"
+    },
+    {
+      "origin_index": 112,
+      "origin_name": "Telegram: True Secator",
+      "origin_url": "https://t.me/s/true_secator",
+      "catalog_key": "feed-9b2179178a780c23",
+      "action": "added"
+    },
+    {
+      "origin_index": 113,
+      "origin_name": "Telegram: Positive Technologies SWARM (ptswarm)",
+      "origin_url": "https://t.me/s/ptswarm",
+      "catalog_key": "feed-c7689cf62295ef76",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 114,
+      "origin_name": "Telegram: Ralf Hacker Channel",
+      "origin_url": "https://t.me/s/RalfHackerChannel",
+      "catalog_key": "feed-6c0faca5bff12ec2",
+      "action": "added"
+    },
+    {
+      "origin_index": 115,
+      "origin_name": "Telegram: SecLab News",
+      "origin_url": "https://t.me/s/SecLabNews",
+      "catalog_key": "feed-88db17e591b2c960",
+      "action": "mapped_existing"
+    },
+    {
+      "origin_index": 116,
+      "origin_name": "Telegram: Android Malware (androidMalware)",
+      "origin_url": "https://t.me/s/androidMalware",
+      "catalog_key": "feed-14283a531b673d44",
+      "action": "added"
+    },
+    {
+      "origin_index": 117,
+      "origin_name": "Telegram: The Hacker News",
+      "origin_url": "https://t.me/s/thehackernews",
+      "catalog_key": "feed-ae87423f8ccf3383",
+      "action": "added"
+    }
+  ]
+}

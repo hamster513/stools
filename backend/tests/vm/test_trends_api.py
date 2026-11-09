@@ -266,3 +266,55 @@ def test_retracted_evidence_is_auditable_only_in_its_selected_period(auth_client
     assert history['publication_count'] == 0 and len(history['evidence']) == 2
     assert auth_client.get('/api/vm/trends?view=mentions&period=all').json()['total'] == 0
     assert auth_client.get('/api/vm/trends/badges?ids=CVE-2026-12345').json() == {}
+
+
+def test_diagnostic_archive_preserves_background_and_unknown_dates(auth_client, db_session):
+    classification={'category':'background','reasons':['Не относится к уязвимостям'],'identifier_roles':[],'rule_version':1}
+    apply_page(db_session,news_page([{'title':'AI detects diseases','identifiers':[],'text':'Medical research','classification':classification},
+        {'title':'Undated security report','published_at':None}]))
+    process_pending(db_session)
+    assert auth_client.get('/api/vm/trends?view=review').json()['total']==0
+    result=auth_client.get('/api/vm/trends?view=archive&period=all').json()
+    assert result['total']==2
+    undated=next(row for row in result['items'] if row['title']=='Undated security report')
+    detail=auth_client.get('/api/vm/trends/'+undated['id']+'?period=all').json()
+    assert detail['evidence_total']==1 and detail['evidence'][0]['published_at'] is None
+
+
+def test_source_filter_limits_loaded_cards_but_keeps_other_publishers(auth_client, db_session, monkeypatch):
+    from api.modules.vm.services.trends import query
+    data = news_page([
+        {'identifiers': ['CVE-2026-12345']},
+        {'identifiers': ['CVE-2026-12345']},
+        {'identifiers': ['CVE-2026-23456'], 'title': 'Unrelated CVE-2026-23456'},
+    ])
+    apply_page(db_session, data)
+    process_pending(db_session)
+    original = query.evidence_for
+    loaded = []
+    def capture(db, card_ids, *args, **kwargs):
+        loaded.extend(card_ids)
+        return original(db, card_ids, *args, **kwargs)
+    monkeypatch.setattr(query, 'evidence_for', capture)
+    response = auth_client.get('/api/vm/trends?view=all&period=30d&source_id=source-0')
+    assert response.status_code == 200
+    assert loaded == ['CVE-2026-12345']
+    assert response.json()['items'][0]['publisher_count'] == 2
+
+
+def test_monthly_results_and_refresh_use_bounded_evidence_batches(auth_client, db_session, monkeypatch):
+    from api.modules.vm.services.trends import analyze, query
+    rows=[{'identifiers':[f'CVE-2026-{20000+i}'], 'title':f'Security issue CVE-2026-{20000+i}'} for i in range(125)]
+    apply_page(db_session,news_page(rows))
+    sizes=[]; original=analyze.evidence_for
+    def capture(db,card_ids,*args,**kwargs):
+        sizes.append(len(card_ids))
+        return original(db,card_ids,*args,**kwargs)
+    monkeypatch.setattr(analyze,'evidence_for',capture)
+    process_pending(db_session)
+    assert sizes and max(sizes)<len(rows)
+    sizes.clear();monkeypatch.setattr(query,'evidence_for',capture)
+    response=auth_client.get('/api/vm/trends?view=mentions&period=30d&limit=10&offset=100')
+    assert response.status_code==200
+    assert response.json()['total']==125 and len(response.json()['items'])==10
+    assert sizes and max(sizes)<len(rows)

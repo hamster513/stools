@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import re
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -38,6 +39,12 @@ _HHMM = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
 
 
 class ThSettings(BaseModel):
+    filter_folder_id: str = ""
+    @field_validator("filter_folder_id")
+    @classmethod
+    def check_filter_folder(cls, value: str) -> str:
+        return str(UUID(value.strip())) if value.strip() else ""
+
     nightly_enabled: bool = True
     window_from: str = "01:00"
     #: Пауза между хантами ночного прогона — не нагружать MaxPatrol; запросы одного ханта идут подряд.

@@ -46,6 +46,8 @@ ops/tls/
 
 # Указания ассистенту — принадлежат рабочему месту, а не проекту
 CLAUDE.md
+AGENTS.md
+.Codex/
 
 # Бандл ATT&CK — публичные данные MITRE, но 50 МБ в репозитории ни к чему
 enterprise-attack.json

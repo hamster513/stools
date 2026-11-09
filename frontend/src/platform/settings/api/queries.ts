@@ -91,11 +91,18 @@ export function useLlm() {
   })
 }
 
-export function useLlmModels(baseUrl: string) {
-  return useQuery<{ models: string[] }, ApiRequestError>({
-    queryKey: ['settings-llm-models', baseUrl],
-    queryFn: () => api.post('/api/settings/llm/models', { base_url: baseUrl }),
-    enabled: !!baseUrl,
+export function useLlmModels(
+  baseUrl: string,
+  provider: NonNullable<LlmSettings['provider']> = 'ollama',
+  options: { enabled?: boolean; apiKey?: string; credentialVersion?: string } = {},
+) {
+  return useQuery<{ models: string[]; embedding_models?: string[] }, ApiRequestError>({
+    // Only a revision identifier belongs in the cache key, never the API key.
+    queryKey: ['settings-llm-models', provider, provider === 'ollama' ? baseUrl : '', options.credentialVersion ?? ''],
+    queryFn: () => api.post('/api/settings/llm/models', {
+      base_url: baseUrl, provider, ...(provider === 'deepseek' ? { api_key: options.apiKey } : {}),
+    }),
+    enabled: options.enabled ?? (provider === 'openrouter' || (provider === 'ollama' && !!baseUrl)),
     retry: false,
     staleTime: 60_000,
   })

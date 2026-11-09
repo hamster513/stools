@@ -68,6 +68,7 @@ export interface FindingRecord {
 }
 
 export const SETTINGS: ThSettings = {
+  filter_folder_id: '',
   nightly_enabled: true,
   window_from: '01:00',
   hunt_pause_s: 30,

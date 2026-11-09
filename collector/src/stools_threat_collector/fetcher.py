@@ -52,7 +52,10 @@ class Fetcher:
                 # Pin the checked address, preserving TLS SNI and the HTTP Host. A second
                 # DNS lookup in the transport could otherwise bypass the address check.
                 target = httpx.URL(url).copy_with(host=addresses[0])
-                request_headers = {"User-Agent": "STools-Threat-Collector/0.1", "Host": parts.netloc, **(headers or {})}
+                safe_headers = dict(headers or {})
+                if (parts.scheme, parts.netloc) != (original.scheme, original.netloc):
+                    safe_headers = {k:v for k,v in safe_headers.items() if k.lower() in ("user-agent", "accept")}
+                request_headers = {"User-Agent": "STools-Threat-Collector/0.1", "Host": parts.netloc, **safe_headers}
                 with client.stream("GET", target, headers=request_headers,
                                    timeout=httpx.Timeout(min(30, remaining), connect=min(10, remaining)),
                                    extensions={"sni_hostname": parts.hostname}) as response:

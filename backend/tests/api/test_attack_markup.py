@@ -200,17 +200,25 @@ def test_leak_guard_keeps_the_payload_off_the_wire(
     assert {g["status"] for g in groups["items"]} == {"unmapped"}
 
 
+@pytest.mark.parametrize('task_routing', [False, True])
 def test_markup_reaches_the_model_when_the_guard_passes(
-    auth_client: TestClient, snapshot_id: int, monkeypatch: pytest.MonkeyPatch
+    auth_client: TestClient, snapshot_id: int, monkeypatch: pytest.MonkeyPatch, task_routing: bool
 ) -> None:
     """Обратная сторона предыдущего теста: без него «ничего не ушло»
     неотличимо от «разметка вообще не работает»."""
     import api.modules.siem.services.attack as service
 
     def fake_embed(self: Any, texts: list[str]) -> list[list[float]]:
+        if task_routing:
+            assert self._settings.provider == 'ollama'
+            assert self._settings.embed_model == 'separate-vectors'
         return [[1.0, 0.0] for _ in texts]
 
     def fake_complete(self: Any, prompt: str, schema: Any) -> str:
+        if task_routing:
+            assert self._settings.provider == 'deepseek'
+            assert self._settings.model == 'separate-reasoner'
+            assert self._settings.api_key.get_secret_value() == 'task-test-key'
         first = schema["properties"]["techniques"]["items"]["properties"]["technique_id"]["enum"][0]
         return json.dumps(
             {"techniques": [{"technique_id": first, "confidence": "низкая", "evidence": "тест"}]}
@@ -222,6 +230,13 @@ def test_markup_reaches_the_model_when_the_guard_passes(
     auth_client.put(
         "/api/settings/llm", json={"base_url": "http://x.invalid:11434", "enabled": True}
     )
+    if task_routing:
+        response = auth_client.put('/api/settings/llm', json={
+            'tasks': {'attack_embeddings': {'provider': 'ollama', 'model': 'separate-vectors'},
+                      'attack_markup': {'provider': 'deepseek', 'model': 'separate-reasoner'}},
+            'key_updates': {'deepseek': 'task-test-key'},
+        })
+        assert response.status_code == 204
     auth_client.put("/api/siem/settings", json={"attack": {"top_k": 5}})
     job_id = auth_client.post(
         "/api/siem/attack/run", json={"snapshot_id": snapshot_id}

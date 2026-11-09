@@ -34,6 +34,8 @@ import {
   type ThFindingsFilters,
   type ThFindingView,
   type ThJob,
+  type CatalogQuery,
+  type SavedFilter,
   type ThSettings,
   type ThSettingsView,
 } from './types'
@@ -441,5 +443,43 @@ export function useThJobs() {
     queryKey: [...TH_JOBS_KEY, 'list'],
     queryFn: () => api.get(`${BASE}/jobs`),
     refetchInterval: (query) => (query.state.data?.some((j) => j.status === 'running') ? POLL_MS : false),
+  })
+}
+
+export function useFilterFolders(enabled: boolean) {
+  return useQuery<{ id: string; name: string }[], ApiRequestError>({
+    queryKey: ['th', 'filter-folders'],
+    queryFn: () => api.get(`${BASE}/filters/folders`),
+    enabled, retry: false, staleTime: 0,
+  })
+}
+
+export function usePublishFilter() {
+  const qc = useQueryClient()
+  return useMutation<SavedFilter, ApiRequestError, { kind: 'query' | 'deep'; id: number }>({
+    mutationFn: ({ kind, id }) => api.post(`${BASE}/filters/${kind}/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['th'] }),
+  })
+}
+
+export function useFilterCatalog(enabled = true) {
+  return useQuery<{ items: { id: string; name: string }[] }, ApiRequestError>({
+    queryKey: ['th', 'filter-catalog'],
+    queryFn: () => api.get(`${BASE}/filters/catalog`),
+    enabled, retry: false, staleTime: 0,
+  })
+}
+
+export function useReadFilter() {
+  return useMutation<CatalogQuery, ApiRequestError, string>({
+    mutationFn: id => api.get(`${BASE}/filters/catalog/${encodeURIComponent(id)}`),
+  })
+}
+
+export function useRefreshFilters() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.get(`${BASE}/filters/catalog`),
+    onSettled: () => qc.invalidateQueries({queryKey: ['th']}),
   })
 }

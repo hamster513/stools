@@ -6,6 +6,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .contracts import Source, SourceUpdate
 from .scheduler import Runner
+from .monitoring_contracts import CollectionWindow
+from . import management, monitoring
 
 
 def create_app(store, run_scheduler=True):
@@ -66,9 +68,9 @@ def create_app(store, run_scheduler=True):
             raise HTTPException(409, str(exc)) from exc
 
     @app.post("/api/v1/sources/{id}/collect", status_code=202, dependencies=[Depends(writer)])
-    def collect(id: str):
+    def collect(id: str, payload: CollectionWindow | None = None):
         try:
-            return {"job_id": runner.submit(id)}
+            return {"job_id": runner.submit(id, window=payload)}
         except KeyError as exc:
             raise HTTPException(404, "Source not found") from exc
         except ValueError as exc:
@@ -77,7 +79,10 @@ def create_app(store, run_scheduler=True):
     @app.get("/api/v1/jobs/{id}", dependencies=[Depends(reader)])
     def job(id: str):
         try:
-            return store.job(id)
+            try:
+                return monitoring.run(store,id)
+            except KeyError:
+                return store.job(id)
         except KeyError as exc:
             raise HTTPException(404, "Job not found") from exc
 
@@ -88,4 +93,5 @@ def create_app(store, run_scheduler=True):
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    management.register(app,store,runner,reader,writer)
     return app

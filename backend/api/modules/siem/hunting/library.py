@@ -16,7 +16,7 @@ import datetime as dt
 import json
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -38,6 +38,10 @@ class LibraryError(ValueError):
 
 
 class QueryIn(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=10000)
+    is_full_pdql: bool = False
+    siem_filter_id: str | None = None
     query_id: str
     query: str
     fields: str
@@ -79,7 +83,7 @@ def check_hunt(data: HuntIn) -> None:
         if qid in seen:
             raise LibraryError(f"query_id повторяется: {qid}")
         seen.add(qid)
-        if not q.query.strip() or not split_fields(q.fields):
+        if not q.query.strip() or (not q.is_full_pdql and not split_fields(q.fields)):
             raise LibraryError(f"{qid}: поля запроса пусты")
         if q.limit is not None and not 1 <= q.limit <= _LIMIT_MAX:
             raise LibraryError(f"{qid}: предел событий от 1 до {_LIMIT_MAX}")
@@ -96,6 +100,10 @@ def stored_view(q: ThQuery) -> tuple[str, list[str], list[str], int | None]:
 
 
 def _fill(row: ThQuery, q: QueryIn) -> None:
+    row.name = q.name.strip() if q.name is not None and q.name.strip() else row.name or row.query_id
+    if q.description is not None:
+        row.description = q.description
+    row.is_full_pdql = q.is_full_pdql
     text, fields, labels, limit = query_view(q)
     row.query = text
     row.fields_json = json.dumps(fields, ensure_ascii=False)
@@ -151,6 +159,10 @@ def sync_queries(db: Session, hunt: ThHunt, queries: list[QueryIn], *, from_ui: 
             row.enabled = q.enabled
             row.position = index
         _fill(row, q)
+        if q.siem_filter_id is not None:
+            db.flush()
+            from api.modules.siem.hunting.saved_filters import bind_selected
+            bind_selected(db, row, q.siem_filter_id)
     if from_ui:
         keep = {q.query_id.strip() for q in queries}
         for qid, row in existing.items():

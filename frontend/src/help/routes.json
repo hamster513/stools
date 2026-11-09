@@ -69,6 +69,7 @@
   "/siem/snapshots/:id/profile",
   "/siem/snapshots/:id/rules",
   "/toolbox",
+  "/toolbox/lookup",
   "/toolbox/aliases",
   "/toolbox/base64",
   "/toolbox/ip",

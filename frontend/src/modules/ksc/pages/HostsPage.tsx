@@ -389,7 +389,7 @@ export function HostsPage({ serverId }: { serverId: number }) {
   const [searchInput, setSearchInput] = useState('')
   const q = useDebouncedValue(searchInput, 250)
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [openHostId, setOpenHostId] = useState<string | null>(null)
+  const [openHostId, setOpenHostId] = useState<string | null>(() => params.get('host'))
   const searchRef = useRef<HTMLInputElement>(null)
   const filtersPanel = useFiltersPanel('ksc-hosts')
   const policyName = usePolicy(snapshotId, filters.policy).data?.name

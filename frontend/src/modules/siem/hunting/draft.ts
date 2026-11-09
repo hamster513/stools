@@ -6,6 +6,10 @@
 import type { HuntIn, HuntView, QueryIn } from './api/types'
 
 export interface QueryDraft {
+  name: string
+  description: string
+  is_full_pdql: boolean
+  siem_filter_id?: string
   /** Ключ строки в списке: у сохранённого запроса `pk-<id>`, у нового `new-<n>`. */
   key: string
   /** Номер запроса в базе (`QueryView.id`); у ещё не сохранённого — null. */
@@ -35,7 +39,7 @@ export function emptyQuery(taken: QueryDraft[]): QueryDraft {
   let n = taken.length + 1
   while (used.has(`Q${n}`)) n += 1
   counter += 1
-  return { key: `new-${counter}`, pk: null, query_id: `Q${n}`, query: '', fields: '', fields_label: '', limit: '', enabled: true }
+  return { key: `new-${counter}`, pk: null, name: '', description: '', is_full_pdql: false, query_id: `Q${n}`, query: '', fields: '', fields_label: '', limit: '', enabled: true }
 }
 
 /** Новый хант включён, как и по умолчанию на сервере: гипотеза идёт в ближайшую ночь; снять галочку можно до создания. */
@@ -53,6 +57,9 @@ export function fromHunt(h: HuntView): HuntDraft {
     queries: h.queries.map((q) => ({
       key: `pk-${q.id}`,
       pk: q.id,
+      name: q.name ?? q.query_id,
+      description: q.description ?? '',
+      is_full_pdql: q.is_full_pdql ?? false,
       query_id: q.query_id,
       query: q.query,
       fields: q.fields,
@@ -69,6 +76,8 @@ export function toHuntIn(draft: HuntDraft, server: HuntView | undefined): HuntIn
     const stored = q.pk === null ? undefined : server?.queries.find((s) => s.id === q.pk)
     const limit = q.limit.trim()
     return {
+      name: q.name.trim(), description: q.description, is_full_pdql: q.is_full_pdql,
+      ...(q.siem_filter_id ? {siem_filter_id: q.siem_filter_id} : {}),
       query_id: q.query_id.trim(),
       query: q.query,
       fields: q.fields,
@@ -91,6 +100,6 @@ export function toHuntIn(draft: HuntDraft, server: HuntView | undefined): HuntIn
 export function draftSignature(d: HuntDraft, saved: boolean): string {
   return JSON.stringify([
     d.code, d.name, d.description, d.technique_id, saved ? null : d.enabled,
-    d.queries.map((q) => [q.pk, q.query_id, q.query, q.fields, q.fields_label, q.limit, q.pk === null ? q.enabled : null]),
+    d.queries.map((q) => [q.pk, q.query_id, q.name, q.description, q.is_full_pdql, q.siem_filter_id, q.query, q.fields, q.fields_label, q.limit, q.pk === null ? q.enabled : null]),
   ])
 }

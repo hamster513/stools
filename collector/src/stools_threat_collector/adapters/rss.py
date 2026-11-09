@@ -8,12 +8,13 @@ from bs4 import BeautifulSoup
 
 CVE = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.IGNORECASE)
 GHSA = re.compile(r"\bGHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}\b", re.IGNORECASE)
+BDU = re.compile(r"\bBDU[:\-]\d{4}[-:]\d{3,}\b", re.IGNORECASE)
 PARSER_VERSION = 2
 
 
 def identifiers(*values):
     text = " ".join(values)
-    return sorted({match.upper() for pattern in (CVE, GHSA) for match in pattern.findall(text)})[:500]
+    return sorted({match.upper() for pattern in (CVE, GHSA, BDU) for match in pattern.findall(text)})[:500]
 
 
 def recent_publication(published, now):
@@ -42,6 +43,9 @@ def entry_date(entry, key):
 def parse_feed(data, now=None):
     feed = feedparser.parse(data)
     if not feed.get("version"):
+        title = BeautifulSoup(data[:20000], 'html.parser').title
+        if title and any(word in title.get_text().lower() for word in ('are we human', 'just a moment', 'access denied')):
+            raise ValueError('publisher requires browser verification')
         raise ValueError("response is not RSS or Atom")
     if feed.get("bozo") and not feed.entries:
         raise ValueError("malformed feed")
@@ -78,7 +82,16 @@ def collect(source, checkpoint, fetcher, now=None):
             headers["If-None-Match"] = checkpoint["etag"]
         if checkpoint.get("modified"):
             headers["If-Modified-Since"] = checkpoint["modified"]
-    response = fetcher.get(source["url"], headers)
+    # These official feeds include full articles and exceed the default 5 MiB.
+    large_feeds = {'https://www.cisa.gov/cybersecurity-advisories/all.xml',
+                   'https://www.elastic.co/security-labs/rss/feed.xml'}
+    old_limit = fetcher.max_bytes
+    try:
+        if source['url'] in large_feeds:
+            fetcher.max_bytes = 16 * 1024 * 1024
+        response = fetcher.get(source["url"], headers)
+    finally:
+        fetcher.max_bytes = old_limit
     if response.status_code == 304:
         return [], checkpoint
     documents = parse_feed(response.content, now=now)

@@ -1,0 +1,792 @@
+[
+  {
+    "name": "Habr",
+    "url": "https://habr.com/ru/rss/articles/",
+    "type": "russian",
+    "priority": 5
+  },
+  {
+    "name": "Hackware",
+    "url": "https://hackware.ru/?feed=rss2",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "Dsec",
+    "url": "https://dsec.ru/blog/rss/",
+    "type": "russian",
+    "priority": 4
+  },
+  {
+    "name": "Xakep",
+    "url": "https://xakep.ru/feed/",
+    "type": "russian",
+    "priority": 5
+  },
+  {
+    "name": "Anti-Malware",
+    "url": "https://www.anti-malware.ru/rss.xml",
+    "type": "russian",
+    "priority": 4
+  },
+  {
+    "name": "Kaspersky",
+    "url": "https://www.kaspersky.ru/blog/feed/",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "SecurityLab",
+    "url": "https://www.securitylab.ru/_services/export/rss/",
+    "type": "russian",
+    "priority": 5
+  },
+  {
+    "name": "Dr.Web",
+    "url": "https://news.drweb.ru/rss/get/?c=5&lng=ru",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "Sophos News",
+    "url": "https://news.sophos.com/en-us/feed/",
+    "type": "world",
+    "priority": 3,
+    "enabled": false
+  },
+  {
+    "name": "The Hacker News",
+    "url": "https://feeds.feedburner.com/TheHackersNews",
+    "type": "world",
+    "priority": 5
+  },
+  {
+    "name": "Avleonov",
+    "url": "https://avleonov.com/feed/",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "CNews",
+    "url": "https://www.cnews.ru/inc/rss/news.xml",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "OpenNET",
+    "url": "https://www.opennet.ru/opennews/opennews_all_utf.rss",
+    "type": "russian",
+    "priority": 4
+  },
+  {
+    "name": "iXBT",
+    "url": "https://www.ixbt.com/export/news.rss",
+    "type": "russian",
+    "priority": 2
+  },
+  {
+    "name": "3DNews",
+    "url": "https://3dnews.ru/breaking/rss",
+    "type": "russian",
+    "priority": 2
+  },
+  {
+    "name": "COMSS",
+    "url": "https://www.comss.ru/rss.php",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "SecurityMedia.ru",
+    "url": "https://securitymedia.ru/feed",
+    "type": "russian",
+    "priority": 3,
+    "enabled": false
+  },
+  {
+    "name": "Dark Reading",
+    "url": "https://www.darkreading.com/rss.xml",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "Krebs on Security",
+    "url": "https://krebsonsecurity.com/feed/",
+    "type": "world",
+    "priority": 5
+  },
+  {
+    "name": "Schneier",
+    "url": "https://schneier.com/blog/atom.xml",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "CERT-EU Security Advisories",
+    "url": "https://cert.europa.eu/publications/security-advisories-rss",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "Bleeping Computer",
+    "url": "https://www.bleepingcomputer.com/feed/",
+    "type": "world",
+    "priority": 5
+  },
+  {
+    "name": "Security Affairs",
+    "url": "https://securityaffairs.com/feed",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "SANS ISC Diary",
+    "url": "https://isc.sans.edu/rssfeed.xml",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "Threatpost",
+    "url": "https://threatpost.com/feed/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "Help Net Security",
+    "url": "https://www.helpnetsecurity.com/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Sophos Naked Security",
+    "url": "https://nakedsecurity.sophos.com/feed/",
+    "type": "world",
+    "priority": 4,
+    "enabled": false
+  },
+  {
+    "name": "Hackread",
+    "url": "https://www.hackread.com/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "GBHackers",
+    "url": "https://gbhackers.com/feed/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "SANS ISC Full",
+    "url": "https://isc.sans.edu/rssfeed_full.xml",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Kitploit",
+    "url": "https://www.kitploit.com/feeds/posts/default",
+    "type": "world",
+    "priority": 3,
+    "enabled": false
+  },
+  {
+    "name": "Palo Alto Networks",
+    "url": "https://www.paloaltonetworks.com/blog/feed",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Mandiant",
+    "url": "https://www.mandiant.com/resources/blog/rss.xml",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Fortinet Threat Research",
+    "url": "https://feeds.fortinet.com/fortinet/blog/threat-research",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Cobalt",
+    "url": "https://www.cobalt.io/blog/rss.xml",
+    "type": "world",
+    "priority": 2
+  },
+  {
+    "name": "Intigriti",
+    "url": "https://blog.intigriti.com/feed/",
+    "type": "world",
+    "priority": 2
+  },
+  {
+    "name": "YesWeHack",
+    "url": "https://blog.yeswehack.com/",
+    "type": "world",
+    "priority": 2,
+    "enabled": false
+  },
+  {
+    "name": "SecurityMagazine",
+    "url": "https://www.securitymagazine.com/rss/topic/2236-cyber-security-news",
+    "type": "world",
+    "priority": 2
+  },
+  {
+    "name": "Infosecurity Magazine",
+    "url": "https://www.infosecurity-magazine.com/rss/news/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "US-CERT Alerts",
+    "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml",
+    "type": "world",
+    "priority": 5,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36 SOC-Tools/1.0",
+    "fallback_urls": [
+      "https://www.cisa.gov/uscert/ncas/alerts.xml",
+      "https://www.cisa.gov/cybersecurity-advisories/cybersecurity-advisories.xml"
+    ]
+  },
+  {
+    "name": "CISA Known Exploited Vulnerabilities",
+    "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    "type": "world",
+    "priority": 5,
+    "feed_kind": "json",
+    "parser_type": "cisa_kev",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36 SOC-Tools/1.0"
+  },
+  {
+    "name": "The Register Security",
+    "url": "https://www.theregister.com/security/headlines.atom",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "USENIX Security",
+    "url": "https://www.usenix.org/blog/feed",
+    "type": "world",
+    "priority": 3,
+    "enabled": false
+  },
+  {
+    "name": "McAfee Labs",
+    "url": "https://www.mcafee.com/blogs/feed/",
+    "type": "world",
+    "priority": 3,
+    "enabled": false
+  },
+  {
+    "name": "VMware Security Blog",
+    "url": "https://blogs.vmware.com/security/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Check Point Research",
+    "url": "https://research.checkpoint.com/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Elastic Security Labs",
+    "url": "https://www.elastic.co/security-labs/rss/feed.xml",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Google Cloud Security",
+    "url": "https://cloud.google.com/blog/topics/security/rss",
+    "type": "world",
+    "priority": 3,
+    "enabled": false
+  },
+  {
+    "name": "Okta Security",
+    "url": "https://sec.okta.com/rss.xml",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "NVD Analyzed CVE Feed",
+    "url": "https://nvd.nist.gov/feeds/xml/cve/misc/nvd-rss-analyzed.xml",
+    "type": "world",
+    "priority": 5,
+    "retired": true,
+    "enabled": false
+  },
+  {
+    "name": "BDU FSTEC",
+    "url": "https://bdu.fstec.ru/ubi/vul/rss",
+    "type": "russian",
+    "priority": 5
+  },
+  {
+    "name": "BDU FSTEC (Опасные)",
+    "url": "https://bdu.fstec.ru/ubi/vul/danger/rss",
+    "type": "russian",
+    "priority": 5
+  },
+  {
+    "name": "BDU FSTEC (Инциденты)",
+    "url": "https://bdu.fstec.ru/ubi/vul/incident/rss",
+    "type": "russian",
+    "priority": 4
+  },
+  {
+    "name": "BDU FSTEC (Угрозы)",
+    "url": "https://bdu.fstec.ru/ubi/threat/rss",
+    "type": "russian",
+    "priority": 4
+  },
+  {
+    "name": "CERT-FR",
+    "url": "https://www.cert.ssi.gouv.fr/feed/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "GovCERT.ch",
+    "url": "https://govcert.ch/feed/",
+    "type": "world",
+    "priority": 4,
+    "enabled": false
+  },
+  {
+    "name": "The DFIR Report",
+    "url": "https://thedfirreport.com/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Malwarebytes Labs",
+    "url": "https://www.malwarebytes.com/blog/feed",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Cisco Security Blog",
+    "url": "https://blogs.cisco.com/security/feed",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Group-IB Blog",
+    "url": "https://www.group-ib.com/blog/rss.xml",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "WeLiveSecurity",
+    "url": "https://www.welivesecurity.com/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Microsoft Security Blog",
+    "url": "https://www.microsoft.com/en-us/security/blog/feed/",
+    "type": "world",
+    "priority": 5
+  },
+  {
+    "name": "Rapid7 Blog",
+    "url": "https://www.rapid7.com/blog/rss/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "Project Zero",
+    "url": "https://projectzero.google/feed.xml",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "Unit 42",
+    "url": "https://unit42.paloaltonetworks.com/feed/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "JetBrains Blog",
+    "url": "https://blog.jetbrains.com/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Citrix Security Bulletins",
+    "url": "https://support.citrix.com/s/security-bulletins?language=en_US",
+    "type": "world",
+    "priority": 3,
+    "enabled": false
+  },
+  {
+    "name": "NVIDIA Product Security",
+    "url": "https://nvidia.custhelp.com/app/answers/list/kw/security%20bulletin",
+    "type": "world",
+    "priority": 2,
+    "enabled": false
+  },
+  {
+    "name": "Exploit Database",
+    "url": "https://www.exploit-db.com/rss.xml",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "CSO Online",
+    "url": "https://www.csoonline.com/rss/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "SentinelOne Blog",
+    "url": "https://www.sentinelone.com/blog/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Talos Security",
+    "url": "https://blog.talosintelligence.com/feed/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "Dev.to",
+    "url": "https://dev.to/feed",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "InfoQ",
+    "url": "https://feed.infoq.com/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "TechCrunch",
+    "url": "https://techcrunch.com/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Ars Technica",
+    "url": "https://feeds.arstechnica.com/arstechnica/index",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "The Register (IT)",
+    "url": "https://www.theregister.com/headlines.atom",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "GitHub Blog",
+    "url": "https://github.blog/feed/",
+    "type": "world",
+    "priority": 4
+  },
+  {
+    "name": "GitHub Security Advisories",
+    "url": "https://api.github.com/advisories?per_page=50&sort=published&direction=desc",
+    "type": "world",
+    "priority": 5,
+    "feed_kind": "json",
+    "parser_type": "github_advisories",
+    "user_agent": "SOC-Tools/1.0 (+local threat intelligence collector)"
+  },
+  {
+    "name": "Stack Overflow Blog",
+    "url": "https://stackoverflow.blog/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "The Verge",
+    "url": "https://www.theverge.com/rss/index.xml",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Wired",
+    "url": "https://www.wired.com/feed/rss",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Google Developers Blog",
+    "url": "https://developers.googleblog.com/feeds/posts/default",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "AWS Blog",
+    "url": "https://aws.amazon.com/blogs/aws/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Docker Blog",
+    "url": "https://www.docker.com/blog/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Kubernetes Blog",
+    "url": "https://kubernetes.io/feed.xml",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "CNCF Blog",
+    "url": "https://www.cncf.io/feed/",
+    "type": "world",
+    "priority": 3
+  },
+  {
+    "name": "Lobsters",
+    "url": "https://lobste.rs/rss",
+    "type": "world",
+    "priority": 2
+  },
+  {
+    "name": "Slashdot Developers",
+    "url": "https://rss.slashdot.org/Slashdot/slashdotDevelopers",
+    "type": "world",
+    "priority": 2
+  },
+  {
+    "name": "Netflix Tech Blog",
+    "url": "https://medium.com/feed/netflix-techblog",
+    "type": "world",
+    "priority": 2
+  },
+  {
+    "name": "Tproger",
+    "url": "https://tproger.ru/feed/",
+    "type": "russian",
+    "priority": 4
+  },
+  {
+    "name": "VC.ru",
+    "url": "https://vc.ru/rss/all",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "Habr — Информационная безопасность",
+    "url": "https://habr.com/ru/rss/hub/infosecurity/all/?fl=ru",
+    "type": "russian",
+    "priority": 5
+  },
+  {
+    "name": "Securelist (RU)",
+    "url": "https://securelist.ru/feed/",
+    "type": "russian",
+    "priority": 5
+  },
+  {
+    "name": "Forklog",
+    "url": "https://forklog.com/feed/",
+    "type": "russian",
+    "priority": 3
+  },
+  {
+    "name": "incrussia.ru",
+    "url": "https://incrussia.ru/feed/",
+    "type": "russian",
+    "priority": 2
+  },
+  {
+    "name": "Microsoft MSRC Update Guide",
+    "url": "https://api.msrc.microsoft.com/update-guide/rss",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 5
+  },
+  {
+    "name": "Cisco Security Advisories",
+    "url": "https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 5
+  },
+  {
+    "name": "Fortinet PSIRT Advisories",
+    "url": "https://filestore.fortinet.com/fortiguard/rss/ir.xml",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 5
+  },
+  {
+    "name": "Palo Alto Security Advisories",
+    "url": "https://security.paloaltonetworks.com/rss.xml",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 5
+  },
+  {
+    "name": "Ubuntu Security Notices",
+    "url": "https://ubuntu.com/security/notices/rss.xml",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "Debian Security Advisories",
+    "url": "https://www.debian.org/security/dsa",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "Chrome Releases",
+    "url": "https://chromereleases.googleblog.com/feeds/posts/default",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "Zero Day Initiative Advisories",
+    "url": "https://www.zerodayinitiative.com/rss/published/",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "Kaspersky ICS CERT Advisories",
+    "url": "https://ics-cert.kaspersky.ru/feed-advisories/",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "CCCS Canada Alerts and Advisories",
+    "url": "https://www.cyber.gc.ca/api/cccs/rss/v1/get?feed=alerts_advisories&lang=en",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "CERT/CC Vulnerability Notes",
+    "url": "https://kb.cert.org/vuls/atomfeed/",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "Ivanti Security Advisories",
+    "url": "https://www.ivanti.com/blog/topics/security-advisory/rss",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4
+  },
+  {
+    "name": "NVD CVE API (Critical)",
+    "url": "https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate={since}&pubEndDate={until}&resultsPerPage=200&cvssV3Severity=CRITICAL",
+    "retired": true,
+    "type": "world",
+    "content_scope": "security",
+    "priority": 5,
+    "parser_type": "nvd_api",
+    "feed_kind": "json"
+  },
+  {
+    "name": "NVD CVE API (High)",
+    "url": "https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate={since}&pubEndDate={until}&resultsPerPage=200&cvssV3Severity=HIGH",
+    "retired": true,
+    "type": "world",
+    "content_scope": "security",
+    "priority": 4,
+    "parser_type": "nvd_api",
+    "feed_kind": "json"
+  },
+  {
+    "name": "NVD CVE API",
+    "url": "https://services.nvd.nist.gov/rest/json/cves/2.0?lastModStartDate={since}&lastModEndDate={until}&resultsPerPage=500",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 5,
+    "parser_type": "nvd_api",
+    "feed_kind": "json"
+  },
+  {
+    "name": "Telegram: Управление уязвимостями (avleonovrus)",
+    "url": "https://t.me/s/avleonovrus",
+    "type": "russian",
+    "content_scope": "security",
+    "priority": 3,
+    "parser_type": "telegram",
+    "feed_kind": "telegram",
+    "telegram_channel": "avleonovrus",
+    "enabled": false
+  },
+  {
+    "name": "Telegram: True Secator",
+    "url": "https://t.me/s/true_secator",
+    "type": "russian",
+    "content_scope": "security",
+    "priority": 3,
+    "parser_type": "telegram",
+    "feed_kind": "telegram",
+    "telegram_channel": "true_secator",
+    "enabled": false
+  },
+  {
+    "name": "Telegram: Positive Technologies SWARM (ptswarm)",
+    "url": "https://t.me/s/ptswarm",
+    "type": "russian",
+    "content_scope": "security",
+    "priority": 3,
+    "parser_type": "telegram",
+    "feed_kind": "telegram",
+    "telegram_channel": "ptswarm",
+    "enabled": false
+  },
+  {
+    "name": "Telegram: Ralf Hacker Channel",
+    "url": "https://t.me/s/RalfHackerChannel",
+    "type": "russian",
+    "content_scope": "security",
+    "priority": 3,
+    "parser_type": "telegram",
+    "feed_kind": "telegram",
+    "telegram_channel": "RalfHackerChannel",
+    "enabled": false
+  },
+  {
+    "name": "Telegram: SecLab News",
+    "url": "https://t.me/s/SecLabNews",
+    "type": "russian",
+    "content_scope": "security",
+    "priority": 3,
+    "parser_type": "telegram",
+    "feed_kind": "telegram",
+    "telegram_channel": "SecLabNews",
+    "enabled": false
+  },
+  {
+    "name": "Telegram: Android Malware (androidMalware)",
+    "url": "https://t.me/s/androidMalware",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 3,
+    "parser_type": "telegram",
+    "feed_kind": "telegram",
+    "telegram_channel": "androidMalware",
+    "enabled": false
+  },
+  {
+    "name": "Telegram: The Hacker News",
+    "url": "https://t.me/s/thehackernews",
+    "type": "world",
+    "content_scope": "security",
+    "priority": 3,
+    "parser_type": "telegram",
+    "feed_kind": "telegram",
+    "telegram_channel": "thehackernews",
+    "enabled": false
+  }
+]

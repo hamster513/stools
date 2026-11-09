@@ -7,7 +7,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Link } from '@/lib/router'
-import { useSaveThSettings, useThSettings } from '../../api/queries'
+import { useFilterFolders, useSaveThSettings, useThSettings } from '../../api/queries'
 import type { ThSettings, ThSettingsView } from '../../api/types'
 import { apiMessage } from '../../format'
 
@@ -18,6 +18,7 @@ const SUBTITLE = 'mb-2 text-[11px] font-semibold tracking-wide text-text-seconda
  * Включение ночного прогона, время старта и пауза между хантами здесь не правятся — они в «Планировщике».
  */
 interface Draft {
+  filter_folder_id: string
   request_timeout_s: string
   retry_minutes: string
   nightly_deadline_h: string
@@ -29,7 +30,7 @@ interface Draft {
   retention_days: string
 }
 
-type NumberKey = Exclude<keyof Draft, 'retry_minutes'>
+type NumberKey = Exclude<keyof Draft, 'retry_minutes' | 'filter_folder_id'>
 
 /** Границы те же, что у сервера (`ThSettings`). */
 const RANGES: Record<NumberKey, [number, number]> = {
@@ -45,6 +46,7 @@ const RANGES: Record<NumberKey, [number, number]> = {
 
 function toDraft(s: ThSettings): Draft {
   return {
+    filter_folder_id: s.filter_folder_id ?? '',
     request_timeout_s: String(s.request_timeout_s),
     retry_minutes: s.retry_minutes.join(', '),
     nightly_deadline_h: String(s.nightly_deadline_h),
@@ -83,6 +85,7 @@ function errorsOf(d: Draft): Partial<Record<keyof Draft, string>> {
  */
 function toSettings(d: Draft, base: ThSettings): ThSettings {
   return {
+    filter_folder_id: d.filter_folder_id,
     nightly_enabled: base.nightly_enabled,
     window_from: base.window_from,
     hunt_pause_s: base.hunt_pause_s,
@@ -130,6 +133,7 @@ export function HuntingSettings() {
 function HuntingForm({ view }: { view: ThSettingsView }) {
   const { admin } = useCan()
   const save = useSaveThSettings()
+  const folders = useFilterFolders(admin)
   const [draft, setDraft] = useState<Draft>(() => toDraft(plain(view)))
   const [saved, setSaved] = useState(false)
 
@@ -161,6 +165,23 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
 
   return (
     <form onSubmit={(e) => { e.preventDefault(); submit() }} className="grid gap-5">
+      <div>
+        <div className={SUBTITLE}>Фильтры MaxPatrol SIEM</div>
+        <div className="grid gap-3">
+          <Row label="Папка фильтров" hint="В этой папке создаются сохранённые фильтры для перехода из находок в SIEM. У подключения должны быть права на запись в папку." error={errors.filter_folder_id}>
+            <div className="flex items-center gap-2">
+              <select aria-label="Папка фильтров SIEM" value={draft.filter_folder_id} onChange={(e) => set('filter_folder_id', e.target.value)} disabled={!admin || folders.isFetching} className={FIELD}>
+                <option value="">Не выбрана</option>
+                {draft.filter_folder_id && !folders.data?.some((folder) => folder.id === draft.filter_folder_id) && <option value={draft.filter_folder_id}>Сохранённая папка ({draft.filter_folder_id})</option>}
+                {folders.data?.map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+              </select>
+              {admin && <Button type="button" loading={folders.isFetching} onClick={() => folders.refetch()}>Обновить</Button>}
+            </div>
+            {folders.isError && <p role="alert" className="mt-1 text-xs text-kind-1">{apiMessage(folders.error, 'Не удалось загрузить папки SIEM')}</p>}
+          </Row>
+          <p className="text-xs text-text-secondary">Из этой папки аналитик выбирает фильтры для запросов ханта. Создание и обновление фильтра в SIEM выполняется только по кнопке. Name — имя фильтра; Description хранится в STools.</p>
+        </div>
+      </div>
       <div>
         <div className={SUBTITLE}>Ночной прогон</div>
         <div className="grid gap-3">

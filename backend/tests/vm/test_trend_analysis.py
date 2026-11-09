@@ -33,7 +33,7 @@ def test_telegram_origin_never_reaches_model_after_source_edit(db_session, monke
     source = {**data['events'][0], 'seq': 3, 'revision': 2,
               'payload': {**data['events'][0]['payload'], 'adapter': 'rss', 'llm_allowed': True}}
     apply_page(db_session, {**data, 'until_seq': 3, 'next_cursor': 3, 'events': [source]})
-    monkeypatch.setattr(analyze, 'load_llm', lambda db: SimpleNamespace(configured=True, model='test', to_provider=lambda: None))
+    monkeypatch.setattr(analyze, 'load_llm', lambda db: SimpleNamespace(task_configured=lambda task: True))
     class Provider:
         def complete(self, *args):
             pytest.fail('Telegram content sent to LLM')

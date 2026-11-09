@@ -206,7 +206,7 @@ def translate(
     user: AppUser = Depends(get_current_user),
 ) -> dict[str, int]:
     """Перевести недостающее локальной моделью. Запускает человек."""
-    if not load_llm(db).configured:
+    if not load_llm(db).task_configured("attack_translation"):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail="адрес модели не задан — задайте его в настройках",

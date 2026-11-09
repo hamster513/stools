@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-IDENTIFIER = re.compile(r"\b(?:CVE-\d{4}-\d{4,}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})\b", re.IGNORECASE)
+IDENTIFIER = re.compile(r"\b(?:CVE-\d{4}-\d{4,}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}|BDU[:\-]\d{4}[-:]\d{3,})\b", re.IGNORECASE)
 
 
 def extract_identifiers(value: Any) -> Any:
@@ -38,7 +38,7 @@ def period_bounds(period: str = "7d", tz: str = "Europe/Moscow", date_from: str 
         zone = ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError("неизвестный часовой пояс") from exc
-    if period not in ("today", "7d", "30d", "custom", "all"):
+    if period not in ("today", "24h", "3d", "7d", "30d", "90d", "custom", "all"):
         raise ValueError("неизвестный период")
     if period == "custom":
         try:
@@ -52,6 +52,8 @@ def period_bounds(period: str = "7d", tz: str = "Europe/Moscow", date_from: str 
         except (ValueError, OverflowError) as exc:
             raise ValueError("укажите корректные даты начала и окончания YYYY-MM-DD") from exc
         return start, end
+    if period == "24h":
+        return now - dt.timedelta(hours=24), None
     if period == "today":
         return now.astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(dt.UTC), None
     return (now - dt.timedelta(days=int(period[:-1])) if period != "all" else None), None
@@ -63,10 +65,13 @@ def period_evidence(evidence: Any, now: Any = None, period: str = "7d", tz: str 
     result = []
     for entry in evidence:
         published = date(entry.get("published_at"))
-        if ((include_excluded or (not entry.get("retracted") and not entry.get("rejected"))) and published is not None
+        if published is None and include_excluded and period == "all":
+            result.append(entry)
+            continue
+        if ((include_excluded or (not entry.get("retracted") and not entry.get("rejected") and not entry.get("suppressed") and (entry.get("included_manually") or entry.get("classification", {}).get("category") != "background"))) and published is not None
                 and published <= now and (start is None or published >= start) and (end is None or published < end)):
             result.append(entry)
-    return sorted(result, key=lambda entry: date(entry["published_at"]), reverse=True)
+    return sorted(result, key=lambda entry: date(entry.get("published_at")) or dt.datetime.min.replace(tzinfo=dt.UTC), reverse=True)
 
 
 def publisher_key(entry: Any) -> str:

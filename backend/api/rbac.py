@@ -39,6 +39,7 @@ MODULE_ADMIN_WRITES: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in 
     r"(PUT|POST) /api/vm/trends/settings(/test)?",
     r"(POST|PATCH) /api/vm/trends/sources(/[^/]+(/collect)?)?",
     r"POST /api/vm/trends/(sync|import)/full",
+    r"(PUT|POST|PATCH) /api/vm/trends/(monitoring/settings|catalog/apply|sources/import/preview|sources/bulk|sources/[^/]+/preview|collector-jobs/[^/]+/(cancel|resume))",
     r"(PUT|DELETE) /api/vm/harbor/schedule",
     r"(PUT|POST) /api/siem/mp(/test)?",
     r"(PUT|POST) /api/siem/profile(/preview)?",
@@ -61,7 +62,7 @@ OPEN_SETTINGS_READS = frozenset({"/api/settings/llm", "/api/settings/findings", 
 def needed(method: str, path: str) -> tuple[str, str] | None:
     """Область и уровень, которые нужны запросу; None — любой вошедший."""
     # Расчёт по снапшоту не меняет конфигурацию и доступен аудитору.
-    read = method in READ_METHODS or (method == "POST" and re.fullmatch(r"/api/ksc/snapshots/[0-9]+/firewall/check(?:/batch)?", path) is not None)
+    read = method in READ_METHODS or (method == "POST" and path == "/api/toolbox/lookup") or (method == "POST" and re.fullmatch(r"/api/ksc/snapshots/[0-9]+/firewall/check(?:/batch)?", path) is not None)
     if path.startswith("/api/auth/"):
         return None
     parts = path.split("/")

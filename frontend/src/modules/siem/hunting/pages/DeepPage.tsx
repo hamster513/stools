@@ -80,6 +80,7 @@ export function DeepPage() {
 // --- Форма ----------------------------------------------------------------------
 
 interface Form {
+  is_full_pdql: boolean
   source: 'library' | 'own'
   huntId: number | null
   queryPk: number | null
@@ -103,6 +104,7 @@ function initialForm(hunt: HuntView | null, queryPk: number | undefined): Form {
     queryPk: q ? q.id : null,
     query: q?.query ?? '',
     fields: q?.fields ?? '',
+    is_full_pdql: q?.is_full_pdql ?? false,
     labels: q?.fields_label ?? '',
     limit: q?.limit != null ? String(q.limit) : '',
     period: 'months',
@@ -122,7 +124,7 @@ const isInt = (s: string, min: number, max: number) => /^\d+$/.test(s.trim()) &&
 function problemOf(f: Form): string | null {
   if (f.source === 'library' && f.queryPk === null) return 'выберите хант и его запрос'
   if (!f.query.trim()) return 'нужен текст запроса'
-  if (!f.fields.trim()) return 'нужны поля'
+  if (!f.is_full_pdql && !f.fields.trim()) return 'нужны поля'
   if (f.limit.trim() && !isInt(f.limit, 1, LIMIT_MAX)) return `предел событий: целое от 1 до ${LIMIT_MAX}`
   if (f.period === 'months') {
     if (f.months.trim() && !isInt(f.months, 1, 36)) return 'глубина: целое число месяцев от 1 до 36'
@@ -134,7 +136,7 @@ function problemOf(f: Form): string | null {
 }
 
 function bodyOf(f: Form): DeepCreate {
-  const body: DeepCreate = { query: f.query.trim(), fields: f.fields.trim(), fields_label: f.labels.trim() }
+  const body: DeepCreate = { is_full_pdql: f.is_full_pdql, query: f.query.trim(), fields: f.fields.trim(), fields_label: f.labels.trim() }
   if (f.source === 'library' && f.queryPk !== null) body.hunt_query_id = f.queryPk
   if (f.title.trim()) body.title = f.title.trim()
   if (f.limit.trim()) body.limit = Number(f.limit)
@@ -173,7 +175,7 @@ function DeepForm({ originHunt, originQuery, originFailed }: { originHunt: HuntV
   function pickQuery(value: string) {
     const q = hunt.data?.queries.find((x) => x.id === Number(value))
     if (!q) return patch({ queryPk: null })
-    patch({ queryPk: q.id, query: q.query, fields: q.fields, labels: q.fields_label, limit: q.limit === null ? '' : String(q.limit) })
+    patch({ queryPk: q.id, is_full_pdql: q.is_full_pdql ?? false, query: q.query, fields: q.fields, labels: q.fields_label, limit: q.limit === null ? '' : String(q.limit) })
   }
 
   function submit() {
@@ -213,7 +215,7 @@ function DeepForm({ originHunt, originQuery, originFailed }: { originHunt: HuntV
             <span className={LABEL}>Запрос</span>
             <select value={form.queryPk ?? ''} onChange={(e) => pickQuery(e.target.value)} disabled={form.huntId === null || !hunt.data} className={FIELD}>
               <option value="">{form.huntId !== null && hunt.isLoading ? 'загрузка…' : '— выберите запрос —'}</option>
-              {(hunt.data?.queries ?? []).map((q) => <option key={q.id} value={q.id}>{q.query_id}{q.enabled ? '' : ' (выключен)'}</option>)}
+              {(hunt.data?.queries ?? []).map((q) => <option key={q.id} value={q.id}>{q.query_id}{q.name ? ` · ${q.name}` : ''}{q.enabled ? '' : ' (выключен)'}</option>)}
             </select>
             {hunt.isError && <span className="mt-1 block text-xs text-kind-1">{apiMessage(hunt.error, 'Не удалось загрузить запросы ханта')}</span>}
           </label>
@@ -221,15 +223,20 @@ function DeepForm({ originHunt, originQuery, originFailed }: { originHunt: HuntV
         </div>
       )}
 
+      <label className="mb-2 flex items-center gap-2 text-xs text-text-secondary">
+        <input type="checkbox" checked={form.is_full_pdql} disabled={form.source === 'library'}
+          onChange={e => patch({is_full_pdql: e.target.checked})} />
+        Полный PDQL (select, sort и другие операции уже включены)
+      </label>
       <label className="mb-3 block">
-        <span className={LABEL}>Запрос (PDQL)</span>
+        <span className={LABEL}>{form.is_full_pdql ? 'Полный запрос PDQL' : 'Условие фильтра (PDQL)'}</span>
         <textarea value={form.query} onChange={(e) => patch({ query: e.target.value })} rows={4} spellCheck={false} className={`${FIELD} font-mono`} />
       </label>
       <div className="mb-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_9rem]">
         <label className="block">
           <span className={LABEL}>Поля</span>
           <input value={form.fields} onChange={(e) => patch({ fields: e.target.value })} className={`${FIELD} font-mono`} placeholder="time, src.ip, dst.hostname" />
-          <span className={HINT}>Через запятую, как в запросе библиотеки.</span>
+          <span className={HINT}>{form.is_full_pdql ? "Можно оставить пустым: колонки будут взяты из ответа SIEM." : "Через запятую, как в запросе библиотеки."}</span>
         </label>
         <label className="block">
           <span className={LABEL}>Подписи колонок</span>

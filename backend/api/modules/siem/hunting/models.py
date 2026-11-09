@@ -58,6 +58,9 @@ class ThQuery(Base):
     #: Номер запроса внутри хунта (Q1, Q2, …).
     query_id: Mapped[str] = mapped_column(String(32))
     position: Mapped[int] = mapped_column(Integer, default=0)
+    name: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    is_full_pdql: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     query: Mapped[str] = mapped_column(Text)
     #: JSON-список полей события, которые просит запрос: ["time", "src.ip", ...].
     fields_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -133,6 +136,7 @@ class ThDeepHunt(Base):
     #: Хант-источник; при его удалении большой хант остаётся со своей копией запроса.
     hunt_id: Mapped[int | None] = mapped_column(ForeignKey("th_hunt.id", ondelete="SET NULL"), nullable=True)
     query_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    is_full_pdql: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     query: Mapped[str] = mapped_column(Text)
     fields_json: Mapped[str] = mapped_column(Text, default="[]")
     labels_json: Mapped[str] = mapped_column(Text, default="[]")

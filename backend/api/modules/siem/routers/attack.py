@@ -262,7 +262,7 @@ def coverage(
         "model": model,
         # Пустой адрес — законное состояние, а не ошибка. Интерфейс должен
         # объяснять, что разметка недоступна, а не показывать ноль как факт.
-        "llm_configured": load_llm(db).configured,
+        "llm_configured": (load_llm(db).task_configured("attack_markup") and load_llm(db).task_configured("attack_embeddings")),
         # Разметка, сделанная на другой версии матрицы, и техники, которых
         # в ней больше нет: и то и другое требует пересмотра человеком.
         "outdated_groups": outdated,
@@ -306,7 +306,7 @@ def run(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, int]:
     _snapshot(db, payload.snapshot_id)
-    if not load_llm(db).configured:
+    if not (load_llm(db).task_configured("attack_markup") and load_llm(db).task_configured("attack_embeddings")):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail="адрес модели не задан — задайте его в настройках",

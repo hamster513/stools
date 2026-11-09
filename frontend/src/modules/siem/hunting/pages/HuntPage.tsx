@@ -13,6 +13,7 @@ import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidth
 import { useDeleteHunt, useHunt, useSaveHunt, useToggleQuery } from '../api/queries'
 import type { CheckWindow, HuntView } from '../api/types'
 import { WindowSelect } from '../components/CheckResult'
+import { FilterCatalogPicker } from '../components/FilterCatalogPicker'
 import { QueryEditor, type QueryCheckHandle } from '../components/QueryEditor'
 import { QueryStatus } from '../components/QueryStatus'
 import { ScheduleLink } from '../components/ScheduleLink'
@@ -106,7 +107,7 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
   }
 
   // Без запроса или полей проверять нечего: сервер ответит «обязательны», а счётчик «i из n» соврёт.
-  const checkable = draft.queries.filter((q) => q.query.trim() && q.fields.trim())
+  const checkable = draft.queries.filter((q) => q.query.trim() && (q.is_full_pdql || q.fields.trim()))
 
   /**
    * Проверка всех запросов черновика (включённых и выключенных, с несохранёнными правками) строго по очереди:
@@ -203,6 +204,16 @@ function HuntForm({ hunt }: { hunt: HuntView | undefined }) {
               </Button>
             )}
           </div>
+          {write && <FilterCatalogPicker
+            existing={draft.queries.flatMap(q => {
+              const id = q.siem_filter_id ?? hunt?.queries.find(stored => stored.id === q.pk)?.saved_filter?.id
+              return id ? [id] : []
+            })}
+            onAdd={items => setDraft(current => {
+              const queries = current.queries.filter(q => q.pk !== null || q.query.trim() || q.name.trim())
+              for (const item of items) queries.push({...emptyQuery(queries), ...item})
+              return {...current, queries}
+            })} />}
           <div className="flex flex-col gap-3">
             {draft.queries.length === 0 && <p className="rounded border border-dashed border-grid px-4 py-6 text-center text-xs text-text-secondary">У ханта нет запросов: сервер не сохранит хант без запроса.</p>}
             {draft.queries.map((q) => {

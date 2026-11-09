@@ -97,6 +97,7 @@ class StateBrief(BaseModel):
 
 
 class FindingDetail(FindingItem):
+    saved_filter: dict | None = None
     key: str
     kind: str
     columns: list[ColumnView]
@@ -219,6 +220,8 @@ def columns_of(finding: ThFinding) -> list[ColumnView]:
 
 def finding_detail(db: Session, finding: ThFinding) -> FindingDetail:
     """Карточка находки — и ночной, и большого ханта (его страница встраивает её)."""
+    from api.modules.siem.hunting.saved_filters import catalog, finding_filter
+    catalog(db, commit=True)
     key = finding_key(finding.id)
     row = state_map(db, TH_MODULE, TH_SCOPE, [key]).get(key)
     st = effective_status(row)
@@ -228,6 +231,7 @@ def finding_detail(db: Session, finding: ThFinding) -> FindingDetail:
     run = db.get(ThRun, finding.run_id) if finding.run_id is not None else None
     deep = db.get(ThDeepHunt, finding.deep_id) if finding.deep_id is not None else None
     return FindingDetail(
+        saved_filter=finding_filter(db, finding),
         id=finding.id, key=key, kind=finding.kind, hunt_code=finding.hunt_code, hunt_name=hunt.name if hunt else "",
         query_id=finding.query_id, target_date=run.target_date if run else None, period_from=finding.period_from,
         period_to=finding.period_to, event_count=finding.event_count, limit_hit=finding.limit_hit,

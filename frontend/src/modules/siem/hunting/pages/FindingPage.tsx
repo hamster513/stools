@@ -1,10 +1,11 @@
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ApiRequestError } from '@/api/client'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
-import { useKbConnection } from '@/modules/siem/api/queries'
+import { useCan } from '@/lib/can'
+import { SavedFilterControl } from '../components/SavedFilterControl'
 import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
 import { StatusBadge } from '@/platform/findings/StatusBadge'
 import { TH_FINDINGS_KEY, useHunts, useThFinding } from '../api/queries'
@@ -14,12 +15,6 @@ import { ruDay, ruStamp } from '../format'
 
 const LINK = 'inline-flex items-center gap-1 rounded text-xs text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 
-/** Адрес консоли MaxPatrol из настройки подключения: хост может быть записан и со схемой. Точная форма ссылки на события — после проверки на живой системе. */
-function maxPatrolUrl(host: string | undefined): string | null {
-  const bare = (host ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '')
-  return bare ? `https://${bare}/` : null
-}
-
 /**
  * Карточка находки Threat Hunting: шапка (хант и запрос), работа со статусом (платформа),
  * сводка и события. Для находки большого ханта (`kind: 'deep'`) ханта в библиотеке нет — ссылки на него не показываются.
@@ -28,7 +23,7 @@ export function FindingPage({ id }: { id: number }) {
   const qc = useQueryClient()
   const finding = useThFinding(Number.isFinite(id) ? id : undefined)
   const hunts = useHunts()
-  const connection = useKbConnection()
+  const { write } = useCan()
   const f = finding.data
 
   if (finding.isLoading) return <FullPageSpinner />
@@ -39,7 +34,6 @@ export function FindingPage({ id }: { id: number }) {
 
   const deep = f.kind === 'deep'
   const hunt = deep ? undefined : hunts.data?.find((h) => h.code === f.hunt_code)
-  const mp = maxPatrolUrl(connection.data?.host)
   const title = deep ? `Большой хант #${f.deep_id}` : `${f.hunt_code} · ${f.query_id}${f.target_date ? ` · ночь ${ruDay(f.target_date)}` : ''}`
 
   return (
@@ -52,11 +46,12 @@ export function FindingPage({ id }: { id: number }) {
         <div className="ml-auto flex flex-wrap items-center gap-4">
           {hunt && <Link to={`/siem/hunting/library/${hunt.id}`} className={LINK}>править запрос</Link>}
           {!deep && <Link to={`/siem/hunting?hunt=${encodeURIComponent(f.hunt_code)}&status=all`} className={LINK}>все находки ханта</Link>}
-          {mp && <a href={mp} target="_blank" rel="noopener noreferrer" className={LINK}>открыть в MaxPatrol <ExternalLink size={12} aria-hidden /></a>}
+          {f.saved_filter && <SavedFilterControl value={f.saved_filter} kind={f.saved_filter.kind} id={f.saved_filter.entity_id} readOnly={!write} />}
         </div>
       </header>
 
       <div className="flex flex-col gap-4 p-4">
+        {f.saved_filter?.url && <p className="text-xs text-text-secondary">В SIEM откроется сохранённый фильтр текущего запроса. Выберите период находки: {ruStamp(f.period_from)} — {ruStamp(f.period_to)}.</p>}
         <div className="grid gap-4 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
           <section className="rounded border border-grid bg-surface p-4">
             <FindingWorkBlock

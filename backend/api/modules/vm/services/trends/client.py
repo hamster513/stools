@@ -67,7 +67,7 @@ class CollectorClient:
 
     def info(self) -> Any:
         info = self.request("GET", "/api/v1/info")
-        if info.get("protocol_version") != 1:
+        if info.get("protocol_version") not in (1, 2):
             raise CollectorError("несовместимая версия протокола сборщика")
         return info
 

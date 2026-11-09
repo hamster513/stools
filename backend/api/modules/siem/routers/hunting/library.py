@@ -38,6 +38,7 @@ from api.modules.siem.hunting.events_client import EventsClient, make_client, pu
 from api.modules.siem.hunting.library import HuntIn, LibraryError
 from api.modules.siem.hunting.models import ThFinding, ThHunt, ThQuery, ThRunQuery
 from api.modules.siem.hunting.pdql import align_labels, build_pdql, split_fields
+from api.modules.siem.hunting.saved_filters import filter_view
 from api.modules.siem.hunting.settings import load_th_settings
 from api.modules.siem.routers.hunting.findings import ColumnView
 from api.modules.siem.services.kb_settings import load_connection
@@ -72,6 +73,7 @@ class EnabledIn(BaseModel):
 
 
 class CheckIn(BaseModel):
+    is_full_pdql: bool = False
     query: str
     fields: str
     fields_label: str = ""
@@ -176,6 +178,10 @@ def list_hunts(
 
 
 class QueryView(BaseModel):
+    name: str
+    description: str
+    is_full_pdql: bool
+    saved_filter: dict | None = None
     id: int
     query_id: str
     position: int
@@ -225,6 +231,8 @@ class HuntView(BaseModel):
 
 
 def _view(db: Session, hunt: ThHunt) -> HuntView:
+    from api.modules.siem.hunting.saved_filters import catalog
+    catalog(db, commit=True)
     queries = lib.hunt_queries(db, hunt)
     last = _latest_runs(db, ThRunQuery.query_pk, [q.id for q in queries])
     pairs = [(fid, query_id) for fid, query_id in db.execute(select(ThFinding.id, ThFinding.query_id).where(ThFinding.hunt_id == hunt.id))]
@@ -245,6 +253,8 @@ def _view(db: Session, hunt: ThHunt) -> HuntView:
         row = last.get(q.id)
         views.append(QueryView(
             id=q.id, query_id=q.query_id, position=q.position, query=q.query,
+            name=q.name or q.query_id, description=q.description, is_full_pdql=q.is_full_pdql,
+            saved_filter=filter_view(db, "query", q),
             fields=", ".join(fields), fields_label=", ".join(labels), limit=q.limit, enabled=q.enabled,
             last=None if row is None else {"at": row.started_at, "events": row.events, "status": row.status},
             new_findings=fresh.get(q.query_id, 0),
@@ -322,7 +332,7 @@ def check_query(
 ) -> CheckOut:
     """Проверка запроса: один вызов событий за выбранное окно, разобранный ответ. Результат не сохраняется."""
     fields = split_fields(payload.fields)
-    if not payload.query.strip() or not fields:
+    if not payload.query.strip() or (not payload.is_full_pdql and not fields):
         return CheckOut(ok=False, message="запрос и поля обязательны")
     conn = load_connection(db)
     if not conn.configured:
@@ -335,7 +345,7 @@ def check_query(
     try:
         with make_client(conn, timeout) as http:
             events = EventsClient(conn.unsealed(), http).search(
-                build_pdql(payload.query.strip(), fields), period_from, now, payload.limit,
+                build_pdql(payload.query.strip(), fields, is_full_pdql=payload.is_full_pdql), period_from, now, payload.limit,
             )
     # Любая причина отказа доходит до человека классом, без адреса, токена и текста ответа.
     except Exception as exc:  # noqa: BLE001
@@ -343,6 +353,8 @@ def check_query(
     finally:
         slot.release()
     duration_ms = int((time.monotonic() - started) * 1000)
+    from api.modules.siem.hunting.pdql import event_fields
+    fields = fields or event_fields(events[:payload.limit])
     labels = align_labels(fields, payload.fields_label)
     # Значения формируются как у события находки (`nightly.event_rows`): только поля запроса, пустое — "".
     # Вложенные значения (dict, список) отдаются как есть — в строку их превращает экран.

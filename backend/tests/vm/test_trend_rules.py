@@ -96,3 +96,14 @@ def test_generic_short_feed_content_does_not_merge_distinct_titles():
     rows = [evidence('one', text='Read more', title='First vulnerability investigation'),
             evidence('two', text='Read more', title='Second independent analysis')]
     assert evaluate(rows, NOW)['independent_sources'] == 2
+
+
+def test_background_does_not_qualify_but_audit_and_manual_restore_remain():
+    from api.modules.vm.services.trends.rules import evaluate, period_evidence
+    now = dt.datetime.now(dt.UTC)
+    evidence = [{"published_at":now.isoformat(),"independent":True,"publisher_id":p,
+        "title":p,"classification":{"category":"background"}} for p in ("one","two")]
+    assert evaluate(evidence, now)["publication_count"] == 0
+    assert len(period_evidence(evidence,now,include_excluded=True)) == 2
+    for entry in evidence: entry["included_manually"] = True
+    assert evaluate(evidence,now)["active"]

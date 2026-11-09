@@ -17,5 +17,12 @@ def align_labels(fields: list[str], labels: str) -> list[str]:
     return (given + fields[len(given):])[: len(fields)]
 
 
-def build_pdql(query: str, fields: list[str]) -> str:
+def build_pdql(query: str, fields: list[str], *, is_full_pdql: bool = False) -> str:
+    if is_full_pdql:
+        return query.strip()
     return f"filter({query}) | select({', '.join(fields)}) | sort(time desc)"
+
+
+def event_fields(events: list[dict]) -> list[str]:
+    """Колонки полного PDQL берутся из ответа, без разбора и переписывания языка."""
+    return list(dict.fromkeys(key for event in events for key in event))

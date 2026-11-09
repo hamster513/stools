@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, get_args, get_origin
 
 import pytest
 from fastapi import BackgroundTasks
@@ -41,7 +41,12 @@ _JSON_BODIES: dict[tuple[str, str], dict[str, Any]] = {
 
 
 def _path_params(route: APIRoute) -> dict[str, str]:
-    return {name: "1" for name in route.param_convertors}
+    params = {name: "1" for name in route.param_convertors}
+    for field in route.dependant.path_params:
+        annotation = field.field_info.annotation
+        if get_origin(annotation) is Literal:
+            params[field.name] = str(get_args(annotation)[0])
+    return params
 
 
 def _flatten(routes: Any, prefix: str = "") -> list[tuple[APIRoute, str]]:
@@ -187,14 +192,15 @@ BUCKET: dict[tuple[str, str], str] = {
     ("PUT", "/api/ksc/settings"): "admin",
     ("POST", "/api/ksc/snapshots/file"): "write",
     ("DELETE", "/api/ksc/snapshots/{snapshot_id}"): "write",
-    ("POST", "/api/ksc/snapshots/{snapshot_id}/firewall/check"): "write",
-    ("POST", "/api/ksc/snapshots/{snapshot_id}/firewall/check/batch"): "write",
+    ("POST", "/api/ksc/snapshots/{snapshot_id}/firewall/check"): "read",
+    ("POST", "/api/ksc/snapshots/{snapshot_id}/firewall/check/batch"): "read",
     ("POST", "/api/ksc/snapshots/{snapshot_id}/reanalyze"): "write",
     ("POST", "/api/siem/attack/confirm"): "write",
     ("DELETE", "/api/siem/attack/reference"): "admin",
     ("POST", "/api/siem/attack/reference"): "admin",
     ("POST", "/api/siem/attack/reference/apply"): "admin",
     ("POST", "/api/siem/attack/run"): "write",
+    ("POST", "/api/siem/hunting/filters/{kind}/{entity_id}"): "write",
     ("POST", "/api/siem/hunting/deep"): "write",
     ("POST", "/api/siem/hunting/deep/{deep_id}/cancel"): "write",
     ("POST", "/api/siem/hunting/deep/{deep_id}/rerun"): "write",
@@ -229,6 +235,7 @@ BUCKET: dict[tuple[str, str], str] = {
     ("PATCH", "/api/toolbox/scrub/jobs/{job_id}/findings"): "write",
     ("POST", "/api/toolbox/scrub/reverse"): "write",
     ("PUT", "/api/toolbox/settings"): "admin",
+    ("POST", "/api/toolbox/lookup"): "read",
     ("POST", "/api/vm/import/file"): "write",
     ("POST", "/api/vm/import/vm"): "write",
     ("POST", "/api/vm/jobs/{job_id}/cancel"): "write",
@@ -243,25 +250,48 @@ BUCKET: dict[tuple[str, str], str] = {
     ("DELETE", "/api/vm/harbor/schedule"): "admin",
     ("PUT", "/api/vm/settings"): "admin",
     ("POST", "/api/vm/settings/test-vm"): "admin",
+    ("PUT", "/api/vm/trends/settings"): "admin",
+    ("POST", "/api/vm/trends/settings/test"): "admin",
+    ("PUT", "/api/vm/trends/monitoring/settings"): "admin",
+    ("POST", "/api/vm/trends/catalog/apply"): "admin",
+    ("POST", "/api/vm/trends/sources"): "admin",
+    ("PATCH", "/api/vm/trends/sources/{id}"): "admin",
+    ("POST", "/api/vm/trends/sources/bulk"): "admin",
+    ("POST", "/api/vm/trends/sources/import/preview"): "admin",
+    ("POST", "/api/vm/trends/sources/{id}/preview"): "admin",
+    ("POST", "/api/vm/trends/sources/{id}/collect"): "admin",
+    ("POST", "/api/vm/trends/collector-jobs/{id}/{action}"): "admin",
+    ("POST", "/api/vm/trends/sync"): "write",
+    ("POST", "/api/vm/trends/sync/full"): "admin",
+    ("POST", "/api/vm/trends/import"): "write",
+    ("POST", "/api/vm/trends/import/full"): "admin",
+    ("POST", "/api/vm/trends/poc/{id}/review"): "write",
+    ("POST", "/api/vm/trends/policies"): "write",
+    ("POST", "/api/vm/trends/policies/global"): "write",
+    ("PATCH", "/api/vm/trends/policies/{id}"): "write",
+    ("POST", "/api/vm/trends/{id}/assistant"): "write",
+    ("PATCH", "/api/vm/trends/{id}/review"): "write",
     ("PUT", "/api/vm/zones"): "admin",
 }
 
 #: Чтение, которое ручка дополнительно сужает сама, внутри: настройки ToolBox
 #: (в словах и подсетях — настоящие значения), псевдонимы и файлы заданий
-#: очистки (в них исходные значения). Скачивание файлов задания
-#: (`/jobs/{job_id}/{which}`) сужено так же, но на пробном `which` перебор
-#: получает 422 раньше проверки — его держат тесты ToolBox.
+#: очистки (в них исходные значения), включая скачивание файлов задания.
 INNER: dict[tuple[str, str], str] = {
     ("GET", "/api/toolbox/settings"): "admin",
     ("GET", "/api/toolbox/aliases"): "write",
     ("GET", "/api/toolbox/aliases/export"): "write",
     ("GET", "/api/toolbox/aliases/export.csv"): "write",
     ("GET", "/api/toolbox/scrub/jobs/{job_id}/findings/export"): "write",
+    ("GET", "/api/toolbox/scrub/jobs/{job_id}/{which}"): "write",
 }
 
 
 def _sample(route: APIRoute, route_path: str) -> str:
-    return route_path.format(**_path_params(route))
+    params = _path_params(route)
+    if route_path.startswith("/api/settings/schedules/"):
+        params.update(module="ad", kind="collect")
+    return route_path.format(**params)
 
 
 def _module_of(path: str) -> str | None:
@@ -331,8 +361,10 @@ def _platform_need(method: str, path: str) -> tuple[str, str] | None:
     read = method == "GET"
     if path.startswith("/api/settings/attack"):
         return None if read else ("attack", "admin")
-    if read and path in ("/api/settings/llm", "/api/settings/findings", "/api/settings/data-status"):
+    if read and path in ("/api/settings/llm", "/api/settings/findings", "/api/settings/data-status", "/api/settings/schedules"):
         return None
+    if path.startswith("/api/settings/schedules/"):
+        return path.split("/")[4], "read" if read else "admin"
     return ("platform", "read") if read else ("platform", "admin")
 
 
@@ -348,7 +380,7 @@ def test_platform_level_sweep(monkeypatch: pytest.MonkeyPatch, client_as: Any, l
     access = {"platform": level}
     mismatches = []
     for route, route_path, method in SETTINGS_ROUTES:
-        need = _platform_need(method, route_path)
+        need = _platform_need(method, _sample(route, route_path))
         expect_403 = need is not None and not allows(access, *need)
         got = client.request(method, _sample(route, route_path)).status_code
         if (got == 403) != expect_403:

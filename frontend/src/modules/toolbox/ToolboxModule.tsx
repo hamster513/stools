@@ -7,6 +7,7 @@ import { ToolboxSidebar } from './ToolboxSidebar'
 import { AliasesPage } from './pages/AliasesPage'
 import { Base64Page } from './pages/Base64Page'
 import { CronPage } from './pages/CronPage'
+import { LookupPage } from './pages/LookupPage'
 import { IpCalcPage } from './pages/IpCalcPage'
 import { NewJobForm } from './pages/NewJobForm'
 import { ReversePage } from './pages/ReversePage'
@@ -26,6 +27,7 @@ export function ToolboxModule() {
   else if (jobId !== null) page = <ScrubJobPage id={jobId} />
   else if (path === '/toolbox/reverse') page = <ReversePage />
   else if (path === '/toolbox/aliases') page = <AliasesPage />
+  else if (path === '/toolbox/lookup') page = <LookupPage />
   else if (path === '/toolbox/base64') page = <Base64Page />
   else if (path === '/toolbox/ip') page = <IpCalcPage />
   else if (path === '/toolbox/linux') page = <UnixTimePage />

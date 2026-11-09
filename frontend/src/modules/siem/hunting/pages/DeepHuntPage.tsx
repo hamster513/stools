@@ -6,6 +6,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FIELD } from '@/components/ui/Field'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
+import { SavedFilterControl } from '../components/SavedFilterControl'
 import { Link, useRouter } from '@/lib/router'
 import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
 import { TH_DEEP_KEY, TH_FINDINGS_KEY, useCancelDeep, useDeepHunt, useRerunDeep, useSaveDeepToLibrary } from '../api/queries'
@@ -82,6 +83,7 @@ function DeepCard({ d }: { d: DeepDetail }) {
       </header>
 
       <div className="flex flex-col gap-4 p-4">
+        <SavedFilterControl value={d.saved_filter} kind="deep" id={d.id} readOnly={!write} />
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="rounded border border-grid bg-surface p-4">
             <div className={SECTION_TITLE}>Параметры</div>

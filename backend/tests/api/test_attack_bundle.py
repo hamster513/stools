@@ -241,8 +241,9 @@ def test_second_translation_is_refused_while_the_first_runs(
     assert response.json()["detail"] == "перевод уже идёт"
 
 
+@pytest.mark.parametrize('task_routing', [False, True])
 def test_model_translates_the_gaps(
-    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch, db_session: Any
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch, db_session: Any, task_routing: bool
 ) -> None:
     import api.modules.attack.services.translate_job as service
 
@@ -251,7 +252,17 @@ def test_model_translates_the_gaps(
         "/api/settings/llm", json={"base_url": "http://x.invalid:11434", "enabled": True}
     )
 
+    if task_routing:
+        assert auth_client.put('/api/settings/llm', json={
+            'tasks': {'attack_translation': {'provider': 'deepseek', 'model': 'dedicated-translator'}},
+            'key_updates': {'deepseek': 'translation-key'},
+        }).status_code == 204
+
     def fake(self: Any, prompt: str, schema: Any) -> str:
+        if task_routing:
+            assert self._settings.provider == 'deepseek'
+            assert self._settings.model == 'dedicated-translator'
+            assert self._settings.api_key.get_secret_value() == 'translation-key'
         ids = schema["properties"]["techniques"]["items"]["properties"]["technique_id"]["enum"]
         return json.dumps(
             {
@@ -280,6 +291,8 @@ def test_model_translates_the_gaps(
     # Происхождение записано: перевод модели и перевод человека — разные
     # вещи, и на непроверенный перевод нужно смотреть иначе.
     assert row.origin == "llm"
+    if task_routing:
+        assert row.model == "deepseek:dedicated-translator"
 
 
 def test_unreachable_model_does_not_erase_existing_translation(

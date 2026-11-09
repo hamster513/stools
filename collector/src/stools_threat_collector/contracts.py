@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
+
+from .monitoring_contracts import ClassificationResult, SourceConfigV2
 
 PROTOCOL_VERSION = 1
 
@@ -11,25 +12,7 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class Source(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    publisher_id: str = Field(min_length=1, max_length=100)
-    adapter: Literal["rss", "kev", "msrc", "cncert", "telegram", "github"] = "rss"
-    url: str = Field(max_length=1024)
-    language: str = Field(default="en", max_length=16)
-    region: str = Field(default="", max_length=40)
-    enabled: bool = False
-    interval_minutes: int = Field(default=60, ge=15, le=10080)
-    llm_allowed: bool = False
-    version: int = Field(default=1, ge=1)
-
-    @field_validator("url")
-    @classmethod
-    def check_url(cls, value: str) -> str:
-        parts = urlsplit(value)
-        if parts.scheme not in ("https", "http") or not parts.hostname or parts.username or parts.password:
-            raise ValueError("public HTTP(S) URL required, without credentials")
-        return value
+Source = SourceConfigV2
 
 
 class Publication(BaseModel):
@@ -47,7 +30,14 @@ class Publication(BaseModel):
     full_text: bool = False
     truncated: bool = False
     retracted: bool = False
+    date_basis: Literal["published", "inferred", "unknown"] = "unknown"
+    source_published_at: str | None = None
+    source_updated_at: str | None = None
+    content_hash: str = Field(default="", max_length=64)
+    classification: ClassificationResult | None = None
 
 
 class SourceUpdate(Source):
     version: int
+
+PublicationV2 = Publication

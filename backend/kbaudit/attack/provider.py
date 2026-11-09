@@ -12,9 +12,9 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any, Protocol
+from typing import Any, Protocol, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 
 from kbaudit.attack.bundle import Technique
 from kbaudit.attack.candidates import Candidate
@@ -40,8 +40,11 @@ class Completion(Protocol):
 
 
 class OllamaSettings(BaseModel):
+    provider: Literal["ollama", "openrouter", "deepseek"] = "ollama"
+    api_key: SecretStr = Field(default=SecretStr(""), exclude=True)
     #: Пустой адрес означает «модель не настроена» — не ошибку.
     base_url: str = ""
+    embed_base_url: str = ""
     model: str = "qwen3:8b-q4_K_M"
     #: Модель эмбеддингов для отбора кандидатов. Отдельная от генеративной:
     #: отбор детерминирован и не требует рассуждающей модели.
@@ -53,7 +56,7 @@ class OllamaSettings(BaseModel):
 
     @property
     def configured(self) -> bool:
-        return bool(self.base_url.strip())
+        return bool(self.base_url.strip()) and (self.provider == "ollama" or bool(self.api_key.get_secret_value()))
 
 
 def _post_json(url: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:
@@ -86,6 +89,12 @@ class OllamaCompletion:
         s = self._settings
         if not s.configured:
             raise ModelError("адрес модели не задан")
+        if s.provider == "deepseek":
+            from .deepseek import complete
+            return complete(s, prompt, schema)
+        if s.provider == "openrouter":
+            from .openrouter import complete
+            return complete(s, prompt, schema)
         body = {
             "model": s.model,
             "prompt": prompt,
@@ -171,6 +180,15 @@ class OllamaEmbedder:
             raise ModelError("адрес модели не задан")
         if not texts:
             return []
+        if s.provider == "deepseek":
+            if not s.embed_base_url.strip():
+                raise ModelError("Для эмбеддингов DeepSeek укажите адрес Ollama в настройках LLM")
+            return OllamaEmbedder(OllamaSettings(
+                base_url=s.embed_base_url, embed_model=s.embed_model, timeout=s.timeout,
+            )).embed(texts)
+        if s.provider == "openrouter":
+            from .openrouter import embed
+            return embed(s, texts)
         parsed = _post_json(
             f"{s.base_url.rstrip('/')}/api/embed",
             {"model": s.embed_model, "input": texts},

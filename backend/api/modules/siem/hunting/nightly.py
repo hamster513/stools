@@ -190,7 +190,9 @@ def persist_finding(
     """Находка и её события в транзакции `db` (фиксирует вызывающий). Колонки — снимок полей и
     подписей на момент прогона: запрос потом могут поправить. От события берутся только поля
     запроса: остальное, что вернул MaxPatrol, не хранится."""
+    from api.modules.siem.hunting.pdql import event_fields
     kept = events[:limit]
+    fields = fields or event_fields(kept)
     labels = (list(labels) + fields[len(labels):])[: len(fields)]
     finding = ThFinding(
         kind=kind,
@@ -362,7 +364,7 @@ def _run_query(
     limit = query_limit or settings.default_limit
     try:
         found = execute_with_retries(
-            client, build_pdql(text, fields), run.period_from, run.period_to, limit, settings, sleeper,
+            client, build_pdql(text, fields, is_full_pdql=query.is_full_pdql), run.period_from, run.period_to, limit, settings, sleeper,
         )
     except EventsAuthError as exc:
         row.status, row.error = "failed", public_error(exc)

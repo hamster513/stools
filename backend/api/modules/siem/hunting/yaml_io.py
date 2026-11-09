@@ -56,9 +56,12 @@ def _parse_query(code: str, index: int, raw: Any) -> QueryIn:
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int)):
         raise LibraryError(f"{where}: limit должен быть числом")
     return QueryIn(
+        name=_text(raw.get("name"), f"{where}, name", required=False) if "name" in raw else None,
+        description=_text(raw.get("description"), f"{where}, description", required=False) if "description" in raw else None,
+        is_full_pdql=raw.get("is_full_pdql", False),
         query_id=_text(raw.get("query_id"), f"{where}, query_id", required=True),
         query=_text(raw.get("query"), f"{where}, query", required=True),
-        fields=_text(raw.get("fields"), f"{where}, fields", required=True),
+        fields=_text(raw.get("fields"), f"{where}, fields", required=not raw.get("is_full_pdql", False)),
         fields_label=_text(raw.get("fields_label"), f"{where}, fields_label", required=False),
         limit=limit,
     )
@@ -111,7 +114,9 @@ def _classify(existing: ThHunt | None, data: HuntIn, db: Session) -> ImportRow:
         in_file.add(qid)
         if qid not in stored:
             changes.append(f"{qid} новый")
-        elif stored_view(stored[qid]) != query_view(q):
+        elif (stored_view(stored[qid]) != query_view(q) or stored[qid].is_full_pdql != q.is_full_pdql
+              or (q.name is not None and stored[qid].name != q.name)
+              or (q.description is not None and stored[qid].description != q.description)):
             changes.append(f"{qid} изменён")
     # Запрос, которого нет в файле, — справка для человека: импорт его не тронет,
     # поэтому сам по себе он хант «изменённым» не делает и замены не просит.
@@ -165,6 +170,9 @@ def export_library_yaml(db: Session) -> bytes:
             text, fields, labels, limit = stored_view(q)
             item: dict[str, Any] = {
                 "query_id": q.query_id,
+                "name": q.name or q.query_id,
+                "description": q.description,
+                "is_full_pdql": q.is_full_pdql,
                 "query": text,
                 "fields": ", ".join(fields),
                 "fields_label": ", ".join(labels),

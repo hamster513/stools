@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Index,
     String,
     Text,
     UniqueConstraint,
@@ -85,3 +86,60 @@ class VmTrendReview(Base):
     actor: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     decision: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+
+class VmTrendEnrichment(Base):
+    __tablename__ = 'vm_trend_enrichment'
+    generation: Mapped[str] = mapped_column(String(36), primary_key=True)
+    external_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    retracted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class VmTrendPoc(Base):
+    __tablename__ = 'vm_trend_poc'
+    generation: Mapped[str] = mapped_column(String(36), primary_key=True)
+    external_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    retracted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class VmTrendPocReview(Base):
+    __tablename__ = 'vm_trend_poc_review'
+    __table_args__ = (UniqueConstraint('candidate_id', 'commit_sha', 'version', name='uq_trend_poc_review_version'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[str] = mapped_column(String(100), index=True)
+    commit_sha: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    actor: Mapped[str] = mapped_column(String(255))
+    state: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class VmTrendPolicy(Base):
+    __tablename__ = 'vm_trend_policy'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32))
+    target_key: Mapped[str] = mapped_column(String(2000))
+    reason: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    actor: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    history: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+
+
+class VmTrendAiAnswer(Base):
+    """Paid answers survive navigation, model changes and collector replays."""
+    __tablename__ = 'vm_trend_ai_answer'
+    __table_args__ = (Index('ix_vm_trend_ai_answer_target_mode_created', 'target', 'mode', 'created_at'),)
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    target: Mapped[str] = mapped_column(String(140))
+    mode: Mapped[str] = mapped_column(String(16))
+    answer: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

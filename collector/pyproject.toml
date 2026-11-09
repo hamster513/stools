@@ -18,4 +18,4 @@ stools-threat-collector = "stools_threat_collector.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-stools_threat_collector = ["sources.json"]
+stools_threat_collector = ["sources.json", "catalog_manifest.json", "certificates/*.pem"]

@@ -17,7 +17,7 @@ def import_bundle(db: Session, stream: Any, reset: Any=False) -> None:
         if archive.getinfo("manifest.json").file_size > 65536:
             raise ValueError("manifest превышает лимит")
         manifest = json.loads(archive.read("manifest.json"))
-        if manifest.get("protocol_version") != 1 or (reset and manifest.get("after") != 0):
+        if manifest.get("protocol_version") not in (1, 2) or (reset and manifest.get("after") != 0):
             raise ValueError("полное восстановление требует пакет от начала истории")
         digest = hashlib.sha256()
         with archive.open("pages.jsonl") as member:
@@ -31,6 +31,8 @@ def import_bundle(db: Session, stream: Any, reset: Any=False) -> None:
                 if len(line) > 8 * 1024 * 1024:
                     raise ValueError("страница пакета превышает лимит")
                 page = ChangePage.model_validate_json(line)
+                if page.protocol_version != manifest["protocol_version"]:
+                    raise ValueError("версия страницы не соответствует пакету")
                 if (page.collector_id, page.epoch, page.until_seq) != (manifest["collector_id"], manifest["epoch"], manifest["until_seq"]):
                     raise ValueError("несовместимые страницы пакета")
                 if page.events and page.events[0].seq != previous + 1:

@@ -1,11 +1,12 @@
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import Text, and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from api.modules.vm.models import VmHost, VmHostCve, VmImage, VmImageCve, VmImport
 from api.modules.vm.trend_models import (
+    VmTrendEnrichment,
     VmTrendCard,
     VmTrendEvidence,
     VmTrendIngestState,
@@ -14,6 +15,10 @@ from api.modules.vm.trend_models import (
 )
 from api.platform.findings.models import FindingState
 
+from .poc import list_pocs
+from .severity import card_severities
+from .policies import visible_match
+from .applicability import evaluate_applicability
 from .analyze import evidence_for, publication_period_conditions, refresh_cards
 from .rules import (
     date,
@@ -27,9 +32,9 @@ from .rules import (
 
 
 def match_aggregates(card_ids: Any) -> Any:
-    hosts = select(VmHostCve.cve_id.label("identifier"), func.count().label("count"), func.max(VmHostCve.risk).label("risk")).where(VmHostCve.cve_id.in_(card_ids)).group_by(VmHostCve.cve_id).subquery()
+    hosts = select(VmHostCve.cve_id.label("identifier"), func.count().label("count"), func.max(VmHostCve.risk).label("risk")).where(VmHostCve.cve_id.in_(card_ids), visible_match(VmHostCve.cve_id, VmHostCve.host_id, "host")).group_by(VmHostCve.cve_id).subquery()
     images = select(func.upper(VmImageCve.cve_id).label("identifier"), func.count(func.distinct(VmImageCve.image_id)).label("count"),
-                    func.max(VmImageCve.risk).label("risk")).where(func.upper(VmImageCve.cve_id).in_(card_ids)).group_by(func.upper(VmImageCve.cve_id)).subquery()
+                    func.max(VmImageCve.risk).label("risk")).where(func.upper(VmImageCve.cve_id).in_(card_ids), visible_match(VmImageCve.cve_id, VmImageCve.image_id, "image", VmImageCve.package)).group_by(func.upper(VmImageCve.cve_id)).subquery()
     return hosts, images
 
 
@@ -40,8 +45,8 @@ def card_view(card: Any, hosts: Any=0, images: Any=0, risk: Any=0) -> Any:
             "independent_sources": card.independent_sources, "hosts": hosts, "images": images, "risk": risk or 0}
 
 
-def period_card_view(card: Any, evidence: Any, now: Any, period: str, tz: str, date_from: str, date_to: str) -> Any:
-    current = period_evidence(evidence, now, period, tz, date_from, date_to)
+def period_card_view(card: Any, evidence: Any, now: Any, period: str, tz: str, date_from: str, date_to: str, archive: bool = False) -> Any:
+    current = period_evidence(evidence, now, period, tz, date_from, date_to, include_excluded=archive)
     result = {**card_view(card), **evaluate(current, now, period, tz, date_from, date_to), "period": period}
     result["active"] = result["active"] and card.status != "rejected"
     news = [entry for entry in current if is_news(entry) and entry.get("title")]
@@ -50,11 +55,13 @@ def period_card_view(card: Any, evidence: Any, now: Any, period: str, tz: str, d
         result["title"] = titled[0]["title"]
         result["source_name"] = titled[0].get("source_name") or titled[0].get("publisher_id") or ""
         result["source_url"] = titled[0].get("url") or ""
+    if archive:
+        result.update(publication_count=len(current), last_event_at=current[0].get("published_at") if current else None)
     return result, current
 
 
 def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, limit: Any=50, offset: Any=0, region: Any="", language: Any="", reason: Any="", publisher: Any="", status: Any="", sort: Any="priority",
-               period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "") -> Any:
+               period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "", source_id: str = "", product: str = "", poc_state: str = "") -> Any:
     now = dt.datetime.now(dt.UTC)
     period_bounds(period, tz, date_from, date_to, now)
     state = db.get(VmTrendIngestState, 1)
@@ -64,6 +71,9 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
     publication = select(VmTrendEvidence.card_id).join(VmTrendPublication).where(
         VmTrendPublication.generation == generation, *publication_period_conditions(period, tz, date_from, date_to, now))
     conditions = [VmTrendCard.id.in_(publication)]
+    if source_id:
+        # Narrow candidates in SQL; retain all publishers' evidence for each CVE.
+        conditions.append(VmTrendCard.id.in_(publication.where(VmTrendPublication.source_id == source_id)))
     if q:
         needle = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         title_match = publication.where(VmTrendPublication.data["title"].astext.ilike(needle))
@@ -72,23 +82,34 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
         conditions.append(VmTrendCard.status == "new")
     if status:
         conditions.append(VmTrendCard.status == status)
+    if product:
+        needle = "%"+product.replace("%", "\\%").replace("_", "\\_")+"%"
+        metadata = select(VmTrendEnrichment.external_id).where(VmTrendEnrichment.generation==generation,
+            VmTrendEnrichment.data["affected_products"].cast(Text).ilike(needle))
+        conditions.append(or_(VmTrendCard.title.ilike(needle),func.concat("cve:",VmTrendCard.id).in_(metadata)))
     cards = list(db.scalars(select(VmTrendCard).where(*conditions)))
-    evidence = evidence_for(db, [card.id for card in cards], generation, period, tz, date_from, date_to, now)
     selected = {}
-    for card in cards:
-        result, current = period_card_view(card, evidence[card.id], now, period, tz, date_from, date_to)
-        if not current or (view in ("all", "matched") and not result["active"]):
-            continue
-        if view == "review" and result["active"]:
-            continue
-        if view == "mentions" and extract_identifiers(card.id) != [card.id]:
-            continue
-        if reason and result["reason"] != reason:
-            continue
-        if not any(all(not value or entry.get(field) == value for field, value in (
-                ("region", region), ("language", language), ("publisher_id", publisher))) for entry in current):
-            continue
-        selected[card.id] = result
+    # A month can include tens of thousands of CVEs with full article bodies.
+    # Keep only one evidence batch in memory; pagination still uses the full result.
+    for start in range(0, len(cards), 100):
+        batch = cards[start:start+100]
+        evidence = evidence_for(db, [card.id for card in batch], generation, period, tz, date_from, date_to, now)
+        for card in batch:
+            result, current = period_card_view(card, evidence[card.id], now, period, tz, date_from, date_to, archive=view=="archive")
+            if not current or (view in ("all", "matched") and not result["active"]):
+                continue
+            if view == "review" and result["active"]:
+                continue
+            if view == "mentions" and extract_identifiers(card.id) != [card.id]:
+                continue
+            if poc_state and not any(p["effective_state"]==poc_state for p in list_pocs(db,card.id)):
+                continue
+            if reason and result["reason"] != reason:
+                continue
+            if not any(all(not value or entry.get(field) == value for field, value in (
+                    ("region", region), ("language", language), ("publisher_id", publisher), ("source_id", source_id))) for entry in current):
+                continue
+            selected[card.id] = result
     if selected:
         hosts, images = match_aggregates(list(selected))
         rows = db.execute(select(VmTrendCard.id, func.coalesce(hosts.c.count, 0), func.coalesce(images.c.count, 0),
@@ -99,12 +120,14 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
             selected[card_id].update(hosts=host_count, images=image_count, risk=risk or 0)
     items = [item for item in selected.values() if view != "matched" or item["hosts"] or item["images"]]
     def order(item: Any) -> Any:
-        timestamp = date(item["last_event_at"]).timestamp()
+        timestamp = date(item["last_event_at"]).timestamp() if date(item["last_event_at"]) else 0
         primary = {"date": -timestamp, "identifier": item["id"],
                    "impact": -(item["hosts"] + item["images"])}.get(sort, -int(item["reason"] == "confirmed_exploitation"))
         return primary, -int(item["reason"] == "confirmed_exploitation"), -item["risk"], -timestamp, item["id"]
     items.sort(key=order)
-    return {"items": items[offset:offset+limit], "total": len(items), "received_at": state.received_at, "period": period, "tz": tz}
+    page = items[offset:offset+limit]
+    severities = card_severities(db, [item["id"] for item in page], generation)
+    return {"items": [{**item, **severities[item["id"]]} for item in page], "total": len(items), "received_at": state.received_at, "period": period, "tz": tz}
 
 
 def detail(db: Session, card_id: Any, period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "") -> Any:
@@ -118,11 +141,28 @@ def detail(db: Session, card_id: Any, period: str = "7d", tz: str = "Europe/Mosc
     result, _ = period_card_view(card, evidence, now, period, tz, date_from, date_to)
     # Audit/restore controls must retain excluded entries within the chosen period.
     evidence = period_evidence(evidence, now, period, tz, date_from, date_to, include_excluded=True)
+    result.update(card_severities(db, [card_id], state.active_generation if state else "")[card_id])
     local = matches(db, card_id)
     result.update(hosts=local["host_total"], images=db.scalar(select(func.count(func.distinct(VmImageCve.image_id))).where(
         func.upper(VmImageCve.cve_id) == card_id.upper())) or 0)
+    metadata_row = db.get(VmTrendEnrichment, (state.active_generation, "cve:"+card_id)) if state and state.active_generation else None
+    metadata = metadata_row.data if metadata_row and not metadata_row.retracted else None
+    applicability = []
+    if metadata:
+        for host in local["hosts"]:
+            applicability.append(evaluate_applicability({"local_ref":"host:"+str(host["id"])},metadata,exact_scanner=True))
+        for image in local["images"]:
+            applicability.append(evaluate_applicability({"local_ref":"image:"+str(image["id"]),"version":image["installed_version"]},metadata,exact_scanner=True))
+        products = {r.get("product", "").lower() for r in metadata.get("cpe_matches", []) if r.get("product") not in (None,"","*")}
+        if products:
+            for image, pair in db.execute(select(VmImage, VmImageCve).join(VmImageCve).where(func.lower(VmImageCve.package).in_(products)).limit(100)):
+                if pair.cve_id.upper() == card_id.upper():
+                    continue
+                # Current Harbor import has no vendor/ecosystem, so keep unknown explicitly.
+                item = {"local_ref":"image:"+str(image.id),"product":pair.package,"version":pair.installed_version,"vendor":"","ecosystem":"unknown"}
+                applicability.append({**evaluate_applicability(item,metadata),"product":pair.package,"version":pair.installed_version})
     reviews = db.scalars(select(VmTrendReview).where(VmTrendReview.card_id == card_id).order_by(VmTrendReview.id.desc()).limit(100))
-    return {**result, "evidence": [{**entry, "text": entry.get("text", "")[:6000]} for entry in evidence[:100]],
+    return {**result, "pocs": list_pocs(db, card_id), "enrichment": metadata, "applicability": applicability, "evidence": [{**entry, "text": entry.get("text", "")[:6000]} for entry in evidence[:100]],
             "evidence_total": len(evidence), "matches": local, "candidates": candidates(db, evidence),
             "reviews": [{"actor": row.actor, "at": row.created_at, "decision": row.decision} for row in reviews]}
 
@@ -152,11 +192,11 @@ def matches(db: Session, card_id: Any, limit: Any=100, offset: Any=0) -> Any:
     host_query = select(VmHost, VmHostCve.risk, func.coalesce(FindingState.status, "new")).join(VmHostCve).outerjoin(
         FindingState, and_(FindingState.module == "vm", FindingState.scope_id == 0,
                           FindingState.key == func.concat(VmHost.hostname, "|", VmHost.ip, "|", VmHostCve.cve_id)))
-    host_query = host_query.where(VmHostCve.cve_id == card_id)
+    host_query = host_query.where(VmHostCve.cve_id == card_id, visible_match(VmHostCve.cve_id, VmHostCve.host_id, "host"))
     host_total = db.scalar(select(func.count()).select_from(host_query.subquery()))
     host_rows = db.execute(host_query.order_by(case((FindingState.status.in_(["risk_accepted", "resolved", "false_positive"]), 1), else_=0),
         VmHostCve.risk.desc(), VmHost.id).offset(offset).limit(limit)).all()
-    image_query = select(VmImage, VmImageCve).join(VmImageCve).where(func.upper(VmImageCve.cve_id) == card_id.upper())
+    image_query = select(VmImage, VmImageCve).join(VmImageCve).where(func.upper(VmImageCve.cve_id) == card_id.upper(), visible_match(VmImageCve.cve_id, VmImageCve.image_id, "image", VmImageCve.package))
     image_total = db.scalar(select(func.count()).select_from(image_query.subquery()))
     image_rows = db.execute(image_query.order_by(VmImageCve.risk.desc().nulls_last(), VmImage.id).offset(offset).limit(limit)).all()
     imported = db.scalar(select(VmImport).order_by(VmImport.id.desc()).limit(1))
@@ -178,6 +218,8 @@ def review(db: Session, card_id: Any, payload: Any, actor: Any) -> Any:
         raise KeyError(card_id)
     if card.version != payload.version:
         raise ValueError("карточка изменена другим аналитиком, обновите её")
+    if payload.include_background is not None and not payload.note.strip():
+        raise ValueError("Укажите причину изменения классификации")
     decision = payload.model_dump(exclude={"version"}, exclude_unset=True)
     state = db.get(VmTrendIngestState, 1)
     if state is None or not state.active_generation:

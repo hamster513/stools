@@ -56,7 +56,7 @@ def _glossary(db: Session, bundle_by_id: dict[str, object]) -> dict[str, str]:
 def run_translation(db: Session, handle: JobHandle) -> None:
     """Тело задания перевода; сессию и запись состояния даёт run_job."""
     llm = load_llm(db)
-    if not llm.configured:
+    if not llm.task_configured("attack_translation"):
         raise ModelError("адрес модели не задан — перевод требует настроенной модели")
 
     bundle = current(db)
@@ -66,7 +66,8 @@ def run_translation(db: Session, handle: JobHandle) -> None:
         handle.stage("done", message="переводить нечего")
         return
 
-    completion = OllamaCompletion(llm.to_provider())
+    provider = llm.for_task("attack_translation", data_class="public")
+    completion = OllamaCompletion(provider)
     glossary = _glossary(db, by_id)
 
     # Счёт техник — в сообщении самого этапа: сообщение, поставленное
@@ -112,7 +113,7 @@ def run_translation(db: Session, handle: JobHandle) -> None:
             row.description_ru = item.description_ru
             row.source_hash = source_hash(by_id[item.technique_id])
             row.origin = ORIGIN_LLM
-            row.model = llm.model
+            row.model = f"{provider.provider}:{provider.model}"
             row.updated_at = now
         db.commit()
         handle.tick(start + len(chunk))

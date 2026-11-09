@@ -189,10 +189,17 @@ def _run(db: Session, job_id: int, snapshot_id: int) -> None:
         return
     try:
         llm = load_llm(db)
-        if not llm.configured:
+        if not llm.task_configured("attack_markup") or not llm.task_configured("attack_embeddings"):
             raise ModelError("адрес модели не задан — разметка требует настроенной модели")
         top_k = load_attack(db).top_k
-        provider = llm.to_provider()
+        provider = llm.for_task("attack_markup", data_class="redacted")
+        embedding_provider = llm.for_task("attack_embeddings", data_class="redacted")
+        model_name = f"{provider.provider}:{provider.model}"
+        # Include endpoint and model so unrelated vector spaces never share a cache.
+        import hashlib
+        vector_key = "task:" + hashlib.sha256(
+            f"{embedding_provider.provider}|{embedding_provider.base_url.rstrip('/')}|{embedding_provider.embed_model}".encode()
+        ).hexdigest()
 
         parsed = ParsedArchive.model_validate_json(
             Path(snapshot.parsed_cache_path).read_text(encoding="utf-8")
@@ -205,10 +212,10 @@ def _run(db: Session, job_id: int, snapshot_id: int) -> None:
         _set_stage(db, job, "embedding")
         book = bundle(db)
         parents = book.parents_only()
-        vectors = ensure_vectors(db, OllamaEmbedder(provider), llm.embed_model, parents)
+        vectors = ensure_vectors(db, OllamaEmbedder(embedding_provider), vector_key, parents)
 
         _set_stage(db, job, "suggesting")
-        embedder = OllamaEmbedder(provider)
+        embedder = OllamaEmbedder(embedding_provider)
         completion = OllamaCompletion(provider)
         existing = {m.rule_uuid: m for m in db.query(AttackMarkup)}
 
@@ -236,7 +243,7 @@ def _run(db: Session, job_id: int, snapshot_id: int) -> None:
             try:
                 suggestion = _suggest_one(
                     rule, bodies, blocklist, frequency, book, vectors,
-                    embedder, completion, llm.model, top_k,
+                    embedder, completion, model_name, top_k,
                 )
             except ModelError:
                 # Прежняя разметка правила остаётся нетронутой: модель молчит,
@@ -253,7 +260,7 @@ def _run(db: Session, job_id: int, snapshot_id: int) -> None:
 
             in_a_row = 0
             _store(
-                db, rule.uuid, group, suggestion, book.version, llm.model,
+                db, rule.uuid, group, suggestion, book.version, model_name,
                 had_row=row is not None,
             )
 

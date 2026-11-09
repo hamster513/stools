@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import or_, delete, func, select, text
 from sqlalchemy.orm import Session
 
 from api.llm_settings import load_llm
@@ -17,6 +17,8 @@ from api.modules.vm.trend_models import (
 )
 from kbaudit.attack.provider import OllamaCompletion
 
+from .policies import active_policies, publication_policy
+from .classify import classify_publication
 from .rules import date, evaluate, extract_identifiers, period_bounds, publication_fingerprint
 
 
@@ -47,7 +49,7 @@ def publication_period_conditions(period: str, tz: str, date_from: str, date_to:
     # Stored timestamps can have offsets. This coarse date-prefix
     # candidate filter keeps a full day of slack; rules apply exact UTC bounds.
     published_day = func.substr(VmTrendPublication.data["published_at"].astext, 1, 10)
-    conditions = [published_day <= (now.date() + dt.timedelta(days=1)).isoformat()]
+    conditions = [or_(published_day.is_(None), published_day <= (now.date() + dt.timedelta(days=1)).isoformat()) if period == "all" else published_day <= (now.date() + dt.timedelta(days=1)).isoformat()]
     if not include_retracted:
         conditions.append(VmTrendPublication.retracted.is_(False))
     if start is not None:
@@ -74,9 +76,12 @@ def evidence_for(db: Session, card_ids: Any, generation: Any, period: str | None
             decisions.setdefault(key, {}).update({field: value for field, value in review.decision.items() if value is not None})
     sources = {row.external_id: row.data for row in db.scalars(select(VmTrendSource).where(VmTrendSource.generation == generation))}
     result: dict[str, list[dict[str, Any]]] = {id_: [] for id_ in card_ids}
+    policies = active_policies(db)
     for card_id, publication in rows:
         source = sources.get(publication.source_id, {})
         value = dict(publication.data)
+        value["classification"] = value.get("classification") or classify_publication(value, source).model_dump()
+        value["identifier_role"] = next((r["role"] for r in value["classification"]["identifier_roles"] if r["identifier"] == card_id), "primary")
         decision = decisions.get((card_id, publication.external_id, publication.revision, publication_fingerprint(publication.data)), {})
         value.update({"publication_id": publication.id, "publication_key": publication.external_id,
             "revision": publication.revision, "retracted": publication.retracted,
@@ -92,17 +97,26 @@ def evidence_for(db: Session, card_ids: Any, generation: Any, period: str | None
             "origin_adapter": value.get("origin_adapter", source.get("adapter", "")),
             "language": source.get("language", ""), "rejected": decision.get("rejected", False),
             "analysis": publication.analysis, "processing": publication.processing, "error": publication.error})
+        if (publication.data.get("classification") and value["identifier_role"] == "mentioned") or source.get("content_scope") == "vulnerability_database" or value.get("origin_adapter") == "nvd":
+            value["independent"] = bool(decision.get("independent", False))
+        value["included_manually"] = bool(decision.get("include_background", False))
+        policy = publication_policy(policies, card_id, publication.external_id)
+        value["suppressed"] = bool(policy)
+        value["suppression_reason"] = policy.reason if policy else ""
         result[card_id].append(value)
     return result
 
 
 def refresh_cards(db: Session, card_ids: Any, generation: Any) -> None:
-    evidence = evidence_for(db, card_ids, generation)
-    for card in db.scalars(select(VmTrendCard).where(VmTrendCard.id.in_(card_ids))):
-        result = evaluate(evidence[card.id])
-        card.active_until = date(result["active_until"])
-        card.last_event_at = date(result["last_event_at"])
-        card.reason, card.independent_sources = result["reason"], result["independent_sources"]
+    card_ids = list(card_ids)
+    for start in range(0, len(card_ids), 100):
+        batch = card_ids[start:start+100]
+        evidence = evidence_for(db, batch, generation)
+        for card in db.scalars(select(VmTrendCard).where(VmTrendCard.id.in_(batch))):
+            result = evaluate(evidence[card.id])
+            card.active_until = date(result["active_until"])
+            card.last_event_at = date(result["last_event_at"])
+            card.reason, card.independent_sources = result["reason"], result["independent_sources"]
 
 
 def process_publication(db: Session, publication: Any) -> None:
@@ -153,9 +167,8 @@ def process_pending(db: Session) -> None:
         refresh_cards(db, list(db.scalars(select(VmTrendCard.id))), generation)
         db.commit()
         llm = load_llm(db)
-        if not llm.configured:
+        if not llm.task_configured("threat_analysis"):
             return
-        provider = OllamaCompletion(llm.to_provider())
         # A bounded batch keeps recovery responsive. Subsequent syncs resume persisted work.
         rows = list(db.scalars(select(VmTrendPublication).join(VmTrendSource,
             (VmTrendSource.generation == VmTrendPublication.generation) & (VmTrendSource.external_id == VmTrendPublication.source_id))
@@ -169,12 +182,17 @@ def process_pending(db: Session) -> None:
                 continue
             try:
                 expected = publication_fingerprint(publication.data)
-                result = analyze_text(publication.data, provider)
+                # Allowed collector publications are public by contract. Explicit
+                # classifications on either source or item can only restrict this.
+                classes = {source.data.get("data_class", "public"), publication.data.get("data_class", "public")}
+                data_class = "public" if classes == {"public"} else "internal"
+                runtime = llm.for_task("threat_analysis", data_class=data_class)
+                result = analyze_text(publication.data, OllamaCompletion(runtime))
                 db.refresh(publication)
                 if publication_fingerprint(publication.data) != expected:
                     continue
                 publication.processing, publication.error = "done", None
-                publication.analysis = {**result, "model": llm.model, "rules_version": 1, "prompt_version": 1,
+                publication.analysis = {**result, "model": runtime.model, "provider": runtime.provider, "task": "threat_analysis", "rules_version": 1, "prompt_version": 1,
                                         "analyzed_at": dt.datetime.now(dt.UTC).isoformat(), "machine_generated": True}
             except Exception as exc:  # noqa: BLE001 — isolate provider/adapter failure from durable delivery
                 publication.error = type(exc).__name__

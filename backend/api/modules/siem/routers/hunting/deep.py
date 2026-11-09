@@ -52,6 +52,7 @@ class DeepIn(BaseModel):
 
     title: str | None = Field(default=None, max_length=255)
     hunt_query_id: int | None = None
+    is_full_pdql: bool = False
     query: str | None = None
     fields: str | None = None
     fields_label: str | None = None
@@ -90,6 +91,8 @@ class DeepView(BaseModel):
 
 
 class DeepDetail(DeepView):
+    is_full_pdql: bool
+    saved_filter: dict | None = None
     query: str
     fields: list[str]
     labels: list[str]
@@ -132,9 +135,12 @@ def _views(db: Session, deeps: list[ThDeepHunt]) -> list[DeepView]:
 
 
 def _detail(db: Session, deep: ThDeepHunt) -> DeepDetail:
+    from api.modules.siem.hunting.saved_filters import catalog, filter_view
+    catalog(db, commit=True)
     (view,) = _views(db, [deep])
     finding = db.scalar(select(ThFinding).where(ThFinding.deep_id == deep.id))
     return DeepDetail(
+        saved_filter=filter_view(db, "deep", deep), is_full_pdql=deep.is_full_pdql,
         **view.model_dump(), query=deep.query, fields=json.loads(deep.fields_json), labels=json.loads(deep.labels_json),
         limit=deep.limit, limit_hit_slices=deep.limit_hit_slices, partial=deep.partial, error=deep.error,
         finished_at=deep.finished_at, finding=finding_detail(db, finding) if finding is not None else None,
@@ -198,7 +204,8 @@ def start_deep(
         labels = align_labels(fields, payload.fields_label or "")
     elif payload.fields_label is not None:
         labels = align_labels(fields, payload.fields_label)
-    if not text or not fields:
+    full_pdql = query.is_full_pdql if query else payload.is_full_pdql
+    if not text or (not full_pdql and not fields):
         raise _unprocessable("запрос и поля обязательны")
     now = utcnow()
     period_from, period_to = _period(db, payload, now)
@@ -207,7 +214,7 @@ def start_deep(
         deep = create_deep(
             db, title=title, hunt=hunt, query=query, query_text=text, fields=fields, labels=labels,
             limit=payload.limit or limit or settings.default_limit, period_from=period_from, period_to=period_to,
-            login=user.login, now=now,
+            login=user.login, now=now, is_full_pdql=full_pdql,
         )
     except ValueError as exc:
         raise _unprocessable(str(exc)) from None
@@ -266,7 +273,7 @@ def rerun_deep(
         db, title=old.title, hunt=hunt, query=None, query_text=old.query, fields=json.loads(old.fields_json),
         labels=json.loads(old.labels_json), limit=old.limit, period_from=old.period_from, period_to=old.period_to,
         # Запрос библиотеки мог быть уже удалён — номер запроса берётся из копии, а не из библиотеки.
-        login=user.login, query_id=old.query_id,
+        login=user.login, query_id=old.query_id, is_full_pdql=old.is_full_pdql,
     )
     request.state.audit_summary = f"большой хант #{old.id} запущен ещё раз: #{new.id}"
     dispatcher.kick(db, started_by=user.login)
@@ -285,7 +292,7 @@ def save_to_library(
     if deep.hunt_id is not None or deep.query_id is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="запрос взят из библиотеки — он уже там")
     data = HuntIn(code=payload.code, name=payload.name, enabled=False, queries=[QueryIn(
-        query_id="Q1", query=deep.query, fields=", ".join(json.loads(deep.fields_json)),
+        query_id="Q1", name=deep.title, is_full_pdql=deep.is_full_pdql, query=deep.query, fields=", ".join(json.loads(deep.fields_json)),
         fields_label=", ".join(json.loads(deep.labels_json)), limit=deep.limit,
     )])
     try:

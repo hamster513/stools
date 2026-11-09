@@ -59,11 +59,14 @@ def _obs(asset: Asset, source: str, key: str, ip: str, gone: bool = False) -> As
 def _seed(engine: Engine) -> dict[str, int]:
     """Сети со сканом и расписаниями, активы с разным составом наблюдений и ссылками на них."""
     with Session(engine) as db:
-        scan_sched = PlatformSchedule(module="assets", kind="scan", target_id=1, interval_hours=24, enabled=True)
-        orphan_sched = PlatformSchedule(module="assets", kind="scan", target_id=999, interval_hours=24, enabled=True)
-        dns_sched = PlatformSchedule(module="assets", kind="dns", target_id=1, interval_hours=24, enabled=True)
-        db.add_all([scan_sched, orphan_sched, dns_sched])
-        db.flush()
+        # Схема BEFORE ещё не содержит календарные поля текущей ORM-модели.
+        scan_sched_id, _, dns_sched_id = [
+            db.execute(text(
+                "INSERT INTO platform_schedule (module, kind, target_id, interval_hours, enabled) "
+                "VALUES ('assets', :kind, :target_id, 24, true) RETURNING id"
+            ), {"kind": kind, "target_id": target_id}).scalar_one()
+            for kind, target_id in (("scan", 1), ("scan", 999), ("dns", 1))
+        ]
         db.execute(text(
             "INSERT INTO network (id, cidr, title, description, zone, site, owner, tags, implicit_tags, scan_enabled, ports, exclude, "
             "concurrency, icmp_timeout_ms, tcp_timeout_ms, rate_per_s, schedule_id, last_scan_at, last_scan_alive, last_scan_icmp, "
@@ -72,7 +75,7 @@ def _seed(engine: Engine) -> dict[str, int]:
             ":now, 3, false, '', '', '', :now, :now), "
             "(2, '10.20.0.0/24', '', '', NULL, '', '', '[]', '[]', false, '[]', '[]', 64, 1000, 2000, 500, NULL, NULL, NULL, NULL, "
             "'', '', '', :now, :now)"
-        ), {"sched": scan_sched.id, "now": NOW})
+        ), {"sched": scan_sched_id, "now": NOW})
 
         only_scan = Asset(name="", ip="10.10.0.9", network_id=1)
         gone_scan = Asset(name="", ip="10.10.0.8", network_id=1)
@@ -115,7 +118,7 @@ def _seed(engine: Engine) -> dict[str, int]:
         db.commit()
         return {
             "only_scan": only_scan.id, "gone_scan": gone_scan.id, "scan_and_ksc": scan_and_ksc.id, "ksc_only": ksc_only.id,
-            "merged": merged.id, "merged_alive": merged_alive.id, "domain": domain.id, "dns_sched": dns_sched.id,
+            "merged": merged.id, "merged_alive": merged_alive.id, "domain": domain.id, "dns_sched": dns_sched_id,
         }
 
 

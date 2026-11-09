@@ -117,6 +117,7 @@ def create_deep(
     login: str,
     now: dt.datetime | None = None,
     query_id: str | None = None,
+    is_full_pdql: bool = False,
 ) -> ThDeepHunt:
     """Большой хант в очереди со своей копией запроса: правка библиотеки его не меняет.
     `query_id` — номер запроса без самого запроса: повтор ханта, чей запрос библиотеки уже удалён."""
@@ -128,6 +129,7 @@ def create_deep(
         hunt_id=hunt.id if hunt else None,
         query_id=query.query_id if query else query_id,
         query=query_text,
+        is_full_pdql=query.is_full_pdql if query is not None else is_full_pdql,
         fields_json=json.dumps(fields, ensure_ascii=False),
         labels_json=json.dumps(labels, ensure_ascii=False),
         limit=limit,
@@ -240,7 +242,7 @@ def _execute(
 
     fields: list[str] = json.loads(deep.fields_json)
     labels: list[str] = json.loads(deep.labels_json)
-    pdql = build_pdql(deep.query, fields)
+    pdql = build_pdql(deep.query, fields, is_full_pdql=deep.is_full_pdql)
     wait = sliced_wait(sleeper, handle, clock, NO_DEADLINE)
     with make_client(conn, float(settings.request_timeout_s)) as http:
         client = EventsClient(conn.unsealed(), http)
@@ -275,6 +277,10 @@ def _append(db: Session, deep: ThDeepHunt, found: list[dict[str, Any]], fields: 
     Пустой кусок находки не заводит: как у ночного прогона, хант без событий кончается без находки."""
     if not found:
         return
+    from api.modules.siem.hunting.pdql import event_fields
+    fields = fields or json.loads(deep.fields_json) or event_fields(found)
+    if not json.loads(deep.fields_json):
+        deep.fields_json = json.dumps(fields, ensure_ascii=False)
     finding = _finding(db, deep)
     if finding is None:
         hunt = db.get(ThHunt, deep.hunt_id) if deep.hunt_id is not None else None

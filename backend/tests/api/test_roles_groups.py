@@ -52,7 +52,7 @@ def test_builtin_roles_listed(auth_client: TestClient) -> None:
     assert set(roles) == {"Администратор", "Аналитик", "Аудитор"}
     admin = roles["Администратор"]
     assert admin["builtin"] is True and admin["groups"] == 1
-    assert set(admin["levels"]) == {"attack", "siem", "vm", "ad", "ksc", "assets", "toolbox", "platform"}
+    assert set(admin["levels"]) == {"attack", "siem", "vm", "ad", "ksc", "assets", "toolbox", "irp", "platform"}
     assert set(admin["levels"].values()) == {"admin"}
 
 
@@ -67,7 +67,7 @@ def test_role_crud_with_matrix(auth_client: TestClient) -> None:
     # Недостающие области — deny: матрица в ответе всегда полная.
     assert body["levels"]["siem"] == "write" and body["levels"]["vm"] == "read"
     assert body["levels"]["ad"] == "deny" and body["levels"]["platform"] == "deny"
-    assert len(body["levels"]) == 8
+    assert len(body["levels"]) == 9
 
     changed = auth_client.put(
         f"/api/settings/roles/{body['id']}",

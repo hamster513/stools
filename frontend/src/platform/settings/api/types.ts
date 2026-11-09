@@ -42,7 +42,32 @@ export interface SecuritySettings {
 
 /** Настройки модели. Пустой адрес — рабочее состояние, а не ошибка:
  *  без модели работает всё, кроме предложений по разметке и перевода. */
+export type LlmProvider = 'ollama' | 'openrouter' | 'deepseek'
+export type LlmTaskId = 'attack_embeddings' | 'attack_markup' | 'attack_translation' | 'threat_analysis' | 'vulnerability_assistant'
+export interface LlmTaskAssignment {
+  provider: LlmProvider
+  model: string
+  enabled: boolean
+  timeout: number
+  think: boolean
+  local_only: boolean
+}
+export interface LlmTaskInfo {
+  title: string
+  description: string
+  kind: 'embedding' | 'completion'
+  data_class: 'public' | 'redacted' | 'internal'
+  providers: LlmProvider[]
+}
+
 export interface LlmSettings {
+  tasks?: Record<LlmTaskId, LlmTaskAssignment>
+  task_catalog?: Record<LlmTaskId, LlmTaskInfo>
+  key_updates?: Partial<Record<'openrouter' | 'deepseek', string | undefined>>
+  provider?: "ollama" | "openrouter" | "deepseek"
+  has_api_key?: boolean
+  api_keys?: Record<string, boolean>
+  api_key?: string
   base_url: string
   model: string
   embed_model: string
@@ -52,8 +77,13 @@ export interface LlmSettings {
 }
 
 export interface TestLlmRequest {
+  task?: LlmTaskId
+  assignment?: LlmTaskAssignment
+  think?: boolean
+  provider?: "ollama" | "openrouter" | "deepseek"
+  api_key?: string
   base_url: string
-  model: string
+  model?: string
   timeout?: number
 }
 

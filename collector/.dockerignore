@@ -5,4 +5,5 @@ __pycache__
 tests
 *.db*
 *.pem
+!src/stools_threat_collector/certificates/bdu-ca.pem
 *.key
