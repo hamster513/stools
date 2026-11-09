@@ -120,7 +120,7 @@ export function HuntingSettings() {
     <section id="hunting" className="rounded border border-grid bg-surface p-4" aria-label="Threat Hunting">
       <h2 className="mb-1 text-sm font-semibold text-text">Threat Hunting</h2>
       <p className="mb-4 text-xs text-text-secondary">
-        Ночной прогон библиотеки хантов и большие ханты за длинный период. Подключение к MaxPatrol задаётся ниже, в блоке «Подключение к MaxPatrol».
+        Ночной прогон библиотеки хантов и большие ханты за длинный период.
         {' '}Время старта, интервал и очередь — в <Link to="/siem/hunting/scheduler" className="rounded text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">Планировщике</Link>.
       </p>
       {settings.isLoading && <div className="flex justify-center py-6"><Spinner /></div>}
@@ -131,7 +131,7 @@ export function HuntingSettings() {
 }
 
 function HuntingForm({ view }: { view: ThSettingsView }) {
-  const { admin } = useCan()
+  const { admin } = useCan('siem')
   const save = useSaveThSettings()
   const folders = useFilterFolders(admin)
   const [draft, setDraft] = useState<Draft>(() => toDraft(plain(view)))

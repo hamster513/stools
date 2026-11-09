@@ -32,6 +32,9 @@ const MOVED_SETTINGS = new Set(['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', '
  * закладки и ссылки в чужих инструкциях — переводим на новые, а не ломаем.
  */
 function legacyPath(path: string, tail: string): string | null {
+  if (['/settings/siem', '/settings/siem/', '/siem/settings'].includes(path) && tail.split('#')[1] === 'hunting') {
+    return `/settings/siem-hunting${tail}`
+  }
   if (path.startsWith('/snapshots/')) return `/siem${path}${tail}`
   if (path === '/upload' || path === '/siem/upload') return `/settings/siem${tail}`
   const m = /^\/([a-z]+)\/settings$/.exec(path)

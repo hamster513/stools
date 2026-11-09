@@ -13,7 +13,6 @@ import { Link } from '@/lib/router'
 import { moduleTitle } from '@/platform/modules'
 import { useLlm } from '@/platform/settings/api/queries'
 import { useScrollToAnchor } from '@/platform/settings/useScrollToAnchor'
-import { HuntingSettings } from '../hunting/pages/settings/HuntingSettings'
 import { DataSources } from './settings/DataSources'
 
 export function SettingsPage() {
@@ -159,7 +158,6 @@ export function SettingsPage() {
           </div>
         </section>
 
-        <HuntingSettings />
       </div>
 
       {/* Все файлы продукта в одном месте: выгрузка правил, матрица,

@@ -6,6 +6,7 @@ import {
   ListChecks,
   ScrollText,
   UserRound,
+  Crosshair,
   type LucideIcon,
 } from 'lucide-react'
 import { useMe } from '@/api/auth'
@@ -22,11 +23,12 @@ const PLATFORM_ITEMS = [
 ] as const
 
 /** Страницы настроек модулей — в порядке рейки, только работающие модули. */
-const MODULE_ITEMS = MODULES.filter((m) => m.status === 'available').map((m) => ({
-  key: m.id as Area,
-  label: m.title,
-  icon: m.icon,
-}))
+const MODULE_ITEMS = MODULES.filter((m) => m.status === 'available').flatMap((m) => [
+  { key: m.id, area: m.id as Area, label: m.title, icon: m.icon },
+  ...(m.id === 'siem'
+    ? [{ key: 'siem-hunting', area: 'siem' as Area, label: 'SIEM Threat Hunting', icon: Crosshair }]
+    : []),
+])
 
 const GROUP = 'px-3 pt-1 pb-1 text-xs font-medium text-text-secondary'
 
@@ -75,7 +77,7 @@ export function SettingsSidebar() {
   const { data: me } = useMe()
   const has = (area: Area, level: Level) => !!me && atLeast(me.access, area, level)
   const platformItems = PLATFORM_ITEMS.filter((i) => has('platform', i.admin ? 'admin' : 'read'))
-  const moduleItems = MODULE_ITEMS.filter((i) => has(i.key, 'write'))
+  const moduleItems = MODULE_ITEMS.filter((i) => has(i.area, 'write'))
   const anyPlatform = platformItems.length > 0
 
   return (
