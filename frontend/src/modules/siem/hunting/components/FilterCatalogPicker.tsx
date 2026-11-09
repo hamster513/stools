@@ -26,13 +26,13 @@ export function FilterCatalogPicker({ existing, onAdd }: { existing: string[]; o
   return <div className="mb-3">
     <Button type="button" onClick={() => setOpen(!open)}>Добавить из SIEM</Button>
     {open && <div className="mt-2 grid gap-2 rounded border border-grid bg-surface p-3">
-      <p className="text-xs text-text-secondary">Выберите фильтры из папки, указанной в настройках Threat Hunting. Каждый станет отдельным запросом ханта.</p>
+      <p className="text-xs text-text-secondary">Выберите фильтры из папки, указанной в настройках Threat Hunting, и всех её вложенных папок. Каждый станет отдельным запросом ханта.</p>
       <div className="flex gap-2">
         <input className={FIELD} aria-label="Поиск фильтров SIEM" placeholder="Поиск по Name" value={search} onChange={e => setSearch(e.target.value)} />
         <Button type="button" loading={catalog.isFetching} onClick={() => catalog.refetch()}>Обновить список</Button>
       </div>
       {catalog.isError && <p role="alert" className="text-xs text-kind-1">{apiMessage(catalog.error, 'Не удалось загрузить каталог SIEM')}</p>}
-      {!catalog.isFetching && !catalog.isError && items.length === 0 && <p className="text-xs text-text-secondary">Фильтры не найдены в выбранной папке.</p>}
+      {!catalog.isFetching && !catalog.isError && items.length === 0 && <p className="text-xs text-text-secondary">Фильтры не найдены в выбранной папке и её вложенных папках.</p>}
       <div className="max-h-72 overflow-auto">
         {items.map(item => <label key={item.id} className="flex items-center gap-2 border-b border-grid py-2 text-xs text-text">
           <input type="checkbox" checked={selected.includes(item.id) || existing.includes(item.id)} disabled={existing.includes(item.id) || loading}

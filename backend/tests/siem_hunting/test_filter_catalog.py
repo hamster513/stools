@@ -2,6 +2,9 @@
 """Каталог фильтров SIEM, метаданные запросов и только ручная публикация."""
 import json
 
+import httpx
+import pytest
+
 from api.modules.siem.hunting import saved_filters as sf
 from tests.siem_hunting.test_findings_api import started  # noqa: F401
 from tests.siem_hunting.test_saved_filters import FILTER, FOLDER, setup_filters  # noqa: F401
@@ -147,3 +150,80 @@ def test_unavailable_siem_is_unknown_not_missing(auth_client, setup_filters, mon
     assert auth_client.get("/api/siem/hunting/filters/catalog").status_code == 502
     card = auth_client.get(f"/api/siem/hunting/hunts/{created['id']}").json()
     assert card["queries"][0]["saved_filter"]["status"] == "unknown"
+
+
+@pytest.fixture
+def nested_catalog(setup_filters, monkeypatch):
+    from uuid import UUID
+
+    child, grandchild, sibling = [str(UUID(int=i)) for i in (101, 102, 103)]
+    direct, nested, deep, outside = [str(UUID(int=i)) for i in (201, 202, 203, 204)]
+    details = {
+        key: {"folderId": folder, "name": "Filter " + key[-3:], "pdqlQuery": PDQL}
+        for key, folder in [(direct, FOLDER), (nested, child), (deep, grandchild), (outside, sibling)]
+    }
+
+    def leaf(key):
+        return {"id": key, "name": details[key]["name"], "type": "filter_node"}
+
+    # Deliberately identical folder names: ancestry must use IDs, not path prefixes.
+    tree = {"roots": [
+        {"id": FOLDER, "name": "Hunts", "type": "folder_node", "children": [
+            leaf(direct), {"id": child, "name": "Hunts", "type": "folder_node", "children": [
+                leaf(nested), {"id": grandchild, "name": "Deep", "type": "folder_node", "children": [leaf(deep)]},
+            ]},
+        ]},
+        {"id": sibling, "name": "Hunts", "type": "folder_node", "children": [leaf(outside)]},
+    ]}
+    calls = []
+
+    def handle(request):
+        calls.append((request.method, request.url.path))
+        assert request.method == "GET", "Catalog import must not write to SIEM"
+        if request.url.path.endswith("filters_hierarchy"):
+            return httpx.Response(200, json=tree)
+        key = request.url.path.rsplit("/", 1)[-1]
+        return httpx.Response(200, json=details[key])
+
+    monkeypatch.setattr(sf, "make_client", lambda conn: httpx.Client(transport=httpx.MockTransport(handle)))
+    return {"child": child, "sibling": sibling, "direct": direct, "nested": nested, "deep": deep,
+            "outside": outside, "details": details, "calls": calls}
+
+
+@pytest.mark.parametrize("select_child", [False, True])
+def test_catalog_includes_descendants_but_not_sibling(auth_client, db_session, nested_catalog, select_child):
+    from api.modules.siem.hunting.settings import ThSettings, save_th_settings
+
+    data = nested_catalog
+    if select_child:
+        save_th_settings(db_session, ThSettings(filter_folder_id=data["child"]), "test")
+    response = auth_client.get("/api/siem/hunting/filters/catalog")
+    assert response.status_code == 200
+    expected = {data["nested"], data["deep"]}
+    if not select_child:
+        expected.add(data["direct"])
+    assert {item["id"] for item in response.json()["items"]} == expected
+    assert auth_client.get(f"/api/siem/hunting/filters/catalog/{data['outside']}").status_code == 404
+
+
+def test_nested_filter_can_be_imported_and_linked(auth_client, nested_catalog):
+    data = nested_catalog
+    response = auth_client.get(f"/api/siem/hunting/filters/catalog/{data['deep']}")
+    assert response.status_code == 200
+    selected = response.json()
+    assert selected["query"] == PDQL
+    response = auth_client.post("/api/siem/hunting/hunts", json={
+        "code": "NESTED-SIEM", "name": "Nested hunt", "queries": [{**selected, "query_id": "Q1"}],
+    })
+    assert response.status_code == 201, response.text
+    query = response.json()["queries"][0]
+    assert query["saved_filter"]["status"] == "available"
+    assert data["deep"] in query["saved_filter"]["url"]
+    assert all(method == "GET" for method, _ in data["calls"])
+
+
+def test_nested_filter_moved_outside_subtree_is_rejected(auth_client, nested_catalog):
+    data = nested_catalog
+    # The hierarchy is an older snapshot, but details already show a move outside.
+    data["details"][data["deep"]]["folderId"] = data["sibling"]
+    assert auth_client.get(f"/api/siem/hunting/filters/catalog/{data['deep']}").status_code == 404

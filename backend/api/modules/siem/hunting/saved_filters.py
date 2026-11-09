@@ -140,17 +140,19 @@ class FiltersClient:
         if not isinstance(data.get("roots"), list):
             raise FilterError("SIEM вернул ответ без дерева папок")
         folders, filters = [], []
-        stack = [(node, "", "") for node in data["roots"]]
+        stack = [(node, "", "", ()) for node in data["roots"]]
         while stack:
-            node, parent_id, parent_path = stack.pop()
+            node, parent_id, parent_path, ancestors = stack.pop()
             if not isinstance(node, dict) or not node.get("id"):
                 raise FilterError("Некорректное дерево папок SIEM")
             if node.get("type") == "filter_node":
-                filters.append({"id": str(node["id"]), "name": node.get("name", ""), "folder": parent_id})
+                filters.append({"id": str(node["id"]), "name": node.get("name", ""),
+                                "folder": parent_id, "ancestors": ancestors})
             elif node.get("type") == "folder_node":
                 path = " / ".join(x for x in (parent_path, node.get("name", "")) if x)
                 folders.append({"id": str(node["id"]), "name": path})
-                stack.extend((child, str(node["id"]), path) for child in node.get("children") or [])
+                stack.extend((child, str(node["id"]), path, (*ancestors, str(node["id"])))
+                             for child in node.get("children") or [])
         return sorted(folders, key=lambda item: item["name"]), filters
 
 
@@ -168,9 +170,10 @@ def catalog(db: Session, *, force: bool = False, commit: bool = False) -> dict:
     conn = load_connection(db)
     host, folder = server_host(conn), load_th_settings(db).filter_folder_id
     cached = _state(db, CATALOG_KEY)
-    if not force and cached.get("host") == host and cached.get("folder") == folder and time.time() - cached.get("at", 0) < 30:
+    if (not force and cached.get("recursive") and cached.get("host") == host
+            and cached.get("folder") == folder and time.time() - cached.get("at", 0) < 30):
         return cached
-    result = {"host": host, "folder": folder, "at": time.time(), "items": [], "error": None}
+    result = {"host": host, "folder": folder, "at": time.time(), "items": [], "error": None, "recursive": True}
     try:
         if not conn.configured:
             raise FilterError("Подключение к MaxPatrol не настроено")
@@ -182,7 +185,8 @@ def catalog(db: Session, *, force: bool = False, commit: bool = False) -> dict:
         if folder not in {item["id"] for item in available}:
             raise FilterError("Выбранная папка SIEM недоступна")
         result["items"] = sorted(
-            [{"id": item["id"], "name": item["name"]} for item in remote if item["folder"] == folder],
+            [{"id": item["id"], "name": item["name"], "folder": item["folder"]}
+             for item in remote if folder in item["ancestors"]],
             key=lambda item: item["name"],
         )
     except FilterError as exc:
@@ -199,16 +203,17 @@ def catalog_query(db: Session, filter_id: str) -> dict:
     listing = catalog(db, force=True)
     if listing["error"]:
         raise HTTPException(502, listing["error"])
-    if filter_id not in {item["id"] for item in listing["items"]}:
-        raise HTTPException(404, "Фильтр не найден в выбранной папке SIEM")
+    selected = next((item for item in listing["items"] if item["id"] == filter_id), None)
+    if selected is None:
+        raise HTTPException(404, "Фильтр не найден в выбранной папке SIEM или её подпапках")
     conn = load_connection(db).unsealed()
     try:
         with make_client(conn) as http:
             info = FiltersClient(conn, http).request("GET", f"{FILTERS}/{filter_id}")
     except FilterError as exc:
         raise HTTPException(502, str(exc)) from exc
-    if info.get("isRemoved") or info.get("folderId") != load_th_settings(db).filter_folder_id:
-        raise HTTPException(404, "Фильтр больше не доступен в выбранной папке")
+    if info.get("isRemoved") or info.get("folderId") != selected["folder"]:
+        raise HTTPException(404, "Фильтр больше не доступен в выбранной папке или её подпапках")
     if not isinstance(info.get("pdqlQuery"), str) or not info["pdqlQuery"].strip() or not isinstance(info.get("name"), str):
         raise HTTPException(502, "SIEM вернул фильтр без имени или PDQL")
     return {"siem_filter_id": filter_id, "name": info["name"], "description": "",
