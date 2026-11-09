@@ -46,6 +46,7 @@
   "/settings/findings",
   "/settings/ksc",
   "/settings/llm",
+  "/settings/mail",
   "/settings/profile",
   "/settings/siem",
   "/settings/toolbox",

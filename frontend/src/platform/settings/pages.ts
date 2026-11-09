@@ -11,6 +11,7 @@ import { SchedulesPage } from './pages/SchedulesPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { AccessPage } from './pages/AccessPage'
 import { AuditPage } from './pages/AuditPage'
+import { MailPage } from './pages/MailPage'
 import { LlmPage } from './pages/LlmPage'
 import { AttackSettingsPage } from './pages/AttackSettingsPage'
 import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
@@ -27,6 +28,7 @@ export const PAGES = new Map<string, { page: ComponentType; nested?: boolean; ne
   // «Доступ» сам разбирает хвост пути: вкладки и карточки групп и ролей.
   ['access', { page: AccessPage, nested: true, need: ['platform', 'read'] }],
   ['audit', { page: AuditPage, need: ['platform', 'read'] }],
+  ['mail', { page: MailPage, need: ['platform', 'admin'] }],
   ['llm', { page: LlmPage, need: ['platform', 'admin'] }],
   ['attack', { page: AttackSettingsPage, need: ['attack', 'write'] }],
   // Страница модуля открыта аналитику: загрузки и сбор — его работа. Настройку модуля

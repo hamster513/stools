@@ -1,5 +1,6 @@
 import {
   Bot,
+  Mail,
   Database,
   CalendarClock,
   KeyRound,
@@ -19,6 +20,7 @@ import { MODULES } from '@/platform/modules'
 const PLATFORM_ITEMS = [
   { key: 'access', label: 'Доступ', icon: KeyRound, admin: false },
   { key: 'audit', label: 'Журнал действий', icon: ScrollText, admin: false },
+  { key: 'mail', label: 'Почта', icon: Mail, admin: true },
   { key: 'llm', label: 'Модель LLM', icon: Bot, admin: true },
 ] as const
 
