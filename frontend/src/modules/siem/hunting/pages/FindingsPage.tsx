@@ -9,7 +9,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
-import { useRouter, useSearchParams } from '@/lib/router'
+import { Link, useRouter, useSearchParams } from '@/lib/router'
 import { ExportButton } from '@/platform/filters/ExportButton'
 import { exportHref } from '@/platform/filters/exportHref'
 import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/FiltersBar'
@@ -136,6 +136,7 @@ export function FindingsPage() {
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <ExportButton href={exportHref(`${TH_FINDINGS_PATH}/export`, thFindingsParams(filters))} total={total} disabled={query.isLoading} />
         <div className="font-mono text-xs tabular-nums text-text-secondary">{data ? `всего: ${total}` : ''}</div>
+        {write && <Link to="/settings/siem-hunting#hunting" className="text-xs text-primary hover:underline">Лимит событий</Link>}
         {!filtersPanel.open && <FilterChips chips={chips} />}
       </header>
       {write && (

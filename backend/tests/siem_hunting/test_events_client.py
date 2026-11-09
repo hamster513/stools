@@ -54,9 +54,10 @@ def test_search_sends_bearer_and_window() -> None:
     assert request.headers["Content-Type"] == "application/json"
     body = json.loads(request.content)
     assert body == {
-        "filter": PDQL, "groupValues": [], "timeFrom": int(T_FROM.timestamp()), "timeTo": int(T_TO.timestamp()), "limit": 500,
+        "filter": PDQL, "groupValues": [], "timeFrom": int(T_FROM.timestamp()), "timeTo": int(T_TO.timestamp()),
     }
     assert body["timeFrom"] < body["timeTo"]
+    assert dict(request.url.params) == {"offset": "0", "limit": "500", "noCount": "true"}
     assert request.url.path == PATH
 
 
@@ -131,3 +132,35 @@ def test_public_error_classes() -> None:
         assert public_error(exc) == TLS_FAILED
     for text in (public_error(EventsError("HTTP 502 mp.corp.local pat_test_token", 502)), public_error(RuntimeError("mp.corp.local"))):
         assert "mp.corp.local" not in text and TOKEN not in text
+
+
+@pytest.mark.parametrize(("available", "limit", "expected", "pages"), [
+    (2600, 2500, 2500, [(0, 1000), (1000, 1000), (2000, 500)]),
+    (2300, 5000, 2300, [(0, 1000), (1000, 1000), (2000, 1000)]),
+    (2000, 5000, 2000, [(0, 1000), (1000, 1000), (2000, 1000)]),
+])
+def test_event_limit_is_applied_across_url_pages(available, limit, expected, pages):
+    calls = []
+    def handle(request):
+        offset = int(request.url.params.get("offset", 0))
+        size = int(request.url.params.get("limit", 1000))
+        calls.append((offset, size))
+        assert request.url.params.get("noCount") == "true"
+        if offset:
+            assert request.url.params["token"] == "query-token"
+        return httpx.Response(200, json={"events": [{"id": i} for i in range(offset, min(offset + size, available))], "token": "query-token"})
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        events = EventsClient(CONN, http).search(PDQL, T_FROM, T_TO, limit)
+    assert len(events) == expected
+    assert [e["id"] for e in events] == list(range(expected))
+    assert calls == pages
+
+
+def test_second_page_error_does_not_return_partial_success():
+    def handle(request):
+        if request.url.params.get("offset", "0") != "0":
+            return httpx.Response(500)
+        return httpx.Response(200, json={"events": [{"id": i} for i in range(1000)]})
+    with (httpx.Client(transport=httpx.MockTransport(handle)) as http,
+          pytest.raises(EventsRetryable)):
+        EventsClient(CONN, http).search(PDQL, T_FROM, T_TO, 2000)

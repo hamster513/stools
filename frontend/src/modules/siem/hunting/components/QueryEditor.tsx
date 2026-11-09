@@ -173,16 +173,18 @@ export function QueryEditor({ ref, huntId, draft, view, enabled, readOnly, toggl
           <input value={draft.fields_label} onChange={(e) => edit({ fields_label: e.target.value })} disabled={readOnly} placeholder="по одной на поле" className={FIELD} />
         </label>
         <label className="block">
-          <span className={LABEL}>Предел событий</span>
+          <span className={LABEL}>Лимит событий этого запроса</span>
           <input
             type="number"
             min={1}
+            max={100000}
             value={draft.limit}
             onChange={(e) => edit({ limit: e.target.value })}
             disabled={readOnly}
             placeholder="из настроек"
             className={`${FIELD} font-mono text-xs`}
           />
+          <span className="mt-1 block text-xs text-text-secondary">Пусто — лимит из <Link to="/settings/siem-hunting#hunting" className="text-primary hover:underline">настроек Threat Hunting</Link>. Указанное число заменяет общий лимит.</span>
         </label>
       </div>
 

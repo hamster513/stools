@@ -287,7 +287,7 @@ def test_limit_hit_flag(db_session: Any, fake: FakeEvents) -> None:
     fake.events_by_query.update({"q-full": events(2), "q-short": events(1), "q-over": events(3)})
     r = create_run(db_session, NIGHT, ThSettings(), TZ)
     run(db_session, r.id)
-    assert json.loads(fake.calls[0].content)["limit"] == 2
+    assert fake.calls[0].url.params["limit"] == "2"
     got = {f.query_id: (f.event_count, f.limit_hit) for f in db_session.scalars(select(ThFinding))}
     assert got == {"Q1": (2, True), "Q2": (1, False), "Q3": (2, True)}
     assert db_session.scalar(select(func.count()).select_from(ThEvent)) == 5

@@ -190,7 +190,7 @@ function HuntingForm({ view }: { view: ThSettingsView }) {
             <input value={draft.retry_minutes} onChange={(e) => set('retry_minutes', e.target.value)} disabled={!admin} aria-invalid={errors.retry_minutes ? true : undefined} className={cn(FIELD, 'font-mono')} />
           </Row>
           {number('nightly_deadline_h', 'Предел длительности ночи', 'По умолчанию 20. Незавершённый к этому часу прогон снимается, оставшиеся запросы помечаются пропущенными.', 'ч')}
-          {number('default_limit', 'Предел событий по умолчанию', 'По умолчанию 5000. Для запроса без своего предела; достигнутый предел помечается в находке.', 'событий')}
+          {number('default_limit', 'Лимит событий на запрос', 'От 1 до 100 000, по умолчанию 5000. Действует для запросов без собственного лимита. SIEM читается постранично до этого предела. Изменение применяется к новым запускам; уже сохранённые находки не дополняются.', 'событий')}
         </div>
       </div>
 

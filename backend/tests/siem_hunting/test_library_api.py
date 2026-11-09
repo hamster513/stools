@@ -231,7 +231,7 @@ def test_check_query_uses_events_client(auth_client: TestClient, fake_events: Fa
     body = _json.loads(call.content)
     assert body["filter"] == "filter(object.name = 'ScreenSave') | select(time, msgid) | sort(time desc)"
     # По умолчанию окно сутки и предел предпросмотра 200 строк.
-    assert body["limit"] == 200 and body["timeTo"] - body["timeFrom"] == 24 * 3600
+    assert call.url.params["limit"] == "200" and body["timeTo"] - body["timeFrom"] == 24 * 3600
     assert TOKEN not in r.text and "corp.local" not in r.text
 
 
@@ -287,7 +287,7 @@ def test_check_limit_hit_and_window(auth_client: TestClient, fake_events: FakeEv
     assert data["returned"] == 2 and len(data["rows"]) == 2 and data["limit_hit"] is True
     assert data["message"] == "2 события за неделю, лимит 2 достигнут"
     body = _json.loads(fake_events.calls[-1].content)
-    assert body["limit"] == 2 and body["timeTo"] - body["timeFrom"] == 7 * 24 * 3600
+    assert fake_events.calls[-1].url.params["limit"] == "2" and body["timeTo"] - body["timeFrom"] == 7 * 24 * 3600
     assert dt.datetime.fromisoformat(data["period_to"]) - dt.datetime.fromisoformat(data["period_from"]) == dt.timedelta(days=7)
 
 

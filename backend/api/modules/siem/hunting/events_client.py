@@ -1,11 +1,12 @@
 """Клиент событий MaxPatrol SIEM (`POST /api/events/v3/events`), только чтение.
 
 Запрос и ответ повторяют скрипт владельца: тело `{filter, groupValues,
-timeFrom, timeTo, limit}`, Bearer-токен, ответ `{"events": [...]}`. API
+timeFrom, timeTo}`, Bearer-токен, ответ `{"events": [...]}`. API
 событий живёт на хосте ядра на стандартном порту HTTPS, а не на порту
 базы знаний. Повтор после 500 и таймаута решает вызывающий (ночной
-прогон ждёт по графику), поэтому клиент делает один запрос и различает
-классы отказа: токен не принят, можно повторить, остальное. Адрес, токен и
+прогон ждёт по графику), поэтому клиент читает страницы до заданного лимита и различает
+классы отказа. offset/limit/noCount передаются в URL согласно API v3.
+Классы отказа: токен не принят, можно повторить, остальное. Адрес, токен и
 тело ответа в тексты ошибок не попадают — наружу уходит класс причины
 (`public_error`).
 """
@@ -78,13 +79,29 @@ class EventsClient:
         return token
 
     def search(self, pdql: str, time_from: dt.datetime, time_to: dt.datetime, limit: int) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        offset, token = 0, None
+        while len(events) < limit:
+            size = min(1000, limit - len(events))
+            page, token = self._page(pdql, time_from, time_to, offset, size, token)
+            events.extend(page[:limit - len(events)])
+            if len(page) < size:
+                break
+            offset += len(page)
+        return events
+
+    def _page(self, pdql: str, time_from: dt.datetime, time_to: dt.datetime,
+              offset: int, limit: int, token: str | None) -> tuple[list[dict[str, Any]], str | None]:
         body = {
             "filter": pdql, "groupValues": [],
-            "timeFrom": int(time_from.timestamp()), "timeTo": int(time_to.timestamp()), "limit": limit,
+            "timeFrom": int(time_from.timestamp()), "timeTo": int(time_to.timestamp()),
         }
+        params = {"offset": str(offset), "limit": str(limit), "noCount": "true"}
+        if token:
+            params["token"] = token
         headers = {"Authorization": f"Bearer {self._token()}", "Content-Type": "application/json"}
         try:
-            with self.http.stream("POST", self.url, headers=headers, json=body) as r:
+            with self.http.stream("POST", self.url, headers=headers, json=body, params=params) as r:
                 if r.status_code == 401:
                     raise EventsAuthError("события: HTTP 401", 401)
                 if r.status_code == 500:
@@ -99,12 +116,16 @@ class EventsClient:
         except ResponseTooLarge as exc:
             raise EventsShapeError(f"события: {exc}") from exc
         try:
-            events = json.loads(raw).get("events")
+            data = json.loads(raw)
+            events = data.get("events")
         except (ValueError, AttributeError) as exc:  # не JSON (страница входа) или не объект
             raise EventsShapeError("ответ без events") from exc
         if not isinstance(events, list):
             raise EventsShapeError("ответ без events")
-        return [e for e in events if isinstance(e, dict)]
+        if any(not isinstance(event, dict) for event in events):
+            raise EventsShapeError("ответ содержит некорректные события")
+        next_token = data.get("token")
+        return events, next_token if isinstance(next_token, str) else token
 
 
 def public_error(exc: BaseException) -> str:
