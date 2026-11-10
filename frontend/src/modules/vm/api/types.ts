@@ -437,6 +437,8 @@ export interface ImagesQuery {
   level?: ImageLevel[]
   /** Есть хотя бы одна находка такой оценки Trivy. */
   trivy?: ('critical' | 'high')[]
+  /** Есть подтверждённый запущенный контейнер в последнем снимке MaxPatrol VM. */
+  running_only?: boolean
   sort?: ImageSort
   limit?: number
   offset?: number

@@ -22,6 +22,7 @@ from api.modules.vm.core.harbor import SEVERITIES, is_cve
 from api.modules.vm.core.risk import level as risk_level
 from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmImage, VmImageCve
+from api.modules.vm.services.image_hosts import running_condition
 from api.modules.vm.services.query import LEVELS, level_bounds, one_of
 
 #: Значение фасета уровня для образа или находки без риска.
@@ -94,6 +95,7 @@ class ImageFilters:
     trivy: frozenset[str] | None = None
     image_id: int | None = None
     levels: Levels = field(default_factory=Levels)
+    running_only: bool = False
 
 
 def image_conditions(f: ImageFilters) -> list[ColumnElement[bool]]:
@@ -116,6 +118,8 @@ def image_conditions(f: ImageFilters) -> list[ColumnElement[bool]]:
         conds.append(or_(*flags))
     if f.image_id is not None:
         conds.append(VmImage.id == f.image_id)
+    if f.running_only:
+        conds.append(running_condition())
     return conds
 
 

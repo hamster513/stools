@@ -3,12 +3,31 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, cast, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import ColumnElement
 
 from api.modules.assets.models import AssetObservation
 from api.modules.vm.docker_models import VmDockerImage, VmDockerSnapshot
 from api.modules.vm.models import VmImage
+
+
+def running_condition() -> ColumnElement[bool]:
+    """Confirmed running matches, before pagination and without multiplying image rows.
+
+    Inventory status is derived from the same host/container records used below.
+    A failed latest poll keeps the previous completed snapshot, as host_views does.
+    """
+    snapshot_ready = select(VmDockerSnapshot.id).where(
+        VmDockerSnapshot.id == 1, VmDockerSnapshot.collected_at.is_not(None),
+    ).exists()
+    matched = select(VmDockerImage.id).where(
+        VmDockerImage.status == "running",
+        VmDockerImage.image_id != "",
+        cast(VmImage.runtime_ids, JSONB).has_key(VmDockerImage.image_id),
+    ).correlate(VmImage).exists()
+    return and_(snapshot_ready, matched)
 
 
 def host_views(db: Session, images: list[VmImage]) -> dict[int, dict[str, Any]]:

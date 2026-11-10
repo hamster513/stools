@@ -5,7 +5,7 @@ import { toggleValue } from '@/platform/findings/facets'
 import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 import { Row, Section } from '../vulns/FacetPanel'
 
-export type ImageFilters = Pick<ImagesQuery, 'project' | 'scan_status' | 'level' | 'trivy'>
+export type ImageFilters = Pick<ImagesQuery, 'project' | 'scan_status' | 'level' | 'trivy' | 'running_only'>
 
 const TRIVY_OPTIONS = [
   { value: 'critical', label: 'есть критические' },
@@ -39,6 +39,12 @@ export function ImagesFacetPanel({ facets, remembered, filters, onToggle, total 
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">
         Образов <span className="font-mono tabular-nums text-text">{total.toLocaleString('ru-RU')}</span>
       </div>
+
+      <Section title="Запуск на хостах" hint="По последнему снимку MaxPatrol VM">
+        <Row active={Boolean(filters.running_only)} count={undefined} onClick={() => onToggle('running_only', filters.running_only ? undefined : true)}>
+          Только запущенные на хостах
+        </Row>
+      </Section>
 
       <Section title="Проект Harbor">
         {projects.map(({ value: p, count }) => (

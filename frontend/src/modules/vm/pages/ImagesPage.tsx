@@ -46,6 +46,7 @@ export function ImagesPage() {
     scan_status: listFrom<ImageScanStatus>(params, 'scan_status', SCAN_STATUSES),
     level: listFrom<ImageLevel>(params, 'level', IMAGE_LEVELS),
     trivy: listFrom(params, 'trivy', TRIVY_FLAGS),
+    running_only: ['true', '1'].includes(params.get('running_only') ?? '') || undefined,
   }))
   const [sort, setSort] = useState<ImageSort>(() => {
     const s = params.get('sort') as ImageSort | null
@@ -90,6 +91,7 @@ export function ImagesPage() {
 
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
   const chips: FilterChip[] = [
+    ...(filters.running_only ? [{ label: 'Только запущенные на хостах', clear: () => toggle('running_only', undefined) }] : []),
     ...valueChips('Проект', filters.project, (p) => p, (v) => toggle('project', v)),
     ...valueChips('Скан', filters.scan_status, (s) => SCAN_STATUS_LABELS[s], (v) => toggle('scan_status', v)),
     ...valueChips('Риск', filters.level, (l) => IMAGE_LEVEL_LABELS[l], (v) => toggle('level', v)),

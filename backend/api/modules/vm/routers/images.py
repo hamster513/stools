@@ -41,11 +41,13 @@ def _image_filters(
     scan_status: QueryList = None,
     level: QueryList = None,
     trivy: QueryList = None,
+    running_only: bool = False,
     db: Session = Depends(get_db),
 ) -> q.ImageFilters:
     """Фасеты `project, scan_status, level, trivy` — повтором ключа; `level=none` — образы без риска;
-    `trivy=critical|high` — есть хотя бы одна такая находка."""
-    return q.ImageFilters(q_, multi(project), multi(scan_status), multi(level), multi(trivy), None, _levels(db))
+    `trivy=critical|high` — есть хотя бы одна такая находка;
+    `running_only=true` — есть подтверждённый running-контейнер в снимке MaxPatrol VM."""
+    return q.ImageFilters(q_, multi(project), multi(scan_status), multi(level), multi(trivy), None, _levels(db), running_only=running_only)
 
 
 def _export_filters(
