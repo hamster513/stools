@@ -495,6 +495,14 @@ export interface ImageRiskCard {
   nvd_url: string | null
 }
 
+export interface HarborSyncError {
+  target: string
+  stage: 'repositories' | 'artifacts' | 'report' | 'unknown'
+  reason: string | null
+  http_status: number | null
+  hint: string
+}
+
 export interface LastSyncView {
   finished_at: string
   images: number
@@ -505,6 +513,7 @@ export interface LastSyncView {
   skipped_unscanned: number
   /** `проект` или `проект/репозиторий`, не прочитанные в этой синхронизации. */
   errors: string[]
+  error_details?: HarborSyncError[]
 }
 
 export interface HarborView {

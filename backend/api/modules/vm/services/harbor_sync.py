@@ -21,7 +21,7 @@ from itertools import batched
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import Table, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -42,6 +42,13 @@ from api.modules.vm.core.harbor import (
 from api.modules.vm.core.weights import Weights
 from api.modules.vm.models import VmCve, VmImage, VmImageCve, VmImageSync
 from api.modules.vm.services.harbor_settings import HarborConnection, load_harbor
+from api.modules.vm.services.harbor_sync_errors import (
+    Stage,
+    SyncErrorDetail,
+    describe_error,
+    errors_text,
+    read_errors,
+)
 from api.modules.vm.services.jobs import (
     DATA_KINDS,
     JobHandle,
@@ -236,21 +243,15 @@ class LastSyncView(BaseModel):
     skipped_unscanned: int
     #: Проекты и репозитории («проект/репозиторий»), не прочитанные в этой синхронизации.
     errors: list[str]
+    error_details: list[SyncErrorDetail] = Field(default_factory=list)
 
 
-def _errors_text(errors: list[str]) -> str | None:
-    """`VmImageSync.errors` — JSON-список; пустой — NULL."""
-    return json.dumps(errors, ensure_ascii=False) if errors else None
+def _errors_text(errors: list[str], details: list[SyncErrorDetail]) -> str | None:
+    return errors_text(errors, details)
 
 
 def _errors_list(text: str | None) -> list[str]:
-    if not text:
-        return []
-    try:
-        value = json.loads(text)
-    except ValueError:
-        return [text]
-    return [str(x) for x in value] if isinstance(value, list) else [text]
+    return read_errors(text)[0]
 
 
 def last_sync(db: Session) -> VmImageSync | None:
@@ -263,9 +264,10 @@ def last_sync_view(db: Session) -> LastSyncView | None:
     row = last_sync(db)
     if row is None:
         return None
+    errors, details = read_errors(row.errors)
     return LastSyncView(
         finished_at=row.finished_at, images=row.images, cves=row.cves, repositories=row.repositories,
-        skipped_unscanned=row.skipped_unscanned, errors=_errors_list(row.errors),
+        skipped_unscanned=row.skipped_unscanned, errors=errors, error_details=details,
     )
 
 
@@ -302,6 +304,7 @@ class _Sync:
         self.db, self.handle, self.client, self.conn = db, handle, client, conn
         self.started_at = started_at
         self.errors: list[str] = []
+        self.error_details: list[SyncErrorDetail] = []
         self.projects: list[str] = []
         #: Проекты, чей список репозиториев прочитан: проект → имена репозиториев.
         self.listed: dict[str, set[str]] = {}
@@ -309,9 +312,12 @@ class _Sync:
         self.failed_repos: dict[tuple[str, str], str] = {}
         self.ok_repos: list[_Repo] = []
 
-    def _error(self, name: str) -> None:
+    def _error(self, name: str, stage: Stage, exc: HarborError) -> None:
         if name not in self.errors:
             self.errors.append(name)
+        detail = describe_error(name, stage, exc)
+        if detail not in self.error_details:
+            self.error_details.append(detail)
 
     def run(self, weights: Weights, started_by: str) -> SyncResult:
         self._list()
@@ -342,7 +348,7 @@ class _Sync:
         self.db.add(VmImageSync(
             started_at=self.started_at, finished_at=dt.datetime.now(dt.UTC), images=result.images, cves=result.cves,
             repositories=result.repositories, skipped_unscanned=result.skipped_unscanned,
-            errors=_errors_text(result.errors), started_by=started_by,
+            errors=_errors_text(result.errors, self.error_details), started_by=started_by,
         ))
         self.db.commit()
         tail = f"; не прочитано: {len(result.errors)}" if result.errors else ""
@@ -369,7 +375,7 @@ class _Sync:
             except HarborError as exc:
                 log.warning("Harbor: репозитории проекта %s не прочитаны: %s", project, exc.kind)
                 self.failed_projects[project] = exc.kind
-                self._error(project)
+                self._error(project, "repositories", exc)
                 continue
             unique: dict[str, HarborRepo] = {}
             for r in repos:
@@ -384,7 +390,7 @@ class _Sync:
                 except HarborError as exc:
                     log.warning("Harbor: артефакты %s/%s не прочитаны: %s", project, repo.name, exc.kind)
                     self.failed_repos[(project, repo.name)] = exc.kind
-                    self._error(f"{project}/{repo.name}")
+                    self._error(f"{project}/{repo.name}", "artifacts", exc)
                     continue
                 self.ok_repos.append(_Repo(project, repo.name, artifacts))
 
@@ -424,7 +430,7 @@ class _Sync:
                 old = known.get(p.key)
                 p.scanned_at = old[1] if old is not None else None
                 p.keep_findings = old is not None
-                self._error(f"{p.repo.project}/{p.repo.name}")
+                self._error(f"{p.repo.project}/{p.repo.name}", "report", exc)
             self.handle.tick(i, message=f"образов: {i}/{total}")
         return skipped
 

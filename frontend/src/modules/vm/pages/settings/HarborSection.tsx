@@ -4,6 +4,7 @@ import { errorText } from '@/api/client'
 import { useHarbor, useSaveHarbor, useTestHarbor } from '@/modules/vm/api/queries'
 import type { HarborView } from '@/modules/vm/api/types'
 import { HarborSyncStatus } from '../images/HarborSyncStatus'
+import { HarborLastSync } from '../images/HarborLastSync'
 import { useHarborSync } from '../images/useHarborSync'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -16,7 +17,6 @@ import { Field, FIELD, Section } from '@/platform/collector/ui'
 const ABOUT =
   'Образы контейнеров из Harbor: список образов, их уязвимости по отчётам Trivy и риск по формуле VM. Подключение — робот-аккаунт Harbor с правом чтения; секрет робота хранится в базе и наружу не показывается: пустое поле при сохранении оставляет прежнее значение. Синхронизация читает указанные проекты (пусто — все, доступные роботу) и несколько последних тегов каждого репозитория.'
 
-const when = (iso: string) => new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 const splitList = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
 
 /** Ответ API на смену адреса без нового секрета (`SECRETS_AGAIN`); по тексту, а не по состоянию формы: такой же 422 дают и другие поля. */
@@ -143,15 +143,7 @@ function HarborForm({ h }: { h: HarborView }) {
 
       <HarborSyncStatus state={harborSync} className="mt-2" />
 
-      <p className="mt-3 text-xs text-text-secondary">
-        {ls ? (
-          <>
-            Последняя синхронизация: {when(ls.finished_at)}, образов: {ls.images}, пар образ–находка: {ls.cves}
-            {ls.skipped_unscanned > 0 && `, без готового скана: ${ls.skipped_unscanned}`}
-            {ls.errors.length > 0 && <span className="text-kind-1">; ошибки: {ls.errors.join(', ')}</span>}
-          </>
-        ) : 'Синхронизаций ещё не было.'}
-      </p>
+      <HarborLastSync sync={ls} />
 
       {admin && (
         <Link to="/settings/schedules" className="text-sm text-primary hover:underline">Расписание синхронизаций</Link>

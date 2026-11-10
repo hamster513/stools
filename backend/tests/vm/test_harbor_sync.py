@@ -243,7 +243,7 @@ def test_repo_error_keeps_old_rows(db_session: Any) -> None:
     assert after["stools/stools-web"].sync_error is None
     assert len(_pairs(db_session, after["library/debian"].id)) == 25
     last = db_session.execute(select(VmImageSync).order_by(VmImageSync.id.desc())).scalars().first()
-    assert last is not None and "library/alpine" in json.loads(last.errors or "[]")
+    assert last is not None and "library/alpine" in harbor_sync._errors_list(last.errors)
 
 
 def test_report_error_keeps_pairs_and_retries(db_session: Any) -> None:
@@ -598,3 +598,43 @@ def test_data_status_harbor_row(auth_client: TestClient, db_session: Any) -> Non
     assert auth_client.put("/api/vm/harbor", json=SETTINGS).status_code == 200
     fresh = row()
     assert (fresh.state, fresh.source, fresh.detail) == ("fresh", "harbor.example.test:8082", "4 образа, 31 пара")
+
+
+@pytest.mark.parametrize("path,stage,target,status", [
+    (LIB, "repositories", "library", 403),
+    (f"{LIB}/alpine/artifacts", "artifacts", "library/alpine", 502),
+    (f"{LIB}/debian/artifacts/*", "report", "library/debian", 401),
+])
+def test_partial_error_details_survive_api_reload(auth_client: TestClient, db_session: Any, path: str, stage: str, target: str, status: int) -> None:
+    job, result = _sync(fake_harbor({path: status}))
+    assert job.status == "done" and result is not None
+    response = auth_client.get("/api/vm/harbor")
+    assert response.status_code == 200
+    last = response.json()["last_sync"]
+    assert target in last["errors"]
+    detail = next(item for item in last["error_details"] if item["target"] == target)
+    assert detail["stage"] == stage
+    assert detail["http_status"] == status
+    assert detail["reason"]
+    assert detail["hint"]
+    assert "s3cret" not in json.dumps(last)
+    assert "harbor.example.test" not in json.dumps(last)
+
+
+@pytest.mark.parametrize("stored,targets", [
+    ('["library", "stools/stools-web"]', ["library", "stools/stools-web"]),
+    ("library", ["library"]),
+    (None, []),
+])
+def test_legacy_sync_errors_have_explicit_unknown_reason(db_session: Any, stored: str | None, targets: list[str]) -> None:
+    assert _sync(fake_harbor())[0].status == "done"
+    row = harbor_sync.last_sync(db_session)
+    assert row is not None
+    row.errors = stored
+    db_session.commit()
+    view = harbor_sync.last_sync_view(db_session)
+    assert view is not None and view.errors == targets
+    assert [item.target for item in view.error_details] == targets
+    for item in view.error_details:
+        assert item.stage == "unknown" and item.reason is None and item.http_status is None
+        assert "Повторите" in item.hint
