@@ -1,4 +1,4 @@
-import { CalendarClock, Copy, Crosshair, LayoutDashboard, Library, ListTree, Radar, SlidersHorizontal, Telescope } from 'lucide-react'
+import { CalendarClock, Copy, Crosshair, LayoutDashboard, Library, Newspaper, ListTree, Radar, SlidersHorizontal, Telescope } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 import { useThFindings } from './hunting/api/queries'
@@ -18,6 +18,7 @@ const NAV_ITEMS = [
 const HUNTING_ITEMS = [
   { key: 'findings', label: 'Находки', to: '/siem/hunting', prefix: '/siem/hunting/findings', icon: Radar },
   { key: 'library', label: 'Библиотека хантов', to: '/siem/hunting/library', prefix: '/siem/hunting/library', icon: Library },
+  { key: 'materials', label: 'Материалы', to: '/siem/hunting/materials', prefix: '/siem/hunting/materials', icon: Newspaper },
   { key: 'deep', label: 'Большой хант', to: '/siem/hunting/deep', prefix: '/siem/hunting/deep', icon: Telescope },
   { key: 'scheduler', label: 'Планировщик', to: '/siem/hunting/scheduler', prefix: '/siem/hunting/scheduler', icon: CalendarClock },
 ] as const

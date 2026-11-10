@@ -45,6 +45,7 @@ MODULE_ADMIN_WRITES: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in 
     r"(PUT|POST) /api/siem/profile(/preview)?",
     r"(POST|DELETE) /api/siem/attack/reference(/apply)?",
     r"PUT /api/siem/hunting/settings",
+    r"POST /api/siem/hunting/intel/import",
     r"PUT /api/siem/hunting/scheduler(/order)?",
     r"PUT /api/vm/zones",
     r"POST /api/vm/refs/.+",

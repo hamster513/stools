@@ -193,3 +193,31 @@ class ThEvent(Base):
     finding_id: Mapped[int] = mapped_column(ForeignKey("th_finding.id", ondelete="CASCADE"))
     position: Mapped[int] = mapped_column(Integer)
     data_json: Mapped[str] = mapped_column(Text)
+
+
+class ThIntelItem(Base):
+    """External reference material; never an executable hunt/query."""
+    __tablename__ = 'th_intel_item'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(100), index=True)
+    external_id: Mapped[str] = mapped_column(String(1024))
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    title: Mapped[str] = mapped_column(String(2000))
+    url: Mapped[str] = mapped_column(String(2048))
+    text: Mapped[str] = mapped_column(Text)
+    format: Mapped[str] = mapped_column(String(32))
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    collected_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    technique_ids_json: Mapped[str] = mapped_column(Text, default='[]')
+    full_text: Mapped[bool] = mapped_column(Boolean, default=False)
+    import_id: Mapped[str] = mapped_column(ForeignKey('th_intel_import.id'))
+    content_hash: Mapped[str] = mapped_column(String(64))
+
+
+class ThIntelImport(Base):
+    __tablename__ = 'th_intel_import'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    created_by: Mapped[str] = mapped_column(String(255))
+    result_json: Mapped[str] = mapped_column(Text)
+    manifest_json: Mapped[str] = mapped_column(Text)

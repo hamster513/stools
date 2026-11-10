@@ -57,6 +57,7 @@
   "/siem/hunting/deep/:id",
   "/siem/hunting/findings/:id",
   "/siem/hunting/library",
+  "/siem/hunting/materials",
   "/siem/hunting/library/:id",
   "/siem/hunting/library/new",
   "/siem/hunting/runs",

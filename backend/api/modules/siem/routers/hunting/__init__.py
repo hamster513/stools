@@ -15,6 +15,7 @@ from api.modules.siem.routers.hunting import (
     deep,
     filters,
     findings,
+    intel,
     library,
     runs,
     scheduler,
@@ -22,5 +23,5 @@ from api.modules.siem.routers.hunting import (
 )
 
 router = APIRouter(prefix="/hunting")
-for sub in (filters.router, library.router, settings.router, findings.router, runs.router, deep.router, scheduler.router, make_jobs_router(ThJob, "siem_th", cancel=False)):
+for sub in (intel.router, filters.router, library.router, settings.router, findings.router, runs.router, deep.router, scheduler.router, make_jobs_router(ThJob, "siem_th", cancel=False)):
     router.include_router(sub)

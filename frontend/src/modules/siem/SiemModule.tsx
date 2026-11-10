@@ -15,6 +15,7 @@ import { AttackPage } from './pages/AttackPage'
 import { FindingPage } from './hunting/pages/FindingPage'
 import { FindingsPage } from './hunting/pages/FindingsPage'
 import { HuntPage } from './hunting/pages/HuntPage'
+import { IntelSection } from './hunting/pages/settings/IntelSection'
 import { LibraryPage } from './hunting/pages/LibraryPage'
 import { DeepHuntPage } from './hunting/pages/DeepHuntPage'
 import { DeepPage } from './hunting/pages/DeepPage'
@@ -91,6 +92,9 @@ function HuntingRoute() {
   } else if (finding) {
     section = `finding-${finding.id}`
     page = <FindingPage id={Number(finding.id)} />
+  } else if (path === '/siem/hunting/materials') {
+    section = path
+    page = <div className="h-full overflow-y-auto p-6"><div className="max-w-4xl"><IntelSection /></div></div>
   } else if (path === '/siem/hunting/library') {
     section = path
     page = <LibraryPage />

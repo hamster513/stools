@@ -61,12 +61,14 @@ SIEM_REFERENCE_UPLOAD = 50 * MB
 #: Файл библиотеки хантов (YAML): текст запросов, поэтому 2 МБ с запасом; совпадает с умолчанием,
 #: в `BODY_LIMITS` не нужен, но ручка проверяет размер явно.
 TH_YAML_UPLOAD = 2 * MB
+TH_INTEL_UPLOAD = 65 * MB  # 64 MiB ZIP + multipart framing
 DEFAULT_LIMIT = 2 * MB
 
 #: (метод, путь ручки загрузки, лимит тела в байтах). Путь сравнивается целиком,
 #: `{name}` — любой непустой сегмент. Всё, чего здесь нет, — DEFAULT_LIMIT.
 BODY_LIMITS: list[tuple[str, str, int]] = [
     ("POST", "/api/siem/snapshots", SIEM_UPLOAD),
+    ("POST", "/api/siem/hunting/intel/import", TH_INTEL_UPLOAD),
     ("POST", "/api/vm/import/file", VM_UPLOAD),
     ("POST", "/api/vm/refs/{name}/upload", VM_UPLOAD),
     ("POST", "/api/ad/snapshots/file", AD_UPLOAD),

@@ -28,6 +28,7 @@ def test_limit_for_matches_exact_upload_routes() -> None:
     """Большой лимит — только у ручек загрузки файлов (метод и путь целиком);
     JSON-ручки рядом с ними получают 2 МБ по умолчанию."""
     assert limit_for("POST", "/api/siem/snapshots") == 300 * MB
+    assert limit_for("POST", "/api/siem/hunting/intel/import") == 65 * MB
     assert limit_for("POST", "/api/vm/import/file") == 500 * MB
     assert limit_for("POST", "/api/vm/refs/nvd/upload") == 500 * MB
     # Архив справочников — отдельный маршрут, но лимит тела тот же шаблон `{name}`.
@@ -51,6 +52,8 @@ def test_limit_for_matches_exact_upload_routes() -> None:
         ("POST", "/api/vm/refs//upload"),
         ("POST", "/api/siem/snapshots-x"),
         ("POST", "/api/auth/login"),
+        ("GET", "/api/siem/hunting/intel/import"),
+        ("POST", "/api/siem/hunting/intel/import/extra"),
         ("POST", "/api/siem/attack/run"),
     ]:
         assert limit_for(method, path) == 2 * MB, (method, path)

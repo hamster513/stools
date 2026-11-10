@@ -1,5 +1,6 @@
 import { Link } from '@/lib/router'
 import { useScrollToAnchor } from '@/platform/settings/useScrollToAnchor'
+import { IntelSection } from './IntelSection'
 import { HuntingSettings } from './HuntingSettings'
 
 export function HuntingSettingsPage() {
@@ -9,7 +10,7 @@ export function HuntingSettingsPage() {
     <div className="h-full overflow-y-auto p-6">
       <h1 className="mb-2 text-base font-semibold text-text">SIEM Threat Hunting</h1>
       <p className="mb-5 max-w-2xl text-xs text-text-secondary">
-        Выполнение запросов хантов, хранение событий и папка сохранённых фильтров SIEM.
+        Выполнение запросов хантов, хранение событий, фильтры SIEM и материалы из внешних источников.
       </p>
       <div className="grid max-w-2xl gap-5">
         <section className="rounded border border-grid bg-surface p-4">
@@ -23,6 +24,7 @@ export function HuntingSettingsPage() {
           </Link>
         </section>
         <HuntingSettings />
+        <IntelSection />
       </div>
     </div>
   )
