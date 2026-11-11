@@ -61,7 +61,7 @@ def period_card_view(card: Any, evidence: Any, now: Any, period: str, tz: str, d
 
 
 def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, limit: Any=50, offset: Any=0, region: Any="", language: Any="", reason: Any="", publisher: Any="", status: Any="", sort: Any="priority",
-               period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "", source_id: str = "", product: str = "", poc_state: str = "") -> Any:
+               period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "", source_id: str = "", product: str = "", poc_state: str = "", from_archive: bool = False) -> Any:
     now = dt.datetime.now(dt.UTC)
     period_bounds(period, tz, date_from, date_to, now)
     state = db.get(VmTrendIngestState, 1)
@@ -70,6 +70,8 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
     generation = state.active_generation
     publication = select(VmTrendEvidence.card_id).join(VmTrendPublication).where(
         VmTrendPublication.generation == generation, *publication_period_conditions(period, tz, date_from, date_to, now))
+    if from_archive:
+        publication = publication.where(VmTrendPublication.data["offline_archive"].as_boolean().is_(True))
     conditions = [VmTrendCard.id.in_(publication)]
     if source_id:
         # Narrow candidates in SQL; retain all publishers' evidence for each CVE.
@@ -95,7 +97,10 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
         batch = cards[start:start+100]
         evidence = evidence_for(db, [card.id for card in batch], generation, period, tz, date_from, date_to, now)
         for card in batch:
-            result, current = period_card_view(card, evidence[card.id], now, period, tz, date_from, date_to, archive=view=="archive")
+            card_evidence = evidence[card.id]
+            if from_archive:
+                card_evidence = [entry for entry in card_evidence if entry.get("offline_archive")]
+            result, current = period_card_view(card, card_evidence, now, period, tz, date_from, date_to, archive=view=="archive")
             if not current or (view in ("all", "matched") and not result["active"]):
                 continue
             if view == "review" and result["active"]:

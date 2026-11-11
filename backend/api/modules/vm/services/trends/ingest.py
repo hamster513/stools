@@ -73,7 +73,7 @@ def _apply_page(db: Session, data: Any, reset: Any=False) -> Any:
                                    generation=str(uuid.uuid4()), cursor=0)
         db.add(state)
         db.flush()
-    elif reset:
+    elif reset or state.collector_id == "offline-news-archives":
         state.collector_id, state.epoch = page.collector_id, page.epoch
         state.generation, state.cursor, state.batch_until = str(uuid.uuid4()), 0, 0
     if (state.collector_id, state.epoch) != (page.collector_id, page.epoch):

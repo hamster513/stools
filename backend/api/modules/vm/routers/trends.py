@@ -168,6 +168,37 @@ def collect(id: str, payload: dict[str, Any] | None = None, db: Session = Depend
     return remote_request(db, "POST", "/api/v1/sources/" + id + "/collect", json=payload or {})
 
 
+@router.get("/publication-sources")
+def publication_sources(db: Session = Depends(get_db)) -> Any:
+    from sqlalchemy import select
+    from api.modules.vm.trend_models import VmTrendSource
+    state = db.get(VmTrendIngestState, 1)
+    if state is None or not state.active_generation:
+        return {"items": []}
+    rows = db.scalars(select(VmTrendSource).where(VmTrendSource.generation == state.active_generation)
+                      .order_by(VmTrendSource.data["name"].astext).limit(1000))
+    return {"items": [{"id": row.external_id, "name": row.data.get("name", row.external_id)} for row in rows]}
+
+
+@router.get("/news-archive/imports")
+def news_imports(db: Session = Depends(get_db)) -> Any:
+    from api.modules.siem.routers.hunting.intel import list_imports
+    return list_imports(db)
+
+
+@router.post("/news-archive")
+def news_archive(file: UploadFile, db: Session = Depends(get_db), user: Any = Depends(get_current_user)) -> Any:
+    from api.modules.siem.hunting.intel import MAX_ZIP, IntelError
+    from api.modules.vm.services.trends.news_archive import import_news
+    data = file.file.read(MAX_ZIP + 1)
+    if len(data) > MAX_ZIP:
+        raise HTTPException(413, "Архив превышает 64 МиБ")
+    try:
+        return import_news(db, data, user.login)
+    except IntelError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
 @router.post("/sync", status_code=202)
 def sync(background: BackgroundTasks, db: Session = Depends(get_db), user: Any=Depends(get_current_user)) -> Any:
     return {"job_id": start_trend_sync(db, user.login, background.add_task)}
@@ -238,10 +269,10 @@ def badge_list(ids: str = "", db: Session = Depends(get_db)) -> Any:
 def listing(view: Literal["matched", "review", "all", "mentions", "archive"] = "matched", q: str = "", active: bool = True,
             limit: int = 50, offset: int = 0, region: str = "", language: str = "", reason: str = "", publisher: str = "", status: str = "", sort: Literal["priority", "date", "identifier", "impact"] = "priority",
             period: Literal["today", "24h", "3d", "7d", "30d", "90d", "custom", "all"] = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "",
-            source_id: str = "", product: str = "", poc_state: Literal["", "candidate", "likely", "confirmed", "rejected"] = "",
+            source_id: str = "", product: str = "", poc_state: Literal["", "candidate", "likely", "confirmed", "rejected"] = "", from_archive: bool = False,
             db: Session = Depends(get_db)) -> Any:
     try:
-        return query.list_cards(db, view, q[:200], active, min(max(limit, 1), 100), max(offset, 0), region, language, reason, publisher, status, sort, period, tz, date_from, date_to, source_id, product[:200], poc_state)
+        return query.list_cards(db, view, q[:200], active, min(max(limit, 1), 100), max(offset, 0), region, language, reason, publisher, status, sort, period, tz, date_from, date_to, source_id, product[:200], poc_state, from_archive)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

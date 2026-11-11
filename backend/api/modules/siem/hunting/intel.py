@@ -148,7 +148,7 @@ def read_bundle(data: bytes) -> tuple[Manifest, list[Material]]:
         raise IntelError('Некорректный архив материалов Threat Hunting или неподдерживаемый формат') from None
 
 
-def import_bundle(db: Session, data: bytes, login: str) -> dict:
+def import_bundle(db: Session, data: bytes, login: str, *, after_import=None) -> dict:
     manifest, rows = read_bundle(data)
     archive_id = hashlib.sha256(data).hexdigest()
     # Serialize imports so concurrent copies cannot race or roll back a newer item.
@@ -156,7 +156,15 @@ def import_bundle(db: Session, data: bytes, login: str) -> dict:
     previous = db.get(ThIntelImport, archive_id)
     if previous:
         result = {**json.loads(previous.result_json), 'duplicate': True}
-        db.rollback()
+        if after_import:
+            try:
+                result.update(after_import(db))
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        else:
+            db.rollback()
         return result
     result = {'id': archive_id, 'added': 0, 'updated': 0, 'unchanged': 0, 'stale': 0,
               'duplicate': False, 'generated_at': manifest.generated_at.isoformat(),
@@ -188,6 +196,8 @@ def import_bundle(db: Session, data: bytes, login: str) -> dict:
                 row.import_id = archive_id
                 row.content_hash = digest
             db.flush()
+        if after_import:
+            result.update(after_import(db))
         imported.result_json = json.dumps(result, ensure_ascii=False)
         db.commit()
         return result

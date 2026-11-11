@@ -25,9 +25,10 @@ def start_trend_sync(db: Session, started_by: Any, submit: Any, reset: Any=False
         with CollectorClient(connection.unsealed()) as client:
             info = client.info()
             state = session.get(VmTrendIngestState, 1)
-            if state and not reset and (state.collector_id, state.epoch) != (info["collector_id"], info["epoch"]):
+            initial_offline = state is not None and state.collector_id == "offline-news-archives"
+            if state and not reset and not initial_offline and (state.collector_id, state.epoch) != (info["collector_id"], info["epoch"]):
                 raise ValueError("изменилась история сборщика, требуется полная синхронизация")
-            cursor = 0 if reset or state is None else state.cursor
+            cursor = 0 if reset or initial_offline or state is None else state.cursor
             until = info["last_seq"]
             handle.stage("receiving", message="Получение публикаций")
             first = True

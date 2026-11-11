@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
-from api.modules.siem.hunting.intel import MAX_ZIP, IntelError, import_bundle
+from api.modules.siem.hunting.intel import MAX_ZIP, IntelError
+from api.modules.vm.services.trends.news_archive import import_news
 from api.modules.siem.hunting.models import ThIntelImport, ThIntelItem
 
 router = APIRouter(prefix='/intel', tags=['siem'])
@@ -40,10 +41,14 @@ def list_imports(db: Session = Depends(get_db)):
 
 @router.post('/import')
 def upload_bundle(file: UploadFile = File(...), db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)):
+    # Legacy URL: importing news is now administered in VM.
+    from api.platform.services.access import access_for, allows
+    if not allows(access_for(db, user.id), 'vm', 'admin'):
+        raise HTTPException(403, 'Импорт архива перенесён в VM; нужен администратор VM')
     data = file.file.read(MAX_ZIP+1)
     if len(data) > MAX_ZIP: raise HTTPException(413, 'Архив превышает 64 МиБ')
     try:
-        return import_bundle(db, data, user.login)
+        return import_news(db, data, user.login)
     except IntelError as exc:
         raise HTTPException(422, str(exc)) from None
 

@@ -1,4 +1,5 @@
-import { useSources } from '../api/trendMonitoring'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/api/client'
 import { MonitoringStatus } from './trends/MonitoringStatus'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
@@ -43,10 +44,11 @@ export function TrendsPage() {
   const { search } = useRouter()
   const [selected, setSelected] = useState(() => new URLSearchParams(search).get('id') ?? '')
   useEffect(() => { setSelected(new URLSearchParams(search).get('id') ?? '') }, [search])
-  const [view, setView] = useState('mentions')
-  const [period, setPeriod] = useState<TrendPeriod>('7d')
+  const [view, setView] = useState(() => VIEWS.find(v => v.value === new URLSearchParams(search).get('view'))?.value ?? 'mentions')
+  const [period, setPeriod] = useState<TrendPeriod>(() => trendPeriods.find(p => p.value === new URLSearchParams(search).get('period'))?.value ?? '7d')
   const [dateFrom, setDateFrom] = useState(() => localDate(6))
   const [dateTo, setDateTo] = useState(() => localDate())
+  const [fromArchive, setFromArchive] = useState(() => new URLSearchParams(search).get('from_archive') === 'true')
   const [query, setQuery] = useState('')
   const filtersPanel = useFiltersPanel('vm-trends')
   const [region, setRegion] = useState('')
@@ -54,7 +56,7 @@ export function TrendsPage() {
   const [reason, setReason] = useState('')
   const [publisher, setPublisher] = useState('')
   const [status, setStatus] = useState('')
-  const sources = useSources()
+  const sources = useQuery({ queryKey: ['vm-trends', 'publication-sources'], queryFn: () => api.get<{ items: { id: string; name: string }[] }>('/api/vm/trends/publication-sources') })
   const [sourceId, setSourceId] = useState('')
   const [product, setProduct] = useState('')
   const [pocState, setPocState] = useState('')
@@ -62,10 +64,20 @@ export function TrendsPage() {
   const [offset, setOffset] = useState(0)
   const scope: TrendScope = { period, tz: DEFAULT_TREND_SCOPE.tz, ...(period === 'custom' ? { date_from: dateFrom, date_to: dateTo } : {}) }
   const validPeriod = period !== 'custom' || Boolean(dateFrom && dateTo && dateFrom <= dateTo)
-  const data = useTrends({ ...scope, view, q: query, region, language, reason, publisher, status, source_id: sourceId, product, poc_state: pocState, sort, offset, limit: 50 }, validPeriod)
+  const data = useTrends({ ...scope, view, from_archive: fromArchive, q: query, region, language, reason, publisher, status, source_id: sourceId, product, poc_state: pocState, sort, offset, limit: 50 }, validPeriod)
   const columns = useColumnWidths('vm-trends-columns', COLUMNS)
+  useEffect(() => {
+    const params = new URLSearchParams(search)
+    const nextView = VIEWS.find(v => v.value === params.get('view'))
+    const nextPeriod = trendPeriods.find(p => p.value === params.get('period'))
+    if (nextView) setView(nextView.value)
+    if (nextPeriod) setPeriod(nextPeriod.value)
+    if (params.has('from_archive')) setFromArchive(params.get('from_archive') === 'true')
+    setOffset(0)
+  }, [search])
   function change(action: () => void) { setOffset(0); action() }
   const chips: FilterChip[] = [
+    { label: fromArchive ? 'Только из ZIP' : '', clear: () => change(() => setFromArchive(false)) },
     { label: period !== 'all' ? `Период: ${period === 'custom' ? `${dateFrom} — ${dateTo}` : trendPeriods.find(p => p.value === period)?.label}` : '', clear: () => change(() => setPeriod('all')) },
     { label: sort !== 'date' ? `Сортировка: ${({ priority: 'приоритет', impact: 'число объектов', identifier: 'идентификатор' } as Record<string, string>)[sort] ?? sort}` : '', clear: () => change(() => setSort('date')) },
     { label: sourceId ? `Источник: ${sources.data?.items.find(s => s.id === sourceId)?.name ?? sourceId}` : '', clear: () => change(() => setSourceId('')) },
@@ -86,7 +98,7 @@ export function TrendsPage() {
       {(chips.length > 0 || query) && <button type="button" onClick={clearFilters} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text"><FilterX size={13} aria-hidden />Сбросить</button>}
       <span className="font-mono text-xs tabular-nums text-text-secondary">{validPeriod ? data.data?.total?.toLocaleString('ru-RU') ?? '…' : '—'}</span>
       <button type="button" disabled={!validPeriod || data.isFetching} onClick={() => data.refetch()} className="rounded p-1.5 text-text-secondary hover:bg-row-hover hover:text-text disabled:opacity-40" aria-label="Обновить" title="Обновить"><RefreshCw size={14} aria-hidden /></button>
-      <Link to="/settings/vm#trends" className="ml-auto flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text"><Settings size={13} aria-hidden />Настройки сборщика</Link>
+      <Link to="/settings/vm#trends" className="ml-auto flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text"><Settings size={13} aria-hidden />Настройки мониторинга</Link>
       {!filtersPanel.open && <FilterChips chips={chips} />}
     </header>
     <div className="shrink-0 space-y-2 border-b border-grid bg-surface px-4 py-2">
@@ -95,7 +107,7 @@ export function TrendsPage() {
       </div>
       <p className="text-xs text-text-secondary">{VIEWS.find(item => item.value === view)?.description}</p>
       <MonitoringStatus />
-      <p className="text-xs text-text-secondary">Получено из сборщика — {when(data.data?.received_at)} · {validPeriod ? `Найдено ${data.data?.total ?? 0}` : 'Период не задан'}</p>
+      <p className="text-xs text-text-secondary">Последнее получение публикаций — {when(data.data?.received_at)} · {validPeriod ? `Найдено ${data.data?.total ?? 0}` : 'Период не задан'}</p>
     </div>
     {data.isLoading && <Spinner />}
     {data.error && <ErrorState message={data.error.message} onRetry={() => data.refetch()} />}
@@ -110,6 +122,7 @@ export function TrendsPage() {
           <p className="mt-2 text-[11px] text-text-secondary">{period === 'all' ? 'Вся история публикаций, включая старые сообщения.' : 'Отбор по исходной дате публикации.'} Часовой пояс: {scope.tz}.{period === 'custom' && ' Обе даты включены.'}</p>
         </Section>
         <Section title="Сортировка"><select className={FIELD} aria-label="Сортировка" value={sort} onChange={e => change(() => setSort(e.target.value))}><option value="priority">По приоритету</option><option value="date">По дате публикации</option><option value="impact">По числу объектов</option><option value="identifier">По идентификатору</option></select></Section>
+        <Section title="Получение"><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={fromArchive} onChange={e => change(() => setFromArchive(e.target.checked))} />Только из ZIP</label></Section>
         <Section title="Источник"><select className={FIELD} aria-label="Источник публикации" value={sourceId} onChange={e => change(() => setSourceId(e.target.value))}><option value="">Все источники</option>{sources.data?.items.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}</select></Section>
         <Section title="Продукт"><input className={FIELD} aria-label="Продукт" placeholder="Продукт из контекста CVE" value={product} onChange={e => change(() => setProduct(e.target.value))} /></Section>
         <Section title="Статус PoC"><select className={FIELD} aria-label="Статус PoC" value={pocState} onChange={e => change(() => setPocState(e.target.value))}><option value="">Любой статус PoC</option><option value="candidate">Кандидат</option><option value="likely">Вероятный</option><option value="confirmed">Подтверждён аналитиком</option><option value="rejected">Отклонён аналитиком</option></select></Section>

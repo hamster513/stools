@@ -114,7 +114,8 @@ def test_import_requires_siem_admin(client_as):
         client = client_as({'siem': role})
         assert client.get(URL).status_code == 200
         assert upload(client, bundle()).status_code == 403
-    assert upload(client_as({'siem': 'admin'}), bundle()).status_code == 200
+    assert upload(client_as({'siem': 'admin'}), bundle()).status_code == 403
+    assert upload(client_as({'siem': 'admin', 'vm': 'admin'}), bundle()).status_code == 200
 
 
 def test_anonymous_and_paging_validation(client):

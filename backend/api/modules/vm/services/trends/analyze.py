@@ -151,8 +151,11 @@ def process_pending(db: Session) -> None:
     try:
         db.execute(text("SELECT pg_advisory_xact_lock(hashtext('vm_trend_ingest'))"))
         db.expire_all()
+        from .news_archive import project_news
+        project_news(db)
         state = db.get(VmTrendIngestState, 1)
         if state is None or state.cursor != state.batch_until:
+            db.commit()  # Persist offline news even while the collector batch is incomplete.
             return
         generation = state.generation
         while True:

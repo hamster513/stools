@@ -160,6 +160,8 @@ def app_settings(
     monkeypatch.setattr("api.main.ensure_platform_schedules", lambda: None)
     # Так же расписания Threat Hunting: их проверяет tests/siem_hunting/test_dispatcher.py.
     monkeypatch.setattr("api.main.ensure_hunting_schedules", lambda: None)
+    # Recovery is tested explicitly; a daemon must not outlive the test and race TRUNCATE.
+    monkeypatch.setattr("api.modules.vm.services.trends.analyze.resume_pending", lambda: None)
     from api.settings import get_settings
 
     yield get_settings()

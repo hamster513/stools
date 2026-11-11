@@ -39,6 +39,7 @@ MODULE_ADMIN_WRITES: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in 
     r"(PUT|POST) /api/vm/trends/settings(/test)?",
     r"(POST|PATCH) /api/vm/trends/sources(/[^/]+(/collect)?)?",
     r"POST /api/vm/trends/(sync|import)/full",
+    r"POST /api/vm/trends/news-archive",
     r"(PUT|POST|PATCH) /api/vm/trends/(monitoring/settings|catalog/apply|sources/import/preview|sources/bulk|sources/[^/]+/preview|collector-jobs/[^/]+/(cancel|resume))",
     r"(PUT|DELETE) /api/vm/harbor/schedule",
     r"(PUT|POST) /api/siem/mp(/test)?",
