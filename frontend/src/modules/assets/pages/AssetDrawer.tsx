@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
+import { SoftwareInventory } from './SoftwareInventory'
 import { ApiRequestError } from '@/api/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { invalidateDiscrepancies, NETWORK_PICK_LIMIT, useAsset, useAssets, useDeleteAsset, useDetachObservation, useMergeAssets, useNetwork, useNetworkSearch, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
@@ -509,6 +510,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
 
                   <LinksBlock a={a} />
                   <UsersBlock a={a} />
+                  <SoftwareInventory key={a.id} assetId={a.id} />
 
                   <SectionTitle>Ручные поля</SectionTitle>
                   <ManualFields key={`${a.id}:${a.updated_at}`} a={a} write={write && a.merged_into === null} />

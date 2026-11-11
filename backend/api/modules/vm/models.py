@@ -37,6 +37,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from api.db.models import Base, _utcnow
 from api.jobs import JobColumns
+from api.modules.vm import software_models  # noqa: F401
 
 
 class VmHost(Base):
@@ -160,6 +161,9 @@ class VmRefEpss(Base):
 
 class VmRefNvd(Base):
     __tablename__ = "vm_ref_nvd"
+
+    configurations_json: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
+    applicability_loaded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
 
     cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     #: Год фида, из которого пришла запись: замена идёт по годам.

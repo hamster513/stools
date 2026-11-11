@@ -126,12 +126,15 @@ class FakeKsc:
         #: Непустой секрет включает второй фактор: пароль даёт 401 + KSCMFA, сессию даёт только код.
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
         #: variant="params" — записи в обёртках, как у живого сервера.
+        self.inventory_malformed = variant == "inventory_malformed"
         self.wrap = variant == "params"
         #: Имена методов, на которые отвечать 403 (нет прав).
         self.deny: set[str] = set(deny) if deny is not None else (set(DENIED_METHODS) if variant == "denied" else set())
         #: Теги: пакетный вызов — 403 (сборщик уходит на вызов по одному хосту); variant="tags_denied" — 403 на оба вызова.
         if deny_tags_batch:
             self.deny.add("HostsTags.ListTags.GetTags")
+        if variant == "inventory_denied":
+            self.deny.add("InventoryApi.GetHostInvProducts")
         if variant == "tags_denied":
             self.deny |= {"HostsTags.ListTags.GetTags", "HostTagsApi.GetHostTags"}
         #: Идентификаторы хостов, на которые HostTagsApi.GetHostTags отвечает PxgError (хост пропал при сборе).
@@ -248,6 +251,14 @@ class FakeKsc:
             return 200, {"PxgRetVal": len(items), "pChunk": {"KLCSP_ITERATOR_ARRAY": items}}
         if method == "ChunkAccessor.Release":
             return 200, {}
+        if method == "InventoryApi.GetHostInvProducts":
+            if body != {"szwHostId": body.get("szwHostId"), "pParams": {}}:
+                return 400, {}
+            if self.inventory_malformed and body["szwHostId"] == "h-ws01":
+                return 200, {"PxgRetVal": {}}
+            items = [{"ProductID": "editor-1", "DisplayName": "Editor", "DisplayVersion": {"type": "wstring", "value": "2.3"},
+                      "Publisher": "Example", "InstallDate": "20261030", "InstallDir": "C:\\Editor"}] if body["szwHostId"] == "h-ws01" else []
+            return 200, {"PxgRetVal": {"KLEVP_EA_PARAM_1": items}}
         if method == "HostGroup.GetHostProducts":
             return 200, {"PxgRetVal": d["host_products"].get(body["strHostName"], {})}
         if method == "HostGroup.GetComponentsForProductOnHost":

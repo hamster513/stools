@@ -138,6 +138,7 @@ class KscExport(BaseModel):
     groups: list[dict[str, Any]] = Field(default_factory=list)
     hosts: list[dict[str, Any]] = Field(default_factory=list)
     host_products: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    host_inventory: dict[str, dict[str, Any]] = Field(default_factory=dict)
     host_components: dict[str, dict[str, list[dict[str, Any]]]] = Field(default_factory=dict)
     policies: list[dict[str, Any]] = Field(default_factory=list)
     effective_policies: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)

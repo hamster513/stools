@@ -37,7 +37,7 @@
 .PARAMETER OutputPath  Куда писать файл; по умолчанию ksc-<сервер>-<дата>.json.gz (в имени сервера всё,
                        кроме латиницы, цифр, точки, дефиса и подчёркивания, заменяется на _).
 .PARAMETER SkipTlsCheck Не проверять сертификат сервера KSC (самоподписанный); остальные адреса проверяются как обычно.
-.PARAMETER SkipProducts Не запрашивать продукты и компоненты по каждому хосту (быстрее).
+.PARAMETER SkipProducts Не запрашивать защитные продукты и компоненты по каждому хосту (общий реестр ПО собирается).
 .PARAMETER SkipPolicyContents Не собирать содержимое и профили политик (секции policy_contents и policy_profiles; файл заметно больше).
 .PARAMETER PageSize    Размер страницы при чтении хостов, по умолчанию 500.
 .PARAMETER Scheme      https (по умолчанию) или http — только для тестов.
@@ -551,6 +551,40 @@ try {
       }
     }
 
+    # Общий реестр ПО независим от защитных продуктов и доступности агента.
+    Write-Step "Установленное ПО"
+    $hostInventory = [ordered]@{}
+    $inventoryFailed = 0
+    $inventoryFirstError = ""
+    foreach ($h in $hosts) {
+      $hid = [string](Plain (Prop (Unwrap $h) "KLHST_WKS_HOSTNAME"))
+      if (-not $hid) { continue }
+      try {
+        $response = Invoke-Ksc "InventoryApi.GetHostInvProducts" @{ szwHostId = $hid; pParams = @{} }
+        $payload = Unwrap (Prop $response "PxgRetVal")
+        # Читаем Value напрямую: PowerShell разворачивает пустой массив из функции в $null.
+        $property = if ($null -ne $payload) { $payload.PSObject.Properties["KLEVP_EA_PARAM_1"] } else { $null }
+        if ($null -eq $property -or $property.Value -isnot [array]) {
+          throw "InventoryApi.GetHostInvProducts: некорректный KLEVP_EA_PARAM_1"
+        }
+        $items = $property.Value
+        foreach ($item in $items) {
+          if ((Unwrap $item) -isnot [pscustomobject]) {
+            throw "InventoryApi.GetHostInvProducts: некорректный KLEVP_EA_PARAM_1"
+          }
+        }
+        $hostInventory[$hid] = @{ status = "complete"; items = @($items) }
+      } catch {
+        $message = $_.Exception.Message
+        $hostInventory[$hid] = @{ status = "error"; items = @(); error = $message }
+        $inventoryFailed++
+        if (-not $inventoryFirstError) { $inventoryFirstError = $message }
+      }
+    }
+    if ($inventoryFailed) {
+      [void]$warnings.Add("host_inventory: установленное ПО не прочитано у $($inventoryFailed) хостов: $($inventoryFirstError)")
+    }
+
     # Теги — только у хостов с агентом: пачками через ListTags.GetTags (чужие идентификаторы в ответе
     # отбрасываются); не сработала пачка — заново по одному хосту через HostTagsApi.GetHostTags. Отказ на
     # одном хосте не теряет остальные: у него пусто, одно предупреждение. Отказали все первые
@@ -837,7 +871,7 @@ try {
     static = $static; domains = $domains
     role_assignments = @($roleAssignments); internal_users = @($internalUsers); security = $security
     server_certs = $serverCerts; secondary_servers = @($secondaryServers); update_agents = @($updateAgents)
-    policy_contents = $policyContents; host_users = $hostUsers
+    policy_contents = $policyContents; host_users = $hostUsers; host_inventory = $hostInventory
   }
   # «Не собрано» отличается от «пусто»: несобранной секции в файле нет вовсе.
   if ($null -ne $hostTags) { $export["host_tags"] = $hostTags }

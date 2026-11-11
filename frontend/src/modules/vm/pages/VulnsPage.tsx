@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Activity, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { FilterX, Search, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
@@ -17,7 +17,8 @@ import { useUsersDirectory } from '@/platform/findings/queries'
 import { STATUSES, type FindingStatus } from '@/platform/findings/types'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { useCan } from '@/lib/can'
-import { useRouter, useSearchParams } from '@/lib/router'
+import { Link, useRouter, useSearchParams } from '@/lib/router'
+import { KscVulns } from './KscVulns'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
@@ -51,6 +52,26 @@ function splitKey(key: string | null): { hostname: string; cve: string } | null 
  * пары фоновой задачей. `?key=` в адресе находит пару и открывает её карточку.
  */
 export function VulnsPage() {
+  const params = useSearchParams()
+  const { search } = useRouter()
+  const ksc = params.get('source') === 'ksc'
+  const scannerSearch = useRef(ksc ? '' : search)
+  useEffect(() => { if (!ksc) scannerSearch.current = search }, [ksc, search])
+  const sourceClass = 'rounded px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
+  return <div className="flex h-full min-h-0 flex-col">
+    <nav aria-label="Источник уязвимостей" className="flex shrink-0 items-center gap-2 border-b border-grid bg-surface px-4 py-1">
+      <span className="text-xs text-text-secondary">Источник</span>
+      <Link to={ksc ? `/vm/vulns${scannerSearch.current}` : `/vm/vulns${search}`} aria-current={!ksc ? 'page' : undefined} className={`${sourceClass} ${!ksc ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover'}`}>MaxPatrol VM</Link>
+      <Link to="/vm/vulns?source=ksc" aria-current={ksc ? 'page' : undefined} className={`${sourceClass} ${ksc ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover'}`}>KSC · установленное ПО</Link>
+    </nav>
+    <div className="min-h-0 flex-1">
+      <Activity mode={ksc ? 'hidden' : 'visible'}><ScannerVulnsPage /></Activity>
+      {ksc && <KscVulns key={`${params.get('asset_id') ?? ''}:${params.get('state') ?? ''}`} />}
+    </div>
+  </div>
+}
+
+function ScannerVulnsPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
   const linked = splitKey(params.get('key'))

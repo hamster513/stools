@@ -19,6 +19,7 @@ from api.modules.ksc.core.export import (
     unwrap,
 )
 from api.modules.ksc.core.secrets import hide_secrets, hide_task_params
+from api.modules.ksc.core.software import inventory_items
 
 COLLECTOR_VERSION = "1.4"
 
@@ -310,6 +311,27 @@ def _host_users(client: KscClient, hosts: list[dict[str, Any]], warnings: list[s
     return out
 
 
+def _host_inventory(client: KscClient, hosts: list[dict[str, Any]], warnings: list[str]) -> dict[str, dict[str, Any]]:
+    """Inventory stored by KSC can be useful even when a host has no active agent."""
+    out: dict[str, dict[str, Any]] = {}
+    failed = 0
+    first_error = ""
+    for host in strip_params(hosts):
+        hid = _str(host.get("KLHST_WKS_HOSTNAME"))
+        if not hid:
+            continue
+        try:
+            response = client.call("InventoryApi.GetHostInvProducts", {"szwHostId": hid, "pParams": {}})
+            out[hid] = {"status": "complete", "items": inventory_items(_ret(response))}
+        except (KscError, ValueError) as exc:
+            out[hid] = {"status": "error", "items": [], "error": str(exc)}
+            failed += 1
+            first_error = first_error or str(exc)
+    if failed:
+        warnings.append(f"host_inventory: установленное ПО не прочитано у {failed} хостов: {first_error}")
+    return out
+
+
 def collect(client: KscClient, *, skip_products: bool = False, skip_policy_contents: bool = False, max_policies: int | None = None, progress: Progress | None = None, username: str = "", host: str = "") -> dict[str, Any]:
     warnings: list[str] = []
 
@@ -355,6 +377,7 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
             if progress:
                 progress(n, len(with_agent))
 
+    host_inventory = _host_inventory(client, hosts, warnings)
     host_tags = _host_tags(client, hosts, warnings)
     host_users = _host_users(client, hosts, warnings)
 
@@ -439,7 +462,7 @@ def collect(client: KscClient, *, skip_products: bool = False, skip_policy_conte
         "policies": policies, "effective_policies": effective, "tasks": tasks, "licenses": licenses, "static": static, "domains": domains,
         "role_assignments": role_assignments, "internal_users": internal_users, "security": security,
         "server_certs": server_certs, "secondary_servers": secondary_servers, "update_agents": update_agents,
-        "policy_contents": policy_contents, "host_users": host_users,
+        "policy_contents": policy_contents, "host_users": host_users, "host_inventory": host_inventory,
     }
     # Секции «не собрано» в файл не попадают вовсе — «не собрано» отличается от «пусто».
     if host_tags is not None:

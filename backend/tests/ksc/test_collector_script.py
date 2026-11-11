@@ -667,3 +667,27 @@ def test_script_and_online_read_odd_sid_and_user_flag_alike(tmp_path: Path) -> N
     assert [u["sid"] for u in odd.values()] == ["", "", "", "S-1-5-18", f"{LAB_SID}-3005"]
     assert not any(u["group"] for u in odd.values())
     assert {k: v for k, v in script_raw["host_users"].items() if k != "h-ws04"} == {k: v for k, v in build_export()["host_users"].items() if k != "h-ws04"}
+
+
+def test_script_collects_general_inventory_outside_skip_products() -> None:
+    source = SCRIPT.read_text(encoding="utf-8-sig")
+    assert 'Invoke-Ksc "InventoryApi.GetHostInvProducts" @{ szwHostId = $hid; pParams = @{} }' in source
+    assert 'host_inventory = $hostInventory' in source
+    assert '"KLEVP_EA_PARAM_1"' in source
+
+
+@pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
+@pytest.mark.parametrize("variant", ["", "params", "inventory_malformed", "inventory_denied"])
+def test_script_general_inventory_matches_online(tmp_path: Path, variant: str, monkeypatch: Any) -> None:
+    from api.modules.ksc.core.client import KscClient
+    from api.modules.ksc.core.collector import collect
+    from tests.ksc.fake_ksc import FakeKsc, http_factory_for
+
+    path = _run_script(tmp_path, 18364, variant, extra_args=("-SkipProducts",))
+    offline = load_export(path.read_bytes())
+    monkeypatch.setattr("api.modules.ksc.core.client.http_factory", http_factory_for(FakeKsc(variant=variant)))
+    with KscClient("https://ksc01:13299", USER, PASSWORD) as client:
+        online = collect(client, skip_products=True)
+    assert {k: {x: v for x, v in e.items() if x != "error"} for k, e in offline.host_inventory.items()} == {k: {x: v for x, v in e.items() if x != "error"} for k, e in strip_params(online["host_inventory"]).items()}
+    assert offline.host_inventory
+    assert len(offline.host_inventory) == len(offline.hosts)

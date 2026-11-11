@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 import tempfile
@@ -66,6 +67,8 @@ NVD_FIRST_YEAR = 2002
 BATCH = 20_000
 #: Потолок одной скачиваемой ленты (аудит L6): крупнейшая, NVD за год в gzip, — десятки мегабайт.
 MAX_FEED_BYTES = 512 * 1024 * 1024
+# NVD yearly JSON exceeds 512 MiB (2026); compressed downloads retain the general cap.
+MAX_NVD_UNPACKED_BYTES = 1024 * 1024 * 1024
 #: Каталог KEV читается в память целиком; настоящий — 1–2 МБ (спека §8).
 MAX_KEV_BYTES = 16 * 1024 * 1024
 
@@ -151,13 +154,16 @@ def _load_epss(db: Session, path: Path, handle: JobHandle) -> int:
 
 def _load_nvd(db: Session, path: Path, handle: JobHandle) -> tuple[int, set[int]]:
     """Год определяется по данным; удаляются только затронутые годы."""
+    from api.modules.vm.services.software import index_nvd_rows, inventory_lock
+
+    inventory_lock(db)
     years: set[int] = set()
     n = 0
     with open_maybe_gzip(path) as raw:
-        fh = limited(raw, MAX_FEED_BYTES)
+        fh = limited(raw, MAX_NVD_UNPACKED_BYTES)
         records = _unique(parse_nvd(fh), lambda r: r.cve_id)
         for batch in _batched(
-            (r.cve_id, r.year, r.cvss_v3, r.v3_av, r.v3_pr, r.v3_ui, r.cvss_v2, r.v2_av, r.v2_ac, r.v2_au, r.description, r.published, r.modified)
+            (r.cve_id, r.year, r.cvss_v3, r.v3_av, r.v3_pr, r.v3_ui, r.cvss_v2, r.v2_av, r.v2_ac, r.v2_au, r.description, r.published, r.modified, json.dumps(r.configurations), True)
             for r in records
         ):
             batch_years = {row[1] for row in batch}
@@ -170,10 +176,15 @@ def _load_nvd(db: Session, path: Path, handle: JobHandle) -> tuple[int, set[int]
             n += bulk_insert(
                 db,
                 NVD_T,
-                ("cve_id", "year", "cvss_v3", "v3_av", "v3_pr", "v3_ui", "cvss_v2", "v2_av", "v2_ac", "v2_au", "description", "published", "modified"),
+                ("cve_id", "year", "cvss_v3", "v3_av", "v3_pr", "v3_ui", "cvss_v2", "v2_av", "v2_ac", "v2_au", "description", "published", "modified", "configurations_json", "applicability_loaded"),
                 batch,
             )
-            handle.tick(n, message=f"записей {n}, годы {sorted(years)}")
+            index_nvd_rows(db, batch)
+            handle.report_progress(n, 0, f"записей {n}, годы {sorted(years)}")
+            if handle.cancelled():
+                from api.jobs import JobCancelled
+
+                raise JobCancelled()
     return n, years
 
 
@@ -306,6 +317,11 @@ def load_ref(
     state.source = source
     state.records = n
     state.detail = detail
+    if name == "nvd":
+        from api.modules.vm.services.software import rebuild_ksc
+
+        handle.report_progress(0, 0, "проверка версий ПО KSC", stage="enriching")
+        rebuild_ksc(db)
     db.commit()
     return n
 

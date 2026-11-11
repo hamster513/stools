@@ -111,6 +111,9 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
     )
     insert_chunked(db, KscFinding, rows, len(findings), handle, "находок")
     store_policies(db, snapshot, idx, cfg)
+    from api.modules.ksc.services.software import store_inventory
+
+    store_inventory(db, snapshot, idx)
     checks: dict[str, dict[str, int]] = {}
     for f in findings:
         checks.setdefault(f.check, {})
@@ -226,8 +229,15 @@ def delete_snapshot(db: Session, snapshot: KscSnapshot, data_dir: Path) -> None:
 
     path, scope_id = snapshot_path(data_dir, snapshot.id), snapshot.server_id
     # Следующий сравнивался с удаляемым: после удаления его предыдущим станет предыдущий удалённого.
+    from api.modules.vm.services.software import inventory_lock, rebuild_ksc
+
+    inventory_lock(db)
     following = next_snapshot(db, snapshot)
     db.delete(snapshot)
+    db.flush()
+    promoted = latest_snapshot(db, scope_id)
+    if promoted is not None:
+        rebuild_ksc(db, snapshot_id=promoted.id)
     db.commit()
     if path.exists():
         path.unlink()

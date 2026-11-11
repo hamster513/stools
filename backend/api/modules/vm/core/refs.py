@@ -102,6 +102,7 @@ class NvdRecord:
     description: str | None = None
     published: dt.date | None = None
     modified: dt.date | None = None
+    configurations: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _date(value: Any) -> dt.date | None:
@@ -129,6 +130,9 @@ def nvd_record(cve: dict[str, Any]) -> NvdRecord | None:
     except (IndexError, ValueError):
         return None
     rec = NvdRecord(cve_id=cve_id, year=year)
+    configs = cve.get("configurations")
+    if isinstance(configs, list) and cve.get("vulnStatus") != "Rejected":
+        rec.configurations = configs
     for d in cve.get("descriptions") or []:
         if d.get("lang") == "en":
             rec.description = d.get("value")

@@ -25,6 +25,7 @@ from api.modules.vm.routers import (
     recalc,
     refs,
     settings,
+    software,
     trends,
     vulns,
     zones,
@@ -38,6 +39,7 @@ from api.platform.sync_jobs import scheduled
 
 router = APIRouter(prefix="/api/vm")
 for sub in (
+    software.router,
     settings.router,
     trends.router,
     harbor.router,

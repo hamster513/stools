@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from api.db.models import Base, _utcnow
 from api.jobs import JobColumns
+from api.modules.ksc import software_models  # noqa: F401
 
 
 class KscServer(Base):
