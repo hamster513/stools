@@ -7,7 +7,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoginPage } from '@/pages/LoginPage'
-import { firstReadableModule } from '@/lib/can'
+import { SearchPage } from '@/platform/search/SearchPage'
 import { atLeast, type Area } from '@/platform/access/types'
 import { HelpPage } from '@/help/pages/HelpPage'
 import { findModule } from '@/platform/modules'
@@ -36,6 +36,7 @@ function legacyPath(path: string, tail: string): string | null {
   if (['/settings/siem', '/settings/siem/', '/siem/settings'].includes(path) && tail.split('#')[1] === 'hunting') {
     return `/settings/siem-hunting${tail}`
   }
+  if (path === '/toolbox/lookup') return '/search'
   if (path.startsWith('/snapshots/')) return `/siem${path}${tail}`
   if (path === '/upload' || path === '/siem/upload') return `/settings/siem${tail}`
   const m = /^\/([a-z]+)\/settings$/.exec(path)
@@ -89,6 +90,8 @@ function Root() {
   const legacy = legacyPath(path, search + window.location.hash)
   if (legacy) return <Redirect to={legacy} />
 
+  if (path === '/search' || path === '/search/') return <AppShell><SearchPage /></AppShell>
+
   // Общие настройки — не модуль: они над модулями и живут в своей оболочке.
   if (path === '/settings' || path.startsWith('/settings/')) return <SettingsShell />
 
@@ -113,8 +116,7 @@ function Root() {
   // хуже любого выбора.
   const module = findModule(path.split('/')[1] ?? '')
   if (!module) {
-    const home = firstReadableModule(me.access)
-    return <Redirect to={home ? `/${home}` : '/settings/profile'} />
+    return <Redirect to="/search" />
   }
 
   // Закрытый модуль по прямой ссылке — отказ в оболочке, а не 403 на каждом

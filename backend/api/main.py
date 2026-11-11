@@ -54,6 +54,7 @@ from api.platform import router as settings_router
 from api.platform.findings.expiry import ensure_platform_schedules
 from api.platform.findings.router import router as findings_router
 from api.platform.scheduler import Scheduler
+from api.platform.search.router import router as search_router
 from api.platform.services.access import ensure_builtin
 from api.rbac import require_access
 from api.routers import auth, irp_integration, oidc
@@ -113,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, dependencies=[Depends(require_access)])
     app.include_router(settings_router, dependencies=[Depends(require_access)])
     app.include_router(findings_router, dependencies=[Depends(require_access)])
+    app.include_router(search_router, dependencies=[Depends(require_access)])
     for module_router in MODULE_ROUTERS:
         app.include_router(module_router, dependencies=[Depends(require_access)])
     return app

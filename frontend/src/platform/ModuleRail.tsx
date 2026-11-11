@@ -1,9 +1,9 @@
 import type { Ref } from 'react'
-import { ListChecks, Settings2 } from 'lucide-react'
+import { ListChecks, Settings2, Search } from 'lucide-react'
 import { useMe } from '@/api/auth'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
-import { firstReadableModule, useCan } from '@/lib/can'
+import { useCan } from '@/lib/can'
 import { atLeast, type Area } from '@/platform/access/types'
 import { useMyFindingsCount } from './findings/queries'
 import { MODULES } from './modules'
@@ -33,7 +33,6 @@ export function ModuleRail({
   // Модули, закрытые группам пользователя, в рейке не показываются.
   // Заглушки «в разработке» прав не имеют — их видят все.
   const modules = MODULES.filter((m) => m.status === 'planned' || (me && atLeast(me.access, m.id as Area, 'read')))
-  const home = firstReadableModule(me?.access)
   // Исполнителем бывает только аналитик или администратор модуля: тому, кто
   // нигде не пишет, значок ни к чему.
   const mine = useMyFindingsCount(can.anyWrite)
@@ -43,11 +42,15 @@ export function ModuleRail({
   return (
     <nav aria-label="Модули" className="flex w-16 shrink-0 flex-col border-r border-grid bg-app-bg">
       <AppSwitcher
-        home={home ? `/${home}` : '/settings/profile'}
+        home="/search"
         irp={Boolean(me && atLeast(me.access, 'irp', 'read'))}
       />
 
       <ul className="flex flex-col gap-1 px-1.5 py-2">
+        <li><Link to="/search" title="Поиск" aria-current={path === '/search' ? 'page' : undefined}
+          className={cn('flex flex-col items-center gap-1 rounded px-1 py-2 text-[10px]', FOCUS, path === '/search' ? 'bg-primary/10 text-primary' : 'text-text-secondary hover:bg-surface hover:text-text')}>
+          <Search size={20} aria-hidden /><span>Поиск</span>
+        </Link></li>
         {modules.map((m) => {
           const Icon = m.icon
           const active = path === `/${m.id}` || path.startsWith(`/${m.id}/`)

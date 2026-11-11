@@ -64,6 +64,8 @@ def needed(method: str, path: str) -> tuple[str, str] | None:
     """Область и уровень, которые нужны запросу; None — любой вошедший."""
     # Расчёт по снапшоту не меняет конфигурацию и доступен аудитору.
     read = method in READ_METHODS or (method == "POST" and path == "/api/toolbox/lookup") or (method == "POST" and re.fullmatch(r"/api/ksc/snapshots/[0-9]+/firewall/check(?:/batch)?", path) is not None)
+    if method == "POST" and path == "/api/search":
+        return None  # каждый источник досье проверяет свои права
     if path.startswith("/api/auth/"):
         return None
     parts = path.split("/")
