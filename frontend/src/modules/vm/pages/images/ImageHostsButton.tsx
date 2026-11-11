@@ -22,7 +22,7 @@ const reasons: Record<string, string> = {
 }
 
 /** Portal avoids clipping by the virtual table's transformed rows. */
-export function ImageHostsButton({ image }: { image: Pick<ImageItem, 'id' | 'name' | 'running_host_count'> }) {
+export function ImageHostsButton({ image }: { image: Pick<ImageItem, 'id' | 'name' | 'running_host_count' | 'artifact_kind'> }) {
   const [open, setOpen] = useState(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLElement>(null)
@@ -41,6 +41,7 @@ export function ImageHostsButton({ image }: { image: Pick<ImageItem, 'id' | 'nam
   }, [open])
   const data = query.data?.pages[0]
   const count = image.running_host_count
+  if (image.artifact_kind === 'helm' || image.artifact_kind === 'other') return <span className="text-text-secondary" title="Артефакт не запускается как контейнер">Не применяется</span>
   return <>
     <button ref={trigger} type="button"
       className="inline-flex min-h-8 items-center gap-1.5 rounded px-2 font-mono tabular-nums text-text underline decoration-dotted underline-offset-4 hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"

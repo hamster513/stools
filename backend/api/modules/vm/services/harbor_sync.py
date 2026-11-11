@@ -40,7 +40,7 @@ from api.modules.vm.core.harbor import (
     make_harbor_client,
 )
 from api.modules.vm.core.weights import Weights
-from api.modules.vm.models import VmCve, VmImage, VmImageCve, VmImageSync
+from api.modules.vm.models import VmCve, VmHarborProjectPolicy, VmImage, VmImageCve, VmImageSync
 from api.modules.vm.services.harbor_settings import HarborConnection, load_harbor
 from api.modules.vm.services.harbor_sync_errors import (
     Stage,
@@ -86,6 +86,7 @@ _CVE_ID_MAX = 32
 _COUNTERS = (*SEVERITIES, "total")
 #: Поля образа, которые синхронизация обновляет; риск считает `rescore_image_pairs`.
 _UPDATED = (
+    "artifact_kind", "is_index", "report_complete",
     "runtime_ids", "runtime_checked_at", "runtime_error",
     "registry_url", "platform", "tags", "size", "pushed_at", "scan_status", "scanned_at", "scanner",
     *(f"trivy_{c}" for c in _COUNTERS), "synced_at", "sync_error",
@@ -140,6 +141,7 @@ class _Planned:
     error: str | None = None
     #: Прежние находки сохранены — сохраняются и счётчики Trivy со сканером.
     keep_findings: bool = False
+    report_complete: bool = False
     runtime_ids: list[str] = field(default_factory=list)
     runtime_checked_at: dt.datetime | None = None
     runtime_error: str = ""
@@ -321,6 +323,7 @@ class _Sync:
 
     def run(self, weights: Weights, started_by: str) -> SyncResult:
         self._list()
+        self._read_policies()
         known = self._known()
         planned = [
             _Planned(repo, art, scanned_at=art.scanned_at)
@@ -394,12 +397,26 @@ class _Sync:
                     continue
                 self.ok_repos.append(_Repo(project, repo.name, artifacts))
 
+    def _read_policies(self) -> None:
+        self.handle.stage("policies", total=len(self.projects) or None, message="политики скачивания Harbor")
+        for index, project in enumerate(self.projects, 1):
+            data, error = {}, ""
+            try:
+                data = self.client.project_policy(project)
+            except HarborError as exc:
+                error = exc.kind
+                self._error(project, "project_policy", exc)
+            # Keep failed refresh explicit; a prior green assessment must not survive it.
+            self.db.merge(VmHarborProjectPolicy(project=project, registry_url=public_url(self.conn.url),
+                data=data, checked_at=self.started_at, error=error))
+            self.handle.tick(index)
+
     def _known(self) -> Known:
         with_pairs = set(self.db.execute(select(PAIR_T.c.image_id).distinct()).scalars())
         rows = self.db.execute(
-            select(IMAGE_T.c.id, IMAGE_T.c.project, IMAGE_T.c.repository, IMAGE_T.c.digest, IMAGE_T.c.scanned_at)
+            select(IMAGE_T.c.id, IMAGE_T.c.project, IMAGE_T.c.repository, IMAGE_T.c.digest, IMAGE_T.c.scanned_at, IMAGE_T.c.report_complete)
         )
-        return {(r.project, r.repository, r.digest): (r.id, r.scanned_at, r.id in with_pairs) for r in rows}
+        return {(r.project, r.repository, r.digest): (r.id, r.scanned_at, r.id in with_pairs and r.report_complete) for r in rows}
 
     # -- reports ---------------------------------------------------------------
 
@@ -419,11 +436,20 @@ class _Sync:
                 continue
             if old is None or old[1] != p.art.scanned_at or not old[2]:
                 need.append(p)
+            else:
+                p.report_complete = True
         total = len(need)
         self.handle.stage("reports", total=total or None, message=f"образов: 0/{total}")
         for i, p in enumerate(need, 1):
             try:
-                p.pairs = collapse(self.client.vulnerabilities(p.repo.project, p.repo.name, p.art.digest))
+                report = self.client.vulnerabilities(p.repo.project, p.repo.name, p.art.digest)
+                p.pairs = collapse(report)
+                # The existing finding deduplication prefers known severities. Do not
+                # let a discarded unknown duplicate turn a pull assessment green.
+                unknown_raw = {v.vuln_id for v in report if v.severity == "unknown"}
+                unknown_kept = {r["cve_id"] for r in p.pairs if r["trivy_severity"] == "unknown"}
+                p.report_complete = (p.art.reported_total is not None and p.art.scanned_at is not None
+                                     and len(report) >= p.art.reported_total and not (unknown_raw - unknown_kept))
             except HarborError as exc:
                 log.warning("Harbor: отчёт %s/%s не прочитан: %s", p.repo.project, p.repo.name, exc.kind)
                 p.error = exc.kind
@@ -442,6 +468,9 @@ class _Sync:
         ))}
         self.handle.stage("runtime", total=len(planned) or None, message="сопоставление образов с хостами")
         for index, p in enumerate(planned, 1):
+            if p.art.artifact_kind in {"helm", "other"}:
+                self.handle.tick(index)
+                continue
             previous = old.get(p.key)
             if previous and previous.runtime_ids:
                 p.runtime_ids = previous.runtime_ids
@@ -514,6 +543,9 @@ class _Sync:
             "repository": repository,
             "digest": digest,
             "registry_url": public_url(self.conn.url),
+            "artifact_kind": a.artifact_kind,
+            "is_index": a.is_index,
+            "report_complete": p.report_complete,
             "runtime_ids": p.runtime_ids,
             "runtime_checked_at": p.runtime_checked_at,
             "runtime_error": p.runtime_error,

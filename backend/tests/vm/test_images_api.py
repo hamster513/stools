@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from api.modules.vm.models import VmCve, VmImage, VmImageCve
 
 EXPORT_HEADER = [
-    "Образ", "Платформа", "Теги", "CVE", "Пакет", "Установлена", "Исправлена", "Trivy", "CVSS Trivy",
+    "Образ", "Тип артефакта", "Платформа", "Теги", "CVE", "Пакет", "Установлена", "Исправлена", "Trivy", "CVSS Trivy",
     "Риск", "Уровень", "EPSS", "KEV", "Статус скана", "Дата скана",
 ]
 

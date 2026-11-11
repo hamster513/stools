@@ -3,7 +3,7 @@ import { Check, Copy, FilterX, Search, ShieldCheck } from 'lucide-react'
 import { ApiRequestError, buildQuery } from '@/api/client'
 import { useImage, useImageVulns } from '@/modules/vm/api/queries'
 import {
-  IMAGE_LEVEL_LABELS, IMAGE_LEVELS, NO_RISK_TITLE, SCAN_STATUS_LABELS, TRIVY_SEVERITIES, TRIVY_SEVERITY_LABELS,
+  ARTIFACT_LABELS, IMAGE_LEVEL_LABELS, IMAGE_LEVELS, NO_RISK_TITLE, SCAN_STATUS_LABELS, TRIVY_SEVERITIES, TRIVY_SEVERITY_LABELS,
   type ImageDetail, type ImageVulnItem, type ImageVulnSort,
 } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
@@ -20,6 +20,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { FullPageSpinner } from '@/components/ui/Spinner'
 import { date, megabytes } from './images/format'
 import { ImageRiskDrawer } from './images/ImageRiskDrawer'
+import { ImagePullPolicyDetails } from './images/ImagePullPolicy'
 import { ImageHostsButton } from './images/ImageHostsButton'
 import { useCan } from '@/lib/can'
 import { ImageVulnsFacetPanel, type ImageVulnFilters } from './images/ImageVulnsFacetPanel'
@@ -99,6 +100,7 @@ function ImageHeader({ image }: { image: ImageDetail }) {
   return (
     <div className="flex flex-col gap-2 text-xs">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+        <Meta label="Тип"><span className="text-text">{ARTIFACT_LABELS[image.artifact_kind ?? 'unknown']}</span></Meta>
         <Meta label="Теги">
           {image.tags.length === 0
             ? <span className="text-text-secondary">нет</span>
@@ -106,7 +108,7 @@ function ImageHeader({ image }: { image: ImageDetail }) {
         </Meta>
         <Meta label="Digest"><DigestCopy short={image.digest_short} full={image.digest} /></Meta>
         <Meta label="Запущен на хостах"><ImageHostsButton image={image} /></Meta>
-        {assetsRead && <Link className="text-text underline" to={`/assets/container-images?source=harbor&image=${image.id}`}>Образ в активах</Link>}
+        {assetsRead && image.artifact_kind !== 'helm' && image.artifact_kind !== 'other' && <Link className="text-text underline" to={`/assets/container-images?source=harbor&image=${image.id}`}>Образ в активах</Link>}
         <Meta label="Платформа"><span className="font-mono text-text">{image.platform ?? '—'}</span></Meta>
         <Meta label="Размер"><span className="font-mono tabular-nums text-text">{megabytes(image.size)}</span></Meta>
         <Meta label="Отправлен"><span className="font-mono tabular-nums text-text">{date(image.pushed_at)}</span></Meta>
@@ -114,7 +116,7 @@ function ImageHeader({ image }: { image: ImageDetail }) {
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
         <Meta label="Скан">
           <span className={cn(image.scan_status === 'error' ? 'text-risk-high' : 'text-text')}>
-            {[image.scanner, image.scanned_at ? date(image.scanned_at) : null, SCAN_STATUS_LABELS[image.scan_status] ?? image.scan_status].filter(Boolean).join(' · ')}
+            {[image.scanner, image.scanned_at ? date(image.scanned_at) : null, image.artifact_kind === 'helm' || image.artifact_kind === 'other' ? 'Не применяется' : SCAN_STATUS_LABELS[image.scan_status] ?? image.scan_status].filter(Boolean).join(' · ')}
           </span>
         </Meta>
         <TrivyCounts trivy={image.trivy} />
@@ -124,6 +126,7 @@ function ImageHeader({ image }: { image: ImageDetail }) {
             : <span className="text-text-secondary" title={NO_RISK_TITLE}>—</span>}
         </Meta>
       </div>
+      <ImagePullPolicyDetails policy={image.pull_policy} />
       {image.sync_error && (
         <div className="text-risk-medium" role="status">Не обновлён в последней синхронизации: {image.sync_error}</div>
       )}

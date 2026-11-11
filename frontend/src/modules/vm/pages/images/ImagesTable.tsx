@@ -3,13 +3,14 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
 import type { ImageItem, ImageSort } from '@/modules/vm/api/types'
-import { NO_RISK_TITLE, SCAN_STATUS_LABELS } from '@/modules/vm/api/types'
+import { ARTIFACT_LABELS, NO_RISK_TITLE, SCAN_STATUS_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { cn } from '@/lib/cn'
 import { SortableTh } from '@/platform/table/SortableTh'
 import { useColumnWidths, type ColumnDef } from '@/platform/table/useColumnWidths'
 import { date, megabytes } from './format'
 import { TrivyCounts } from './TrivyCounts'
+import { PullPolicyBadge } from './ImagePullPolicy'
 import { ImageHostsButton } from './ImageHostsButton'
 
 const ROW_HEIGHT = 40
@@ -17,6 +18,8 @@ const SHOWN_TAGS = 3
 
 const COLUMNS: ColumnDef[] = [
   { key: 'image', label: 'Образ', width: 280, flex: true },
+  { key: 'artifact_kind', label: 'Тип', width: 150 },
+  { key: 'pull_policy', label: 'Скачивание · уязвимости', width: 190 },
   { key: 'tags', label: 'Теги', width: 200 },
   { key: 'running_hosts', label: 'Запущен на хостах', width: 150 },
   { key: 'risk', label: 'Риск', width: 208 },
@@ -95,6 +98,8 @@ export function ImagesTable({ items, selectedIndex, sort, onSort, onSelectIndex,
                 </div>
                 {item.platform && <div className="truncate text-[10px] text-text-secondary" title={item.platform}>{item.platform}</div>}
               </div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={ARTIFACT_LABELS[item.artifact_kind ?? 'unknown']}>{ARTIFACT_LABELS[item.artifact_kind ?? 'unknown']}</div>
+              <div className="min-w-0 truncate px-2"><PullPolicyBadge policy={item.pull_policy} /></div>
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary" title={item.tags.join(', ')}>
                 {item.tags.length === 0 ? '—' : item.tags.slice(0, SHOWN_TAGS).join(', ')}
                 {extra > 0 && <span className="ml-1 text-[10px]">+{extra}</span>}
@@ -107,7 +112,7 @@ export function ImagesTable({ items, selectedIndex, sort, onSort, onSelectIndex,
               </div>
               <div className="min-w-0 overflow-hidden px-2"><TrivyCounts trivy={item.trivy} /></div>
               <div className="min-w-0 px-2">
-                <div className={cn('truncate', item.scan_status === 'error' ? 'text-risk-high' : 'text-text')}>{SCAN_STATUS_LABELS[item.scan_status] ?? item.scan_status}</div>
+                <div className={cn('truncate', item.scan_status === 'error' ? 'text-risk-high' : 'text-text')}>{item.artifact_kind === 'helm' || item.artifact_kind === 'other' ? 'Не применяется' : SCAN_STATUS_LABELS[item.scan_status] ?? item.scan_status}</div>
                 {item.scanned_at && <div className="truncate text-[10px] text-text-secondary">{date(item.scanned_at)}</div>}
               </div>
               <div className="min-w-0 truncate px-2 font-mono tabular-nums text-text-secondary">{date(item.pushed_at)}</div>

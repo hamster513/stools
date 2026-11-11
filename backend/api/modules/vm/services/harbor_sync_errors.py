@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 from api.hosts import LOGIN_REJECTED, NO_LINK, NO_RIGHTS, TLS_FAILED
 from api.modules.vm.core.harbor import BAD_FORMAT, HarborError
 
-Stage = Literal["repositories", "artifacts", "report", "unknown"]
+Stage = Literal["repositories", "artifacts", "report", "project_policy", "unknown"]
 
 
 class SyncErrorDetail(BaseModel):

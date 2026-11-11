@@ -3,7 +3,7 @@ import { Container, FilterX, RefreshCw, Search } from 'lucide-react'
 import { buildQuery, errorText } from '@/api/client'
 import { useHarbor, useImages } from '@/modules/vm/api/queries'
 import {
-  IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES,
+  ARTIFACT_KINDS, ARTIFACT_LABELS, IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES,
   type ImageItem, type ImageLevel, type ImageScanStatus, type ImageSort,
 } from '@/modules/vm/api/types'
 import { ExportButton } from '@/platform/filters/ExportButton'
@@ -42,6 +42,7 @@ export function ImagesPage() {
   const params = useSearchParams()
   const { search, navigate } = useRouter()
   const [filters, setFilters] = useState<ImageFilters>(() => ({
+    artifact_kind: listFrom(params, 'artifact_kind', ARTIFACT_KINDS),
     project: listFrom(params, 'project'),
     scan_status: listFrom<ImageScanStatus>(params, 'scan_status', SCAN_STATUSES),
     level: listFrom<ImageLevel>(params, 'level', IMAGE_LEVELS),
@@ -92,6 +93,7 @@ export function ImagesPage() {
   // Что выбрано, пока панель свёрнута: фильтр из ссылки не должен действовать незаметно.
   const chips: FilterChip[] = [
     ...(filters.running_only ? [{ label: 'Только запущенные на хостах', clear: () => toggle('running_only', undefined) }] : []),
+    ...valueChips('Тип', filters.artifact_kind, (kind) => ARTIFACT_LABELS[kind], (v) => toggle('artifact_kind', v)),
     ...valueChips('Проект', filters.project, (p) => p, (v) => toggle('project', v)),
     ...valueChips('Скан', filters.scan_status, (s) => SCAN_STATUS_LABELS[s], (v) => toggle('scan_status', v)),
     ...valueChips('Риск', filters.level, (l) => IMAGE_LEVEL_LABELS[l], (v) => toggle('level', v)),

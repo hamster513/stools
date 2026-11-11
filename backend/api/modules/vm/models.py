@@ -354,6 +354,17 @@ class VmStagePair(Base):
     cve_id: Mapped[str] = mapped_column(String(32))
 
 
+class VmHarborProjectPolicy(Base):
+    """Effective vulnerability policy read from Harbor at the last sync."""
+
+    __tablename__ = "vm_harbor_project_policy"
+    project: Mapped[str] = mapped_column(String(255), primary_key=True)
+    registry_url: Mapped[str] = mapped_column(String(512))
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    checked_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str] = mapped_column(String(255), default="")
+
+
 class VmImage(Base):
     """Образ контейнера из Harbor: один тегированный артефакт. Мультиархитектурный индекс —
     одна строка (отчёт Trivy Harbor хранит на самом индексе), его платформы — в `platform`.
@@ -376,6 +387,10 @@ class VmImage(Base):
     digest: Mapped[str] = mapped_column(String(80))
     #: Адрес реестра на момент получения, без учётных данных; старые строки — пусто до синхронизации.
     registry_url: Mapped[str] = mapped_column(String(512), default="", server_default="")
+    #: image | helm | other | unknown. Legacy rows stay unknown until sync.
+    artifact_kind: Mapped[str] = mapped_column(String(16), default="unknown", server_default="unknown")
+    is_index: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    report_complete: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     #: Verified root/child manifest and runnable configuration hashes for host matching.
     runtime_ids: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     runtime_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

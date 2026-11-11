@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement
 
 from api.modules.vm.core.harbor import SEVERITIES, is_cve
+from api.modules.vm.core.harbor_policy import ARTIFACT_LABELS
 from api.modules.vm.core.risk import level as risk_level
 from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmImage, VmImageCve
@@ -96,6 +97,7 @@ class ImageFilters:
     image_id: int | None = None
     levels: Levels = field(default_factory=Levels)
     running_only: bool = False
+    artifact_kind: frozenset[str] | None = None
 
 
 def image_conditions(f: ImageFilters) -> list[ColumnElement[bool]]:
@@ -118,6 +120,8 @@ def image_conditions(f: ImageFilters) -> list[ColumnElement[bool]]:
         conds.append(or_(*flags))
     if f.image_id is not None:
         conds.append(VmImage.id == f.image_id)
+    if f.artifact_kind is not None:
+        conds.append(one_of(VmImage.artifact_kind, f.artifact_kind))
     if f.running_only:
         conds.append(running_condition())
     return conds
@@ -140,6 +144,7 @@ def image_item(img: VmImage, levels: Levels) -> dict[str, Any]:
     return {
         "id": img.id,
         "project": img.project,
+        "artifact_kind": img.artifact_kind,
         "repository": img.repository,
         "name": f"{img.project}/{img.repository}",
         "platform": img.platform,
@@ -169,10 +174,12 @@ def image_item(img: VmImage, levels: Levels) -> dict[str, Any]:
 def page_images(db: Session, f: ImageFilters, sort: str, limit: int, offset: int) -> list[dict[str, Any]]:
     stmt = select(VmImage).where(*image_conditions(f)).order_by(*IMAGE_SORTS[sort]).limit(limit).offset(offset)
     from api.modules.vm.services.image_hosts import summaries
+    from api.modules.vm.services.image_policy import summaries as policy_summaries
 
     images = list(db.scalars(stmt))
     runtime = summaries(db, images)
-    return [{**image_item(img, f.levels), **runtime[img.id]} for img in images]
+    policies = policy_summaries(db, images)
+    return [{**image_item(img, f.levels), **runtime[img.id], "pull_policy": policies[img.id]} for img in images]
 
 
 def count_images(db: Session, f: ImageFilters) -> int:
@@ -190,6 +197,7 @@ def image_facets(db: Session, f: ImageFilters) -> dict[str, dict[str, int]]:
     return {
         "project": {str(k): n for k, n in _counts(db, VmImage.project, conds).items()},
         "scan_status": {str(k): n for k, n in _counts(db, VmImage.scan_status, conds).items()},
+        "artifact_kind": {str(k): n for k, n in _counts(db, VmImage.artifact_kind, conds).items()},
         "level": _fold_levels(_counts(db, VmImage.risk_max, conds), f.levels),
     }
 
@@ -311,7 +319,7 @@ def find_vuln(db: Session, image_id: int, cve_id: str, package: str, installed_v
 
 
 EXPORT_COLUMNS_SQL = [
-    VmImage.project, VmImage.repository, VmImage.platform, VmImage.tags, VmImage.scan_status, VmImage.scanned_at,
+    VmImage.project, VmImage.repository, VmImage.artifact_kind, VmImage.platform, VmImage.tags, VmImage.scan_status, VmImage.scanned_at,
     VmImageCve.cve_id, VmImageCve.package, VmImageCve.installed_version, VmImageCve.fixed_version,
     VmImageCve.trivy_severity, VmImageCve.trivy_cvss, VmImageCve.risk, VmCve.epss, VmCve.kev,
 ]
@@ -333,6 +341,7 @@ def iter_export_rows(db: Session, f: ImageFilters, sort: str, chunk: int = 5000)
     for r in db.execute(stmt):
         yield {
             "image": f"{r.project}/{r.repository}",
+            "artifact_kind": ARTIFACT_LABELS.get(r.artifact_kind, ARTIFACT_LABELS["unknown"]),
             "platform": r.platform,
             "tags": ", ".join(parse_tags(r.tags)),
             "cve_id": r.cve_id,

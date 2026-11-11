@@ -1,6 +1,7 @@
 import type { HarborSyncError, LastSyncView } from '../../api/types'
 
 const stages: Record<HarborSyncError['stage'], string> = {
+  project_policy: 'Чтение политики скачивания и CVE-исключений',
   repositories: 'Чтение списка репозиториев',
   artifacts: 'Чтение списка образов',
   report: 'Чтение отчёта об уязвимостях',

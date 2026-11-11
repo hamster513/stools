@@ -1,11 +1,11 @@
 import type { ImageLevel, ImagesFacets, ImagesQuery, ImageScanStatus } from '@/modules/vm/api/types'
-import { IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES } from '@/modules/vm/api/types'
+import { ARTIFACT_KINDS, ARTIFACT_LABELS, IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES } from '@/modules/vm/api/types'
 import { LEVEL_TEXT } from '@/modules/vm/components/RiskBadge'
 import { toggleValue } from '@/platform/findings/facets'
 import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 import { Row, Section } from '../vulns/FacetPanel'
 
-export type ImageFilters = Pick<ImagesQuery, 'project' | 'scan_status' | 'level' | 'trivy' | 'running_only'>
+export type ImageFilters = Pick<ImagesQuery, 'project' | 'scan_status' | 'level' | 'trivy' | 'running_only' | 'artifact_kind'>
 
 const TRIVY_OPTIONS = [
   { value: 'critical', label: 'есть критические' },
@@ -31,7 +31,7 @@ export function ImagesFacetPanel({ facets, remembered, filters, onToggle, total 
   // Статусы — в своём порядке; показываются виденные хоть раз и выбранные.
   const seen = new Set((remembered.scan_status ?? []).map((s) => s.value))
   const statuses = SCAN_STATUSES.filter((s) => seen.has(s) || has(filters.scan_status, s))
-  const pick = <K extends 'project' | 'scan_status' | 'level' | 'trivy'>(key: K, value: string) =>
+  const pick = <K extends 'project' | 'scan_status' | 'level' | 'trivy' | 'artifact_kind'>(key: K, value: string) =>
     onToggle(key, toggleValue(filters[key] as string[] | undefined, value) as ImageFilters[K])
 
   return (
@@ -39,6 +39,12 @@ export function ImagesFacetPanel({ facets, remembered, filters, onToggle, total 
       <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">
         Образов <span className="font-mono tabular-nums text-text">{total.toLocaleString('ru-RU')}</span>
       </div>
+
+      <Section title="Тип артефакта">
+        {ARTIFACT_KINDS.map((kind) => <Row key={kind} active={has(filters.artifact_kind, kind)} count={facets?.artifact_kind?.[kind] ?? 0} onClick={() => pick('artifact_kind', kind)}>
+          {ARTIFACT_LABELS[kind]}
+        </Row>)}
+      </Section>
 
       <Section title="Запуск на хостах" hint="По последнему снимку MaxPatrol VM">
         <Row active={Boolean(filters.running_only)} count={undefined} onClick={() => onToggle('running_only', filters.running_only ? undefined : true)}>

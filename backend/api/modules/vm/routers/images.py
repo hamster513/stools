@@ -42,12 +42,13 @@ def _image_filters(
     level: QueryList = None,
     trivy: QueryList = None,
     running_only: bool = False,
+    artifact_kind: QueryList = None,
     db: Session = Depends(get_db),
 ) -> q.ImageFilters:
     """Фасеты `project, scan_status, level, trivy` — повтором ключа; `level=none` — образы без риска;
     `trivy=critical|high` — есть хотя бы одна такая находка;
     `running_only=true` — есть подтверждённый running-контейнер в снимке MaxPatrol VM."""
-    return q.ImageFilters(q_, multi(project), multi(scan_status), multi(level), multi(trivy), None, _levels(db), running_only=running_only)
+    return q.ImageFilters(q_, multi(project), multi(scan_status), multi(level), multi(trivy), None, _levels(db), running_only=running_only, artifact_kind=multi(artifact_kind))
 
 
 def _export_filters(
@@ -95,6 +96,7 @@ def list_images(
 
 EXPORT_COLUMNS = [
     Column("image", "Образ"),
+    Column("artifact_kind", "Тип артефакта"),
     Column("platform", "Платформа"),
     Column("tags", "Теги"),
     Column("cve_id", "CVE"),
@@ -141,8 +143,9 @@ def image_detail(
     image = _image(db, image_id)
     sync = last_sync(db)
     from api.modules.vm.services.image_hosts import summaries
+    from api.modules.vm.services.image_policy import summaries as policy_summaries
 
-    return {**q.image_item(image, _levels(db)), **summaries(db, [image])[image.id],
+    return {"pull_policy": policy_summaries(db, [image])[image.id], **q.image_item(image, _levels(db)), **summaries(db, [image])[image.id],
             "last_sync_at": sync.finished_at if sync else None}
 
 

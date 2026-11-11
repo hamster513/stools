@@ -381,8 +381,33 @@ export const IMAGE_LEVEL_LABELS: Record<ImageLevel, string> = { ...LEVEL_LABELS,
 /** Подсказка к «—» вместо риска образа: почему балла нет. */
 export const NO_RISK_TITLE = 'нет оценённых пар: образ не сканировался, в отчёте нет CVE или строки витрины нет. Если справочники (NVD, EPSS, KEV) не загружены, риск показывается как 0, а не «—»'
 
+export const ARTIFACT_KINDS = ['image', 'helm', 'other', 'unknown'] as const
+export type ArtifactKind = typeof ARTIFACT_KINDS[number]
+export const ARTIFACT_LABELS: Record<ArtifactKind, string> = {
+  image: 'Контейнерный образ', helm: 'Helm-чарт', other: 'Другой артефакт', unknown: 'Тип не определён',
+}
+export interface ImagePullPolicy {
+  evaluated: boolean
+  state: 'allowed' | 'blocked' | 'unknown' | 'not_applicable'
+  reason: string
+  checked_at: string | null
+  enabled: boolean | null
+  threshold: string | null
+  allowlist_source: 'system' | 'project' | null
+  allowlist_expires_at: number | null
+  allowlist_expired: boolean
+  signature_required: boolean
+  blocking_count: number
+  excluded_count: number
+  blocking_cves: string[]
+  excluded_cves: string[]
+  error?: string | null
+}
+
 export interface ImageItem {
   id: number
+  artifact_kind: ArtifactKind
+  pull_policy?: ImagePullPolicy
   project: string
   repository: string
   /** `project/repository`. */
@@ -407,7 +432,7 @@ export interface ImageItem {
   sync_error: string | null
   /** Уникальные хосты с running-контейнерами; null — нет снимка или сопоставления. */
   running_host_count?: number | null
-  runtime_state?: 'ready' | 'mapping_missing' | 'snapshot_missing'
+  runtime_state?: 'ready' | 'mapping_missing' | 'snapshot_missing' | 'not_applicable'
 }
 
 /** Карточка образа: элемент списка и время последней синхронизации. */
@@ -416,6 +441,7 @@ export interface ImageDetail extends ImageItem {
 }
 
 export interface ImagesFacets {
+  artifact_kind: Partial<Record<ArtifactKind, number>>
   project: Record<string, number>
   scan_status: Partial<Record<ImageScanStatus, number>>
   level: Record<ImageLevel, number>
@@ -431,6 +457,7 @@ export interface ImagesResponse {
 export type ImageSort = 'risk_desc' | 'name' | 'pushed_desc' | 'trivy_desc'
 
 export interface ImagesQuery {
+  artifact_kind?: ArtifactKind[]
   q?: string
   project?: string[]
   scan_status?: ImageScanStatus[]
@@ -499,7 +526,7 @@ export interface ImageRiskCard {
 
 export interface HarborSyncError {
   target: string
-  stage: 'repositories' | 'artifacts' | 'report' | 'unknown'
+  stage: 'repositories' | 'artifacts' | 'report' | 'project_policy' | 'unknown'
   reason: string | null
   http_status: number | null
   hint: string

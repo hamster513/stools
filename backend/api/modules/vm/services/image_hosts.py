@@ -27,7 +27,7 @@ def running_condition() -> ColumnElement[bool]:
         VmDockerImage.image_id != "",
         cast(VmImage.runtime_ids, JSONB).has_key(VmDockerImage.image_id),
     ).correlate(VmImage).exists()
-    return and_(snapshot_ready, matched)
+    return and_(snapshot_ready, matched, VmImage.artifact_kind.not_in(["helm", "other"]))
 
 
 def host_views(db: Session, images: list[VmImage]) -> dict[int, dict[str, Any]]:
@@ -42,6 +42,8 @@ def host_views(db: Session, images: list[VmImage]) -> dict[int, dict[str, Any]]:
     result = {}
     for image in images:
         state = "mapping_missing" if not image.runtime_ids else "snapshot_missing" if not snapshot or not snapshot.collected_at else "ready"
+        if image.artifact_kind in {"helm", "other"}:
+            state = "not_applicable"
         hosts: dict[str, dict[str, Any]] = {}
         if state == "ready":
             for ref in image.runtime_ids:

@@ -76,6 +76,8 @@ class HarborArtifact:
     scanner: str | None
     #: Ключи: critical high medium low unknown total.
     trivy_counts: dict[str, int]
+    artifact_kind: str = "unknown"
+    reported_total: int | None = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +163,7 @@ class HarborClient:
         self.conn = conn
         self.http = http
         self._registry_tokens: dict[str, str] = {}
+        self._system_allowlist: dict | HarborError | None = None
 
     def runtime_image_ids(self, project: str, repository: str, digest: str) -> list[str]:
         from api.modules.vm.core.registry_manifests import image_ids
@@ -174,9 +177,11 @@ class HarborClient:
             url = f"https://{url}"
         return f"{url}/api/v2.0"
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> tuple[Any, httpx.Headers]:
+    def _get(self, path: str, params: dict[str, Any] | None = None, *, resource_name: bool = False) -> tuple[Any, httpx.Headers]:
         """GET → (JSON, заголовки). Любой сбой — `HarborError`."""
         headers = {"Accept": "application/json", "X-Accept-Vulnerabilities": _ACCEPT}
+        if resource_name:
+            headers["X-Is-Resource-Name"] = "true"
         try:
             with self.http.stream("GET", f"{self.base}{path}", params=params, headers=headers) as r:
                 status = r.status_code
@@ -248,6 +253,28 @@ class HarborClient:
         names = [_dict(p).get("name") for p in self._pages("/projects")]
         return [n for n in names if isinstance(n, str) and n]
 
+    def system_allowlist(self) -> dict:
+        if self._system_allowlist is None:
+            try:
+                value, _ = self._get("/system/CVEAllowlist")
+                if not isinstance(value, dict):
+                    raise HarborError(BAD_FORMAT)
+                self._system_allowlist = value
+            except HarborError as exc:
+                self._system_allowlist = exc
+        if isinstance(self._system_allowlist, HarborError):
+            raise self._system_allowlist
+        return self._system_allowlist
+
+    def project_policy(self, project: str) -> dict[str, Any]:
+        from api.modules.vm.core.harbor_policy import project_policy
+
+        raw, _ = self._get(_project_path(project), resource_name=True)
+        try:
+            return project_policy(raw, self.system_allowlist)
+        except (TypeError, ValueError) as exc:
+            raise HarborError(BAD_FORMAT) from exc
+
     def repositories(self, project: str) -> list[HarborRepo]:
         prefix = f"{project}/"
         repos: list[HarborRepo] = []
@@ -282,6 +309,8 @@ class HarborClient:
 
     @staticmethod
     def _artifact(raw: dict[str, Any]) -> HarborArtifact:
+        from api.modules.vm.core.harbor_policy import artifact_kind
+
         media_type = raw.get("manifest_media_type")
         media = media_type if isinstance(media_type, str) else ""
         tags = tuple(n for n in (_dict(t).get("name") for t in raw.get("tags") or []) if isinstance(n, str) and n)
@@ -309,6 +338,8 @@ class HarborClient:
         by_severity = _dict(summary.get("summary"))
         counts = {sev: _int(by_severity.get(sev.capitalize())) for sev in SEVERITIES}
         counts["total"] = _int(summary.get("total"))
+        total = summary.get("total")
+        reported_total = total if isinstance(total, int) and not isinstance(total, bool) and total >= 0 else None
 
         size = raw.get("size")
         return HarborArtifact(
@@ -323,6 +354,8 @@ class HarborClient:
             scanned_at=_time(report.get("end_time")),
             scanner=scanner,
             trivy_counts=counts,
+            artifact_kind=artifact_kind(raw),
+            reported_total=reported_total,
         )
 
     def vulnerabilities(self, project: str, repo: str, digest: str) -> list[HarborVuln]:
@@ -337,11 +370,19 @@ class HarborClient:
         if not isinstance(report, dict):
             raise HarborError(BAD_FORMAT)
         vulns: list[HarborVuln] = []
-        for raw in report.get("vulnerabilities") or []:
+        if "vulnerabilities" not in report:
+            raise HarborError(BAD_FORMAT)
+        raw_vulns = report.get("vulnerabilities")
+        if raw_vulns is None:
+            # Harbor represents a completed empty report with null as well as [].
+            raw_vulns = []
+        if not isinstance(raw_vulns, list):
+            raise HarborError(BAD_FORMAT)
+        for raw in raw_vulns:
             item = _dict(raw)
             vuln_id = item.get("id")
             if not isinstance(vuln_id, str) or not vuln_id:
-                continue
+                raise HarborError(BAD_FORMAT)
             links = [x for x in item.get("links") or [] if isinstance(x, str) and x]
             score = _dict(item.get("preferred_cvss")).get("score_v3")
             description = item.get("description")

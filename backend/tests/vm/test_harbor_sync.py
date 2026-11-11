@@ -109,6 +109,8 @@ def fake_harbor(overrides: dict[str, Any] | None = None) -> FakeHarbor:
     routes: dict[str, Any] = {
         f"{API}/systeminfo": fixture("systeminfo.json"),
         f"{API}/projects": fixture("projects.json"),
+        f"{API}/projects/library": {"metadata": {"prevent_vul": "false"}},
+        f"{API}/projects/stools": {"metadata": {"prevent_vul": "false"}},
         LIB: repos,
         STOOLS: [{"name": "stools/stools-web", "artifact_count": 1, "update_time": "2026-10-28T10:36:43.837Z"}],
         f"{LIB}/alpine/artifacts": fixture("artifacts_library_alpine.json"),
