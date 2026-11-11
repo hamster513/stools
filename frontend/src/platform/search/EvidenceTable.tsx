@@ -1,5 +1,6 @@
 import { ArrowUpRight } from 'lucide-react'
 import { Link } from '@/lib/router'
+import { ObjectIcon } from './ObjectIcon'
 import type { Entity, Row } from './api'
 export function EvidenceTable({ rows, onOpen }: { rows: Row[]; onOpen: (entity: Entity) => void }) {
   return <div className="overflow-x-auto"><table className="w-full min-w-[640px] table-fixed text-left text-sm">
@@ -9,7 +10,7 @@ export function EvidenceTable({ rows, onOpen }: { rows: Row[]; onOpen: (entity: 
     </tr></thead>
     <tbody>{rows.map(row => <tr key={row.id} className="border-b border-grid align-top last:border-0">
       <td className="max-w-xs py-3 pr-4 break-words">
-        {row.target ? <button type="button" className="text-left font-medium text-primary hover:underline" onClick={() => onOpen(row.target!)}>{row.title}</button> : <span className="font-medium">{row.title}</span>}
+        {row.target ? <button type="button" className="inline-flex items-start gap-2 text-left font-medium text-primary hover:underline" onClick={() => onOpen(row.target!)}><ObjectIcon kind={row.target.kind} size={15} /><span>{row.title}</span></button> : <span className="font-medium">{row.title}</span>}
         {row.target?.domain && <p className="mt-1 text-xs text-text-secondary">{row.target.domain}</p>}
       </td>
       <td className="max-w-xl py-3 pr-4 break-words"><p>{row.reason}</p>

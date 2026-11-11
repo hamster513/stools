@@ -5,6 +5,8 @@ import { FIELD, Field } from '@/components/ui/Field'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Link } from '@/lib/router'
 import { EvidenceTable } from './EvidenceTable'
+import { DossierSections } from './DossierSections'
+import { ObjectIcon } from './ObjectIcon'
 import { GraphWorkspace } from './graph/GraphWorkspace'
 import { useSearch, type Kind, type Entity, type SearchInput } from './api'
 const KINDS: Record<Kind, string> = { auto: 'Любой объект', host: 'Хост', user: 'Пользователь', group: 'Группа', ip: 'IP-адрес', domain: 'Домен', cve: 'CVE' }
@@ -47,7 +49,7 @@ export function SearchPage() {
         {data.has_more && <p className="text-xs text-text-secondary">Показаны первые 20 объектов. Уточните домен, UPN или SID.</p>}
       </section>}
       {dossier && <>
-        <section className="border-y border-grid py-4"><div className="flex flex-wrap items-baseline gap-3"><span className="text-xs text-text-secondary">{TYPES[dossier.entity.kind]}</span><h2 className="break-all text-lg font-semibold">{dossier.entity.title}</h2><Link to={dossier.entity.href} className="text-xs text-primary hover:underline">Открыть источник ↗</Link></div>
+        <section className="border-y border-grid py-4"><div className="flex flex-wrap items-baseline gap-3"><ObjectIcon kind={dossier.entity.kind} /><span className="text-xs text-text-secondary">{TYPES[dossier.entity.kind]}</span><h2 className="break-all text-lg font-semibold">{dossier.entity.title}</h2><Link to={dossier.entity.href} className="text-xs text-primary hover:underline">Открыть источник ↗</Link></div>
           <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-2 text-sm">{[...(dossier.entity.domain ? [{label:'Домен',value:dossier.entity.domain}] : []),...dossier.entity.facts].map(f => <div key={f.label}><dt className="inline text-text-secondary">{f.label}: </dt><dd className="inline break-all">{f.value}</dd></div>)}</dl>
         </section>
         <div role="group" aria-label="Режим просмотра" className="flex gap-2">
@@ -56,9 +58,7 @@ export function SearchPage() {
         </div>
         <div hidden={mode !== 'graph'}><GraphWorkspace key={`${dossier.entity.id}:${search.submittedAt}`} dossier={dossier} /></div>
         <div hidden={mode !== 'dossier'} className="space-y-6">
-        <nav aria-label="Разделы досье" className="flex flex-wrap gap-x-5 gap-y-2 text-sm">{dossier.sections.map(s => <a key={s.id} href={`#dossier-${s.id}`} className="text-primary hover:underline">{s.title} ({s.items.length}{s.has_more ? '+' : ''})</a>)}</nav>
-        {dossier.sections.map(s => <section key={s.id} id={`dossier-${s.id}`} className="scroll-mt-4"><h3 className="font-semibold">{s.title}</h3><p className="my-2 max-w-5xl text-xs text-text-secondary">{s.note}</p>{s.items.length ? <EvidenceTable rows={s.items} onOpen={open} /> : <p className="border-t border-grid py-3 text-sm text-text-secondary">Нет доступных сведений.</p>}</section>)}
-        {dossier.notes.map(n => <p key={n} className="text-xs text-text-secondary">{n}</p>)}
+        <DossierSections key={`${dossier.entity.id}:${search.submittedAt}`} dossier={dossier} onOpen={open} />
         </div>
       </>}
       {!data.matches.length && groups.map(g => <section key={g.id}><h2 className="font-semibold">{g.title}</h2><p className="my-2 text-xs text-text-secondary">{g.note}</p><EvidenceTable rows={g.items} onOpen={open} />{g.has_more && <p className="text-xs text-text-secondary">Первые 20 совпадений. Уточните запрос или откройте источник.</p>}</section>)}
