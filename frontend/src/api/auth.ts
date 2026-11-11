@@ -6,7 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Theme } from '@/lib/theme'
 import type { Access } from '@/platform/access/types'
-import { api, ApiRequestError } from './client'
+import { api, ApiRequestError } from './client.ts'
 
 export interface LoginRequest {
   login: string
@@ -34,10 +34,21 @@ export interface MeResponse {
   groups: MeGroup[]
 }
 
+export async function fetchMe(): Promise<MeResponse | null> {
+  try {
+    return await api.get<MeResponse>('/api/auth/me')
+  } catch (error) {
+    // 401 — отсутствие сессии, а не ошибка загрузки. При ошибке фонового
+    // запроса React Query сохраняет прежнего пользователя в data.
+    if (error instanceof ApiRequestError && error.status === 401) return null
+    throw error
+  }
+}
+
 export function useMe() {
-  return useQuery<MeResponse, ApiRequestError>({
+  return useQuery<MeResponse | null, ApiRequestError>({
     queryKey: ['me'],
-    queryFn: () => api.get('/api/auth/me'),
+    queryFn: fetchMe,
     retry: false,
   })
 }

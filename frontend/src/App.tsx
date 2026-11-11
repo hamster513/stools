@@ -5,6 +5,7 @@ import { applyTheme, readStoredTheme } from '@/lib/theme'
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { FullPageSpinner } from '@/components/ui/Spinner'
+import { ErrorState } from '@/components/ui/ErrorState'
 import { LoginPage } from '@/pages/LoginPage'
 import { firstReadableModule } from '@/lib/can'
 import { atLeast, type Area } from '@/platform/access/types'
@@ -49,14 +50,14 @@ function legacyPath(path: string, tail: string): string | null {
 
 function Root() {
   const { path, search, navigate } = useRouter()
-  const { data: me, isLoading, isError } = useMe()
+  const { data: me, isLoading, isError, refetch } = useMe()
 
   useEffect(() => {
-    if (isLoading) return
+    if (isLoading || isError) return
     if (!me && path !== '/login') {
       navigate('/login', { replace: true })
     }
-  }, [isLoading, me, path, navigate])
+  }, [isLoading, isError, me, path, navigate])
 
   // Тема из профиля главнее той, что применена до рендера по localStorage:
   // так выбор доезжает до браузера, где его не делали.
@@ -68,7 +69,18 @@ function Root() {
     return <LoginPage />
   }
 
-  if (isLoading || isError || !me) {
+  if (isError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <ErrorState
+          message="Не удалось проверить сессию. Проверьте соединение и повторите попытку."
+          onRetry={() => { void refetch() }}
+        />
+      </div>
+    )
+  }
+
+  if (isLoading || !me) {
     // useEffect выше уже планирует переход на /login — не рендерим пусто.
     return <FullPageSpinner />
   }

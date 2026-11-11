@@ -8,6 +8,7 @@
     "build": "npm run check:help && tsc -b && vite build",
     "check:help": "node scripts/check-help.ts",
     "lint": "eslint .",
+    "test:auth": "node --test \"src/api/*.test.ts\"",
     "test:siem": "node --test \"src/modules/siem/hunting/components/*.test.ts\"",
     "test:help": "node --test \"src/help/core/*.test.ts\"",
     "test:ksc": "node --test \"src/modules/ksc/pages/netrules/*.test.ts\"",
