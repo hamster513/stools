@@ -9,7 +9,7 @@ import { ScheduleBlock } from '@/platform/collector/ScheduleBlock'
 import type { ScheduleIn, ScheduleView } from '@/platform/collector/types'
 import { scheduleText } from '../scheduleText'
 
-const MODULES = { ad: 'Active Directory', ksc: 'Антивирус', assets: 'Активы', vm: 'Уязвимости', siem: 'SIEM', attack: 'ATT&CK' }
+const MODULES = { platform: 'Платформа', ad: 'Active Directory', ksc: 'Антивирус', assets: 'Активы', vm: 'Уязвимости', siem: 'SIEM', attack: 'ATT&CK' }
 const CONNECTIONS = [
   { module: 'ad', kind: 'collect', title: 'Active Directory', anchor: 'connections' },
   { module: 'ksc', kind: 'collect', title: 'Антивирус (KSC)', anchor: 'connections' },
@@ -42,8 +42,8 @@ export function SchedulesPage() {
   const when = (iso?: string | null) => iso && data
     ? new Date(iso).toLocaleString('ru-RU', { timeZone: data.tz, dateStyle: 'short', timeStyle: 'short' }) : '—'
   return <div className="mx-auto w-full max-w-6xl space-y-4 p-6">
-    <h1 className="text-xl font-semibold">Расписание синхронизаций</h1>
-    <p className="text-sm text-text-secondary">У каждого источника свои дни и время запуска. {data && `Часовой пояс — ${data.tz}.`}</p>
+    <h1 className="text-xl font-semibold">Расписание задач</h1>
+    <p className="text-sm text-text-secondary">У каждой задачи свои дни и время запуска. {data && `Часовой пояс — ${data.tz}.`}</p>
     {query.isLoading && <p role="status">Загрузка расписаний…</p>}
     {query.isError && <p role="alert">{query.error.message} <Button variant="ghost" onClick={() => query.refetch()}>Повторить</Button></p>}
     {data && !data.items.length && !missing.length && <p>Нет доступных источников синхронизации.</p>}

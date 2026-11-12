@@ -24,6 +24,8 @@ class Target:
 
 
 def _sources(db: Session, module: str) -> list[Target]:
+    if module == "platform":
+        return [Target("storage", 0, "Замер объёма хранилища")]
     if module in ("ad", "ksc"):
         from api.modules.ad.models import AdConnection
         from api.modules.ksc.models import KscConnection
@@ -54,7 +56,7 @@ def _sources(db: Session, module: str) -> list[Target]:
 
 @router.get("")
 def list_schedules(db: Session = Depends(get_db), access: Access = Depends(current_access)):
-    modules = [m for m in ("ad", "ksc", "vm", "assets", "siem", "attack") if allows(access, m, "read")]
+    modules = [m for m in ("ad", "ksc", "vm", "assets", "siem", "attack", "platform") if allows(access, m, "read")]
     schedules = {(s.module, s.kind, s.target_id): s for s in db.scalars(
         select(PlatformSchedule).where(PlatformSchedule.module.in_(modules)))}
     items = []

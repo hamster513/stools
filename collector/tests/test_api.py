@@ -32,3 +32,16 @@ def test_recovery_releases_abandoned_job(tmp_path):
     store.recover_jobs()
     assert store.job(job)['state'] == 'failed'
     assert store.create_job(source['id']) != job
+
+
+def test_info_storage_includes_sqlite_sidecars(tmp_path):
+    store = Store(tmp_path / 'collector.db')
+    token = store.create_token('reader', ['data:read'])
+    with TestClient(create_app(store, run_scheduler=False)) as client:
+        response = client.get('/api/v1/info', headers={'Authorization': 'Bearer ' + token})
+        assert response.status_code == 200
+        value = response.json()
+        assert value['storage']['database_bytes'] == value['storage_bytes'] > 0
+        assert set(value['storage']) == {'database_bytes', 'wal_bytes', 'shm_bytes'}
+        assert all(type(n) is int and n >= 0 for n in value['storage'].values())
+        assert client.get('/api/v1/info').status_code == 401

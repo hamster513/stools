@@ -1,5 +1,6 @@
 # ruff: noqa: B008 — FastAPI dependency declarations
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -44,7 +45,13 @@ def create_app(store, run_scheduler=True):
 
     @app.get("/api/v1/info")
     def info(scopes=Depends(reader)):
-        return {**store.info(), "scopes": scopes, "storage_bytes": store.path.stat().st_size}
+        sizes = {}
+        for key, suffix in [('database_bytes', ''), ('wal_bytes', '-wal'), ('shm_bytes', '-shm')]:
+            try:
+                sizes[key] = Path(str(store.path) + suffix).stat().st_size
+            except FileNotFoundError:
+                sizes[key] = 0
+        return {**store.info(), "scopes": scopes, "storage_bytes": sizes['database_bytes'], "storage": sizes}
 
     @app.get("/api/v1/sources", dependencies=[Depends(reader)])
     def sources():

@@ -2,6 +2,7 @@ import {
   Bot,
   Mail,
   Database,
+  HardDrive,
   CalendarClock,
   KeyRound,
   ListChecks,
@@ -18,6 +19,7 @@ import { MODULES } from '@/platform/modules'
 
 /** Разделы платформы: видны при чтении платформы, «Модель LLM» — её администратору. */
 const PLATFORM_ITEMS = [
+  { key: 'storage', label: 'Хранилище', icon: HardDrive, admin: false },
   { key: 'access', label: 'Доступ', icon: KeyRound, admin: false },
   { key: 'audit', label: 'Журнал действий', icon: ScrollText, admin: false },
   { key: 'mail', label: 'Почта', icon: Mail, admin: true },
