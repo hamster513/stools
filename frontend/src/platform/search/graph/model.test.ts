@@ -115,3 +115,17 @@ test('layout of all fifty groups has no overlapping coordinates', () => {
   assert.equal(Object.keys(positions).length,graph.nodes.length)
   assert.equal(new Set(Object.values(positions).map(p=>`${p.x}:${p.y}`)).size,graph.nodes.length)
 })
+
+
+test('layout grows left to right in aligned levels without wrapping fifty groups left', () => {
+  const state=initialState(user.id)
+  state.expanded[categoryId(user.id,'groups')]=true
+  const graph=buildGraph(user.id,cache,state), positions=layoutGraph(graph)
+  assert.deepEqual(positions[user.id],{x:0,y:0})
+  const categories=graph.nodes.filter(n=>n.kind==='category')
+  assert(categories.every(n=>positions[n.id].x>0))
+  assert.equal(new Set(categories.map(n=>positions[n.id].x)).size,1)
+  const groups=graph.nodes.filter(n=>n.kind==='group')
+  assert.equal(new Set(groups.map(n=>positions[n.id].x)).size,1)
+  assert(groups.every(n=>positions[n.id].x>positions[categoryId(user.id,'groups')].x))
+})

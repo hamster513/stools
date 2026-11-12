@@ -165,24 +165,25 @@ export function filterGraph(graph: Graph, kinds: Set<string>, enabledSources: Se
 }
 
 export function layoutGraph(graph: Graph): Record<string, Point> {
-  const positions: Record<string, Point> = { [graph.rootId]: { x: 0, y: 0 } }
-  const depth = new Map([[graph.rootId, 0]]), queue = [graph.rootId], levels = new Map<number, string[]>()
-  while (queue.length) {
-    const id = queue.shift()!
-    for (const edge of graph.edges) {
-      const next = edge.from === id ? edge.to : edge.to === id ? edge.from : null
-      if (!next || depth.has(next)) continue
-      const level = depth.get(id)! + 1
-      depth.set(next, level); queue.push(next); levels.set(level, [...(levels.get(level) ?? []), next])
+  // Follow the exploration direction; cycles cannot move discovered nodes back a level.
+  const outgoing = new Map<string, string[]>()
+  for (const edge of graph.edges) outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to])
+  const depth = new Map([[graph.rootId, 0]]), queue = [graph.rootId]
+  const levels: string[][] = [[graph.rootId]]
+  for (let index = 0; index < queue.length; index++) {
+    const id = queue[index], level = depth.get(id)! + 1
+    for (const next of outgoing.get(id) ?? []) {
+      if (depth.has(next)) continue
+      depth.set(next, level); queue.push(next)
+      const peers = levels[level] ?? (levels[level] = [])
+      peers.push(next)
     }
   }
-  let offset = 330
-  for (const ids of levels.values()) {
-    ids.forEach((id, index) => {
-      const slot = Math.floor(index / 2), column = Math.floor(slot / 8), count = Math.min(8, Math.ceil((ids.length - index % 2) / 2) - column * 8)
-      positions[id] = { x: (index % 2 ? -1 : 1) * (offset + column * 240), y: (slot % 8 - (count - 1) / 2) * 95 }
-    })
-    offset += Math.ceil(ids.length / 16) * 240 + 120
-  }
+  const detached = graph.nodes.filter(node => !depth.has(node.id)).map(node => node.id)
+  if (detached.length) levels.push(detached)
+  const positions: Record<string, Point> = {}
+  levels.forEach((ids, level) => ids.forEach((id, index) => {
+    positions[id] = { x: level * 360, y: (index - (ids.length - 1) / 2) * 100 }
+  }))
   return positions
 }
