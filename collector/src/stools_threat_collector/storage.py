@@ -53,11 +53,22 @@ class Store:
             db.close()
 
     def info(self):
+        from .retention import info
         with self.connection() as db:
-            meta = dict(db.execute("SELECT key,value FROM meta LIMIT 10").fetchall())
-            last = db.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
-        return {"protocol_version": int(meta.get("protocol_version", "1")), "supported_protocol_versions": [1, 2], "collector_id": meta["collector_id"],
-                "epoch": meta["epoch"], "last_seq": last}
+            db.execute("BEGIN")
+            return info(db)
+
+    def create_snapshot(self):
+        from .retention import create_snapshot
+        return create_snapshot(self)
+
+    def snapshot_page(self, snapshot_id, after=0, limit=100, byte_limit=8 * 1024 * 1024):
+        from .retention import snapshot_page
+        return snapshot_page(self, snapshot_id, after, limit, byte_limit)
+
+    def retention(self, policy, *, execute=False):
+        from .retention import retention
+        return retention(self, policy, execute=execute)
 
     def source(self, source_id):
         with self.connection() as db:
@@ -153,27 +164,27 @@ class Store:
         return count
 
     def changes(self, after, until=None, limit=100, byte_limit=8 * 1024 * 1024):
-        info = self.info()
-        until = info["last_seq"] if until is None else until
-        if after < 0 or until < after or until > info["last_seq"]:
-            raise ValueError("cursor out of range; full sync required")
+        from .retention import info
         if not 1 <= limit <= 500:
             raise ValueError("invalid page limit")
         with self.connection() as db:
-            rows = db.execute("SELECT * FROM changes WHERE seq>? AND seq<=? ORDER BY seq LIMIT ?",
-                              (after, until, limit)).fetchall()
-        events, used = [], 1024
-        for row in rows:
-            event = {**dict(row), "payload": json.loads(row["payload"])}
-            size = len(encode(event).encode())
-            if used + size > byte_limit:
-                if not events:
-                    raise ValueError("event exceeds page limit")
-                break
-            events.append(event)
-            used += size
+            db.execute("BEGIN")
+            state = info(db)
+            until = state["last_seq"] if until is None else until
+            if after < state["cursor_floor"] or until < after or until > state["last_seq"]:
+                raise ValueError("cursor out of range; full sync required")
+            events, used = [], 2048
+            for row in db.execute("SELECT * FROM changes WHERE seq>? AND seq<=? ORDER BY seq LIMIT ?", (after, until, limit)):
+                event = {**dict(row), "payload": json.loads(row["payload"])}
+                size = len(encode(event).encode())
+                if used + size > byte_limit:
+                    if not events:
+                        raise ValueError("event exceeds page limit")
+                    break
+                events.append(event)
+                used += size
         cursor = events[-1]["seq"] if events else after
-        return {**info, "until_seq": until, "next_cursor": cursor, "has_more": cursor < until, "events": events}
+        return {**state, "until_seq": until, "next_cursor": cursor, "has_more": cursor < until, "events": events}
 
     def create_token(self, name, scopes):
         if not set(scopes) <= {"data:read", "sources:write"}:

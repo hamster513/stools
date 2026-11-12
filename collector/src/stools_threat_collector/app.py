@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .contracts import Source, SourceUpdate
+from .retention import RetentionPolicy
 from .scheduler import Runner
 from .monitoring_contracts import CollectionWindow
 from . import management, monitoring
@@ -97,6 +98,28 @@ def create_app(store, run_scheduler=True):
     def changes(after: int = Query(0, ge=0), until: int | None = Query(None, ge=0), limit: int = Query(100, ge=1, le=500)):
         try:
             return store.changes(after, until, limit)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post("/api/v1/retention/preview", dependencies=[Depends(writer)])
+    def retention_preview(payload: RetentionPolicy):
+        return store.retention(payload.model_dump())
+
+    @app.post("/api/v1/retention/run", dependencies=[Depends(writer)])
+    def retention_run(payload: RetentionPolicy):
+        return store.retention(payload.model_dump(), execute=True)
+
+    @app.post("/api/v1/snapshots", dependencies=[Depends(reader)])
+    def create_snapshot():
+        try:
+            return store.create_snapshot()
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/v1/snapshots/{snapshot_id}", dependencies=[Depends(reader)])
+    def snapshot_page(snapshot_id: str, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
+        try:
+            return store.snapshot_page(snapshot_id, after, limit)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 

@@ -1,4 +1,5 @@
 import datetime as dt
+import hashlib
 import json
 import uuid
 from typing import Any, Literal
@@ -8,10 +9,10 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from api.modules.vm.trend_models import (
-    VmTrendEventReceipt,
     VmTrendEnrichment,
-    VmTrendPoc,
+    VmTrendEventReceipt,
     VmTrendIngestState,
+    VmTrendPoc,
     VmTrendPublication,
     VmTrendSource,
 )
@@ -76,6 +77,7 @@ def _apply_page(db: Session, data: Any, reset: Any=False) -> Any:
     elif reset or state.collector_id == "offline-news-archives":
         state.collector_id, state.epoch = page.collector_id, page.epoch
         state.generation, state.cursor, state.batch_until = str(uuid.uuid4()), 0, 0
+        state.snapshot_id = state.snapshot_baseline = None
     if (state.collector_id, state.epoch) != (page.collector_id, page.epoch):
         raise ValueError("изменилась история сборщика, требуется полная синхронизация")
     if page.next_cursor > page.until_seq or page.has_more != (page.next_cursor < page.until_seq):
@@ -90,7 +92,7 @@ def _apply_page(db: Session, data: Any, reset: Any=False) -> Any:
         serialized = event.model_dump(mode="json")
         receipt = db.get(VmTrendEventReceipt, (state.generation, event.seq))
         if event.seq <= state.cursor:
-            if receipt is None or receipt.data != serialized:
+            if receipt is None or (receipt.payload_hash != event_hash(serialized) if receipt.payload_hash else receipt.data != serialized):
                 raise ValueError("повторное событие отличается от сохранённого")
             continue
         if event.seq != state.cursor + 1:
@@ -133,7 +135,7 @@ def _apply_page(db: Session, data: Any, reset: Any=False) -> Any:
             row.data, row.revision = value, event.revision
             row.retracted, row.processing = event.operation == "retract", "pending"
             row.error, row.analysis = None, {}
-        db.add(VmTrendEventReceipt(generation=state.generation, seq=event.seq, data=serialized))
+        db.add(VmTrendEventReceipt(generation=state.generation, seq=event.seq, data=serialized, payload_hash=event_hash(serialized)))
         state.cursor = event.seq
         db.flush()
     if page.next_cursor > state.cursor or (not page.events and page.next_cursor != state.cursor):
@@ -142,3 +144,49 @@ def _apply_page(db: Session, data: Any, reset: Any=False) -> Any:
     state.received_at = dt.datetime.now(dt.UTC)
     db.flush()
     return state.cursor
+
+
+def event_hash(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def compact_receipts(db: Session, days: int, *, execute: bool = False, as_of: dt.datetime | None = None) -> dict:
+    cutoff = (as_of or dt.datetime.now(dt.UTC)) - dt.timedelta(days=days)
+    eligible, size = db.execute(text("SELECT count(*), coalesce(sum(pg_column_size(data)),0) FROM vm_trend_event_receipt WHERE data IS NOT NULL AND received_at < :cutoff"), {'cutoff': cutoff}).one()
+    total = db.scalar(text("SELECT count(*) FROM vm_trend_event_receipt"))
+    if execute:
+        # Serialise with ingestion; never remove the fingerprint used to reject corrupt replays.
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext('vm_trend_ingest'))"))
+        while True:
+            rows = list(db.scalars(select(VmTrendEventReceipt).where(VmTrendEventReceipt.data.is_not(None), VmTrendEventReceipt.received_at < cutoff).limit(500).with_for_update()))
+            if not rows:
+                break
+            for row in rows:
+                row.payload_hash = row.payload_hash or event_hash(row.data)
+                row.data = None
+            db.flush()
+    return {"eligible_rows": eligible, "protected_rows": total-eligible, "estimated_bytes": size}
+
+
+def apply_snapshot_page(db: Session, data: Any, *, reset: bool = False) -> int:
+    """Stage a frozen snapshot; its synthetic sequence never enters the delivery journal."""
+    snapshot_id, baseline = data.get('snapshot_id'), data.get('baseline_seq')
+    if not isinstance(snapshot_id, str) or not snapshot_id or not isinstance(baseline, int) or baseline < 0:
+        raise ValueError('неверный снимок сборщика')
+    try:
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext('vm_trend_ingest'))"))
+        state = db.get(VmTrendIngestState, 1)
+        if not reset and (state is None or state.snapshot_id != snapshot_id or state.snapshot_baseline != baseline):
+            raise ValueError('изменился снимок сборщика, требуется полная синхронизация')
+        cursor = _apply_page(db, data, reset=reset)
+        state = db.get(VmTrendIngestState, 1)
+        state.snapshot_id, state.snapshot_baseline = snapshot_id, baseline
+        if not data['has_more']:
+            db.execute(text('DELETE FROM vm_trend_event_receipt WHERE generation=:generation'), {'generation':state.generation})
+            state.cursor = state.batch_until = baseline
+            state.snapshot_id = None
+        db.commit()
+        return cursor
+    except Exception:
+        db.rollback()
+        raise

@@ -16,6 +16,7 @@ from api.platform.scheduler import register_schedule_kind
 from api.platform.sync_jobs import scheduled
 from api.platform.routers import storage
 from api.platform.storage_usage.service import scheduled_measure
+from api.platform.storage_retention import scheduled_cleanup
 
 router = APIRouter(prefix="/api/settings")
 for sub in (
@@ -25,6 +26,7 @@ for sub in (
     router.include_router(sub)
 
 register_schedule_kind("platform", "storage", scheduled_measure, jobless=True)
+register_schedule_kind("platform", "storage_cleanup", scheduled_cleanup, jobless=True)
 
 register_schedule_kind("attack", "download", scheduled(attack.start_download))
 

@@ -25,7 +25,7 @@ class Target:
 
 def _sources(db: Session, module: str) -> list[Target]:
     if module == "platform":
-        return [Target("storage", 0, "Замер объёма хранилища")]
+        return [Target("storage", 0, "Замер объёма хранилища"), Target("storage_cleanup", 0, "Очистка хранилища")]
     if module in ("ad", "ksc"):
         from api.modules.ad.models import AdConnection
         from api.modules.ksc.models import KscConnection
@@ -48,7 +48,8 @@ def _sources(db: Session, module: str) -> list[Target]:
                 Target("trends_pull", 0, "Получение трендовых уязвимостей"),
                 *(Target(f"ref_{name}", 0, title) for name, title in TITLES.items())]
     if module == "siem":
-        return [Target("kb_collect", 0, "Сбор базы знаний MaxPatrol SIEM"), Target("logons", 0, "Импорт авторизаций из табличного списка SIEM")]
+        return [Target("kb_collect", 0, "Сбор базы знаний MaxPatrol SIEM"),
+                Target("logons", 0, "Импорт авторизаций из табличного списка SIEM")]
     if module == "attack":
         return [Target("download", 0, "Скачать матрицу MITRE ATT&CK для подтверждения")]
     return []

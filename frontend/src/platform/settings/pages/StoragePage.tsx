@@ -9,6 +9,7 @@ import { atLeast } from '@/platform/access/types'
 import { Link } from '@/lib/router'
 import { bytes, type StorageResponse, type StorageSample } from '../storage'
 import { StorageHistory } from './StorageHistory'
+import { StorageRetention } from './StorageRetention'
 
 export function StoragePage() {
   const [days, setDays] = useState(30), [expanded, setExpanded] = useState<string[]>([])
@@ -46,6 +47,7 @@ export function StoragePage() {
       })}</tbody></table></div><p className="text-xs text-text-secondary">¹ Данные БД включают TOAST и служебное пространство таблиц. Оценка числа строк берётся из статистики PostgreSQL. Удаление записей не всегда сразу уменьшает размер файлов базы.</p></section>
       <section className="space-y-3 border-t border-grid pt-4"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold">История роста</h2><label className="flex items-center gap-2 text-sm">Период<select aria-label="Период" className={FIELD} value={days} onChange={e => setDays(Number(e.target.value))}>{[7,30,90,365].map(n => <option key={n} value={n}>{n} дней</option>)}</select></label></div><StorageHistory points={data.history} modules={latest.modules} tz={data.tz} /><p className="text-xs text-text-secondary">Храним до 1000 замеров за последние 365 дней. Исторические значения до включения замеров неизвестны.</p></section>
     </>}
+    <StorageRetention admin={admin} />
     <p className="border-t border-grid pt-3 text-xs text-text-secondary">В объём входят текущая база PostgreSQL, обычные файлы каталога данных API и SQLite коллектора. Размеры файлов считаются по выделенным блокам; симлинки пропускаются, жёсткие ссылки учитываются один раз. Образы Docker, резервные копии, WAL PostgreSQL и данные внешних систем (включая отдельный IRP) сюда не входят.</p>
   </div>
 }

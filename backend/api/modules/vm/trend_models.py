@@ -25,6 +25,8 @@ class VmTrendIngestState(Base):
     epoch: Mapped[str] = mapped_column(String(100))
     generation: Mapped[str] = mapped_column(String(36))
     active_generation: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    snapshot_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    snapshot_baseline: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     batch_until: Mapped[int] = mapped_column(BigInteger, default=0)
     cursor: Mapped[int] = mapped_column(BigInteger, default=0)
     received_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -41,7 +43,9 @@ class VmTrendEventReceipt(Base):
     __tablename__ = "vm_trend_event_receipt"
     generation: Mapped[str] = mapped_column(String(36), primary_key=True)
     seq: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    data: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    received_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class VmTrendPublication(Base):

@@ -3,7 +3,7 @@ import json
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from api.llm_settings import load_llm
@@ -17,8 +17,8 @@ from api.modules.vm.trend_models import (
 )
 from kbaudit.attack.provider import OllamaCompletion
 
-from .policies import active_policies, publication_policy
 from .classify import classify_publication
+from .policies import active_policies, publication_policy
 from .rules import date, evaluate, extract_identifiers, period_bounds, publication_fingerprint
 
 
@@ -154,7 +154,7 @@ def process_pending(db: Session) -> None:
         from .news_archive import project_news
         project_news(db)
         state = db.get(VmTrendIngestState, 1)
-        if state is None or state.cursor != state.batch_until:
+        if state is None or state.snapshot_id is not None or state.cursor != state.batch_until:
             db.commit()  # Persist offline news even while the collector batch is incomplete.
             return
         generation = state.generation

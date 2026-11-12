@@ -9,6 +9,10 @@ class CollectorError(ValueError):
     pass
 
 
+class CollectorCursorExpired(CollectorError):
+    pass
+
+
 def tls_context(pem: Any) -> Any:
     context = ssl.create_default_context()
     if pem:
@@ -46,7 +50,8 @@ class CollectorClient:
                 if response.status_code >= 300:
                     messages = {401: "токен сборщика отклонён", 403: "недостаточно прав токена",
                                 407: "прокси требует авторизацию (407)", 409: "конфликт версии или позиции синхронизации"}
-                    raise CollectorError(messages.get(response.status_code, f"сборщик вернул HTTP {response.status_code}"))
+                    error = CollectorCursorExpired if response.status_code == 409 else CollectorError
+                    raise error(messages.get(response.status_code, f"сборщик вернул HTTP {response.status_code}"))
                 chunks, size = [], 0
                 for chunk in response.iter_bytes():
                     size += len(chunk)
@@ -79,3 +84,10 @@ class CollectorClient:
         if until is not None:
             params["until"] = until
         return self.request("GET", "/api/v1/changes", params=params)
+
+
+    def create_snapshot(self) -> Any:
+        return self.request("POST", "/api/v1/snapshots")
+
+    def snapshot_page(self, snapshot_id: str, after: int = 0) -> Any:
+        return self.request("GET", "/api/v1/snapshots/" + snapshot_id, params={"after":after, "limit":100})
