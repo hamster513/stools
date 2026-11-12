@@ -18,6 +18,7 @@ from api.modules.assets.routers import (
     container_images,
     dns,
     groups,
+    logons,
     networks,
     overview,
     racktables,
@@ -39,6 +40,7 @@ router = APIRouter(prefix="/api/assets", tags=["assets"])
 # zone_rules — до networks: иначе `/networks/{network_id}` перехватит `/networks/zone-rules`.
 for sub in (
     software.router,
+    logons.router,
     container_images.router,
     assets.router, dns.router, groups.router, zone_rules.router, networks.router, overview.router, racktables.router, settings.router, users.router, zones.router,
     make_jobs_router(AssetJob, "assets"),

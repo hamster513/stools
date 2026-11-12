@@ -15,7 +15,7 @@ WEEK = {"interval_hours": 24, "weekdays": [4, 0], "run_time": "03:00"}
 def test_catalog_permissions_and_excluded_tasks(client_as):
     client = client_as({"siem": "admin"})
     items = client.get(URL).json()["items"]
-    assert [(item["module"], item["kind"]) for item in items] == [("siem", "kb_collect")]
+    assert [(item["module"], item["kind"]) for item in items] == [("siem", "kb_collect"), ("siem", "logons")]
     for kind in ["th_nightly", "th_dispatch"]:
         assert client.put(f"{URL}/siem/{kind}/0", json=WEEK).status_code == 404
         assert client.delete(f"{URL}/siem/{kind}/0").status_code == 404

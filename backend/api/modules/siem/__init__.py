@@ -25,6 +25,7 @@ from api.modules.siem.routers import (
     graph,
     jobs,
     kb,
+    logons,
     profile,
     rules,
     settings,
@@ -35,9 +36,9 @@ from api.modules.siem.routers import (
 # Под другим именем: `hunting` в этом пакете — подпакет с моделями и сервисами, имя нельзя занимать.
 from api.modules.siem.routers.hunting import router as hunting_router
 from api.modules.siem.services.attack_layer import LAYER as ATTACK_LAYER
-from api.platform.sync_jobs import scheduled
 from api.platform import scheduler
 from api.platform.findings.adapters import register_adapter, register_bulk_filter
+from api.platform.sync_jobs import scheduled
 
 router = APIRouter(prefix="/api/siem")
 for sub in (
@@ -48,6 +49,7 @@ for sub in (
     graph.router,
     hunting_router,
     jobs.router,
+    logons.router,
     kb.router,
     profile.router,
     rules.router,
@@ -70,3 +72,7 @@ register_bulk_filter(TH_ADAPTER.module, keys_by_filter)
 scheduler.register_schedule_kind("siem", "kb_collect", scheduled(kb.start_kb_collect))
 scheduler.register_schedule_kind("siem", "th_nightly", nightly_handler)
 scheduler.register_schedule_kind("siem", "th_dispatch", dispatch_handler, jobless=True)
+
+from api.modules.siem.logons.service import start_import as start_logons_import
+
+scheduler.register_schedule_kind("siem", "logons", scheduled(start_logons_import))

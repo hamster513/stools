@@ -229,7 +229,7 @@ def get_asset_ids(
 
 
 #: Подписи источников — как на экране (SOURCE_LABELS фронтенда).
-SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "dns": "DNS", "rt": "RT"}
+SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "dns": "DNS", "rt": "RT", "siem": "SIEM"}
 #: Выгрузке нужен весь отбор: страница списка ограничена `MAX_LIMIT`, здесь — нет.
 EXPORT_ALL = 10**9
 

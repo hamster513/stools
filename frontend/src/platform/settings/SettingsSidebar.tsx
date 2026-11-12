@@ -30,7 +30,8 @@ const PLATFORM_ITEMS = [
 const MODULE_ITEMS = MODULES.filter((m) => m.status === 'available').flatMap((m) => [
   { key: m.id, area: m.id as Area, label: m.title, icon: m.icon },
   ...(m.id === 'siem'
-    ? [{ key: 'siem-hunting', area: 'siem' as Area, label: 'SIEM Threat Hunting', icon: Crosshair }]
+    ? [{ key: 'siem-hunting', area: 'siem' as Area, label: 'SIEM Threat Hunting', icon: Crosshair },
+       { key: 'siem-logons', area: 'siem' as Area, label: 'Импорт авторизаций SIEM', icon: Database }]
     : []),
 ])
 

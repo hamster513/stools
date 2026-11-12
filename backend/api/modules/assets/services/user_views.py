@@ -49,7 +49,7 @@ from api.modules.assets.services.group_views import user_group_ids
 from api.modules.assets.services.users import ad_domains, ad_group_notes
 from api.timeutil import utcnow
 
-USER_SOURCES = ("ad", "ksc")
+USER_SOURCES = ("ad", "ksc", "siem")
 STATES = ("enabled", "disabled", "unknown")
 SESSIONS = ("active", "past", "none")
 YES_NO = ("yes", "no")

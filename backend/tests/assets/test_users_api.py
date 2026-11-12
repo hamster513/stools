@@ -193,7 +193,7 @@ def test_unknown_filter_value_422(analyst: TestClient) -> None:
 
 def test_facets_without_filters(analyst: TestClient) -> None:
     f = listed(analyst)["facets"]
-    assert f["source"] == {"ad": 4, "ksc": 7}
+    assert f["source"] == {"ad": 4, "ksc": 7, "siem": 0}
     assert f["state"] == {"enabled": 3, "disabled": 1, "unknown": 3}
     assert f["session"] == {"active": 3, "past": 3, "none": 1}
     assert f["local"] == {"yes": 2, "no": 5}
@@ -395,7 +395,7 @@ def test_facets_under_q_and_host(analyst: TestClient, state: Session) -> None:
     f = listed(analyst, host_id=asset_id(state, "ws01"))["facets"]
     assert f["local"] == {"yes": 1, "no": 3}
     assert f["session"] == {"active": 3, "past": 1, "none": 0}
-    assert f["source"] == {"ad": 2, "ksc": 4}
+    assert f["source"] == {"ad": 2, "ksc": 4, "siem": 0}
     # Буквальные `%` и `_` в поиске — не шаблон.
     assert listed(analyst, q="%")["total"] == 0 and listed(analyst, q="_")["total"] == 0
 

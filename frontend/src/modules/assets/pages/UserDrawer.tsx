@@ -1,3 +1,4 @@
+import { SiemLogons } from './SiemLogons'
 import { useEffect, useRef, useState } from 'react'
 import { User, X } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
@@ -310,6 +311,7 @@ export function UserDrawer({ userId, onClose, onOpenUser }: { userId: number | n
                   <Identity u={u} />
                   {u.discrepancies.length > 0 && <Discrepancies u={u} />}
                   <Devices u={u} />
+                  <SiemLogons key={u.id} userId={u.id} />
                   <Groups u={u} />
                   <AdFlags u={u} />
                   <SectionTitle>Ручные поля</SectionTitle>

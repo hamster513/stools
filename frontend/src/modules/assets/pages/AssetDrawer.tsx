@@ -1,3 +1,4 @@
+import { SiemLogons } from './SiemLogons'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
 import { SoftwareInventory } from './SoftwareInventory'
@@ -510,6 +511,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
 
                   <LinksBlock a={a} />
                   <UsersBlock a={a} />
+                  <SiemLogons key={a.id} assetId={a.id} />
                   <SoftwareInventory key={a.id} assetId={a.id} />
 
                   <SectionTitle>Ручные поля</SectionTitle>

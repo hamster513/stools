@@ -254,6 +254,7 @@ BUCKET: dict[tuple[str, str], str] = {
     ("POST", "/api/vm/settings/test-vm"): "admin",
     ("PUT", "/api/vm/trends/settings"): "admin",
     ("POST", "/api/vm/trends/settings/test"): "admin",
+    ("POST", "/api/vm/trends/news-archive"): "admin",
     ("PUT", "/api/vm/trends/monitoring/settings"): "admin",
     ("POST", "/api/vm/trends/catalog/apply"): "admin",
     ("POST", "/api/vm/trends/sources"): "admin",
@@ -279,6 +280,14 @@ BUCKET: dict[tuple[str, str], str] = {
 #: Чтение, которое ручка дополнительно сужает сама, внутри: настройки ToolBox
 #: (в словах и подсетях — настоящие значения), псевдонимы и файлы заданий
 #: очистки (в них исходные значения), включая скачивание файлов задания.
+BUCKET.update({
+    ("PUT", "/api/siem/logons/settings"): "admin",
+    ("POST", "/api/siem/logons/preview"): "admin",
+    ("POST", "/api/siem/logons/run"): "write",
+    ("POST", "/api/siem/logons/jobs/{job_id}/cancel"): "write",
+})
+
+
 INNER: dict[tuple[str, str], str] = {
     ("GET", "/api/toolbox/settings"): "admin",
     ("GET", "/api/toolbox/aliases"): "write",

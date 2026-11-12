@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import type { Area, Level } from '@/platform/access/types'
 import { SettingsPage as SiemSettingsPage } from '@/modules/siem/pages/SettingsPage'
+import { LogonImportPage } from '@/modules/siem/logons/ImportPage'
 import { HuntingSettingsPage } from '@/modules/siem/hunting/pages/settings/HuntingSettingsPage'
 import { SettingsPage as VmSettingsPage } from '@/modules/vm/pages/SettingsPage'
 import { SettingsPage as AdSettingsPage } from '@/modules/ad/pages/SettingsPage'
@@ -36,6 +37,7 @@ export const PAGES = new Map<string, { page: ComponentType; nested?: boolean; ne
   // Страница модуля открыта аналитику: загрузки и сбор — его работа. Настройку модуля
   // (подключения, расписания, справочники) сама страница оставляет администратору.
   ['siem', { page: SiemSettingsPage, need: ['siem', 'write'] }],
+  ['siem-logons', { page: LogonImportPage, need: ['siem', 'write'] }],
   ['siem-hunting', { page: HuntingSettingsPage, need: ['siem', 'write'] }],
   ['vm', { page: VmSettingsPage, need: ['vm', 'write'] }],
   ['ad', { page: AdSettingsPage, need: ['ad', 'write'] }],

@@ -13,12 +13,13 @@ export const JOB_KIND_LABELS: Record<string, string> = {
 
 export type AssetSource = 'vm' | 'ksc' | 'ad' | 'dns' | 'rt'
 export const SOURCES: AssetSource[] = ['vm', 'ksc', 'ad', 'dns', 'rt']
-export const SOURCE_LABELS: Record<AssetSource, string> = {
+export const SOURCE_LABELS: Record<AssetSource | 'siem', string> = {
   vm: 'VM',
   ksc: 'KSC',
   ad: 'AD',
   dns: 'DNS',
   rt: 'RT',
+  siem: 'SIEM',
 }
 
 export type DiscrepancyCode = 'stale' | 'conflict' | 'no_av' | 'ad_inactive' | 'no_network'
@@ -516,8 +517,8 @@ export interface AssetsOverview {
 
 // ---- Пользователи как активы ----
 
-export type UserSource = 'ad' | 'ksc'
-export const USER_SOURCES: UserSource[] = ['ad', 'ksc']
+export type UserSource = 'ad' | 'ksc' | 'siem'
+export const USER_SOURCES: UserSource[] = ['ad', 'ksc', 'siem']
 
 /** Включённость по AD; `unknown` — AD учётку не видел (только KSC, локальная, домен без выгрузки). */
 export type UserState = 'enabled' | 'disabled' | 'unknown'
