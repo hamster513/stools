@@ -4,6 +4,9 @@ from collections import defaultdict
 
 from sqlalchemy import func, select
 
+from api.modules.ad.core.account_groups import account_groups
+from api.modules.ad.core.export import ExportFormatError, ExportIndex
+from api.modules.ad.services.snapshots import latest_snapshot
 from api.modules.assets.models import (
     Asset,
     AssetGroup,
@@ -13,6 +16,7 @@ from api.modules.assets.models import (
     AssetUserHost,
     AssetUserObservation,
 )
+from api.modules.assets.services.users import read_ad_export
 from api.modules.toolbox.services.lookup_types import facts
 from api.platform.services.access import allows
 
@@ -110,7 +114,37 @@ def fill(section, rows):
     return section
 
 
-def groups(db, obj, access):
+def _snapshot_user_groups(db, obj, data_dir, section):
+    # Resolve the exact persisted AD identity, never a display name or login.
+    observation = db.scalar(
+        select(AssetUserObservation).where(
+            AssetUserObservation.user_id == obj.id,
+            AssetUserObservation.source == "ad",
+            AssetUserObservation.source_key == obj.sid,
+            AssetUserObservation.gone_at.is_(None),
+        )
+    )
+    domain_id = (observation.data or {}).get("domain_id") if observation else None
+    snapshot = latest_snapshot(db, domain_id) if isinstance(domain_id, int) else None
+    if snapshot is None:
+        return None
+    try:
+        idx = ExportIndex(read_ad_export(None, data_dir, snapshot.id))
+    except (OSError, ExportFormatError, ValueError):
+        return None
+    result = account_groups(idx)
+    section.note += f" Последний снимок AD #{snapshot.id} от {snapshot.collected_at.isoformat()}."
+    links = result.groups.get(observation.source_key)
+    if links is None:
+        section.note += " Учётка с этим SID отсутствует в снимке; членство не определено."
+        links = []
+    # Preserve AD's warnings about incomplete exported memberships.
+    if result.notes:
+        section.note += " " + " ".join(result.notes)
+    return sorted(links, key=lambda x: (not x["direct"], x["name"]))[: CAP + 1], snapshot.collected_at
+
+
+def groups(db, obj, access, data_dir):
     section = Section(
         id="groups",
         title="Группы",
@@ -121,13 +155,31 @@ def groups(db, obj, access):
         section.note = "Нет доступа к AD для групп пользователя."
         return section
     if isinstance(obj, AssetUser) and allows(access, "ad", "read"):
-        links = db.scalars(
-            select(AssetUserGroup)
-            .where(AssetUserGroup.user_id == obj.id)
-            .order_by(AssetUserGroup.direct.desc(), AssetUserGroup.group_name)
-            .limit(CAP + 1)
-        ).all()
-        sids = [x.group_sid for x in links]
+        current = _snapshot_user_groups(db, obj, data_dir, section)
+        if current is None:
+            section.note += (
+                " Последний снимок AD недоступен или не связан с учёткой;"
+                " показаны сохранённые группы Assets, которые могли устареть."
+            )
+            links = [
+                {"sid": x.group_sid, "name": x.group_name, "direct": x.direct}
+                for x in db.scalars(
+                    select(AssetUserGroup)
+                    .where(AssetUserGroup.user_id == obj.id, AssetUserGroup.source == "ad")
+                    .order_by(AssetUserGroup.direct.desc(), AssetUserGroup.group_name)
+                    .limit(CAP + 1)
+                )
+            ]
+            stamp = db.scalar(
+                select(func.max(AssetUserObservation.seen_at)).where(
+                    AssetUserObservation.user_id == obj.id,
+                    AssetUserObservation.source == "ad",
+                    AssetUserObservation.gone_at.is_(None),
+                )
+            )
+        else:
+            links, stamp = current
+        sids = [x["sid"] for x in links]
         found = {
             g.sid: g
             for g in db.scalars(
@@ -140,27 +192,24 @@ def groups(db, obj, access):
                 .limit(CAP + 1)
             )
         }
-        stamp = db.scalar(
-            select(func.max(AssetUserObservation.seen_at)).where(
-                AssetUserObservation.user_id == obj.id,
-                AssetUserObservation.source == "ad",
-                AssetUserObservation.gone_at.is_(None),
-            )
-        )
         for link in links:
-            g = found.get(link.group_sid)
-            reason = "Прямое членство" if link.direct else "Вложенное членство"
+            g = found.get(link["sid"])
+            reason = "Прямое членство" if link["direct"] else "Вложенное членство"
             if g:
-                rows.append(row(g, reason, "AD", stamp))
+                item = row(g, reason, "AD", stamp)
+                # The asset reference may predate a group rename in the AD snapshot.
+                item.title = item.target.title = link["name"]
+                rows.append(item)
             else:
                 rows.append(
                     Row(
-                        id=link.group_sid,
-                        title=link.group_name,
+                        id=link["sid"],
+                        title=link["name"],
                         href=f"/assets/users?user={obj.id}",
                         reason=reason,
                         source="AD",
-                        facts=facts(SID=link.group_sid),
+                        observed_at=stamp,
+                        facts=facts(SID=link["sid"]),
                     )
                 )
     else:

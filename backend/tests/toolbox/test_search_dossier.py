@@ -399,3 +399,102 @@ def test_group_member_evidence_from_two_sources_is_one_row(auth_client, db_sessi
         if x["target"] and x["target"]["id"] == f"user:{u.id}"
     ]
     assert len(rows) == 1 and "AD" in rows[0]["source"] and "VM" in rows[0]["source"]
+
+
+@pytest.fixture
+def current_user_ad_groups(db_session, people, monkeypatch):
+    from api.modules.ad.models import AdDomain, AdSnapshot
+    from api.modules.assets.models import AssetUserObservation
+    from tests.ad.mini import DOMAIN_SID, group, mini_export, rid, user
+
+    _, account, _ = people
+    principal = user("alice", 1001)
+    account.sid = principal["sid"]
+    account.domain = "corp.local"
+    domain = AdDomain(sid=DOMAIN_SID, dns_root="corp.local", netbios="CORP")
+    db_session.add(domain)
+    db_session.flush()
+    snapshot = AdSnapshot(domain_id=domain.id, collected_at=NOW, source="file")
+    db_session.add(snapshot)
+    db_session.add(AssetUserObservation(
+        user_id=account.id, source="ad", source_key=principal["sid"],
+        seen_at=NOW - dt.timedelta(days=1), data={"domain_id": domain.id},
+    ))
+    # Assets still contains memberships from an older synchronization.
+    db_session.add_all([
+        AssetUserGroup(user_id=account.id, group_sid=rid(5000 + n),
+                       group_name=f"Old {n}", direct=True, source="ad")
+        for n in range(100)
+    ])
+    db_session.commit()
+
+    def install(count, *, unavailable=False, missing_user=False):
+        export = mini_export([user("alice", 9999)] if missing_user else [principal, *[
+            group(f"Current {n:03}", rid(6000 + n), [principal["dn"]])
+            for n in range(count)
+        ]])
+
+        def load(*args):
+            if unavailable:
+                raise OSError("export unavailable")
+            return export
+
+        monkeypatch.setattr("api.modules.ad.core.export.load_export_path", load)
+        monkeypatch.setattr("api.modules.ad.routers.snapshots.load_export_path", load)
+        return snapshot, principal
+
+    return install
+
+
+@pytest.mark.parametrize("count", [0, 67, 105])
+def test_user_dossier_groups_match_latest_ad_not_stale_assets(
+    auth_client, current_user_ad_groups, count,
+):
+    snapshot, principal = current_user_ad_groups(count)
+    ad = auth_client.get(f"/api/ad/snapshots/{snapshot.id}/account-groups/{principal['sid']}")
+    assert ad.status_code == 200, ad.text
+    expected = ad.json()["groups"]
+    assert len(expected) == count
+    response = auth_client.post(API, json={"query": "alice", "kind": "user"})
+    assert response.status_code == 200, response.text
+    groups = section(response.json(), "groups")
+    assert len(groups["items"]) == min(count, 100)
+    assert groups["has_more"] is (count > 100)
+    assert {r["title"] for r in groups["items"]} == {g["name"] for g in expected[:100]}
+    assert f"#{snapshot.id}" in groups["note"]
+
+
+def test_user_dossier_marks_cached_groups_when_export_unavailable(auth_client, current_user_ad_groups):
+    current_user_ad_groups(67, unavailable=True)
+    response = auth_client.post(API, json={"query": "alice", "kind": "user"})
+    assert response.status_code == 200, response.text
+    groups = section(response.json(), "groups")
+    assert len(groups["items"]) == 100 and groups["has_more"]
+    assert "сохранённые" in groups["note"] and "устареть" in groups["note"]
+
+
+def test_user_absent_from_latest_ad_does_not_inherit_cached_groups(auth_client, current_user_ad_groups):
+    current_user_ad_groups(0, missing_user=True)
+    response = auth_client.post(API, json={"query": "alice", "kind": "user"})
+    assert response.status_code == 200, response.text
+    groups = section(response.json(), "groups")
+    assert not groups["items"] and not groups["has_more"]
+    assert "SID" in groups["note"]
+
+
+def test_user_dossier_keeps_group_link_but_uses_current_ad_name(
+    auth_client, db_session, current_user_ad_groups,
+):
+    from tests.ad.mini import rid
+
+    current_user_ad_groups(1)
+    cached = AssetGroup(group_key="ad:renamed", sid=rid(6000), name="Old name",
+                        domain="corp.local", in_ad=True, sources=["ad"])
+    db_session.add(cached)
+    db_session.commit()
+    response = auth_client.post(API, json={"query": "alice", "kind": "user"})
+    assert response.status_code == 200, response.text
+    item, = section(response.json(), "groups")["items"]
+    assert item["title"] == item["target"]["title"] == "CORP\\Current 000"
+    assert item["target"]["id"] == f"group:{cached.id}"
+    assert dt.datetime.fromisoformat(item["observed_at"]) == NOW

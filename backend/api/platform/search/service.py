@@ -181,7 +181,7 @@ def vulnerabilities(db, obj, access):
 
 
 def dossier(db, obj, access, data_dir):
-    sections = [observations(db, obj, access), relations.groups(db, obj, access)]
+    sections = [observations(db, obj, access), relations.groups(db, obj, access, data_dir)]
     if isinstance(obj, AssetGroup):
         sections.append(relations.members(db, obj, access))
     else:
