@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, errorText } from '@/api/client'
+import { api, ApiRequestError, errorText } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
 import { useCan } from '@/lib/can'
@@ -46,9 +46,13 @@ function Wizard({ initial }: { initial: Config | null }) {
     mutationFn: async (kind: 'catalog' | 'columns' | 'preview' | 'save' | 'run' | 'cancel') => {
       setMessage('')
       if (kind === 'catalog') {
+        setCatalog([])
         const data = await api.get<{ items: typeof catalog }>(`${ROOT}/catalog?siem_id=${encodeURIComponent(config.siem_id)}`)
+        if (!Array.isArray(data.items) || data.items.some((item) => !item || typeof item.id !== 'string' || typeof item.name !== 'string')) {
+          throw new ApiRequestError(502, 'Некорректный ответ каталога SIEM. Повторите загрузку списков.')
+        }
         setCatalog(data.items)
-        if (!data.items.length) setMessage('В SIEM нет доступных табличных списков.')
+        setMessage(data.items.length ? `Получено списков: ${data.items.length}. Выберите нужный ниже.` : 'В SIEM нет доступных табличных списков.')
       } else if (kind === 'columns' || kind === 'preview') {
         const data = await api.post<Preview>(`${ROOT}/preview`, config)
         setColumns(data.columns); setPreview(data); setStep(kind === 'columns' ? 1 : 2)
@@ -79,8 +83,14 @@ function Wizard({ initial }: { initial: Config | null }) {
         <h2 className="font-semibold">Выберите табличный список</h2>
         <label className="grid gap-1 text-sm">ID конвейера SIEM (если их несколько)<input className={FIELD} value={config.siem_id} onChange={(e) => { update({ ...config, siem_id: e.target.value }); setCatalog([]) }} /></label>
         <Button disabled={pending} onClick={() => action.mutate('catalog')}>{pending ? 'Загрузка…' : 'Получить списки из SIEM'}</Button>
-        <label className="grid gap-1 text-sm">Название табличного списка<input className={FIELD} list="siem-logon-tables" value={config.table_name} onChange={(e) => update({ ...config, table_name: e.target.value })} placeholder="Выберите из списка или введите название" /></label>
-        <datalist id="siem-logon-tables">{catalog.map((t) => <option key={t.id} value={t.name} />)}</datalist>
+        {message && <p role={action.isError ? 'alert' : 'status'} className={action.isError ? 'text-sm text-risk-high' : 'text-sm'}>{message}</p>}
+        {catalog.length > 0 && <label className="grid gap-1 text-sm">Доступные табличные списки
+          <select className={FIELD} value={catalog.some((t) => t.name === config.table_name) ? config.table_name : ''} onChange={(e) => update({ ...config, table_name: e.target.value })}>
+            <option value="">Выберите список ({catalog.length})</option>
+            {catalog.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+          </select>
+        </label>}
+        <label className="grid gap-1 text-sm">Название табличного списка<input className={FIELD} value={config.table_name} onChange={(e) => update({ ...config, table_name: e.target.value })} placeholder="Выберите выше или введите название вручную" /></label>
         <Button disabled={pending || !config.table_name.trim()} onClick={() => action.mutate('columns')}>Далее: сопоставить поля</Button>
       </>}
       {can.admin && step === 1 && <>
@@ -108,7 +118,7 @@ function Wizard({ initial }: { initial: Config | null }) {
         <div className="flex flex-wrap gap-2">{can.admin && <Button disabled={pending} onClick={() => setStep(0)}>Изменить настройку</Button>}<Button disabled={!saved || dirty || busy || pending || !can.write} onClick={() => action.mutate('run')}>Импортировать сейчас</Button>{busy && can.write && <Button disabled={pending} onClick={() => action.mutate('cancel')}>Отменить импорт</Button>}</div>
         {can.admin && <Link to="/settings/schedules" className="text-sm text-primary hover:underline">Настроить время и дни импорта в общем расписании</Link>}
       </>}
-      {message && <p role="status" className="text-sm">{message}</p>}
+      {step !== 0 && message && <p role={action.isError ? 'alert' : 'status'} className={action.isError ? 'text-sm text-risk-high' : 'text-sm'}>{message}</p>}
       {pending && <p role="status" className="text-xs text-text-secondary">Выполняется запрос к серверу…</p>}
     </fieldset>
     <section className="rounded border border-grid p-4"><h2 className="mb-2 text-sm font-semibold">Последние импорты</h2>
