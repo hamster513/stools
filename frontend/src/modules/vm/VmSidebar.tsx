@@ -1,10 +1,11 @@
-import { Container, LayoutDashboard, ListChecks, ShieldAlert } from 'lucide-react'
+import { Container, LayoutDashboard, ListChecks, ShieldAlert, Search } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
 const NAV_ITEMS = [
   { to: '/vm', label: 'Обзор', icon: LayoutDashboard, exact: true },
   { to: '/vm/vulns', label: 'Уязвимости', icon: ShieldAlert, exact: false },
+  { to: '/vm/cve', label: 'Поиск уязвимостей', icon: Search, exact: false },
   { to: '/vm/trends', label: 'Трендовые уязвимости', icon: ShieldAlert, exact: false },
   { to: '/vm/images', label: 'Образы контейнеров', icon: Container, exact: false },
   { to: '/vm/jobs', label: 'Задачи', icon: ListChecks, exact: false },

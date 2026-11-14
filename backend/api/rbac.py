@@ -66,7 +66,7 @@ OPEN_SETTINGS_READS = frozenset({"/api/settings/llm", "/api/settings/findings", 
 def needed(method: str, path: str) -> tuple[str, str] | None:
     """Область и уровень, которые нужны запросу; None — любой вошедший."""
     # Расчёт по снапшоту не меняет конфигурацию и доступен аудитору.
-    read = method in READ_METHODS or (method == "POST" and path == "/api/toolbox/lookup") or (method == "POST" and re.fullmatch(r"/api/ksc/snapshots/[0-9]+/firewall/check(?:/batch)?", path) is not None)
+    read = method in READ_METHODS or (method == "POST" and path in {"/api/toolbox/lookup", "/api/toolbox/certificates/inspect"}) or (method == "POST" and re.fullmatch(r"/api/ksc/snapshots/[0-9]+/firewall/check(?:/batch)?", path) is not None)
     if method == "POST" and path == "/api/search":
         return None  # каждый источник досье проверяет свои права
     if path.startswith("/api/auth/"):
@@ -85,6 +85,8 @@ def needed(method: str, path: str) -> tuple[str, str] | None:
         return None if read else ("attack", "admin")
     if read and path in OPEN_SETTINGS_READS:
         return None
+    if path.startswith("/api/settings/diagnostics/"):
+        return "platform", "admin"
     if path.startswith("/api/settings/"):
         return "platform", "read" if read else "admin"
     if path.startswith("/api/findings/") or path == "/api/users/directory":

@@ -4,6 +4,11 @@ FROM python:3.13-slim
 
 # Зависимости ставятся отдельным слоем: их список меняется реже кода,
 # и пересборка после правки исходников не тянет сеть заново.
+# GHSA updates compare pinned Git trees without downloading the full advisory archive.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml README.md alembic.ini ./
 COPY kbaudit ./kbaudit

@@ -6,7 +6,7 @@ from api.llm_settings import load_llm
 from kbaudit.attack.provider import ModelError
 
 URL = '/api/settings/llm'
-TASKS = {'attack_embeddings', 'attack_markup', 'attack_translation', 'threat_analysis', 'vulnerability_assistant'}
+TASKS = {'attack_embeddings', 'attack_markup', 'attack_translation', 'threat_analysis', 'vulnerability_assistant', 'rule_rewrite'}
 
 
 def assignment(provider='ollama', model='local-model', **kw):
@@ -26,6 +26,9 @@ def test_legacy_materializes_equivalent_tasks_without_writing(auth_client, db_se
     assert body['tasks']['threat_analysis']['think'] is True
     assert body['tasks']['attack_embeddings']['provider'] == 'ollama'
     assert body['tasks']['attack_embeddings']['model'] == 'local-embed'
+    assert body['tasks']['rule_rewrite']['provider'] == 'ollama'
+    assert body['tasks']['rule_rewrite']['model'] == ''
+    assert body['tasks']['rule_rewrite']['local_only'] is True
     assert db_session.get(AppSetting, 'llm').value_json == before
 
 
@@ -34,7 +37,8 @@ def test_independent_tasks_resolve_their_own_keys(auth_client, db_session):
              'attack_markup': assignment('deepseek', 'reasoning-model'),
              'attack_translation': assignment('openrouter', 'translator'),
              'threat_analysis': assignment(model='local-analysis'),
-             'vulnerability_assistant': assignment(model='local-explainer')}
+             'vulnerability_assistant': assignment(model='local-explainer'),
+             'rule_rewrite': assignment(model='local-coder')}
     assert auth_client.put(URL, json={'base_url': 'http://local:11434', 'tasks': tasks,
         'key_updates': {'openrouter': 'router-key', 'deepseek': 'ds-key'}}).status_code == 204
     db_session.expire_all()

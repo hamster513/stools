@@ -51,6 +51,7 @@ from api.modules.siem.hunting.dispatcher import ensure_hunting_schedules
 from api.modules.vm.services.scoring import ensure_vm_rescored
 from api.origin import OriginMiddleware
 from api.platform import router as settings_router
+from api.platform.diagnostics.router import router as diagnostics_router
 from api.platform.findings.expiry import ensure_platform_schedules
 from api.platform.findings.router import router as findings_router
 from api.platform.scheduler import Scheduler
@@ -115,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_router, dependencies=[Depends(require_access)])
     app.include_router(findings_router, dependencies=[Depends(require_access)])
     app.include_router(search_router, dependencies=[Depends(require_access)])
+    app.include_router(diagnostics_router, dependencies=[Depends(require_access)])
     for module_router in MODULE_ROUTERS:
         app.include_router(module_router, dependencies=[Depends(require_access)])
     return app

@@ -36,6 +36,7 @@ from api.modules.siem.services.attack import (
 from api.modules.siem.services.highlight import spans_for
 from api.modules.siem.services.kb_inventory import deployment_by_rule, rule_fields, set_names
 from api.modules.siem.services.rule_attention import attention_by_rule, group_key
+from api.modules.siem.services.rule_rewrite import Request as RewriteRequest
 from api.platform.export import Column, export_response
 from api.platform.findings import service as finding_svc
 
@@ -491,3 +492,19 @@ def get_rule(
         # среди сотни замечаний.
         "body_spans": [s.model_dump() for s in spans_for(rule.body_text, findings_with_values)],
     }
+
+
+@router.get('/{rule_uuid}/suggestion')
+def get_suggestion(rule_uuid: str, snapshot_id: int = Query(...),
+                   db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict:
+    from api.modules.siem.services import rule_rewrite
+    return rule_rewrite.read(db, rule_rewrite.cache_key(snapshot_id, rule_uuid),
+                             rule_rewrite.with_finding_values(db, snapshot_id, get_rule(rule_uuid, snapshot_id, db, _user)))
+
+
+@router.post('/{rule_uuid}/suggestion')
+def generate_suggestion(rule_uuid: str, body: RewriteRequest, snapshot_id: int = Query(...),
+                        db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict:
+    from api.modules.siem.services import rule_rewrite
+    return rule_rewrite.generate(db, rule_rewrite.cache_key(snapshot_id, rule_uuid), body.context_hash,
+                                 lambda: rule_rewrite.with_finding_values(db, snapshot_id, get_rule(rule_uuid, snapshot_id, db, _user)))

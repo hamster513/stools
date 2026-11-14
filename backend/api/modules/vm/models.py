@@ -69,7 +69,7 @@ class VmCve(Base):
 
     cve_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     cvss: Mapped[float | None] = mapped_column(Float, nullable=True)
-    #: nvd_v3 | nvd_v2 | none — откуда взят балл, показывается в карточке.
+    #: nvd_v3 | nvd_v2 | ghsa_v2 | ghsa_v3 | ghsa_v4 | none — откуда взят балл, показывается в карточке.
     cvss_source: Mapped[str] = mapped_column(String(16), default="none")
     v3_av: Mapped[str | None] = mapped_column(String(32), nullable=True)
     v3_pr: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -418,7 +418,7 @@ class VmImage(Base):
     trivy_total: Mapped[int] = mapped_column(Integer, default=0)
     #: Наибольший риск по парам образа; NULL — ни одна пара не получила риск.
     risk_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: Сколько пар получили риск по формуле.
+    #: Сколько находок получили риск, без дублей CVE/GHSA для одного пакета и версии.
     cves_scored: Mapped[int] = mapped_column(Integer, default=0)
     #: Синхронизация, которой образ виден.
     synced_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -428,7 +428,7 @@ class VmImage(Base):
 
 class VmImageCve(Base):
     """Находка Trivy в образе. `cve_id` — идентификатор из отчёта как есть, не внешний
-    ключ на `vm_cve`: пересчёт соединяет по нему, а не-CVE (GHSA-…) остаются без риска."""
+    ключ на `vm_cve`: пересчёт соединяет по нему, GHSA обогащаются явными aliases."""
 
     __tablename__ = "vm_image_cve"
 

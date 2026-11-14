@@ -12,11 +12,14 @@ from fastapi import APIRouter
 from api.modules.attack.layers import register_layer
 from api.modules.vm import data_status as data_status  # регистрирует провайдера свежести данных
 from api.modules.vm import docker_models as docker_models
+from api.modules.vm import ghsa_models as ghsa_models
 from api.modules.vm import models as models  # таблицы должны попасть в metadata
+from api.modules.vm import sync_models as sync_models
 from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job
 from api.modules.vm.routers import (
+    cve,
     harbor,
     images,
     import_,
@@ -39,6 +42,7 @@ from api.platform.sync_jobs import scheduled
 
 router = APIRouter(prefix="/api/vm")
 for sub in (
+    cve.router,
     software.router,
     settings.router,
     trends.router,

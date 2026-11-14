@@ -224,6 +224,7 @@ BUCKET: dict[tuple[str, str], str] = {
     ("PUT", "/api/siem/mp"): "admin",
     ("POST", "/api/siem/mp/collect"): "write",
     ("POST", "/api/siem/mp/test"): "admin",
+    ("POST", "/api/siem/rules/{rule_uuid}/suggestion"): "write",
     ("PUT", "/api/siem/profile"): "admin",
     ("POST", "/api/siem/profile/preview"): "admin",
     ("PUT", "/api/siem/settings"): "admin",
@@ -238,6 +239,7 @@ BUCKET: dict[tuple[str, str], str] = {
     ("POST", "/api/toolbox/scrub/reverse"): "write",
     ("PUT", "/api/toolbox/settings"): "admin",
     ("POST", "/api/toolbox/lookup"): "read",
+    ("POST", "/api/toolbox/certificates/inspect"): "read",
     ("POST", "/api/vm/import/file"): "write",
     ("POST", "/api/vm/import/vm"): "write",
     ("POST", "/api/vm/jobs/{job_id}/cancel"): "write",
@@ -273,6 +275,7 @@ BUCKET: dict[tuple[str, str], str] = {
     ("POST", "/api/vm/trends/policies/global"): "write",
     ("PATCH", "/api/vm/trends/policies/{id}"): "write",
     ("POST", "/api/vm/trends/{id}/assistant"): "write",
+    ("POST", "/api/vm/cve/{key}/assistant"): "write",
     ("PATCH", "/api/vm/trends/{id}/review"): "write",
     ("PUT", "/api/vm/zones"): "admin",
 }
@@ -370,6 +373,8 @@ def test_foreign_module_is_denied(client_as: Any) -> None:
 def _platform_need(method: str, path: str) -> tuple[str, str] | None:
     """Спека ролей §1.2 — независимо от api/rbac.py."""
     read = method == "GET"
+    if path.startswith("/api/settings/diagnostics/"):
+        return "platform", "admin"
     if path.startswith("/api/settings/attack"):
         return None if read else ("attack", "admin")
     if read and path in ("/api/settings/llm", "/api/settings/findings", "/api/settings/data-status", "/api/settings/schedules"):
@@ -393,6 +398,8 @@ def test_platform_level_sweep(monkeypatch: pytest.MonkeyPatch, client_as: Any, l
     for route, route_path, method in SETTINGS_ROUTES:
         need = _platform_need(method, _sample(route, route_path))
         expect_403 = need is not None and not allows(access, *need)
+        if route_path.startswith("/api/settings/diagnostics/"):
+            expect_403 = expect_403 or any(not allows(access, area, "read") for area in ("assets", "ad", "ksc"))
         got = client.request(method, _sample(route, route_path)).status_code
         if (got == 403) != expect_403:
             mismatches.append((method, route_path, "403" if expect_403 else "не 403", got))

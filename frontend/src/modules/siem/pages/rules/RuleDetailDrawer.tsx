@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, CheckCircle2, Pencil, X } from 'lucide-react'
+import { RuleRewrite } from './RuleRewrite'
 import { useRuleDetail } from '@/modules/siem/api/queries'
 import type { FindingKind, RuleBodySpan, RuleFindingSummary, RuleTableState } from '@/modules/siem/api/types'
 import { FINDING_KIND_ADVICE, FINDING_KIND_EXPLANATION, tacticLabel } from '@/modules/siem/api/types'
@@ -257,6 +258,8 @@ export function RuleDetailDrawer({ uuid, snapshotId, onClose }: RuleDetailDrawer
                   ))}
                 </ul>
               </div>
+
+              <RuleRewrite key={`${snapshotId}:${data.uuid}:${data.body_hash}`} uuid={data.uuid} snapshotId={snapshotId} bodyHash={data.body_hash} />
 
               <FindingsSection
                 snapshotId={snapshotId}

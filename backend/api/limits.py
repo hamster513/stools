@@ -62,6 +62,7 @@ SIEM_REFERENCE_UPLOAD = 50 * MB
 #: в `BODY_LIMITS` не нужен, но ручка проверяет размер явно.
 TH_YAML_UPLOAD = 2 * MB
 TH_INTEL_UPLOAD = 65 * MB  # 64 MiB ZIP + multipart framing
+DIAGNOSTIC_UPLOAD = 21 * MB  # 20 MiB ZIP + bounded multipart framing
 DEFAULT_LIMIT = 2 * MB
 
 #: (метод, путь ручки загрузки, лимит тела в байтах). Путь сравнивается целиком,
@@ -74,6 +75,7 @@ BODY_LIMITS: list[tuple[str, str, int]] = [
     ("POST", "/api/ad/snapshots/file", AD_UPLOAD),
     ("POST", "/api/ksc/snapshots/file", KSC_UPLOAD),
     ("POST", "/api/toolbox/scrub/jobs", TOOLBOX_UPLOAD),
+    ("POST", "/api/settings/diagnostics/imports", DIAGNOSTIC_UPLOAD),
     ("POST", "/api/settings/attack", ATTACK_BUNDLE_UPLOAD),
     ("POST", "/api/settings/attack/preview", ATTACK_BUNDLE_UPLOAD),
     ("POST", "/api/attack/ru-ttp", RU_TTP_UPLOAD),

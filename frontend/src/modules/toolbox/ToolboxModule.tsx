@@ -12,6 +12,11 @@ import { NewJobForm } from './pages/NewJobForm'
 import { ReversePage } from './pages/ReversePage'
 import { ScrubJobPage } from './pages/ScrubJobPage'
 import { ScrubJobsPage } from './pages/ScrubJobsPage'
+import { ComparePage } from './pages/ComparePage'
+import { StructuredPage } from './pages/StructuredPage'
+import { DecoderPage } from './pages/DecoderPage'
+import { RegexPage } from './pages/RegexPage'
+import { CertificatesPage } from './pages/CertificatesPage'
 import { UnixTimePage } from './pages/UnixTimePage'
 
 /** Маршруты модуля ToolBox — всё под /toolbox. Blindspot (очистка файлов) — на прежних адресах. */
@@ -27,6 +32,11 @@ export function ToolboxModule() {
   else if (path === '/toolbox/reverse') page = <ReversePage />
   else if (path === '/toolbox/aliases') page = <AliasesPage />
   else if (path === '/toolbox/lookup') page = <Redirect to="/search" />
+  else if (path === '/toolbox/compare') page = <ComparePage />
+  else if (path === '/toolbox/data') page = <StructuredPage />
+  else if (path === '/toolbox/decoder') page = <DecoderPage />
+  else if (path === '/toolbox/regex') page = <RegexPage />
+  else if (path === '/toolbox/certificates') page = <CertificatesPage />
   else if (path === '/toolbox/base64') page = <Base64Page />
   else if (path === '/toolbox/ip') page = <IpCalcPage />
   else if (path === '/toolbox/linux') page = <UnixTimePage />

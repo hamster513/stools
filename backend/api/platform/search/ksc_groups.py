@@ -25,20 +25,29 @@ class ManagementGroup:
 
 
 def find(db, q, selected=None):
-    latest = (
-        select(KscSnapshot.id, KscSnapshot.server_id, KscSnapshot.collected_at)
-        .distinct(KscSnapshot.server_id)
-        .order_by(KscSnapshot.server_id, KscSnapshot.collected_at.desc(), KscSnapshot.id.desc())
-        .subquery()
-    )
+    ranked = select(
+        KscSnapshot.id, KscSnapshot.server_id, KscSnapshot.collected_at,
+        func.row_number().over(
+            partition_by=KscSnapshot.server_id,
+            order_by=(KscSnapshot.collected_at.desc(), KscSnapshot.id.desc()),
+        ).label("position"),
+    ).subquery()
+    latest = select(ranked.c.id, ranked.c.server_id, ranked.c.collected_at).where(
+        ranked.c.position == 1,
+    ).subquery()
     found = {}
     for model in (KscHost, KscPolicyScope):
+        leaf = (
+            func.stools_path_leaf(model.group_path)
+            if db.get_bind().dialect.name == "sqlite"
+            else func.regexp_replace(model.group_path, r"^.*[\\/]", "")
+        )
         condition = (
             (model.group_id == selected[1]) & (latest.c.server_id == selected[0])
             if selected
             else or_(
                 func.lower(model.group_path) == q.lower(),
-                func.lower(func.regexp_replace(model.group_path, r"^.*[\\/]", "")) == q.lower(),
+                func.lower(leaf) == q.lower(),
             )
         )
         rows = db.execute(

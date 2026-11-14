@@ -15,16 +15,16 @@ interface Answer {
   cached: boolean; stale: boolean; truncated: boolean; sources: { title: string; url: string }[]
 }
 
-export function ReadingAssistant({ cardId, publicationKey, revision, originalText, textLabel }: {
-  cardId: string; publicationKey?: string; revision?: number; originalText: string; textLabel?: string
+export function ReadingAssistant({ cardId, publicationKey, revision, originalText, textLabel, apiBase = TREND_BASE }: {
+  cardId: string; publicationKey?: string; revision?: number; originalText: string; textLabel?: string; apiBase?: string
 }) {
   const { write } = useCan()
   const queryClient = useQueryClient()
   const [showOriginal, setShowOriginal] = useState(false)
   const explanationPanel = useRef<HTMLDetailsElement>(null)
   const target = publicationKey ? { publication_key: publicationKey, revision } : {}
-  const url = `${TREND_BASE}/${encodeURIComponent(cardId)}/assistant`
-  const queryKey = ['vm-trend-assistant', cardId, publicationKey, revision]
+  const url = `${apiBase}/${encodeURIComponent(cardId)}/assistant`
+  const queryKey = ['vm-trend-assistant', apiBase, cardId, publicationKey, revision]
   const saved = useQuery({ queryKey, queryFn: () => api.get<Partial<Record<Mode, Answer | null>>>(url + buildQuery(target)) })
   const request = useMutation({
     mutationFn: (mode: Mode) => api.post<Answer>(url, { mode, ...target }),
@@ -54,7 +54,7 @@ export function ReadingAssistant({ cardId, publicationKey, revision, originalTex
     <p data-assistant-text className="whitespace-pre-wrap break-words text-xs">{text}</p>
     {translated && <p className="text-[11px] text-text-secondary">Переведено ИИ · {translation!.model} · {when(translation!.generated_at)}{translation!.truncated ? ' · Переведена выдержка из большого материала' : ''}</p>}
   </div>
-  return <div className="space-y-2" aria-label={publicationKey ? 'ИИ для публикации' : 'ИИ для CVE'}>
+  return <div className="space-y-2" aria-label={publicationKey ? 'ИИ для публикации' : cardId.startsWith('GHSA-') ? 'ИИ для GHSA' : 'ИИ для CVE'}>
     {(originalText || translation?.translation) && (textLabel
       ? <details key={translation?.generated_at ?? 'original'} open={Boolean(translation)} className="space-y-2"><summary className="cursor-pointer text-xs">{textLabel}</summary>{textContent}</details>
       : textContent)}

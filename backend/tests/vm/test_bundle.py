@@ -117,7 +117,7 @@ def test_bundle_loads_all_and_rescores_once(
     assert calls == {"rebuild": 1, "rescore": 1}
 
     states = {s["name"]: s for s in auth_client.get("/api/vm/refs").json()}
-    assert {n: s["source"] for n, s in states.items()} == dict.fromkeys(("epss", "nvd", "exploitdb", "msf", "attack", "kev"), "bundle")
+    assert {n: s["source"] for n, s in states.items() if s["source"]} == dict.fromkeys(("epss", "nvd", "exploitdb", "msf", "attack", "kev"), "bundle")
     assert states["epss"]["detail"] == "epss_scores-current.csv.gz" and states["kev"]["detail"] == "known_exploited_vulnerabilities.json"
     assert states["nvd"]["detail"] == "годы: 2019, 2021" and states["nvd"]["records"] == 3
     # JSON CTID заменил справочник, CSV дописался: как два файла одной загрузкой.

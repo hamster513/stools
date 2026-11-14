@@ -41,6 +41,7 @@ from api.modules.vm.core.harbor import (
 )
 from api.modules.vm.core.weights import Weights
 from api.modules.vm.models import VmCve, VmHarborProjectPolicy, VmImage, VmImageCve, VmImageSync
+from api.modules.vm.services.ghsa_mapping import is_ghsa
 from api.modules.vm.services.harbor_settings import HarborConnection, load_harbor
 from api.modules.vm.services.harbor_sync_errors import (
     Stage,
@@ -503,14 +504,14 @@ class _Sync:
             drop_orphan_cves(self.db)
 
     def _unbuilt_cves(self) -> list[str]:
-        """CVE пар образов, которых нет в витрине или чьи поля ещё не собраны из справочников.
+        """CVE/GHSA пар образов, которых нет в витрине или чьи поля ещё не собраны из справочников.
         По базе, а не по только что записанным парам: прогон, прерванный между записью пар и
         сборкой витрины, иначе оставил бы их без риска навсегда — неизменный отчёт второй раз
         не читается. Несобранная строка `vm_cve` — та, что завела `ensure_cves`: вероятность 0,
         ни CVSS, ни EPSS (`rebuild_cves` даёт вероятности хотя бы априорное значение)."""
         ids = sorted(
             c for c in self.db.execute(select(PAIR_T.c.cve_id).distinct()).scalars()
-            if is_cve(c) and len(c) <= _CVE_ID_MAX
+            if (is_cve(c) or is_ghsa(c)) and len(c) <= _CVE_ID_MAX
         )
         unbuilt = set(ensure_cves(self.db, ids))
         for chunk in batched(ids, UPSERT_CHUNK):

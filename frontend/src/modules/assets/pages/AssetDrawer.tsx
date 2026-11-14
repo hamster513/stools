@@ -2,6 +2,7 @@ import { SiemLogons } from './SiemLogons'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
 import { SoftwareInventory } from './SoftwareInventory'
+import { DrawerTabs } from '@/platform/tabs/DrawerTabs'
 import { ApiRequestError } from '@/api/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { invalidateDiscrepancies, NETWORK_PICK_LIMIT, useAsset, useAssets, useDeleteAsset, useDetachObservation, useMergeAssets, useNetwork, useNetworkSearch, usePatchAsset, usePinField } from '@/modules/assets/api/queries'
@@ -55,7 +56,7 @@ function day(iso: string | null): string {
 }
 
 function title(a: { id: number; name: string; fqdn: string; ip: string }): string {
-  return a.name || a.fqdn || a.ip || `актив #${a.id}`
+  return a.name || a.fqdn || a.ip || `хост #${a.id}`
 }
 
 export function SectionTitle({ children }: { children: ReactNode }) {
@@ -157,7 +158,7 @@ function CanonicalCard({ a, write }: { a: AssetDetail; write: boolean }) {
               {a.network_manual && <span className="text-text-secondary"> (задана вручную)</span>}
             </>
           ) : '—'}
-          {/* Адрес не входит ни в одну сеть: создать её тут же; после сохранения актив привяжется сам. */}
+          {/* Адрес не входит ни в одну сеть: создать её тут же; после сохранения хост привяжется сам. */}
           {!a.network && a.ip && write && (
             <Link to={`/assets/networks?new=${encodeURIComponent(defaultCidr(a.ip))}`} className="ml-2 text-[11px] text-primary hover:underline">создать сеть {defaultCidr(a.ip)}</Link>
           )}
@@ -396,7 +397,7 @@ function ManualFields({ a, write }: { a: AssetDetail; write: boolean }) {
 }
 
 /**
- * Выбор сети актива: сетей тысячи, поэтому — поиск (адрес, имя, тег, VLAN) и первые совпадения; выбранная сеть
+ * Выбор сети хоста: сетей тысячи, поэтому — поиск (адрес, имя, тег, VLAN) и первые совпадения; выбранная сеть
  * подгружается своей карточкой и видна всегда. `value`: '' — по адресу, иначе id сети.
  */
 function NetworkPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -435,7 +436,7 @@ function NetworkPicker({ value, onChange }: { value: string; onChange: (v: strin
   )
 }
 
-/** Поиск второго актива для объединения: наблюдения найденного переедут в этот. */
+/** Поиск второго хоста для объединения: наблюдения найденного переедут в этот. */
 function MergePicker({ a, onPick }: { a: AssetDetail; onPick: (other: { id: number; label: string }) => void }) {
   const [input, setInput] = useState('')
   const q = useDebouncedValue(input.trim(), 250)
@@ -443,7 +444,7 @@ function MergePicker({ a, onPick }: { a: AssetDetail; onPick: (other: { id: numb
   const items = (found.data?.pages[0]?.items ?? []).filter((i) => i.id !== a.id).slice(0, 8)
   return (
     <div className="flex flex-col gap-1">
-      <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Имя, FQDN или IP второго актива" aria-label="Поиск актива для объединения" className={cn(FIELD, 'text-xs')} />
+      <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Имя, FQDN или IP второго хоста" aria-label="Поиск хоста для объединения" className={cn(FIELD, 'text-xs')} />
       {q && (
         <ul className="flex flex-col">
           {found.isLoading && <li className="text-text-secondary">поиск…</li>}
@@ -462,7 +463,7 @@ function MergePicker({ a, onPick }: { a: AssetDetail; onPick: (other: { id: numb
   )
 }
 
-/** Карточка актива справа (спека §6): каноническое с закреплением, наблюдения по источникам с подсветкой
+/** Карточка хоста справа (спека §6): каноническое с закреплением, наблюдения по источникам с подсветкой
  * расхождений, ссылки в модули, ручные поля, объединение и отвязка. */
 export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number | null; onClose: () => void; onOpenAsset: (id: number) => void }) {
   const open = assetId !== null
@@ -474,32 +475,35 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
   const [mergeWith, setMergeWith] = useState<{ id: number; label: string } | null>(null)
   const [detaching, setDetaching] = useState<Observation | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [tab, setTab] = useState('overview')
   const closeRef = useRef<HTMLButtonElement>(null)
-  useEffect(() => { if (open) closeRef.current?.focus(); setMergeWith(null); setDetaching(null); setDeleting(false) }, [open, assetId])
+  useEffect(() => { if (open) closeRef.current?.focus(); setMergeWith(null); setDetaching(null); setDeleting(false); setTab('overview') }, [open, assetId])
   const a = detail.data
   const err = merge.error ?? detach.error ?? remove.error
 
   return (
     <>
       <div className={cn('fixed inset-0 z-30 bg-black/50 transition-opacity duration-200', open ? 'opacity-100' : 'pointer-events-none opacity-0')} onClick={onClose} aria-hidden />
-      <aside role="dialog" aria-label="Актив" aria-hidden={!open} className={cn('fixed top-0 right-0 z-40 flex h-full w-[600px] flex-col border-l border-grid bg-surface transition-transform duration-200', open ? 'translate-x-0' : 'translate-x-full')}>
+      <aside role="dialog" aria-label="Хост" aria-hidden={!open} className={cn('fixed top-0 right-0 z-40 flex h-full w-[960px] max-w-[calc(100vw-2rem)] flex-col border-l border-grid bg-surface transition-transform duration-200', open ? 'translate-x-0' : 'translate-x-full')}>
         {open && (
           <>
             <div className="flex items-center justify-between border-b border-grid px-4 py-3">
               <div className="flex min-w-0 items-center gap-2">
                 <Monitor size={16} className="shrink-0 text-text-secondary" aria-hidden />
-                <span className="truncate text-sm text-text">{a ? title(a) : `актив #${assetId}`}</span>
+                <span className="truncate text-sm text-text">{a ? title(a) : `хост #${assetId}`}</span>
               </div>
               <button ref={closeRef} type="button" onClick={onClose} className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" aria-label="Свернуть (Esc)"><X size={16} aria-hidden /></button>
             </div>
+            <DrawerTabs tabs={[{ key: 'overview', label: 'Обзор' }, { key: 'software', label: 'ПО и уязвимости' }]} current={tab} onSelect={setTab} label="Разделы хоста" />
             <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
               {detail.isLoading && <div className="flex justify-center py-8"><Spinner /></div>}
-              {detail.error && <p className="text-kind-1">{detail.error instanceof ApiRequestError ? detail.error.message : 'Не удалось загрузить актив'}</p>}
-              {a && (
+              {detail.error && <p className="text-kind-1">{detail.error instanceof ApiRequestError ? detail.error.message : 'Не удалось загрузить хост'}</p>}
+              {a && tab === 'software' && <SoftwareInventory key={a.id} assetId={a.id} />}
+              {a && tab === 'overview' && (
                 <>
                   {a.merged_into !== null && (
                     <p className="mb-3 rounded border border-grid px-3 py-2 text-text-secondary">
-                      Актив объединён с <button type="button" className="text-text underline hover:text-primary" onClick={() => { if (a.merged_into !== null) onOpenAsset(a.merged_into) }}>активом #{a.merged_into}</button>.
+                      Хост объединён с <button type="button" className="text-text underline hover:text-primary" onClick={() => { if (a.merged_into !== null) onOpenAsset(a.merged_into) }}>хостом #{a.merged_into}</button>.
                     </p>
                   )}
                   <CanonicalCard a={a} write={write && a.merged_into === null} />
@@ -512,17 +516,16 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
                   <LinksBlock a={a} />
                   <UsersBlock a={a} />
                   <SiemLogons key={a.id} assetId={a.id} />
-                  <SoftwareInventory key={a.id} assetId={a.id} />
 
                   <SectionTitle>Ручные поля</SectionTitle>
                   <ManualFields key={`${a.id}:${a.updated_at}`} a={a} write={write && a.merged_into === null} />
 
                   {write && a.merged_into === null && (
                     <>
-                      <SectionTitle>Объединить с другим активом</SectionTitle>
+                      <SectionTitle>Объединить с другим хостом</SectionTitle>
                       <MergePicker a={a} onPick={setMergeWith} />
-                      <SectionTitle>Удалить актив</SectionTitle>
-                      <Button variant="ghost" className="text-risk-high" onClick={() => setDeleting(true)}><Trash2 size={13} aria-hidden /> Удалить актив</Button>
+                      <SectionTitle>Удалить хост</SectionTitle>
+                      <Button variant="ghost" className="text-risk-high" onClick={() => setDeleting(true)}><Trash2 size={13} aria-hidden /> Удалить хост</Button>
                     </>
                   )}
                   {err && <p className="mt-2 text-kind-1">{err.message}</p>}
@@ -535,7 +538,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
       {a && mergeWith && (
         <Confirm
           label={`Объединить «${mergeWith.label}» с «${title(a)}»?`}
-          text={`Наблюдения «${mergeWith.label}» переедут в этот актив, теги объединятся, заметка допишется; «${mergeWith.label}» исчезнет из списка.`}
+          text={`Наблюдения «${mergeWith.label}» переедут в этот хост, теги объединятся, заметка допишется; «${mergeWith.label}» исчезнет из списка.`}
           action="Объединить"
           pending={merge.isPending}
           onCancel={() => setMergeWith(null)}
@@ -545,7 +548,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
       {a && deleting && (
         <Confirm
           label={`Удалить «${title(a)}»?`}
-          text="Актив исчезнет вместе с наблюдениями источников. Если источник его всё ещё видит, он вернётся при следующей синхронизации — удаление чистит реестр, а не прячет хост."
+          text="Хост исчезнет вместе с наблюдениями источников. Если источник его всё ещё видит, он вернётся при следующей синхронизации — удаление чистит реестр, а не прячет хост."
           action="Удалить"
           danger
           pending={remove.isPending}
@@ -556,7 +559,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
       {a && detaching && (
         <Confirm
           label={`Отвязать наблюдение ${SOURCE_LABELS[detaching.source]}?`}
-          text={`Наблюдение «${detaching.name || detaching.fqdn || detaching.ip || detaching.source_key}» станет отдельным активом и останется им при следующих синхронизациях.`}
+          text={`Наблюдение «${detaching.name || detaching.fqdn || detaching.ip || detaching.source_key}» станет отдельным хостом и останется им при следующих синхронизациях.`}
           action="Отвязать"
           danger
           pending={detach.isPending}

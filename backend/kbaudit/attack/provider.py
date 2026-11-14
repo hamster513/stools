@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any, Protocol, Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, SecretStr
 
@@ -85,7 +85,8 @@ class OllamaCompletion:
     def __init__(self, settings: OllamaSettings) -> None:
         self._settings = settings
 
-    def complete(self, prompt: str, schema: dict[str, Any]) -> str:
+    def complete(self, prompt: str, schema: dict[str, Any], *,
+                 options: dict[str, int] | None = None, require_complete: bool = False) -> str:
         s = self._settings
         if not s.configured:
             raise ModelError("адрес модели не задан")
@@ -104,10 +105,12 @@ class OllamaCompletion:
             # и та же выгрузка обязана давать один и тот же результат, иначе
             # расхождение между прогонами не отличить от расхождения из-за
             # правки правил.
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, **(options or {})},
             "format": schema,
         }
         parsed = _post_json(f"{s.base_url.rstrip('/')}/api/generate", body, s.timeout)
+        if require_complete and (parsed.get("done") is not True or parsed.get("done_reason") != "stop"):
+            raise ModelError("Модель не завершила ответ полностью")
         return str(parsed.get("response") or "")
 
 

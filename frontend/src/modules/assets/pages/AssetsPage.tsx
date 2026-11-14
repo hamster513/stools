@@ -192,7 +192,7 @@ function FacetPanel({ facets, zones, networkCards, filters, onToggle, disc, onDi
     onToggle(key, toggleValue(filters[key] as (typeof value)[] | undefined, value) as Filters[K])
   return (
     <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto border-r border-grid bg-surface">
-      <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Активов <span className="font-mono tabular-nums text-text">{total}</span></div>
+      <div className="border-b border-grid px-4 py-3 text-xs text-text-secondary">Хостов <span className="font-mono tabular-nums text-text">{total}</span></div>
       <FacetSection title="Расхождения">
         <FacetRow active={has(filters.code, 'any')} count={facets?.code.any} onClick={() => pick('code', 'any')}>{ANY_CODE_LABEL}</FacetRow>
         {CODES.map((c) => (
@@ -222,7 +222,7 @@ function FacetPanel({ facets, zones, networkCards, filters, onToggle, disc, onDi
           <FacetRow key={c} active={has(filters.criticality, c)} count={facets?.criticality[c]} onClick={() => pick('criticality', c)}>{CRITICALITY_LABELS[c]}</FacetRow>
         ))}
       </FacetSection>
-      {/* Считаются только активы с наблюдением AD. */}
+      {/* Считаются только хосты с наблюдением AD. */}
       <FacetSection title="LAPS">
         {LAPS_VALUES.map((v) => (
           <FacetRow key={v} active={has(filters.laps, v)} count={facets?.laps[v]} onClick={() => pick('laps', v)}>{LAPS_LABELS[v]}</FacetRow>
@@ -233,7 +233,7 @@ function FacetPanel({ facets, zones, networkCards, filters, onToggle, disc, onDi
           <FacetRow key={v} active={has(filters.cluster, v)} count={facets?.cluster[v]} onClick={() => pick('cluster', v)}>{CLUSTER_LABELS[v]}</FacetRow>
         ))}
       </FacetSection>
-      {/* Расположение — признак группы сети актива; вне сети или в группе без расположения — «не задано». */}
+      {/* Расположение — признак группы сети хоста; вне сети или в группе без расположения — «не задано». */}
       <FacetSection title="Расположение">
         {PLACEMENTS.map((p) => (
           <FacetRow key={p} active={has(filters.placement, p)} count={facets?.placement[p]} onClick={() => pick('placement', p)}>{PLACEMENT_LABELS[p]}</FacetRow>
@@ -313,12 +313,12 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, 
               {checked && (
                 // Щелчок по флажку не открывает карточку; Shift отмечает диапазон от предыдущего флажка.
                 <div className="flex h-full items-center justify-center" onClick={(e) => e.stopPropagation()}>
-                  <input type="checkbox" className="accent-primary" checked={checked.has(a.id)} onChange={(e) => onCheck(v.index, (e.nativeEvent as MouseEvent).shiftKey)} aria-label={`Отметить ${a.name || a.fqdn || a.ip || `актив #${a.id}`}`} />
+                  <input type="checkbox" className="accent-primary" checked={checked.has(a.id)} onChange={(e) => onCheck(v.index, (e.nativeEvent as MouseEvent).shiftKey)} aria-label={`Отметить ${a.name || a.fqdn || a.ip || `хост #${a.id}`}`} />
                 </div>
               )}
               <div className="min-w-0 truncate px-2">
                 <div className="truncate text-text" title={a.name}>
-                  {a.name || a.fqdn || a.ip || `актив #${a.id}`}
+                  {a.name || a.fqdn || a.ip || `хост #${a.id}`}
                   {a.cluster && <span className="ml-1.5 rounded border border-grid px-1 font-mono text-[10px] text-text-secondary" title={a.cluster === 'node' ? 'узел кластера Windows' : 'виртуальное имя кластера Windows, не хост'}>{CLUSTER_LABELS[a.cluster]}</span>}
                 </div>
                 <div className="truncate text-[10px] text-text-secondary" title={a.fqdn}>{a.fqdn}</div>
@@ -343,7 +343,7 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, 
 const split = (text: string) => text.split(',').map((t) => t.trim()).filter(Boolean)
 
 /**
- * Статус расхождения одного кода у отмеченных активов — статусы находок платформы. Коды — те, что есть
+ * Статус расхождения одного кода у отмеченных хостов — статусы находок платформы. Коды — те, что есть
  * в текущем списке (фасет); обоснование обязательно для «Принят риск» и «Ложное срабатывание».
  */
 function DiscrepancyBulkForm({ ids, facets, code: filterCode }: { ids: number[]; facets: AssetsFacets | null; code: CodeFilter | undefined }) {
@@ -387,7 +387,7 @@ function DiscrepancyBulkForm({ ids, facets, code: filterCode }: { ids: number[];
   )
 }
 
-/** Удаление отмеченных: подтверждение с числом; актив, которого источник ещё видит, вернётся при синхронизации. */
+/** Удаление отмеченных: подтверждение с числом; хост, которого источник ещё видит, вернётся при синхронизации. */
 function BulkDelete({ ids, onDone }: { ids: number[]; onDone: () => void }) {
   const remove = useBulkDelete()
   const [confirm, setConfirm] = useState(false)
@@ -396,10 +396,10 @@ function BulkDelete({ ids, onDone }: { ids: number[]; onDone: () => void }) {
       <Button variant="ghost" onClick={() => setConfirm(true)} className="text-risk-high"><Trash2 size={13} aria-hidden /> Удалить</Button>
       {remove.error && <span className="text-kind-1">{remove.error.message}</span>}
       {confirm && (
-        <div role="dialog" aria-label="Удалить активы" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div role="dialog" aria-label="Удалить хосты" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded border border-grid bg-surface p-4">
-            <div className="mb-2 text-sm font-semibold text-text">Удалить активов: {ids.length}?</div>
-            <p className="mb-4 text-xs text-text-secondary">Активы исчезнут вместе с наблюдениями источников. Те, кого источник всё ещё видит, вернутся при следующей синхронизации — удаление чистит реестр, а не прячет хост.</p>
+            <div className="mb-2 text-sm font-semibold text-text">Удалить хостов: {ids.length}?</div>
+            <p className="mb-4 text-xs text-text-secondary">Хосты исчезнут вместе с наблюдениями источников. Те, кого источник всё ещё видит, вернутся при следующей синхронизации — удаление чистит реестр, а не прячет хост.</p>
             <div className="flex justify-end gap-2">
               <Button onClick={() => setConfirm(false)}>Отмена</Button>
               <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate(ids, { onSuccess: () => { setConfirm(false); onDone() } })}>Удалить</Button>
@@ -411,7 +411,7 @@ function BulkDelete({ ids, onDone }: { ids: number[]; onDone: () => void }) {
   )
 }
 
-/** Массовое изменение отмеченных активов: критичность и теги (добавить, снять), статус расхождения, удаление. Заметка и сеть — только в карточке. */
+/** Массовое изменение отмеченных хостов: критичность и теги (добавить, снять), статус расхождения, удаление. Заметка и сеть — только в карточке. */
 function BulkBar({ ids, total, selectingAll, onSelectAll, onClear, facets, code }: {
   ids: number[]; total: number; selectingAll: boolean; onSelectAll: () => void; onClear: () => void; facets: AssetsFacets | null; code: CodeFilter | undefined
 }) {
@@ -444,14 +444,14 @@ function BulkBar({ ids, total, selectingAll, onSelectAll, onClear, facets, code 
       <Button variant="ghost" onClick={onClear}>Снять отметки</Button>
       <BulkDelete ids={ids} onDone={onClear} />
       {bulk.error && <span className="text-kind-1">{bulk.error.message}</span>}
-      {bulk.isSuccess && !bulk.isPending && <span className="text-text-secondary">изменено активов: {bulk.data.updated}</span>}
+      {bulk.isSuccess && !bulk.isPending && <span className="text-text-secondary">изменено хостов: {bulk.data.updated}</span>}
       <DiscrepancyBulkForm key={code ?? ''} ids={ids} facets={facets} code={code} />
     </div>
   )
 }
 
 /**
- * Реестр активов: таблица с фасетами слева, карточка справа. Адрес задаёт начальные фильтры — сюда ведут
+ * Реестр хостов: таблица с фасетами слева, карточка справа. Адрес задаёт начальные фильтры — сюда ведут
  * ссылки обзора; `?asset=<id>` сразу открывает карточку — так ведут ссылки «в Assets» из антивируса и VM.
  */
 export function AssetsPage() {
@@ -570,12 +570,12 @@ export function AssetsPage() {
   const errorMessage = query.error instanceof ApiRequestError
     ? (adOn && query.error.status === 422 ? 'Ссылка из сводки AD неполная — откройте её со страницы сводки заново.'
       : adOn && (query.error.status === 404 || query.error.status === 409) ? `Ячейка сводки AD не открывается: ${query.error.message}` : query.error.message)
-    : query.isError ? 'Не удалось загрузить активы' : null
+    : query.isError ? 'Не удалось загрузить хосты' : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
-        <h1 className="text-sm font-semibold text-text">Активы</h1>
+        <h1 className="text-sm font-semibold text-text">Хосты</h1>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <ExportButton href={exportHref('/api/assets/assets/export', queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
@@ -601,8 +601,8 @@ export function AssetsPage() {
               <div className="p-6">
                 <EmptyState
                   icon={FilterX}
-                  title={hasFilters ? 'Ничего не найдено' : 'Активов ещё нет'}
-                  description={hasFilters ? 'Ни один актив не подходит под фильтры.' : 'Активы появятся после импорта в модулях VM, антивируса или AD — или после синхронизации кнопкой на обзоре и в настройках.'}
+                  title={hasFilters ? 'Ничего не найдено' : 'Хостов ещё нет'}
+                  description={hasFilters ? 'Ни один хост не подходит под фильтры.' : 'Хосты появятся после импорта в модулях VM, антивируса или AD — или после синхронизации кнопкой на обзоре и в настройках.'}
                 />
               </div>
             )}

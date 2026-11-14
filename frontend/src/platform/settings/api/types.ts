@@ -43,7 +43,7 @@ export interface SecuritySettings {
 /** Настройки модели. Пустой адрес — рабочее состояние, а не ошибка:
  *  без модели работает всё, кроме предложений по разметке и перевода. */
 export type LlmProvider = 'ollama' | 'openrouter' | 'deepseek'
-export type LlmTaskId = 'attack_embeddings' | 'attack_markup' | 'attack_translation' | 'threat_analysis' | 'vulnerability_assistant'
+export type LlmTaskId = 'attack_embeddings' | 'attack_markup' | 'attack_translation' | 'threat_analysis' | 'vulnerability_assistant' | 'rule_rewrite'
 export interface LlmTaskAssignment {
   provider: LlmProvider
   model: string

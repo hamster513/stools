@@ -4,13 +4,12 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import HTTPException
-from sqlalchemy import and_, cast, func, or_, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import and_, func, or_, select
 
 from api.modules.ad.models import AdDomain
 from api.modules.assets.models import Asset, AssetGroup, AssetObservation, AssetUser, AssetUserHost
 from api.modules.toolbox.services.lookup import lookup
-from api.modules.toolbox.services.lookup_types import facts, identity, parse_query
+from api.modules.toolbox.services.lookup_types import facts, identity, ip_list_contains, parse_query
 from api.modules.vm.models import VmHost, VmHostCve, VmImport
 from api.platform.services.access import allows
 
@@ -37,13 +36,14 @@ def candidate_rows(db, q, kind):
                     fqdn=Asset.fqdn,
                     domain=Asset.domain,
                     ip=Asset.ip,
+                    dialect=db.get_bind().dialect.name,
                 )
                 if parsed == "ip":
                     secondary = select(AssetObservation.asset_id).where(
                         AssetObservation.gone_at.is_(None),
                         or_(
                             AssetObservation.ip == normalized,
-                            cast(AssetObservation.ips, JSONB).contains([normalized]),
+                            ip_list_contains(AssetObservation.ips, normalized, db.get_bind().dialect.name),
                         ),
                     )
                     condition = or_(condition, Asset.id.in_(secondary))

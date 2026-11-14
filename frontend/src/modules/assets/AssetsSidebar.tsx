@@ -1,4 +1,4 @@
-import { Boxes, LayoutDashboard, ListChecks, Monitor, Network, Users, UsersRound } from 'lucide-react'
+import { Boxes, LayoutDashboard, ListChecks, Monitor, Network, Package, Users, UsersRound } from 'lucide-react'
 import { Link, useRouter } from '@/lib/router'
 import { cn } from '@/lib/cn'
 
@@ -7,7 +7,8 @@ const LINK =
 
 const ITEMS = [
   { to: '/assets', label: 'Обзор', icon: LayoutDashboard, exact: true },
-  { to: '/assets/list', label: 'Активы', icon: Monitor, exact: false },
+  { to: '/assets/list', label: 'Хосты', icon: Monitor, exact: false },
+  { to: '/assets/software', label: 'ПО', icon: Package, exact: false },
   { to: '/assets/container-images', label: 'Образы контейнеров', icon: Boxes, exact: false },
   { to: '/assets/users', label: 'Пользователи', icon: Users, exact: false },
   { to: '/assets/groups', label: 'Группы', icon: UsersRound, exact: false },
@@ -24,7 +25,7 @@ export function AssetsSidebar() {
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-grid bg-surface">
       <div className="px-4 py-4">
-        <div className="text-sm font-semibold tracking-wide text-text">Активы</div>
+        <div className="text-sm font-semibold tracking-wide text-text">Хосты</div>
         <div className="text-xs text-text-secondary">хосты из всех источников</div>
       </div>
       <nav className="flex flex-col gap-0.5 px-2" aria-label="Разделы">

@@ -41,9 +41,10 @@ FEEDS: dict[str, tuple[str, str, bool]] = {
     CTID_JSON: ("attack", "ctid-kev.json", False),
     CTID_CSV: ("attack", "attack_to_cve.csv", False),
     "known_exploited_vulnerabilities.json": ("kev", "kev.json", False),
+    "advisory-database.zip": ("ghsa", "ghsa", False),
 }
 ALL = set(FEEDS)
-REF_NAMES = ("epss", "nvd", "exploitdb", "msf", "attack", "kev")
+REF_NAMES = ("epss", "nvd", "exploitdb", "msf", "attack", "kev", "ghsa")
 
 
 def _names(feed: str) -> set[str]:
@@ -60,6 +61,10 @@ def www(tmp_path: Path) -> Path:
     root = tmp_path / "www"
     root.mkdir()
     for name, (_, fixture, gz) in FEEDS.items():
+        if fixture == "ghsa":
+            with zipfile.ZipFile(root / name, "w") as archive:
+                archive.writestr("advisory-database-main/README.md", "test snapshot")
+            continue
         data = (FIXTURES / fixture).read_bytes()
         (root / name).write_bytes(gzip.compress(data) if gz else data)
     return root
@@ -78,7 +83,7 @@ def port(www: Path) -> Iterator[int]:
         server.server_close()
 
 
-def _check_zip(path: Path, www: Path, expected: set[str]) -> None:
+def _check_one_zip(path: Path, www: Path, expected: set[str]) -> None:
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
         assert sorted(names) == sorted(expected)
@@ -87,6 +92,20 @@ def _check_zip(path: Path, www: Path, expected: set[str]) -> None:
             assert "/" not in name and "\\" not in name, name
             assert classify(name) == FEEDS[name][0], name
             assert zf.read(name) == (www / name).read_bytes(), name
+
+
+def _check_zip(path: Path, www: Path, expected: set[str]) -> None:
+    ghsa = {"advisory-database.zip"} & expected
+    regular = expected - ghsa
+    companion = path.with_name(path.stem + "-ghsa.zip")
+    if regular and ghsa:
+        _check_one_zip(path, www, regular)
+        _check_one_zip(companion, www, ghsa)
+        with zipfile.ZipFile(companion) as archive:
+            assert archive.getinfo("advisory-database.zip").compress_type == zipfile.ZIP_DEFLATED
+    else:
+        _check_one_zip(path, www, expected)
+        assert not companion.exists()
 
 
 # --- PowerShell в контейнере -------------------------------------------------------------------
@@ -144,7 +163,7 @@ def test_ps1_skip_and_failed_feed(tmp_path: Path, www: Path, port: int) -> None:
 @needs_pwsh
 def test_ps1_year_range_and_bad_year(tmp_path: Path, www: Path, port: int) -> None:
     """«2019-2021» — три года (2020 на сервере нет: 404, остальные упакованы); мусор — понятная ошибка, код 1."""
-    skip = "-Skip epss,exploitdb,msf,attack,kev"
+    skip = "-Skip epss,exploitdb,msf,attack,kev,ghsa"
     code, log, archive = _ps(tmp_path, port, f"-Years 2019-2021 {skip}")
     assert code == 0, log
     assert "nvdcve-2.0-2020.json.gz (HTTP 404)" in log
@@ -225,9 +244,39 @@ def test_sh_needs_zip_or_python_before_download(tmp_path: Path, port: int) -> No
 @pytest.mark.skipif(not shutil.which("curl"), reason="нужен curl")
 def test_sh_falls_back_to_python_zipfile(tmp_path: Path, www: Path, port: int) -> None:
     """Без `zip` в PATH архив собирает python3: каталог с одними нужными утилитами."""
-    bin_dir = _bin(tmp_path, ("sh", "curl", "date", "mktemp", "rm", "mv", "mkdir", "tr", "sed", "cat"))
+    bin_dir = _bin(tmp_path, ("sh", "curl", "date", "mktemp", "rm", "mv", "mkdir", "tr", "sed", "cat", "wc"))
     (bin_dir / "python3").symlink_to(os.path.realpath(sys.executable))
     code, log, archive = _sh(tmp_path, port, {}, path=str(bin_dir))
     assert code == 0, log
     assert "python3" in log
     _check_zip(archive, www, ALL)
+
+
+@needs_sh
+@pytest.mark.parametrize("skip", ["epss nvd exploitdb msf attack kev", "ghsa"])
+def test_sh_one_output_for_single_group(tmp_path: Path, www: Path, port: int, skip: str) -> None:
+    code, log, archive = _sh(tmp_path, port, {"SKIP": skip})
+    assert code == 0, log
+    _check_zip(archive, www, _names("ghsa") if skip != "ghsa" else ALL - _names("ghsa"))
+
+
+@needs_pwsh
+@pytest.mark.parametrize("skip", ["epss,nvd,exploitdb,msf,attack,kev", "ghsa"])
+def test_ps1_one_output_for_single_group(tmp_path: Path, www: Path, port: int, skip: str) -> None:
+    code, log, archive = _ps(tmp_path, port, f"-Years 2019,2021 -Skip {skip}")
+    assert code == 0, log
+    _check_zip(archive, www, _names("ghsa") if skip != "ghsa" else ALL - _names("ghsa"))
+
+
+@needs_sh
+def test_sh_refuses_oversized_output(tmp_path: Path, port: int) -> None:
+    code, log, archive = _sh(tmp_path, port, {"VM_REFS_MAX_BUNDLE_BYTES": "1"})
+    assert code == 1 and "лимит" in log
+    assert not archive.exists() and not archive.with_name("refs-ghsa.zip").exists()
+
+
+@needs_pwsh
+def test_ps1_refuses_oversized_output(tmp_path: Path, port: int) -> None:
+    code, log, archive = _ps(tmp_path, port, "-Years 2019,2021 -MaxBundleBytes 1")
+    assert code == 1 and "лимит" in log
+    assert not archive.exists() and not archive.with_name("refs-ghsa.zip").exists()

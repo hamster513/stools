@@ -36,10 +36,12 @@ export function SettingsShell() {
 
   return (
     <AppShell sidebar={<SettingsSidebar />}>
-      {/* Ключ по разделу: ошибка одного раздела не должна переезжать в следующий. */}
-      <ErrorBoundary key={section ?? ''} resetLabel="Показать снова">
-        {page}
-      </ErrorBoundary>
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+        {/* Ключ по разделу: ошибка одного раздела не должна переезжать в следующий. */}
+        <ErrorBoundary key={section ?? ''} resetLabel="Показать снова">
+          {page}
+        </ErrorBoundary>
+      </div>
     </AppShell>
   )
 }

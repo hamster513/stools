@@ -20,6 +20,7 @@ from api.modules.vm.core.risk import explain
 from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmImage, VmRefState
 from api.modules.vm.services import images_query as q
+from api.modules.vm.services.ghsa_mapping import equivalents, is_ghsa
 from api.modules.vm.services.harbor_sync import last_sync
 from api.modules.vm.services.risk_view import cve_inputs, risk_view
 from api.modules.vm.services.settings import load_settings
@@ -210,7 +211,7 @@ def image_risk_card(
     _user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Находка образа и расчёт её риска. Находка — (идентификатор, пакет, версия): один CVE
-    бывает в нескольких пакетах. Для не-CVE (GHSA-…) и CVE вне витрины расчёта нет — `factors: null`."""
+    бывает в нескольких пакетах. CVE/GHSA используют витрину; вне неё `factors: null`."""
     image = _image(db, image_id)
     vuln_id = cve_id.upper() if is_cve(cve_id) else cve_id
     row = q.find_vuln(db, image_id, vuln_id, package, installed_version)
@@ -219,21 +220,30 @@ def image_risk_card(
     settings = load_settings(db)
     levels = settings.weights.levels
     factors = None
-    cve = db.get(VmCve, vuln_id) if is_cve(vuln_id) else None
+    cve = db.get(VmCve, vuln_id) if is_cve(vuln_id) or is_ghsa(vuln_id) else None
+    has_cve = is_cve(vuln_id) or any(is_cve(alias) for alias in equivalents(db, vuln_id))
+    known_exploited = True if cve and cve.kev else (
+        False if has_cve and db.get(VmRefState, "kev") is not None else None
+    )
     if cve is not None:
         # Расчёт для образа: критичности, зоны и интернета нет — V базовая (`scoring.image_value`).
         # «Внутри, без интернета и конфиденциальности» для образа — условие формулы, а не подстановка
         # за неразмеченную зону: `zone_marked=True`.
         e = explain(
-            cve_inputs(cve, kev_loaded=db.get(VmRefState, "kev") is not None),
+            cve_inputs(cve, kev_loaded=known_exploited is not None),
             None, internet=False, confidential=False, zone_marked=True, w=settings.weights,
         )
         # Пара ещё без риска (до пересчёта) — показываем расчёт.
         factors = risk_view(e, settings, row.risk if row.risk is not None else e.score,
                             row.risk_raw if row.risk_raw is not None else e.raw)
+        if is_ghsa(vuln_id) and not has_cve and known_exploited is None:
+            factors["likelihood_parts"]["kev"]["source"] = "нет CVE для проверки по KEV"
     return {
         "image": q.image_item(image, levels),
         "vuln": q.vuln_item(row, levels),
         "factors": factors,
         "nvd_url": f"https://nvd.nist.gov/vuln/detail/{vuln_id}" if is_cve(vuln_id) else None,
+        "source_url": (f"https://nvd.nist.gov/vuln/detail/{vuln_id}" if is_cve(vuln_id)
+                       else f"https://github.com/advisories/GHSA-{vuln_id[5:].lower()}" if is_ghsa(vuln_id) else None),
+        "known_exploited": known_exploited,
     }

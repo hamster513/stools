@@ -11,13 +11,20 @@ from sqlalchemy.orm import Session
 from api.crypto import SecretUnreadable
 from api.llm_settings import load_llm
 from api.modules.vm.trend_models import (
-    VmTrendCard, VmTrendEnrichment, VmTrendEvidence, VmTrendIngestState,
-    VmTrendPublication, VmTrendSource, VmTrendReview, VmTrendPolicy,
+    VmTrendCard,
+    VmTrendEnrichment,
+    VmTrendEvidence,
+    VmTrendIngestState,
+    VmTrendPolicy,
+    VmTrendPublication,
+    VmTrendReview,
+    VmTrendSource,
 )
 from kbaudit.attack.provider import ModelError, OllamaCompletion
-from .rules import publication_fingerprint, extract_identifiers
-from .classify import classify_publication
+
 from . import assistant_cache
+from .classify import classify_publication
+from .rules import extract_identifiers, publication_fingerprint
 
 
 class AssistantRequest(BaseModel):
@@ -153,14 +160,14 @@ def generate(db: Session, card_id: str, request: AssistantRequest, original: dic
         message = str(exc) if isinstance(exc, ModelError) else 'Не удалось прочитать ключ провайдера'
         raise HTTPException(409, message + '. Проверьте задачу «Перевод и объяснение CVE и новостей» в настройках ИИ.') from exc
     instructions = (
-        'Переведи на русский язык исходное описание CVE и тексты публикаций. Не сокращай переданный текст, '
-        'сохраняй номера CVE, версии и технические термины. Отделяй перевод каждого материала его названием.'
+        'Переведи на русский язык исходное описание уязвимости и тексты публикаций. Не сокращай переданный текст, '
+        'сохраняй номера CVE/GHSA, версии и технические термины. Отделяй перевод каждого материала его названием.'
         if request.mode == 'translate' else
         'Объясни по-русски простым языком: summary — что произошло и в чём суть; danger — возможные последствия '
         'и условия атаки; affected — продукты и версии; actions — конкретные действия для проверки/защиты; '
         'limitations — чего нельзя заключить из материалов. Если это новость без CVE, объясни новость, не выдумывай уязвимость.'
     )
-    focus = (f'Объясняй или переводи только {card_id}. Не подменяй её другой CVE. В объяснении укажи этот идентификатор в summary. '
+    focus = (f'Объясняй или переводи только {card_id}. Не подменяй её другой уязвимостью. В объяснении укажи этот идентификатор в summary. '
              if not request.publication_key and not card_id.startswith('signal-') else 'Разбирай именно выбранную публикацию. ')
     prompt = (
         'Ты помогаешь аналитику ИБ читать материалы. Используй только предоставленные факты. '
@@ -180,12 +187,12 @@ def generate(db: Session, card_id: str, request: AssistantRequest, original: dic
         result = schema.model_validate_json(OllamaCompletion(runtime).complete(prompt, schema.model_json_schema()))
     except (ModelError, ValidationError, ValueError) as exc:
         raise HTTPException(502, 'Модель не вернула корректный ответ. Повторите запрос или проверьте подключение в настройках ИИ.') from exc
-    if not request.publication_key and card_id.startswith('CVE-') and request.mode == 'explain':
+    if not request.publication_key and card_id.startswith(('CVE-', 'GHSA-')) and request.mode == 'explain':
         identifiers = extract_identifiers(json.dumps(result.model_dump(), ensure_ascii=False))
-        allowed = {card_id, *extract_identifiers(original['content']['cve'].get('description', ''))}
-        if card_id not in extract_identifiers(result.summary) or any(
-            identifier.startswith('CVE-') and identifier not in allowed for identifier in identifiers
+        allowed = {card_id.upper(), *extract_identifiers(original['content']['cve'].get('description', '')), *(i.upper() for i in original['content'].get('aliases', []))}
+        if card_id.upper() not in extract_identifiers(result.summary) or any(
+            identifier.startswith(('CVE-', 'GHSA-')) and identifier not in allowed for identifier in identifiers
         ):
-            raise HTTPException(502, 'Модель смешала разные CVE. Ответ не показан; повторите запрос.')
+            raise HTTPException(502, 'Модель смешала разные CVE/GHSA. Ответ не показан; повторите запрос.')
     return {**result.model_dump(), 'mode': request.mode, 'provider': runtime.provider, 'model': runtime.model,
             'generated_at': dt.datetime.now(dt.UTC).isoformat(), 'sources': original['sources'], 'truncated': original['truncated']}

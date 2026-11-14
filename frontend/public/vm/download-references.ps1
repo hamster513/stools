@@ -3,8 +3,8 @@
   Скачать справочники модуля VM STools одним архивом для сети без интернета.
 
 .DESCRIPTION
-  Качает EPSS, NVD (по годам), ExploitDB, Metasploit, размётку CTID ATT&CK и каталог CISA KEV
-  и складывает их в один zip. Архив загружается в STools: «Настройки и данные → Справочники →
+  Качает EPSS, NVD (по годам), ExploitDB, Metasploit, размётку CTID ATT&CK и каталог CISA KEV, GitHub Advisory Database
+  и создаёт основной ZIP и отдельный <имя>-ghsa.zip для GHSA. Загружайте их по очереди в STools: «Настройки и данные → Справочники →
   Загрузить архив». Справочник узнаётся по имени файла, поэтому имена в архиве не меняйте.
 
   Прокси берётся из системы (настройки Windows текущего пользователя), вход на прокси — под
@@ -18,13 +18,20 @@
   Если политика запрещает скрипты: powershell -ExecutionPolicy Bypass -File .\download-references.ps1
 
 .PARAMETER Out
-  Путь к архиву. По умолчанию vm-references-ГГГГММДД.zip в текущей папке.
+  Основной архив. GHSA сохраняется рядом как <имя>-ghsa.zip; если выбран только GHSA — в Out.
+  Каждый результат должен быть не больше 500 МиБ. По умолчанию имя содержит дату.
+.PARAMETER Mode
+  Full сохраняет прежнюю полную загрузку; Updates скачивает только обновления (Python 3, git для GHSA).
+.PARAMETER State
+  Файл состояния, экспортированный из STools. Обновляется после создания нового Out; архивы передавать по порядку.
+.PARAMETER Cache
+  Необязательный каталог кеша обновлений.
 .PARAMETER Years
-  Ограничить годы NVD: списком (2024,2025) или диапазоном (2022-2026). По умолчанию все годы, с 2002 (архив ~400 МБ, в лимит загрузки 500 МБ укладывается).
+  Ограничить годы NVD: списком (2024,2025) или диапазоном (2022-2026). По умолчанию все годы, с 2002.
 .PARAMETER AllYears
   NVD за все годы, с 2002 (то же, что по умолчанию; перекрывает -Years).
 .PARAMETER Skip
-  Какие справочники не качать: epss, nvd, exploitdb, msf, attack, kev.
+  Какие справочники не качать: epss, nvd, exploitdb, msf, attack, kev, ghsa.
 .PARAMETER NoProxy
   Ходить напрямую, без прокси.
 .PARAMETER ProxyCredential
@@ -34,6 +41,9 @@
 [CmdletBinding()]
 param(
   [string]$Out = "",
+  [ValidateSet("Full", "Updates")][string]$Mode = "Full",
+  [string]$State = "",
+  [string]$Cache = "",
   # Строки, а не числа: при запуске через -File «2024,2025» приходит одной строкой.
   [string[]]$Years = @(),
   [switch]$AllYears,
@@ -41,7 +51,8 @@ param(
   [switch]$NoProxy,
   [switch]$ProxyCredential,
   # Для тестов: справочник → адрес папки, где лежат файлы с теми же именами.
-  [Parameter(DontShow = $true)][hashtable]$BaseUrls = @{}
+  [Parameter(DontShow = $true)][hashtable]$BaseUrls = @{},
+  [Parameter(DontShow = $true)][ValidateRange(1, 524288000)][long]$MaxBundleBytes = 524288000
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,7 +61,7 @@ Set-StrictMode -Version Latest
 
 $UserAgent = "STools-references/1"
 $Retries = 3
-$Known = @("epss", "nvd", "exploitdb", "msf", "attack", "kev")
+$Known = @("epss", "nvd", "exploitdb", "msf", "attack", "kev", "ghsa")
 
 function Split-List([string[]]$Values) {
   $list = @()
@@ -105,6 +116,26 @@ if (-not $Out) { $Out = "vm-references-{0}.zip" -f (Get-Date -Format "yyyyMMdd")
 # Путь относительно текущей папки PowerShell, а не процесса .NET.
 $Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
 
+if ($Mode -eq "Updates") {
+  if (-not $State) { throw "-Mode Updates требует -State — экспорт состояния из STools" }
+  if ($ProxyCredential) { throw "Обновления используют прокси Python (HTTPS_PROXY); -ProxyCredential доступен в режиме Full" }
+  $helper = Join-Path $PSScriptRoot "ref_updates.py"
+  if (-not (Test-Path -LiteralPath $helper)) { throw "нет ref_updates.py — распакуйте весь комплект скриптов STools" }
+  $python = Get-Command python3 -ErrorAction SilentlyContinue
+  $pythonPrefix = @()
+  if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+  if (-not $python) { $python = Get-Command py -ErrorAction SilentlyContinue; $pythonPrefix = @("-3") }
+  if (-not $python) { throw "для обновлений нужен Python 3" }
+  $selected = @($Known | Where-Object { $skipList -notcontains $_ })
+  if ($selected.Count -eq 0) { throw "не выбран ни один справочник" }
+  $statePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($State)
+  $updateArgs = @($helper, "--state", $statePath, "--out", $Out, "--max-bytes", [string]$MaxBundleBytes, "--sources") + $selected
+  if ($Cache) { $updateArgs += @("--cache", $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Cache)) }
+  if ($NoProxy) { $updateArgs += "--no-proxy" }
+  & $python.Source @pythonPrefix @updateArgs
+  exit $LASTEXITCODE
+}
+
 # Прокси: адрес и учётные записи не печатаются — только есть он или нет.
 if ($NoProxy) {
   $Proxy = $null
@@ -135,7 +166,8 @@ $items += @(
   @{ Ref = "attack"; Name = "kev-07.28.2025_attack-16.1-enterprise.json"; Url = "$gh/center-for-threat-informed-defense/mappings-explorer/main/mappings/kev/attack-16.1/kev-07.28.2025/enterprise/kev-07.28.2025_attack-16.1-enterprise.json" },
   # Имя с «&» сохраняется буквально: по нему сервер узнаёт справочник.
   @{ Ref = "attack"; Name = "Att&ckToCveMappings.csv"; Url = "$gh/center-for-threat-informed-defense/mappings-explorer/main/src/mapex_convert/mappings/Att%26ckToCveMappings.csv" },
-  @{ Ref = "kev"; Name = "known_exploited_vulnerabilities.json"; Url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json" }
+  @{ Ref = "kev"; Name = "known_exploited_vulnerabilities.json"; Url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json" },
+  @{ Ref = "ghsa"; Name = "advisory-database.zip"; Url = "https://codeload.github.com/github/advisory-database/zip/refs/heads/main" }
 )
 
 function Save-Feed([string]$Url, [string]$Path) {
@@ -256,23 +288,41 @@ try {
   } else {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    if (Test-Path -LiteralPath $Out) { Remove-Item -LiteralPath $Out -Force }
-    # ZipFile, а не Compress-Archive: тот держит всё в памяти, упирается в 2 ГБ и в 5.1
-    # пишет обратные слэши в именах.
-    $zip = [System.IO.Compression.ZipFile]::Open($Out, [System.IO.Compression.ZipArchiveMode]::Create)
-    try {
-      foreach ($name in $packed) {
-        # .gz уже сжат: второй раз жать — только время.
-        $level = [System.IO.Compression.CompressionLevel]::Optimal
-        if ($name.EndsWith(".gz")) { $level = [System.IO.Compression.CompressionLevel]::NoCompression }
-        [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $tmp $name), $name, $level)
+    $regular = @($packed | Where-Object { $_ -ne "advisory-database.zip" })
+    $groups = @()
+    if ($regular.Count -gt 0) { $groups += @{ Path = $Out; Names = $regular } }
+    if ($packed -contains "advisory-database.zip") {
+      $ghsaOut = $Out
+      if ($regular.Count -gt 0) {
+        $ghsaOut = Join-Path ([System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($Out))) ([System.IO.Path]::GetFileNameWithoutExtension($Out) + "-ghsa.zip")
       }
-    } finally {
-      $zip.Dispose()
+      $groups += @{ Path = $ghsaOut; Names = @("advisory-database.zip") }
     }
-    Write-Host "вошло: $($packed -join ', ')"
-    Write-Host "архив: $Out ($([math]::Round((Get-Item -LiteralPath $Out).Length / 1MB, 1)) МБ)"
-    Write-Host "загрузите его в STools: Настройки и данные → Справочники → Загрузить архив"
+    foreach ($group in $groups) {
+      $destination = [string]$group.Path
+      if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Force }
+      # ZipFile пишет потоком; GHSA обязательно DEFLATE, включая ZIP-метаданные.
+      $zip = [System.IO.Compression.ZipFile]::Open($destination, [System.IO.Compression.ZipArchiveMode]::Create)
+      try {
+        foreach ($name in $group.Names) {
+          $level = [System.IO.Compression.CompressionLevel]::Optimal
+          if ($name.EndsWith(".gz")) { $level = [System.IO.Compression.CompressionLevel]::NoCompression }
+          [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $tmp $name), $name, $level)
+        }
+      } finally {
+        $zip.Dispose()
+      }
+      $bytes = (Get-Item -LiteralPath $destination).Length
+      if ($bytes -gt $MaxBundleBytes) {
+        Remove-Item -LiteralPath $destination -Force
+        Write-Host "! ${destination}: превышен лимит архива ($MaxBundleBytes байт); ограничьте -Years" -ForegroundColor Red
+        $code = 1
+      } else {
+        Write-Host "архив: $destination ($([math]::Round($bytes / 1MB, 1)) МБ)"
+      }
+    }
+    Write-Host "скачано: $($packed -join ', ')"
+    Write-Host "загрузите каждый созданный архив по очереди в STools: Настройки и данные → Справочники → Загрузить архив"
   }
 } finally {
   Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

@@ -19,6 +19,8 @@ ToolBox — утилиты для специалиста по безопасно
 
 ## Как читать
 
+В меню также доступны [Сравнение списков и подсетей](help:toolbox-compare), [Данные и логи](help:toolbox-data), [Декодер](help:toolbox-decoder), [Regex](help:toolbox-regex) и [Сертификаты](help:toolbox-certificates).
+
 Инструменты модуля — в меню слева: Blindspot, [Base64](help:toolbox-base64), [IP-калькулятор](help:toolbox-ipcalc) и Linux с вкладками [Unix time](help:toolbox-unixtime) и [Cron](help:toolbox-cron). У Blindspot вкладки сверху: «Задания» (здесь), [«Обратный перевод»](help:toolbox-reverse) и [«Соответствия»](help:toolbox-aliases).
 
 Идущие задания стоят сверху, за ними последние 50. Щелчок по строке открывает [карточку задания](help:toolbox-scrub).

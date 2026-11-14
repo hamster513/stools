@@ -18,6 +18,7 @@ import type {
   Job,
   Overview,
   RefState,
+  RefDownloadMode,
   RiskCard,
   SettingsUpdate,
   SettingsView,
@@ -235,8 +236,8 @@ export function useRefs() {
 
 export function useDownloadRef() {
   const qc = useQueryClient()
-  return useMutation<{ job_id: number }, ApiRequestError, { name: string; years?: number[] }>({
-    mutationFn: ({ name, years }) => api.post(`/api/vm/refs/${name}/download`, years ? { years } : {}),
+  return useMutation<{ job_id: number }, ApiRequestError, { name: string; years?: number[]; mode?: RefDownloadMode }>({
+    mutationFn: ({ name, years, mode = 'auto' }) => api.post(`/api/vm/refs/${name}/download`, { mode, ...(years ? { years } : {}) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vm-refs'] }),
   })
 }

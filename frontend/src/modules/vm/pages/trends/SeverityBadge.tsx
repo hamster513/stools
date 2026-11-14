@@ -1,7 +1,7 @@
 import type { Trend } from '../../api/trends'
 const labels = { critical: 'Критическая', high: 'Высокая', medium: 'Средняя', low: 'Низкая', none: 'Нулевая', unknown: 'Нет данных' }
 const colors = { critical: 'text-risk-critical', high: 'text-risk-high', medium: 'text-risk-medium', low: 'text-risk-low', none: 'text-text-secondary', unknown: 'text-text-secondary' }
-const sources: Record<string, string> = { collector_nvd: 'NVD · сборщик', collector_cna: 'CNA · сборщик', collector_unknown: 'Сборщик', nvd_v3: 'NVD', nvd_v2: 'NVD', trivy: 'Trivy', none: 'Локальные данные' }
+const sources: Record<string, string> = { ghsa: 'GitHub Advisory Database', ghsa_v2: 'GitHub Advisory Database', ghsa_v3: 'GitHub Advisory Database', ghsa_v4: 'GitHub Advisory Database', collector_nvd: 'NVD · сборщик', collector_cna: 'CNA · сборщик', collector_unknown: 'Сборщик', nvd_v3: 'NVD', nvd_v2: 'NVD', trivy: 'Trivy', none: 'Локальные данные' }
 export function SeverityBadge({ value }: { value: Pick<Trend, 'severity' | 'cvss' | 'cvss_source' | 'cvss_version'> }) {
   const level = value.severity ?? 'unknown'
   return <span className="inline-flex flex-col gap-0.5" title="Критичность уязвимости; не оценка локального риска">

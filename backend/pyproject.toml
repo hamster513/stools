@@ -28,6 +28,8 @@ api = [
     # Модуль VM: клиент MaxPatrol и скачивание справочников; потоковый JSON.
     "httpx>=0.27",
     "ijson>=3.2",
+    "cvss>=3.6,<4",
+    "packaging>=24",
     # Модуль AD: онлайн-сборщик по LDAP и SYSVOL по SMB.
     "ldap3>=2.9",
     "smbprotocol>=1.13",

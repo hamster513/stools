@@ -25,12 +25,13 @@ function safeLink(url: string | null): string | null {
 const EXTERNAL = 'inline-flex items-center gap-1 text-text underline'
 
 /**
- * Находка образа: данные Trivy и, для CVE из справочника, расчёт риска — вероятность
+ * Находка образа: данные Trivy и, для CVE/GHSA из справочника, расчёт риска — вероятность
  * эксплуатации × тяжесть × ценность. У образа нет хоста: ценность одна для всех образов.
  */
 export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
   const open = item !== null
-  const card = useImageCard(imageId, item?.is_cve ? item : null)
+  const supported = Boolean(item && (item.is_cve || /^GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/i.test(item.cve_id)))
+  const card = useImageCard(imageId, supported ? item : null)
   const closeRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
 
   const d = card.data
   const r = d?.factors
+  const sourceLink = safeLink(d?.source_url ?? d?.nvd_url ?? null)
   const link = item ? safeLink(item.link) : null
 
   return (
@@ -54,7 +56,7 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
           <>
             <div className="flex items-center justify-between border-b border-grid px-4 py-3">
               <div className="min-w-0">
-                <div className={cn('truncate font-mono text-sm text-text', !item.is_cve && 'italic')} title={item.cve_id}>{item.cve_id}</div>
+                <div className={cn('truncate font-mono text-sm text-text', !supported && 'italic')} title={item.cve_id}>{item.cve_id}</div>
                 <div className="truncate font-mono text-xs text-text-secondary" title={`${item.package} ${item.installed_version}`}>
                   {item.package} {item.installed_version}
                 </div>
@@ -65,10 +67,10 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
-              {item.is_cve && card.isLoading && <div className="flex justify-center py-8"><Spinner /></div>}
-              {item.is_cve && card.isError && <p className="mb-3 text-kind-1">Не удалось загрузить расчёт риска.</p>}
+              {supported && card.isLoading && <div className="flex justify-center py-8"><Spinner /></div>}
+              {supported && card.isError && <p className="mb-3 text-kind-1">Не удалось загрузить расчёт риска.</p>}
 
-              {item.is_cve && d && r && (
+              {supported && d && r && (
                 <>
                   <div className="mb-3 flex items-center justify-between rounded border border-grid bg-app-bg px-3 py-2">
                     <RiskBadge score={r.score} level={r.level} />
@@ -95,19 +97,19 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
                   {/* Без каталога «нет в KEV» не факт: эксплуатируемая CVE считается только по EPSS и эксплойтам. */}
                   {r.likelihood_parts.kev.substituted && (
                     <p className="mb-4 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-[11px] text-text-secondary">
-                      Справочник CISA KEV не загружен — факт эксплуатации не учтён. <Link to="/settings/vm#references" onNavigate={onClose} className="text-text underline">Загрузить справочники</Link>.
+                      В загруженных данных нет сведений об эксплуатации для этого идентификатора. <Link to="/settings/vm#references" onNavigate={onClose} className="text-text underline">Загрузить справочники</Link>.
                     </p>
                   )}
                 </>
               )}
-              {item.is_cve && d && !r && (
+              {supported && d && !r && (
                 <p className="mb-4 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-[11px] text-text-secondary">
-                  Расчёта нет: {item.cve_id} отсутствует в загруженном NVD. Загрузите справочники в настройках модуля VM — риск появится после пересчёта.
+                  Расчёта нет: {item.cve_id} отсутствует в загруженной витрине уязвимостей. Загрузите справочники в настройках модуля VM — риск появится после пересчёта.
                 </p>
               )}
-              {!item.is_cve && (
+              {!supported && (
                 <p className="mb-4 rounded border border-grid bg-app-bg px-3 py-2 text-[11px] text-text-secondary">
-                  Идентификатор не из CVE ({item.cve_id}): риск не рассчитывается, ниже — данные из отчёта Trivy.
+                  Идентификатор не из CVE/GHSA ({item.cve_id}): риск не рассчитывается, ниже — данные из отчёта Trivy.
                 </p>
               )}
 
@@ -132,25 +134,25 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
                 </>
               )}
 
-              {item.is_cve && d?.factors && (
+              {supported && d?.factors && (
                 <>
-                  <SectionTitle>CVE</SectionTitle>
+                  <SectionTitle>Уязвимость</SectionTitle>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-text-secondary">
                     <dt>CVSS</dt>
                     <dd className="font-mono text-text">{item.cvss ?? '—'} {item.cvss_source && <span className="text-[10px] text-text-secondary">{CVSS_SOURCE_LABELS[item.cvss_source]}</span>}</dd>
                     <dt>EPSS</dt><dd className="font-mono text-text">{epssPercent(item.epss)}</dd>
-                    <dt>CISA KEV</dt><dd className={item.kev ? 'text-risk-critical' : 'text-text'}>{item.kev ? 'в каталоге' : 'нет'}</dd>
-                    {d.nvd_url && (
+                    <dt>CISA KEV</dt><dd className={item.kev ? 'text-risk-critical' : 'text-text'}>{d.known_exploited === true ? 'в каталоге' : d.known_exploited === false ? 'не отмечена' : 'нет данных'}</dd>
+                    {sourceLink && (
                       <>
-                        <dt>NVD</dt>
-                        <dd><a href={d.nvd_url} target="_blank" rel="noreferrer" className={EXTERNAL}>{item.cve_id} <ExternalLink size={11} aria-hidden /></a></dd>
+                        <dt>{item.is_cve ? 'NVD' : 'GitHub'}</dt>
+                        <dd><a href={sourceLink} target="_blank" rel="noreferrer" className={EXTERNAL}>{item.cve_id} <ExternalLink size={11} aria-hidden /></a></dd>
                       </>
                     )}
                   </dl>
                 </>
               )}
-              {item.is_cve && d && !d.factors && d.nvd_url && (
-                <a href={d.nvd_url} target="_blank" rel="noreferrer" className={EXTERNAL}>{item.cve_id} в NVD <ExternalLink size={11} aria-hidden /></a>
+              {supported && d && !d.factors && sourceLink && (
+                <a href={sourceLink} target="_blank" rel="noreferrer" className={EXTERNAL}>{item.cve_id} · первоисточник <ExternalLink size={11} aria-hidden /></a>
               )}
             </div>
           </>

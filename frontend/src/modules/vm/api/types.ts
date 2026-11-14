@@ -16,11 +16,14 @@ export const LEVEL_LABELS: Record<RiskLevel, string> = {
 
 export const LEVELS: RiskLevel[] = ['critical', 'high', 'medium', 'low']
 
-export type CvssSource = 'nvd_v3' | 'nvd_v2' | 'none'
+export type CvssSource = 'nvd_v3' | 'nvd_v2' | 'ghsa_v2' | 'ghsa_v3' | 'ghsa_v4' | 'none'
 
 export const CVSS_SOURCE_LABELS: Record<CvssSource, string> = {
   nvd_v3: 'NVD v3',
   nvd_v2: 'NVD v2',
+  ghsa_v2: 'GitHub CVSS v2',
+  ghsa_v3: 'GitHub CVSS v3',
+  ghsa_v4: 'GitHub CVSS v4',
   none: 'нет',
 }
 
@@ -332,6 +335,8 @@ export interface ImportState {
   active: Job | null
 }
 
+export type RefDownloadMode = 'auto' | 'updates' | 'full'
+
 export interface RefState {
   name: string
   title: string
@@ -342,6 +347,14 @@ export interface RefState {
   detail: string
   stale: boolean
   active_job_id: number | null
+  update_capability: 'delta' | 'snapshot'
+  update_available: boolean
+  update_reason: string | null
+  checkpoint: Record<string, unknown> | null
+  last_checked_at: string | null
+  last_mode: 'full' | 'delta' | 'snapshot' | 'unchanged' | null
+  last_counts: { upserted: number; deleted: number } | null
+  pending_rebuild: boolean
 }
 
 // ---- Образы контейнеров (Harbor) -------------------------------------------------
@@ -515,13 +528,15 @@ export interface ImageVulnsQuery {
   offset?: number
 }
 
-/** Находка образа и расчёт её риска; `factors` — null для не-CVE и CVE вне витрины. */
+/** Находка образа и расчёт её риска; `factors` — null для неподдерживаемых идентификаторов и записей вне витрины. */
 export interface ImageRiskCard {
   image: ImageItem
   vuln: ImageVulnItem
   /** Те же L, S, V, что у пары хоста, с условиями образа: интернета, критичности и конфиденциальности нет. */
   factors: RiskCard['risk'] | null
   nvd_url: string | null
+  source_url?: string | null
+  known_exploited?: boolean | null
 }
 
 export interface HarborSyncError {

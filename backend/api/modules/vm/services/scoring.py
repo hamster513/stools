@@ -16,7 +16,19 @@ from typing import Any
 from typing import cast as typing_cast
 
 from sqlalchemy import Integer as SaInteger
-from sqlalchemy import Table, bindparam, case, cast, delete, exists, func, null, select, update
+from sqlalchemy import (
+    Table,
+    bindparam,
+    case,
+    cast,
+    delete,
+    exists,
+    func,
+    null,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -38,16 +50,10 @@ from api.modules.vm.models import (
     VmHostCve,
     VmImage,
     VmImageCve,
-    VmRefEpss,
-    VmRefExploitdb,
-    VmRefExploitdbCve,
-    VmRefKev,
-    VmRefMsf,
-    VmRefMsfCve,
-    VmRefNvd,
     VmRefState,
     VmZone,
 )
+from api.modules.vm.services.ghsa_mapping import canonical_finding_id, is_ghsa, reference_metrics
 from api.modules.vm.services.jobs import (
     DATA_KINDS,
     JobHandle,
@@ -101,31 +107,6 @@ def drop_orphan_cves(db: Session) -> int:
     return int(result.rowcount or 0)
 
 
-def _refs_for(
-    db: Session, chunk: Sequence[str]
-) -> tuple[
-    dict[str, VmRefNvd], dict[str, VmRefEpss], dict[str, list[str]], dict[str, list[int]], dict[str, VmRefKev]
-]:
-    nvd = {r.cve_id: r for r in db.execute(select(VmRefNvd).where(VmRefNvd.cve_id.in_(chunk))).scalars()}
-    epss = {r.cve_id: r for r in db.execute(select(VmRefEpss).where(VmRefEpss.cve_id.in_(chunk))).scalars()}
-    kev = {r.cve_id: r for r in db.execute(select(VmRefKev).where(VmRefKev.cve_id.in_(chunk))).scalars()}
-    exdb: dict[str, list[str]] = {}
-    for cve_id, etype in db.execute(
-        select(VmRefExploitdbCve.cve_id, VmRefExploitdb.type)
-        .join(VmRefExploitdb, VmRefExploitdb.exploit_id == VmRefExploitdbCve.exploit_id)
-        .where(VmRefExploitdbCve.cve_id.in_(chunk))
-    ):
-        exdb.setdefault(cve_id, []).append(etype)
-    msf: dict[str, list[int]] = {}
-    for cve_id, rank in db.execute(
-        select(VmRefMsfCve.cve_id, VmRefMsf.rank)
-        .join(VmRefMsf, VmRefMsf.fullname == VmRefMsfCve.fullname)
-        .where(VmRefMsfCve.cve_id.in_(chunk))
-    ):
-        msf.setdefault(cve_id, []).append(rank)
-    return nvd, epss, exdb, msf, kev
-
-
 def rebuild_cves(
     db: Session, weights: Weights, cve_ids: Sequence[str] | None = None, handle: JobHandle | None = None
 ) -> int:
@@ -135,6 +116,13 @@ def rebuild_cves(
     `cve_ids=None` — все CVE витрины (после загрузки справочника или смены
     весов); список — только новые после импорта.
     """
+    if cve_ids is None:
+        # Older Harbor syncs retained GHSA findings but did not create their mart rows.
+        # A reference import must enrich those explicit observations immediately.
+        observed = db.scalars(select(VmImageCve.cve_id).distinct().where(
+            func.upper(VmImageCve.cve_id).like("GHSA-%"),
+        ))
+        ensure_cves(db, (identifier for identifier in observed if is_ghsa(identifier)))
     ids = list(cve_ids) if cve_ids is not None else list(db.execute(select(VmCve.cve_id)).scalars())
     # Без загруженного каталога «нет в KEV» — незнание, а не факт: карточка это пометит.
     kev_loaded = db.get(VmRefState, "kev") is not None
@@ -169,23 +157,40 @@ def rebuild_cves(
     )
     done = 0
     for chunk in _chunks(ids):
-        nvd, epss, exdb, msf, kev = _refs_for(db, chunk)
+        references = reference_metrics(db, chunk)
         params = []
         for cve_id in chunk:
-            n = nvd.get(cve_id)
-            e = epss.get(cve_id)
-            k = kev.get(cve_id)
+            reference = references[cve_id]
+            n, e, k, g = reference.nvd, reference.epss, reference.kev, reference.ghsa
             cvss, source = None, "none"
+            v3_av, v3_pr, v3_ui = (n.v3_av, n.v3_pr, n.v3_ui) if n else (None, None, None)
+            v2_av, v2_ac, v2_au = (n.v2_av, n.v2_ac, n.v2_au) if n else (None, None, None)
             if n is not None and n.cvss_v3 is not None:
                 cvss, source = n.cvss_v3, "nvd_v3"
             elif n is not None and n.cvss_v2 is not None:
                 cvss, source = n.cvss_v2, "nvd_v2"
-            exdb_type = best_exploit_type(exdb.get(cve_id, []), weights)
-            msf_rank = best_msf_rank(msf.get(cve_id, []), weights)
+            elif g is not None and g.cvss is not None:
+                cvss = g.cvss
+                major = g.cvss_version[:1]
+                source = f"ghsa_v{major}" if major in {"2", "3", "4"} else "ghsa"
+                vector = dict(part.split(":", 1) for part in (g.cvss_vector or "").split("/") if ":" in part)
+                av = {"N": "NETWORK", "A": "ADJACENT_NETWORK", "L": "LOCAL", "P": "PHYSICAL"}.get(vector.get("AV", ""))
+                if major == "2":
+                    v3_av, v3_pr, v3_ui = None, None, None
+                    v2_av = av
+                    v2_ac = {"L": "LOW", "M": "MEDIUM", "H": "HIGH"}.get(vector.get("AC", ""))
+                    v2_au = {"N": "NONE", "S": "SINGLE", "M": "MULTIPLE"}.get(vector.get("Au", ""))
+                else:
+                    v3_av = av
+                    v3_pr = {"N": "NONE", "L": "LOW", "H": "HIGH"}.get(vector.get("PR", ""))
+                    v3_ui = {"N": "NONE", "R": "REQUIRED", "P": "PASSIVE", "A": "ACTIVE"}.get(vector.get("UI", ""))
+                    v2_av, v2_ac, v2_au = None, None, None
+            exdb_type = best_exploit_type(reference.exploit_types, weights)
+            msf_rank = best_msf_rank(reference.msf_ranks, weights)
             inputs = CveInputs(
                 epss=e.epss if e is not None else None,
                 cvss=cvss,
-                av=(n.v3_av or n.v2_av) if n else None,
+                av=v3_av or v2_av,
                 exploitdb_type=exdb_type,
                 msf_rank=msf_rank,
                 kev=k is not None,
@@ -197,27 +202,27 @@ def rebuild_cves(
                     "b_cve_id": cve_id,
                     "b_cvss": cvss,
                     "b_cvss_source": source,
-                    "b_v3_av": n.v3_av if n else None,
-                    "b_v3_pr": n.v3_pr if n else None,
-                    "b_v3_ui": n.v3_ui if n else None,
-                    "b_v2_av": n.v2_av if n else None,
-                    "b_v2_ac": n.v2_ac if n else None,
-                    "b_v2_au": n.v2_au if n else None,
+                    "b_v3_av": v3_av,
+                    "b_v3_pr": v3_pr,
+                    "b_v3_ui": v3_ui,
+                    "b_v2_av": v2_av,
+                    "b_v2_ac": v2_ac,
+                    "b_v2_au": v2_au,
                     "b_epss": inputs.epss,
                     "b_epss_percentile": e.percentile if e is not None else None,
                     "b_exploitdb_type": exdb_type,
-                    "b_exploits_count": len(exdb.get(cve_id, [])),
+                    "b_exploits_count": len(reference.exploit_types),
                     "b_msf_rank": msf_rank,
-                    "b_msf_modules": len(msf.get(cve_id, [])),
-                    "b_description": n.description if n else None,
-                    "b_published": n.published if n else None,
+                    "b_msf_modules": len(reference.msf_ranks),
+                    "b_description": n.description if n and n.description else (g.description or g.summary if g else None),
+                    "b_published": n.published if n and n.published else (g.published.date() if g and g.published else None),
                     "b_kev": inputs.kev,
                     "b_kev_added": inputs.kev_added,
                     "b_kev_ransomware": bool(k and k.ransomware),
                     "b_kev_due": k.due_date if k else None,
                     "b_likelihood": likelihood(inputs, weights)[0].value,
                     "b_cvss10": cvss / 10.0 if cvss is not None else None,
-                    "b_av_class": av_class(n.v3_av, n.v2_av) if n else "none",
+                    "b_av_class": av_class(v3_av, v2_av),
                 }
             )
         if params:
@@ -316,8 +321,8 @@ def image_value(w: Weights) -> float:
 def rescore_image_pairs(db: Session, weights: Weights) -> int:
     """Риск пар «образ × CVE» по той же формуле, что у хостов: одним
     `UPDATE vm_image_cve … FROM vm_cve`, reach — как у хоста без доступа из интернета,
-    V — `image_value`. Пары, чьего идентификатора нет в витрине (GHSA-…, пустые
-    справочники), получают NULL. Затем на образе — наибольший риск и число пар с риском.
+    V — `image_value`. Пары, чьего идентификатора нет в витрине, получают NULL.
+    Затем на образе — наибольший риск и число находок с риском без дублей CVE/GHSA.
     Возвращает число пар, получивших риск.
     """
     w = weights
@@ -344,10 +349,20 @@ def rescore_image_pairs(db: Session, weights: Weights) -> int:
     )
     pairs = IMAGE_PAIR_T.alias("p")
     of_image = pairs.c.image_id == IMAGE_T.c.id
+    # Many images repeat the same identifier. Resolve its bounded alias component
+    # once per distinct observed ID, rather than once per package finding.
+    identifiers = select(IMAGE_PAIR_T.c.cve_id).distinct().cte("observed_image_ids")
+    canonical_ids = select(
+        identifiers.c.cve_id,
+        canonical_finding_id(identifiers.c.cve_id).label("canonical"),
+    ).cte("canonical_image_ids").prefix_with("MATERIALIZED")
+    counted_pairs = pairs.join(canonical_ids, canonical_ids.c.cve_id == pairs.c.cve_id)
     db.execute(
         update(IMAGE_T).values(
             risk_max=select(func.max(pairs.c.risk)).where(of_image).scalar_subquery(),
-            cves_scored=select(func.count(pairs.c.risk)).where(of_image).scalar_subquery(),
+            cves_scored=select(func.count(func.distinct(tuple_(
+                canonical_ids.c.canonical, pairs.c.package, pairs.c.installed_version,
+            )))).select_from(counted_pairs).where(of_image, pairs.c.risk.is_not(None)).scalar_subquery(),
         )
     )
     db.commit()

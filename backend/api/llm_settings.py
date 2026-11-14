@@ -59,6 +59,9 @@ class LlmSettings(BaseModel):
             raise ModelError('Неизвестная задача LLM')
         if task in self.tasks:
             return self.tasks[task]
+        if task == 'rule_rewrite':
+            return TaskAssignment(provider='ollama', model=self.model if self.provider == 'ollama' else '',
+                                  timeout=self.timeout, think=self.think, local_only=True)
         embedding = task == 'attack_embeddings'
         return TaskAssignment(
             provider='ollama' if embedding and self.provider == 'deepseek' else self.provider,

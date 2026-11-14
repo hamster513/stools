@@ -119,13 +119,13 @@ def test_refs_show_running_job(auth_client: TestClient, db_session: Any) -> None
 
     single = start_job(db_session, "ref_epss", "tester")
     shown = ids()
-    assert shown["epss"] == single and [v for k, v in shown.items() if k != "epss"] == [None] * 5
+    assert shown["epss"] == single and [v for k, v in shown.items() if k != "epss"] == [None] * 6
     db_session.get(VmJob, single).status = "done"
     db_session.commit()
 
     bundle = start_job(db_session, "ref_bundle", "tester")
     shown = ids()
-    assert len(shown) == 6 and set(shown.values()) == {bundle}
+    assert len(shown) == 7 and set(shown.values()) == {bundle}
 
 
 class _Handle:
@@ -163,7 +163,7 @@ def test_feed_download_closes_http_client(monkeypatch: pytest.MonkeyPatch) -> No
         return clients[-1]
 
     with pytest.raises(ValueError, match="HTTP 500"):
-        refs_service.run_ref_download(None, _Handle(), "epss", None, http_factory=factory)  # type: ignore[arg-type]
+        refs_service.run_ref_download(None, _Handle(), "epss", None, http_factory=factory, mode="full")  # type: ignore[arg-type]
     assert len(clients) == 1 and clients[0].is_closed
 
 

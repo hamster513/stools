@@ -40,6 +40,7 @@ import { NetRulesTable } from './NetRulesPage'
 import { DrawerTabs, type TabDef } from '@/platform/tabs/DrawerTabs'
 import { HostFindings, HostOverview } from './hosts/HostOverview'
 import { HostPoliciesTab } from './hosts/HostPoliciesTab'
+import { HostSoftwareTab } from './hosts/HostSoftwareTab'
 import { HostTagsTab } from './hosts/HostTagsTab'
 
 const ROW_HEIGHT = 40
@@ -297,6 +298,7 @@ const DRAWER_TABS: TabDef[] = [
   { key: 'overview', label: 'Обзор' },
   { key: 'policies', label: 'Политики и профили' },
   { key: 'tags', label: 'Теги' },
+  { key: 'software', label: 'ПО и уязвимости' },
   { key: 'exclusions', label: 'Исключения' },
   { key: 'netrules', label: 'Сетевые правила' },
   { key: 'findings', label: 'Находки' },
@@ -334,6 +336,7 @@ function HostDrawerBody({ hostId, snapshotId, serverId, onClose }: { hostId: str
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
+          {tab === 'software' && <HostSoftwareTab key={`${snapshotId}:${hostId}`} snapshotId={snapshotId} hostId={hostId} />}
           {tab === 'policies' && <HostPoliciesTab snapshotId={snapshotId} hostId={hostId} serverId={serverId} />}
           {tab === 'tags' && <HostTagsTab snapshotId={snapshotId} hostId={hostId} serverId={serverId} />}
           {(tab === 'overview' || tab === 'findings') && (

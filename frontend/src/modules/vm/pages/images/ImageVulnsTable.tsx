@@ -15,7 +15,7 @@ import { TrivyBadge } from './TrivyCounts'
 const ROW_HEIGHT = 32
 
 const COLUMNS: ColumnDef[] = [
-  { key: 'cve', label: 'CVE', width: 176 },
+  { key: 'cve', label: 'Уязвимость', width: 176 },
   { key: 'package', label: 'Пакет', width: 224, flex: true },
   { key: 'installed', label: 'Установлена', width: 144 },
   { key: 'fixed', label: 'Исправлена', width: 144 },

@@ -3,6 +3,7 @@ import {
   Mail,
   Database,
   HardDrive,
+  Package,
   CalendarClock,
   KeyRound,
   ListChecks,
@@ -22,6 +23,7 @@ const PLATFORM_ITEMS = [
   { key: 'storage', label: 'Хранилище', icon: HardDrive, admin: false },
   { key: 'access', label: 'Доступ', icon: KeyRound, admin: false },
   { key: 'audit', label: 'Журнал действий', icon: ScrollText, admin: false },
+  { key: 'diagnostics', label: 'Диагностические пакеты', icon: Package, admin: true },
   { key: 'mail', label: 'Почта', icon: Mail, admin: true },
   { key: 'llm', label: 'Модель LLM', icon: Bot, admin: true },
 ] as const
@@ -81,17 +83,17 @@ function NavItem({
 export function SettingsSidebar() {
   const { data: me } = useMe()
   const has = (area: Area, level: Level) => !!me && atLeast(me.access, area, level)
-  const platformItems = PLATFORM_ITEMS.filter((i) => has('platform', i.admin ? 'admin' : 'read'))
+  const platformItems = PLATFORM_ITEMS.filter((i) => has('platform', i.admin ? 'admin' : 'read') && (i.key !== 'diagnostics' || (has('ad', 'read') && has('assets', 'read') && has('ksc', 'read'))))
   const moduleItems = MODULE_ITEMS.filter((i) => has(i.area, 'write'))
   const anyPlatform = platformItems.length > 0
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-grid bg-surface">
-      <div className="px-4 py-4">
+    <aside className="flex min-h-0 w-56 shrink-0 flex-col border-r border-grid bg-surface">
+      <div className="shrink-0 px-4 py-4">
         <div className="text-sm font-semibold tracking-wide text-text">Настройки</div>
         <div className="text-xs text-text-secondary">платформа и модули</div>
       </div>
-      <nav className="flex flex-col gap-0.5 px-2" aria-label="Разделы настроек">
+      <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain px-2 pb-4" aria-label="Разделы настроек">
         {/* Всем: сводка свежести баз и выгрузок модулей пользователя. */}
         <NavItem to="/settings" label="Данные" icon={Database} />
         <div className={cn(GROUP, 'mt-2 border-t border-grid pt-3')}>Платформа</div>

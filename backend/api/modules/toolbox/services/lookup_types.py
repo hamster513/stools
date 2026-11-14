@@ -8,8 +8,8 @@ from ipaddress import ip_address
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-from sqlalchemy import case, cast, func, or_
-from sqlalchemy.dialects.postgresql import INET
+from sqlalchemy import case, cast, event, exists, func, or_, select
+from sqlalchemy.dialects.postgresql import INET, JSONB
 
 LIMIT = 20
 Kind = Literal["auto", "ip", "host", "domain", "cve"]
@@ -84,8 +84,40 @@ def parse_query(raw: str, kind: Kind) -> tuple[str, str]:
     return q, "name" if kind == "auto" else kind
 
 
-def identity(q: str, kind: str, *, name: Any, fqdn: Any, domain: Any, ip: Any) -> Any:
+def configure_sqlite_lookup(engine: Any) -> None:
+    """Install only on offline diagnostic engines, before their first connection."""
+    def normalize(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        try:
+            return str(ip_address(value))
+        except ValueError:
+            return None
+
+    def connect(connection: Any, _record: Any) -> None:
+        connection.create_function("stools_normalize_ip", 1, normalize, deterministic=True)
+        connection.create_function(
+            "stools_path_leaf", 1, lambda value: re.split(r"[\\/]", value or "")[-1],
+            deterministic=True,
+        )
+
+    event.listen(engine, "connect", connect)
+
+
+def ip_list_contains(column: Any, q: str, dialect: str = "postgresql") -> Any:
+    if dialect == "sqlite":
+        items = func.json_each(column).table_valued("value").alias()
+        return exists(select(1).select_from(items).where(func.stools_normalize_ip(items.c.value) == q))
+    return cast(column, JSONB).contains([q])
+
+
+def identity(
+    q: str, kind: str, *, name: Any, fqdn: Any, domain: Any, ip: Any,
+    dialect: str = "postgresql",
+) -> Any:
     if kind == "ip":
+        if dialect == "sqlite":
+            return func.stools_normalize_ip(ip) == q
         # PostgreSQL 16 soft validation keeps malformed legacy values from aborting lookup.
         valid_ip = case((func.pg_input_is_valid(ip, "inet"), cast(ip, INET)), else_=None)
         return valid_ip == cast(q, INET)

@@ -34,7 +34,7 @@ _CHUNK = 1 << 20
 _NVD_RE = re.compile(r"nvdcve-2\.0-\d{4}\.json")
 _ATTACK_JSON_RE = re.compile(r"kev-.*_attack-.*-enterprise\.json")
 #: Справочники, которые заменяются целиком: второй файл в архиве лишний.
-_SINGLE = ("epss", "exploitdb", "msf", "kev")
+_SINGLE = ("epss", "exploitdb", "msf", "kev", "ghsa")
 
 
 def _basename(name: str) -> str:
@@ -52,6 +52,8 @@ def classify(name: str) -> str | None:
     if _is_junk(name):
         return None
     base = _basename(name).lower()
+    if base in ("advisory-database.zip", "advisory-database-main.zip"):
+        return "ghsa"
     # .gz — только у лент, которые так и скачиваются; у CTID парсер выбирается
     # по расширению, и `.json.gz` ушёл бы в разбор CSV.
     plain = base.removesuffix(".gz")
@@ -116,7 +118,6 @@ def extract(zip_path: Path, into: Path, handle: JobHandle) -> tuple[list[tuple[s
     """Извлечь узнанные записи в `into/<номер>/<имя>`: номер разводит одинаковые имена
     из разных папок, а имя файла остаётся как в архиве — его видно в сообщении задачи.
     Превышение пределов — `ValueError`, извлечённое к этому моменту удаляется."""
-    member_limit = refs_service.MAX_FEED_BYTES
     total_limit = safe_io.ZIP_TOTAL_LIMIT
     written: list[Path] = []
     out: list[tuple[str, Path]] = []
@@ -129,6 +130,7 @@ def extract(zip_path: Path, into: Path, handle: JobHandle) -> tuple[list[tuple[s
             total = 0
             for index, (ref, info) in enumerate(plan):
                 base = _basename(info.filename)
+                member_limit = refs_service.MAX_FEED_BYTES
                 # Заголовок — отказ без распаковки; счётчик ниже — на случай, если он лжёт.
                 if info.file_size > member_limit:
                     raise _too_big(base, member_limit)
@@ -199,6 +201,17 @@ def _rebuild_after_failure(db: Session, handle: JobHandle, touched: set[str], we
 def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights) -> None:
     into = Path(tempfile.mkdtemp(prefix="ref-bundle-", dir=zip_path.parent))
     try:
+        from api.modules.vm.services.ref_updates import (
+            MANIFEST_NAME,
+            preflight_bundle,
+            run_update_bundle,
+        )
+        preflight_bundle(zip_path)
+        with zipfile.ZipFile(zip_path) as archive:
+            is_update = MANIFEST_NAME in archive.namelist()
+        if is_update:
+            run_update_bundle(db, handle, zip_path, weights)
+            return
         handle.stage("extracting")
         files, skipped = extract(zip_path, into, handle)
         loaded: set[str] = set()
@@ -214,7 +227,8 @@ def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights)
                 _rebuild_after_failure(db, handle, loaded | {ref}, weights, path.name)
                 raise ValueError(f"{path.name}: {_reason(exc)}") from exc
             loaded.add(ref)
-        _rebuild(db, handle, loaded, weights)
+        from api.modules.vm.services.ref_updates import rebuild_pending
+        rebuild_pending(db, handle, weights, loaded)
         summary = f"загружено файлов: {len(files)}"
         if skipped:
             summary += "; пропущено: " + ", ".join(skipped)

@@ -5,6 +5,7 @@ import datetime as dt
 import uuid
 import zipfile
 from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, status
 from pydantic import BaseModel
@@ -36,6 +37,7 @@ from api.settings import Settings, get_settings
 router = APIRouter(prefix="/refs", tags=["vm"])
 
 class DownloadRequest(BaseModel):
+    mode: Literal["auto", "updates", "full"] = "auto"
     years: list[int] | None = None
 
 
@@ -68,15 +70,23 @@ def _has_known_refs(path: Path) -> bool:
     if not zipfile.is_zipfile(path):
         return False
     try:
+        from api.modules.vm.services.ref_updates import preflight_bundle
+        preflight_bundle(path)
         with zipfile.ZipFile(path) as zf:
-            return any(classify(info.filename) for info in zf.infolist() if not info.is_dir())
-    except zipfile.BadZipFile:
+            return "stools-reference-update.json" in zf.namelist() or any(classify(info.filename) for info in zf.infolist() if not info.is_dir())
+    except (zipfile.BadZipFile, ValueError):
         return False
 
 
 @router.get("", response_model=list[RefView])
 def list_refs(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> list[RefView]:
     return ref_views(db)
+
+
+@router.get("/update-state")
+def update_state(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+    from api.modules.vm.services.ref_updates import export_state
+    return export_state(db)
 
 
 @router.post("/bundle/upload", response_model=JobStarted, status_code=status.HTTP_202_ACCEPTED)
@@ -134,10 +144,11 @@ def download_ref(
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
     return JobStarted(job_id=start_download(db, user.login, background_tasks.add_task, name=name,
-                                            years=payload.years if payload else None))
+                                            years=payload.years if payload else None,
+                                            mode=payload.mode if payload else "auto"))
 
 
-def start_download(db: Session, login: str, submit: Submit, *, name: str, years: list[int] | None = None) -> int:
+def start_download(db: Session, login: str, submit: Submit, *, name: str, years: list[int] | None = None, mode: str = "auto") -> int:
     _check_name(name)
     _reject_if_running(db)
     years = years or (nvd_years_default() if name == "nvd" else None)
@@ -146,7 +157,7 @@ def start_download(db: Session, login: str, submit: Submit, *, name: str, years:
     job_id = start_job(db, f"ref_{name}", login, message="из сети")
 
     def work(session: Session, handle: JobHandle) -> None:
-        run_ref_download(session, handle, name, load_settings(session).weights, years)
+        run_ref_download(session, handle, name, load_settings(session).weights, years, mode=mode)
 
     submit(lambda: run_job(job_id, work))
     return job_id
@@ -165,6 +176,8 @@ async def upload_ref(
     _reject_if_running(db)
     if not files:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="файлы не переданы")
+    if name == "nvd" and any("modified" in (f.filename or "").lower() or "recent" in (f.filename or "").lower() for f in files):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="NVD modified/recent: загрузите пакет обновлений вместо полного файла")
     job_id = start_job(db, f"ref_{name}", user.login, message=", ".join(f.filename or "?" for f in files))
     folder = settings.data_dir / "vm"
     folder.mkdir(parents=True, exist_ok=True)

@@ -12,6 +12,8 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 
 COPY frontend/ ./
+# The offline updater is distributed from the same source used by the API.
+COPY backend/api/modules/vm/core/ref_updates.py /backend/api/modules/vm/core/ref_updates.py
 RUN npm run build
 
 # Caddy остаётся от root. Автоматический HTTPS (см. ops/Caddyfile,

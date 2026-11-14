@@ -8,6 +8,7 @@ import { SettingsPage as AdSettingsPage } from '@/modules/ad/pages/SettingsPage'
 import { SettingsPage as KscSettingsPage } from '@/modules/ksc/pages/SettingsPage'
 import { SettingsPage as AssetsSettingsPage } from '@/modules/assets/pages/SettingsPage'
 import { SettingsPage as ToolboxSettingsPage } from '@/modules/toolbox/pages/SettingsPage'
+import { DiagnosticsPage } from './pages/DiagnosticsPage'
 import { StoragePage } from './pages/StoragePage'
 import { SchedulesPage } from './pages/SchedulesPage'
 import { ProfilePage } from './pages/ProfilePage'
@@ -24,6 +25,7 @@ import { FindingsSettingsPage } from './pages/FindingsSettingsPage'
  * администратор платформы — это проверяет сама страница).
  */
 export const PAGES = new Map<string, { page: ComponentType; nested?: boolean; need: [Area, Level] | null }>([
+  ['diagnostics', { page: DiagnosticsPage, nested: true, need: ['platform', 'admin'] }],
   ['storage', { page: StoragePage, need: ['platform', 'read'] }],
   ['schedules', { page: SchedulesPage, need: null }],
   ['profile', { page: ProfilePage, need: null }],

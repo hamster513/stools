@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 
 Provider = Literal['ollama', 'openrouter', 'deepseek']
 DataClass = Literal['public', 'redacted', 'internal']
-TaskId = Literal['attack_embeddings', 'attack_markup', 'attack_translation', 'threat_analysis', 'vulnerability_assistant']
+TaskId = Literal['attack_embeddings', 'attack_markup', 'attack_translation', 'threat_analysis', 'vulnerability_assistant', 'rule_rewrite']
 
 class TaskInfo(TypedDict):
     title: str
@@ -16,6 +16,11 @@ class TaskInfo(TypedDict):
 
 
 TASKS: dict[TaskId, TaskInfo] = {
+    'rule_rewrite': {
+        'title': 'Исправление правил SIEM', 'kind': 'completion', 'data_class': 'internal',
+        'description': 'Предлагает полный исправленный код правила, пояснения и сравнение. Полный исходник обрабатывается только локальной Ollama; выберите модель для работы с кодом.',
+        'providers': ['ollama'],
+    },
     'attack_embeddings': {
         'title': 'Поиск кандидатов ATT&CK', 'kind': 'embedding', 'data_class': 'redacted',
         'description': 'Преобразует техники и очищенные описания правил в векторы. Для локальной обработки подойдёт bge-m3.',

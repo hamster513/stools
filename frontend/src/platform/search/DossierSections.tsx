@@ -9,7 +9,7 @@ import { matchesRow } from './searchText'
 import type { Dossier, Entity } from './api'
 
 
-export function DossierSections({ dossier, onOpen }: { dossier: Dossier; onOpen: (entity: Entity) => void }) {
+export function DossierSections({ dossier, onOpen, showSourceLinks = true }: { dossier: Dossier; onOpen: (entity: Entity) => void; showSourceLinks?: boolean }) {
   const prefix = useId()
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -39,8 +39,8 @@ export function DossierSections({ dossier, onOpen }: { dossier: Dossier; onOpen:
           </button></h3>
           <div id={panelId} hidden={!open} className="min-w-0 px-3 pb-3">
             <p className="mb-3 text-xs text-text-secondary">{section.note}</p>
-            {section.matches.length ? <EvidenceTable rows={section.matches} onOpen={onOpen} /> : <p className="py-3 text-sm text-text-secondary">{query.trim() ? 'Совпадений в этом разделе нет.' : 'Нет доступных сведений.'}</p>}
-            {section.has_more && <p className="mt-2 text-xs text-text-secondary">Показаны первые {section.items.length} записей источника. Поиск охватывает этот список; дополнительные сведения доступны в исходном модуле.</p>}
+            {section.matches.length ? <EvidenceTable rows={section.matches} onOpen={onOpen} showSourceLinks={showSourceLinks} /> : <p className="py-3 text-sm text-text-secondary">{query.trim() ? 'Совпадений в этом разделе нет.' : 'Нет доступных сведений.'}</p>}
+            {section.has_more && <p className="mt-2 text-xs text-text-secondary">Показаны первые {section.items.length} записей. {showSourceLinks ? 'Поиск охватывает этот список; дополнительные сведения доступны в исходном модуле.' : 'Поиск в досье охватывает этот список. Уточните поиск внутри пакета; сведения за пределами пакета недоступны.'}</p>}
           </div>
         </section>
       })}

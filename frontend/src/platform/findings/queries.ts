@@ -26,7 +26,7 @@ export const FINDING_SUMMARY_KEY = 'finding-summary'
 export const FINDINGS_MINE_KEY = 'findings-mine'
 
 function invalidateDerived(qc: ReturnType<typeof useQueryClient>) {
-  for (const key of [FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY]) qc.invalidateQueries({ queryKey: [key] })
+  for (const key of [FINDING_SUMMARY_KEY, FINDINGS_MINE_KEY, 'rule-rewrite']) qc.invalidateQueries({ queryKey: [key] })
 }
 
 export function useChangeFinding() {

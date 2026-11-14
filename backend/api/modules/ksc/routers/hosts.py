@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -34,6 +34,7 @@ from api.modules.ksc.services.host_scope import (
     scope_policies,
     tags_collected_db,
 )
+from api.modules.ksc.services.host_software import host_software
 from api.modules.ksc.services.policy_store import ensure_policy_tables
 from api.modules.ksc.services.settings import load_config
 from api.platform.export import Column, export_response
@@ -453,3 +454,24 @@ def host_profiles(
     ]
     collected = db.scalar(select(KscPolicy.id).where(KscPolicy.snapshot_id == snapshot_id, KscPolicy.profiles.is_not(None)).limit(1)) is not None
     return {"profiles_collected": collected, "tags": scope.tags, "policies": policies, "by_tag": by_tag}
+
+
+@router.get("/snapshots/{snapshot_id}/hosts/{host_id}/software")
+def host_software_detail(
+    snapshot_id: int,
+    host_id: str,
+    q: str = Query("", max_length=255),
+    coverage: Literal["checked", "unrecognized", "missing_version", "pending", "uncertain"] | None = None,
+    state: Literal["affected", "unknown"] | None = None,
+    limit: int = Query(50, ge=1, le=100),
+    software_offset: int = Query(0, ge=0),
+    vuln_offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    _user: AppUser = Depends(get_current_user),
+) -> dict[str, Any]:
+    snap = db.get(KscSnapshot, snapshot_id)
+    if snap is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="снапшот не найден")
+    find_host(db, snapshot_id, host_id)
+    return host_software(db, snap, host_id, q=q, coverage=coverage, state=state,
+                         limit=limit, software_offset=software_offset, vuln_offset=vuln_offset)

@@ -31,8 +31,9 @@ def test_limit_for_matches_exact_upload_routes() -> None:
     assert limit_for("POST", "/api/siem/hunting/intel/import") == 65 * MB
     assert limit_for("POST", "/api/vm/import/file") == 500 * MB
     assert limit_for("POST", "/api/vm/refs/nvd/upload") == 500 * MB
-    # Архив справочников — отдельный маршрут, но лимит тела тот же шаблон `{name}`.
+    # GHSA и части офлайн-комплекта сохраняют общий ограниченный upload-бюджет.
     assert limit_for("POST", "/api/vm/refs/bundle/upload") == VM_UPLOAD
+    assert limit_for("POST", "/api/vm/refs/ghsa/upload") == VM_UPLOAD
     assert limit_for("POST", "/api/ad/snapshots/file") == 200 * MB
     assert limit_for("POST", "/api/ksc/snapshots/file") == 200 * MB
     assert limit_for("POST", "/api/settings/attack") == 100 * MB
@@ -42,6 +43,9 @@ def test_limit_for_matches_exact_upload_routes() -> None:
     # JSON-ручки под теми же префиксами и другие методы — 2 МБ.
     for method, path in [
         ("POST", "/api/vm/refs/nvd/download"),
+        ("POST", "/api/vm/refs/ghsa/download"),
+        ("GET", "/api/vm/refs/ghsa/upload"),
+        ("POST", "/api/vm/refs/ghsa/upload/extra"),
         ("POST", "/api/vm/import/vm"),
         ("POST", "/api/siem/attack/reference/apply"),
         ("POST", "/api/settings/attack/download"),
@@ -359,3 +363,11 @@ def test_xlsx_bomb_is_a_parse_error(auth_client: TestClient, monkeypatch: pytest
     r = auth_client.post(path, files={"file": ("t.xlsx", data, "application/octet-stream")})
     assert r.status_code == 422
     assert "распакованный размер больше лимита" in r.json()["detail"]
+
+
+@pytest.mark.parametrize('path', ['/api/vm/refs/ghsa/upload','/api/vm/refs/bundle/upload'])
+def test_large_reference_upload_remains_bounded_and_requires_session(path):
+    status, _, seen = _call([(b'content-length',str(VM_UPLOAD+1).encode())],[b'x'],path=path)
+    assert status == 413 and seen == {'receive':0,'app':0}
+    status, _, seen = _call([(b'content-length',str(400*MB).encode())],[b'x'],path=path)
+    assert status == 401 and seen == {'receive':0,'app':0}

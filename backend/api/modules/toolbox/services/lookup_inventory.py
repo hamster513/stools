@@ -2,25 +2,25 @@
 
 from urllib.parse import urlencode
 
-from sqlalchemy import cast, func, or_, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from api.modules.ad.models import AdDomain, AdSnapshot
 from api.modules.assets.models import Asset, AssetObservation
 from api.modules.ksc.models import KscHost, KscServer, KscSnapshot
 
-from .lookup_types import LIMIT, Evidence, Group, facts, identity
+from .lookup_types import LIMIT, Evidence, Group, facts, identity, ip_list_contains
 
 
 def assets(db: Session, q: str, kind: str) -> list[Group]:
     match = identity(
-        q, kind, name=Asset.name_key, fqdn=Asset.fqdn, domain=Asset.domain, ip=Asset.ip
+        q, kind, name=Asset.name_key, fqdn=Asset.fqdn, domain=Asset.domain, ip=Asset.ip,
+        dialect=db.get_bind().dialect.name,
     )
     if kind == "ip":
         secondary = select(AssetObservation.asset_id).where(
             AssetObservation.gone_at.is_(None),
-            or_(AssetObservation.ip == q, cast(AssetObservation.ips, JSONB).contains([q])),
+            or_(AssetObservation.ip == q, ip_list_contains(AssetObservation.ips, q, db.get_bind().dialect.name)),
         )
         match = or_(match, Asset.id.in_(secondary))
     rows = db.scalars(
@@ -105,6 +105,7 @@ def ad(db: Session, q: str, kind: str) -> list[Group]:
                 fqdn=AssetObservation.fqdn,
                 domain=AssetObservation.domain,
                 ip=AssetObservation.ip,
+                dialect=db.get_bind().dialect.name,
             ),
         )
         .order_by(AssetObservation.id)
@@ -160,7 +161,8 @@ def antivirus(db: Session, q: str, kind: str) -> list[Group]:
         .join(KscHost, KscHost.snapshot_id == KscSnapshot.id)
         .where(
             identity(
-                q, kind, name=KscHost.name, fqdn=KscHost.fqdn, domain=KscHost.domain, ip=KscHost.ip
+                q, kind, name=KscHost.name, fqdn=KscHost.fqdn, domain=KscHost.domain, ip=KscHost.ip,
+                dialect=db.get_bind().dialect.name,
             )
         )
         .order_by(KscServer.id, KscHost.id)

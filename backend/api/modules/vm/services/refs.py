@@ -62,11 +62,13 @@ URLS = {
     # В списке справочников показывается первая ссылка: она основная.
     "attack": ATTACK_URLS[0],
     "kev": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+    "ghsa": "https://codeload.github.com/github/advisory-database/zip/refs/heads/main",
 }
 NVD_FIRST_YEAR = 2002
 BATCH = 20_000
 #: Потолок одной скачиваемой ленты (аудит L6): крупнейшая, NVD за год в gzip, — десятки мегабайт.
 MAX_FEED_BYTES = 512 * 1024 * 1024
+MAX_GHSA_FEED_BYTES = 1024 * 1024 * 1024
 # NVD yearly JSON exceeds 512 MiB (2026); compressed downloads retain the general cap.
 MAX_NVD_UNPACKED_BYTES = 1024 * 1024 * 1024
 #: Каталог KEV читается в память целиком; настоящий — 1–2 МБ (спека §8).
@@ -86,21 +88,27 @@ def nvd_years_default() -> list[int]:
     return list(range(NVD_FIRST_YEAR, dt.datetime.now(dt.UTC).year + 1))
 
 
-def download(url: str, to_path: Path, handle: JobHandle, http: httpx.Client) -> int:
+def download(
+    url: str, to_path: Path, handle: JobHandle, http: httpx.Client, *, max_bytes: int | None = None,
+    validators: dict[str, str] | None = None,
+) -> int:
     """Скачать ленту в файл потоком. Больше `MAX_FEED_BYTES` — отказ: по заявленной длине сразу,
     без неё — на куске, который перешёл лимит (недокачанный файл удаляет вызывающий)."""
-    too_large = ValueError(f"{url}: лента больше лимита ({MAX_FEED_BYTES // (1024 * 1024)} МБ), загрузка прервана")
+    limit = MAX_FEED_BYTES if max_bytes is None else max_bytes
+    too_large = ValueError(f"{url}: лента больше лимита ({limit // (1024 * 1024)} МБ), загрузка прервана")
     size = 0
     with http.stream("GET", url) as r:
         if r.status_code != 200:
             raise ValueError(f"{url}: HTTP {r.status_code}")
+        if validators is not None:
+            validators.update({key: value for key, value in {"etag": r.headers.get("etag"), "last_modified": r.headers.get("last-modified")}.items() if value})
         total = int(r.headers.get("content-length") or 0) or None
-        if total is not None and total > MAX_FEED_BYTES:
+        if total is not None and total > limit:
             raise too_large
         with to_path.open("wb") as out:
             for chunk in r.iter_bytes():
                 size += len(chunk)
-                if size > MAX_FEED_BYTES:
+                if size > limit:
                     raise too_large
                 out.write(chunk)
                 handle.tick(size, total=total, message=f"скачано {size // 1_000_000} МБ")
@@ -152,7 +160,7 @@ def _load_epss(db: Session, path: Path, handle: JobHandle) -> int:
     return n
 
 
-def _load_nvd(db: Session, path: Path, handle: JobHandle) -> tuple[int, set[int]]:
+def _load_nvd(db: Session, path: Path, handle: JobHandle, *, delta: bool = False) -> tuple[int, set[int]]:
     """Год определяется по данным; удаляются только затронутые годы."""
     from api.modules.vm.services.software import index_nvd_rows, inventory_lock
 
@@ -168,9 +176,9 @@ def _load_nvd(db: Session, path: Path, handle: JobHandle) -> tuple[int, set[int]
         ):
             batch_years = {row[1] for row in batch}
             new_years = batch_years - years
-            if new_years:
+            if new_years and not delta:
                 db.execute(delete(NVD_T).where(NVD_T.c.year.in_(list(new_years))))
-                years |= new_years
+            years |= new_years
             # Один CVE может встретиться и в старом фиде, и в новом (modified).
             db.execute(delete(NVD_T).where(NVD_T.c.cve_id.in_([row[0] for row in batch])))
             n += bulk_insert(
@@ -277,10 +285,24 @@ def _load_attack(db: Session, path: Path, handle: JobHandle, replace: bool) -> i
 def load_ref(
     db: Session, handle: JobHandle, name: str, path: Path, source: str, detail: str = "", append: bool = False
 ) -> int:
-    """Заменить справочник содержимым файла и записать состояние.
-    Загрузчики коммитят пакетами ради прогресса и отмены, поэтому отменённая
-    загрузка оставляет справочник частично заполненным — состояние
-    (`VmRefState`) при этом не обновляется, и обзор покажет его устаревшим."""
+    """Publish full rows and their trusted source checkpoint atomically."""
+    if name == "nvd" and re.search(r"(?:modified|recent)", path.name + " " + detail, re.IGNORECASE):
+        raise ValueError("NVD modified/recent: загрузите пакет обновлений вместо полного файла")
+    if name == "ghsa":
+        from api.modules.vm.services.ghsa_import import load_ghsa
+        handle.stage("loading", message=path.name)
+        return load_ghsa(db, path, handle, source, detail)
+    if name == "attack":
+        current_bundle(db)  # Built-in seeding may commit; keep it outside the catalog transaction.
+    with Session(db.get_bind()) as catalog, catalog.begin():
+        count = _load_ref(catalog, handle, name, path, source, detail, append)
+    db.expire_all()
+    return count
+
+
+def _load_ref(
+    db: Session, handle: JobHandle, name: str, path: Path, source: str, detail: str = "", append: bool = False
+) -> int:
     if name not in REF_NAMES:
         raise ValueError(f"неизвестный справочник: {name}")
     handle.stage("loading", message=path.name)
@@ -322,7 +344,9 @@ def load_ref(
 
         handle.report_progress(0, 0, "проверка версий ПО KSC", stage="enriching")
         rebuild_ksc(db)
-    db.commit()
+    from api.modules.vm.services.ref_updates import record_full_checkpoint
+
+    record_full_checkpoint(db, name, path, years if name == "nvd" else None)
     return n
 
 
@@ -349,7 +373,8 @@ def run_ref_file(db: Session, handle: JobHandle, name: str, paths: list[Path], w
     try:
         for index, path in enumerate(paths):
             load_ref(db, handle, name, path, "file", detail=path.name, append=index > 0)
-        rebuild_after_ref(db, handle, name, weights)
+        from api.modules.vm.services.ref_updates import rebuild_pending
+        rebuild_pending(db, handle, weights, {name})
     finally:
         for path in paths:
             if path.exists():
@@ -363,21 +388,63 @@ def run_ref_download(
     weights: Weights,
     years: list[int] | None = None,
     http_factory: Callable[[], httpx.Client] | None = None,
+    mode: str = "auto",
 ) -> None:
+    from api.modules.vm.services.ref_updates import export_state, rebuild_pending, run_update_bundle
+    from api.modules.vm.sync_models import VmRefSyncState
+
+    if mode not in {"auto", "updates", "full"}:
+        raise ValueError("Invalid reference download mode")
+    if mode != "full":
+        state = db.get(VmRefSyncState, name)
+        checkpoint = state.checkpoint if state else None
+        loaded = db.get(VmRefState, name)
+        if name in {"nvd", "ghsa"} and checkpoint is None:
+            if mode == "updates" or loaded is not None and loaded.records > 0:
+                raise ValueError(f"{name}: неизвестна версия исходной базы; повторно загрузите полный исходный архив с метаданными источника (Full)")
+            mode = "full"
+        elif checkpoint is not None or mode == "updates" or loaded is not None and loaded.records > 0:
+            mode = "updates"
+        else:
+            mode = "full"
+    if mode == "updates":
+        from api.modules.vm.core.ref_updates import build_update_bundle
+        from api.settings import get_settings
+
+        cache = get_settings().data_dir / "vm" / "ref-update-cache"
+        handle.stage("downloading", message=f"{name}: обновления")
+        with tempfile.TemporaryDirectory(prefix="ref-update-download-") as directory:
+            archive = Path(directory) / "updates.zip"
+            try:
+                build_update_bundle(archive,
+                                    export_state(db), [name], cache,
+                                    progress=lambda message: handle.tick(0, message=f"Проверка обновлений {name}: {message}"))
+            except ValueError as exc:
+                raise ValueError(f"Не удалось получить обновления {name}: {exc}") from exc
+            run_update_bundle(db, handle, archive, weights, "network")
+        return
     if name == "nvd":
         urls = [URLS["nvd"].format(year=y) for y in (years or nvd_years_default())]
     elif name == "attack":
         urls = list(ATTACK_URLS)
     else:
         urls = [URLS[name]]
+    validators = {}
     with http_factory() if http_factory else httpx.Client(timeout=600.0, follow_redirects=True) as http:
         for i, url in enumerate(urls, 1):
-            suffix = ".gz" if url.endswith(".gz") else Path(url).suffix or ".dat"
+            suffix = ".zip" if name == "ghsa" else ".gz" if url.endswith(".gz") else Path(url).suffix or ".dat"
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 temp = Path(tmp.name)
             try:
                 handle.stage("downloading", message=f"{i}/{len(urls)} {url.rsplit('/', 1)[-1]}")
-                download(url, temp, handle, http)
+                metadata: dict[str, str] = {}
+                download(url, temp, handle, http, max_bytes=MAX_GHSA_FEED_BYTES if name == "ghsa" else None,
+                         validators=metadata)
+                if name not in {"nvd", "ghsa"}:
+                    import hashlib
+                    with temp.open("rb") as feed:
+                        metadata["sha256"] = hashlib.file_digest(feed, "sha256").hexdigest()
+                    validators[url] = metadata
                 load_ref(
                     db, handle, name, temp, "network",
                     detail=re.sub(r"\?.*$", "", url.rsplit("/", 1)[-1]),
@@ -386,4 +453,9 @@ def run_ref_download(
             finally:
                 if temp.exists():
                     os.unlink(temp)
-    rebuild_after_ref(db, handle, name, weights)
+    if validators:
+        state = db.get(VmRefSyncState, name)
+        assert state is not None
+        state.checkpoint = {"validators": validators}
+        db.commit()
+    rebuild_pending(db, handle, weights, {name})

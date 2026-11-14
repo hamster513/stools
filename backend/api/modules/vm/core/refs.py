@@ -21,7 +21,7 @@ from typing import IO, Any, cast
 
 from api.modules.vm.core.sources import CVE_RE
 
-REF_NAMES = ("epss", "nvd", "exploitdb", "msf", "attack", "kev")
+REF_NAMES = ("epss", "nvd", "exploitdb", "msf", "attack", "kev", "ghsa")
 
 
 def open_maybe_gzip(path: Path) -> IO[bytes]:
