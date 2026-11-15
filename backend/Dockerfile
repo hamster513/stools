@@ -1,41 +1,66 @@
-# Образ API. Ядро анализа и HTTP-слой ставятся одним пакетом,
-# но внутри пакета граница сохраняется: kbaudit не знает про базу и HTTP.
-FROM python:3.13-slim
+# Python 3.13 and the base manifest are shared by both target architectures.
+ARG PYTHON_IMAGE=python:3.13-alpine3.23@sha256:bf88c40985006a79ca25458159a4da1dffc457f9ae234e948b2d6df56ca5ebd2
+# Build and sign the SQLite backport against stable Alpine; no edge repositories.
+FROM ${PYTHON_IMAGE} AS sqlite-build
+RUN apk upgrade --no-cache && apk add --no-cache alpine-sdk readline-dev
+COPY docker/sqlite/APKBUILD /build/main/sqlite/APKBUILD
+WORKDIR /build/main/sqlite
+RUN abuild-keygen -a -n \
+    && cp /root/.abuild/*.rsa.pub /etc/apk/keys/ \
+    && abuild -F -r \
+    && mkdir /out \
+    && cp /root/packages/main/*/sqlite-libs-*.apk /out/sqlite-libs.apk \
+    && cp /root/.abuild/*.rsa.pub /out/
 
-# Зависимости ставятся отдельным слоем: их список меняется реже кода,
-# и пересборка после правки исходников не тянет сеть заново.
-# GHSA updates compare pinned Git trees without downloading the full advisory archive.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
+FROM ${PYTHON_IMAGE} AS build
 
+# Native extension build tools do not enter the runtime image.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache build-base libffi-dev openssl-dev linux-headers 'expat-dev>=2.10.0'
+# Replace bundled Expat in both Python XML extensions, using matching verified sources.
+RUN wget -q -O /tmp/python.tar.xz "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz" \
+    && echo "${PYTHON_SHA256}  /tmp/python.tar.xz" | sha256sum -c - \
+    && mkdir /tmp/python-src \
+    && tar -xJf /tmp/python.tar.xz -C /tmp/python-src --strip-components=1
+WORKDIR /tmp/python-src
+RUN ./configure --with-system-expat --enable-shared --with-ensurepip=no \
+    && make -j2 "Modules/pyexpat$(python3-config --extension-suffix)" "Modules/_elementtree$(python3-config --extension-suffix)" \
+    && cp Modules/pyexpat*.so Modules/_elementtree*.so /usr/local/lib/python3.13/lib-dynload/ \
+    && PYTHONPATH=/tmp/python-src/Lib python -m test test_pyexpat test_xml_etree test_xml_etree_c test_minidom test_sax
 WORKDIR /app
 COPY pyproject.toml README.md alembic.ini ./
 COPY kbaudit ./kbaudit
 COPY api ./api
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir -e ".[api]" \
+    && /opt/venv/bin/python -m pip uninstall -y pip
 
-# pip нужен только здесь, при сборке. В работающем контейнере он лишний,
-# а сканеры образов находят уязвимости в копиях пакетов, которые pip
-# возит внутри себя (pip/_vendor: msgpack, код setuptools). Поэтому он
-# удаляется в том же слое, где отработал, вместе с запасной копией для
-# ensurepip; новые зависимости на проде приходят только пересборкой образа.
-RUN pip install --no-cache-dir -e ".[api]" \
-	&& python -m pip uninstall -y pip \
-	&& rm -rf /usr/local/lib/python3.13/ensurepip/_bundled
+FROM ${PYTHON_IMAGE} AS runtime
+COPY --from=sqlite-build /out/*.rsa.pub /etc/apk/keys/
+COPY --from=sqlite-build /out/sqlite-libs.apk /tmp/sqlite-libs.apk
+# Git is required by the GHSA incremental updater; keep HTTPS trust and native libs.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache git libffi libstdc++ ca-certificates tzdata 'libexpat>=2.10.0' /tmp/sqlite-libs.apk \
+    && python -m pip uninstall -y pip \
+    && rm -rf /usr/local/lib/python3.13/ensurepip/_bundled /tmp/sqlite-libs.apk
+COPY --from=build /usr/local/lib/python3.13/lib-dynload/pyexpat*.so /usr/local/lib/python3.13/lib-dynload/
+COPY --from=build /usr/local/lib/python3.13/lib-dynload/_elementtree*.so /usr/local/lib/python3.13/lib-dynload/
+COPY --from=build /opt/venv /opt/venv
+# Preserve parser error handling on musl worker threads with a bounded native stack.
+COPY docker-sitecustomize.py /opt/venv/lib/python3.13/site-packages/sitecustomize.py
+COPY --from=build /app /app
+COPY --from=build /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENV PATH="/opt/venv/bin:$PATH"
+# A clean scanner report alone must not hide outdated embedded libraries.
+RUN python -c 'import pyexpat,sqlite3; assert pyexpat.version_info >= (2,10,0); assert sqlite3.sqlite_version_info >= (3,54,1)'
+WORKDIR /app
 
-# Архивы выгрузок и кэш разбора хранятся целиком: без архива нельзя
-# перепрогнать старый снапшот доработанным парсером, а без кэша разбора
-# не пересчитать снапшот при смене профиля. Каталог монтируется томом,
-# иначе всё это живёт в слое контейнера и пропадает при пересоздании.
-#
-# Непривилегированный пользователь фиксированным uid: том /data переживает
-# пересоздание контейнера, и uid должен быть предсказуем, чтобы владение
-# не расходилось между пересборками образа.
+# Preserve the existing data-volume ownership across Debian/Alpine deployments.
 RUN mkdir -p /data/archives \
-	&& groupadd --gid 10001 stools \
-	&& useradd --uid 10001 --gid stools --no-create-home --shell /usr/sbin/nologin stools \
-	&& chown -R stools:stools /data
+    && addgroup -g 10001 stools \
+    && adduser -D -H -u 10001 -G stools -s /sbin/nologin stools \
+    && chown -R stools:stools /data
 ENV STOOLS_DATA_DIR=/data
 
 EXPOSE 8000

@@ -1,0 +1,40 @@
+# Backport upstream SQLite fixes onto the same stable Alpine ABI as the API.
+# Source checksum and feature flags follow alpinelinux/aports main/sqlite.
+pkgname=sqlite
+pkgver=3.54.1
+pkgrel=0
+pkgdesc="SQL database engine (STools stable-ABI security backport)"
+url="https://www.sqlite.org/"
+arch="all"
+license="blessing"
+makedepends="readline-dev"
+subpackages="$pkgname-static $pkgname-dev $pkgname-doc $pkgname-libs:libs"
+source="https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz"
+builddir="$srcdir/sqlite-autoconf-3540100"
+# secfixes:
+#   3.54.1-r0:
+#     - CVE-2026-119373
+#     - CVE-2026-119374
+#     - CVE-2026-119379
+build() {
+    export CFLAGS="$CFLAGS -O2 -DSQLITE_ENABLE_FTS3_PARENTHESIS -DSQLITE_ENABLE_COLUMN_METADATA -DSQLITE_SECURE_DELETE -DSQLITE_ENABLE_UNLOCK_NOTIFY -DSQLITE_ENABLE_RTREE -DSQLITE_ENABLE_GEOPOLY -DSQLITE_USE_URI -DSQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_SOUNDEX -DSQLITE_MAX_VARIABLE_NUMBER=250000"
+    ./configure --prefix=/usr --enable-threadsafe --enable-readline \
+        --enable-session --enable-fts3 --enable-fts4 --enable-fts5 --soname=legacy
+    make -j2
+}
+check() {
+    test "$(./sqlite3 :memory: 'SELECT sqlite_version();')" = "$pkgver"
+    test "$(./sqlite3 :memory: "SELECT json_extract('{\"a\":1}', '$.a');")" = 1
+    ./sqlite3 :memory: "CREATE VIRTUAL TABLE words USING fts5(value); INSERT INTO words VALUES ('test'); SELECT * FROM words WHERE words MATCH 'test';" | grep -qx test
+}
+package() {
+    make DESTDIR="$pkgdir" install
+}
+libs() {
+    pkgdesc="SQLite shared library (STools stable-ABI security backport)"
+    mkdir -p "$subpkgdir/usr/lib"
+    mv "$pkgdir"/usr/lib/libsqlite3.so* "$subpkgdir/usr/lib/"
+}
+sha512sums="
+3df4348f54f5cd0554eec6d91e1d08a70535b7b78f497b2c6f24910b5087f6ef70483c9e35fa388bd8f38483cb8d1cb84e98ccdd58b9f525a10e0cf48c8c6742  sqlite-autoconf-3540100.tar.gz
+"
