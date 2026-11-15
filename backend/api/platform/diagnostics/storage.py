@@ -29,9 +29,15 @@ def _unique_object(pairs):
     return result
 
 
-def decode_archive(data: bytes) -> dict:
+def _validate_archive_bundle(bundle):
+    if isinstance(bundle, dict) and bundle.get("format") == "stools-diagnostic/2":
+        from .module_export import validate_module_bundle
+        return validate_module_bundle(bundle)
     from .exporter import validate_bundle
+    return validate_bundle(bundle)
 
+
+def decode_archive(data: bytes) -> dict:
     if len(data) > MAX_COMPRESSED:
         raise ValueError("Диагностический пакет слишком большой.")
     try:
@@ -60,7 +66,7 @@ def decode_archive(data: bytes) -> dict:
             object_pairs_hook=_unique_object,
             parse_constant=lambda _: (_ for _ in ()).throw(ValueError()),
         )
-        return validate_bundle(bundle)
+        return _validate_archive_bundle(bundle)
     except (
         ValueError,
         TypeError,
@@ -78,9 +84,7 @@ def decode_archive(data: bytes) -> dict:
 
 
 def encode_archive(bundle: dict) -> bytes:
-    from .exporter import validate_bundle
-
-    validate_bundle(bundle)
+    _validate_archive_bundle(bundle)
     raw = json.dumps(bundle, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
         "utf-8"
     )
@@ -125,6 +129,8 @@ class PackageStore:
 
     def import_archive(self, data):
         bundle = decode_archive(data)
+        if bundle["format"] != "stools-diagnostic/1":
+            raise ValueError("Этот пакет нужно загрузить в обычные модули.")
         package_id = uuid.uuid4().hex
         root = bundle["root"]
         name = "asset" if root["kind"] == "host" else "asset_user"
@@ -138,6 +144,7 @@ class PackageStore:
             "id": package_id,
             "created_at": dt.datetime.now(dt.UTC).isoformat(),
             "summary": bundle["report"],
+            "mode": "legacy",
             "root": {**root, "title": title or str(root["id"])},
         }
         area = self._area("imports")

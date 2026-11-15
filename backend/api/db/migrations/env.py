@@ -5,7 +5,8 @@ from sqlalchemy import engine_from_config, pool
 
 import api.modules.ad.models
 import api.modules.attack.models
-import api.modules.vm.models  # noqa: F401 — таблицы модуля VM в metadata
+import api.modules.vm.models  # таблицы модуля VM в metadata
+import api.platform.diagnostics.models  # noqa: F401 — diagnostic import provenance
 from api.db.models import Base
 from api.settings import get_settings
 

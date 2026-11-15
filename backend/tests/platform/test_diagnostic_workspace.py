@@ -107,7 +107,7 @@ def test_export_is_owner_bound_and_expires(tmp_path, codec, monkeypatch):
 
 
 @pytest.fixture
-def api(tmp_path, monkeypatch):
+def api(tmp_path, monkeypatch, db_session):
     from api.db.base import get_db
     from api.deps import get_current_user
     from api.platform.diagnostics import router as diagnostic
@@ -119,7 +119,7 @@ def api(tmp_path, monkeypatch):
     app.dependency_overrides[current_access] = lambda: permissions
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=7)
     app.dependency_overrides[get_settings] = lambda: SimpleNamespace(data_dir=tmp_path)
-    app.dependency_overrides[get_db] = lambda: None
+    app.dependency_overrides[get_db] = lambda: db_session
     return TestClient(app), permissions, diagnostic
 
 
@@ -240,13 +240,11 @@ def test_export_errors_explain_only_known_safe_bundle_failures(api, monkeypatch,
 
     from sqlalchemy.exc import SQLAlchemyError
     client, _, diagnostic = api
-    exporter = sys.modules["api.platform.diagnostics.exporter"]
-    class SafeBundleError(ValueError):
-        pass
+    from api.platform.diagnostics import module_export as exporter
+    from api.platform.diagnostics.schema import BundleError as SafeBundleError
     def fail(*args):
         raise {"bundle": SafeBundleError, "value": ValueError, "sql": SQLAlchemyError}[error_kind](message)
-    monkeypatch.setattr(exporter, "BundleError", SafeBundleError, raising=False)
-    monkeypatch.setattr(exporter, "build_bundle", fail, raising=False)
+    monkeypatch.setattr(exporter, "build_module_bundle", fail)
     monkeypatch.setattr(diagnostic, "export_snapshot", lambda _: nullcontext(None))
     response = client.post("/api/settings/diagnostics/exports", json={"kind": "host", "entity_id": 1})
     assert response.status_code == 422

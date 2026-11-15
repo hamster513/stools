@@ -7,6 +7,11 @@ export interface Summary { counts: Record<string, number>; limitations: string[]
 export interface DiagnosticImport {
   id: string
   created_at: string
+  mode?: 'legacy' | 'modules'
+  status?: 'ready' | 'modified' | 'incomplete'
+  can_delete?: boolean
+  missing_records?: number
+  links?: { module: 'ad' | 'assets' | 'ksc'; title: string; href: string }[]
   summary: Summary
   root: { kind: DiagnosticKind; id: number; title: string }
 }

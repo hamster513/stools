@@ -34,6 +34,7 @@ from api.modules.assets.models import (
 from api.modules.assets.services.assets import apply_observation, recompute
 from api.modules.assets.services.networks import apply_zone_rules, load_networks, reassign_assets
 from api.modules.assets.services.sync import sync_lock
+from api.platform.diagnostics.sync_guard import diagnostic_sync_guard
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
 
@@ -235,7 +236,7 @@ def _write(run: _Run) -> bool:
     """Сети, наблюдения и пропавшие — под той же блокировкой, что синхронизация и запись DNS.
     False — подключение удалили, пока шли запросы."""
     db = run.db
-    with sync_lock(db, wait=True):
+    with sync_lock(db, wait=True), diagnostic_sync_guard(db):
         row = db.get(AssetRacktables, run.cfg.id, populate_existing=True)
         if row is None:
             db.rollback()

@@ -43,6 +43,7 @@ from api.modules.assets.services.users import (
     read_ad_export,
     sync_users,
 )
+from api.platform.diagnostics.sync_guard import exclude_diagnostic_imports
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
 
@@ -328,6 +329,7 @@ def run_sync(db: Session, handle: JobHandle, sources: tuple[str, ...] = SYNC_SOU
         return _locked_sync(db, handle, sources)
 
 
+@exclude_diagnostic_imports
 def _locked_sync(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict[str, int]:
     _take_rerun(db)  # этот проход и так прочитает всё
     counts = _sync_pass(db, handle, sources)

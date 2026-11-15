@@ -42,6 +42,7 @@ from api.modules.assets.models import Asset, AssetDns, AssetJob, AssetObservatio
 from api.modules.assets.services.assets import apply_observation, recompute
 from api.modules.assets.services.networks import load_networks
 from api.modules.assets.services.sync import sync_lock
+from api.platform.diagnostics.sync_guard import diagnostic_sync_guard
 from api.platform.scheduler import PlatformSchedule
 from api.timeutil import utcnow
 
@@ -309,7 +310,7 @@ def _write(run: _Run) -> bool:
     """Найденное — наблюдениями, пропавшее — gone_at; под той же блокировкой, что синхронизация и
     запись RackTables (все они заводят активы). False — настройку удалили, пока шли запросы."""
     db = run.db
-    with sync_lock(db, wait=True):
+    with sync_lock(db, wait=True), diagnostic_sync_guard(db):
         row = db.get(AssetDns, run.cfg.id, populate_existing=True)
         if row is None:
             db.rollback()
@@ -373,11 +374,14 @@ def run_dns(db: Session, handle: JobHandle, dns_id: int) -> dict[str, int]:
         if cfg.zone_read:
             _zones(run)
     else:
-        names = known_names(db) if cfg.forward else []
-        ips = known_ips(db) if cfg.reverse else []
-        db.commit()
+        # Read ownership and targets under the import/sync lock. The write
+        # phase refreshes the guard after network requests release this lock.
+        with sync_lock(db, wait=True), diagnostic_sync_guard(db):
+            names = known_names(db) if cfg.forward else []
+            ips = known_ips(db) if cfg.reverse else []
+            db.commit()
         # Имя сервера разрешается один раз на задачу, а не на каждый запрос.
-        server = dns_core.server_address(cfg.server) if cfg.server else None
+        server = dns_core.server_address(cfg.server) if cfg.server and (names or ips) else None
         rate = RateLimiter(cfg.rate_per_s)
         # На имя — A и AAAA (AAAA не спрашивается, если имени нет), на адрес — PTR.
         est = estimate(2 * len(names) + len(ips), cfg.rate_per_s)

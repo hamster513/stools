@@ -1,4 +1,4 @@
-"""Administrative API for exported previews and isolated diagnostic workspaces."""
+"""Administrative API for native diagnostic slices and legacy workspaces."""
 
 from contextlib import contextmanager
 from typing import Annotated, Literal
@@ -124,8 +124,22 @@ _EXPORT_REASONS = {
     "Diagnostic source size limit exceeded.": "Превышен допустимый размер исходного снимка для диагностического пакета.",
     "Selected entity is unavailable.": "Выбранный объект недоступен. Обновите поиск и выберите объект снова.",
     "Latest directory export is unavailable or unsupported.": "Последний снимок AD недоступен или имеет неподдерживаемый формат. Проверьте сохранённую выгрузку AD.",
+    "Latest KSC export is unavailable or unsupported.": "Последний исходный снимок KSC недоступен. Для переноса настроек политик нужна сохранённая выгрузка KSC.",
     "Unsupported directory identity.": "Обнаружен неподдерживаемый идентификатор AD. Проверьте исходный снимок AD.",
 }
+
+
+def _export_reason(exc):
+    reason = str(exc)
+    if reason in _EXPORT_REASONS:
+        return _EXPORT_REASONS[reason]
+    if reason.startswith(("Unsupported AD ", "AD diagnostic ")):
+        return "В снимке AD есть содержимое политики, которое пока нельзя обезличить с сохранением смысла. Пакет не создан: настройки не были отброшены."
+    if reason.startswith(("Unsupported diagnostic KSC ", "Unsupported opaque KSC ", "Unsupported opaque binary KSC ", "Unsupported opaque typed KSC ")):
+        return "В снимке KSC есть неподдерживаемое содержимое политики. Пакет не создан: небезопасные значения и неполные настройки не выгружены."
+    if reason.startswith(("Unsupported diagnostic address", "Unsupported diagnostic network", "Unsupported partial wildcard")):
+        return "Адресное условие или шаблон политики нельзя обезличить с сохранением его действия. Пакет не создан."
+    return _EXPORT_FAILURE
 
 
 @router.post("/exports")
@@ -137,15 +151,16 @@ def create_export(
     user: Annotated[AppUser, Depends(diagnostic_access)],
     store: Annotated[storage.PackageStore, Depends(package_store)],
 ):
-    from .exporter import BundleError, build_bundle
+    from .module_export import build_module_bundle
+    from .schema import BundleError
 
     request.state.audit_summary = "Подготовлен обезличенный диагностический пакет"
     try:
         with export_snapshot(db) as snapshot:
-            bundle = build_bundle(snapshot, settings.data_dir, payload.kind, payload.entity_id)
+            bundle = build_module_bundle(snapshot, settings.data_dir, payload.kind, payload.entity_id)
         return store.create_export(bundle, user.id)
     except BundleError as exc:
-        raise HTTPException(422, _EXPORT_REASONS.get(str(exc), _EXPORT_FAILURE)) from None
+        raise HTTPException(422, _export_reason(exc)) from None
     except (ValueError, SQLAlchemyError):
         raise HTTPException(422, _EXPORT_FAILURE) from None
 
@@ -170,20 +185,42 @@ def download_export(
     )
 
 
+def _require_module_write(access):
+    if any(not allows(access, area, "write") for area in workspace.ACCESS):
+        raise HTTPException(403, "Для загрузки и удаления среза нужны права записи в AD, Assets и AV.")
+
+
 @router.get("/imports")
-def list_imports(store: Annotated[storage.PackageStore, Depends(package_store)]):
-    return {"items": store.list_imports()}
+def list_imports(
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    store: Annotated[storage.PackageStore, Depends(package_store)],
+):
+    from . import module_import
+
+    items = module_import.list_imports(db, data_dir=settings.data_dir) + store.list_imports()
+    return {"items": sorted(items, key=lambda item: item["created_at"], reverse=True)}
 
 
 @router.post("/imports")
 def import_package(
     request: Request,
     file: Annotated[UploadFile, File()],
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    access: Annotated[dict, Depends(current_access)],
     store: Annotated[storage.PackageStore, Depends(package_store)],
 ):
-    request.state.audit_summary = "Импортирован изолированный диагностический пакет"
     try:
         data = file.file.read(storage.MAX_COMPRESSED + 1)
+        bundle = storage.decode_archive(data)
+        if bundle["format"] == "stools-diagnostic/2":
+            from . import module_import
+
+            _require_module_write(access)
+            request.state.audit_summary = "Обезличенный диагностический срез загружен в AD, Assets и AV"
+            return module_import.import_bundle(db, settings.data_dir, bundle)
+        request.state.audit_summary = "Импортирован изолированный диагностический пакет старого формата"
         return store.import_archive(data)
     except (ValueError, OSError, SQLAlchemyError, KeyError, StopIteration) as exc:
         raise _failure(exc) from None
@@ -195,12 +232,23 @@ def import_package(
 def delete_import(
     package_id: str,
     request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    access: Annotated[dict, Depends(current_access)],
     store: Annotated[storage.PackageStore, Depends(package_store)],
 ):
+    from . import module_import
+
     request.state.audit_summary = "Удалён диагностический пакет"
     try:
-        store.delete_import(package_id)
-    except (ValueError, OSError) as exc:
+        if module_import.get_import(db, package_id, data_dir=settings.data_dir) is not None:
+            _require_module_write(access)
+            module_import.delete_import(db, settings.data_dir, package_id)
+        else:
+            store.delete_import(package_id)
+    except (ValueError, OSError, SQLAlchemyError) as exc:
+        if str(exc) == module_import.DELETE_UNAVAILABLE:
+            raise HTTPException(409, "Срез содержит записи обычных модулей. Автоматическое удаление всего среза недоступно; данные не изменены.") from None
         raise _failure(exc) from None
     return Response(status_code=204)
 
@@ -210,13 +258,19 @@ def search_import(
     package_id: str,
     payload: SearchRequest,
     request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
     store: Annotated[storage.PackageStore, Depends(package_store)],
 ):
-    request.state.audit_summary = "Просмотр изолированного диагностического досье"
+    from . import module_import
+
+    if module_import.get_import(db, package_id, data_dir=settings.data_dir) is not None:
+        raise HTTPException(409, "Срез загружен в обычные модули. Откройте AD, Assets или AV по ссылкам пакета.")
+    request.state.audit_summary = "Просмотр изолированного диагностического досье старого формата"
     try:
         directory = store.import_path(package_id)
-        with workspace.open_dataset(directory) as db:
-            result = search(db, payload, workspace.ACCESS, directory)
+        with workspace.open_dataset(directory) as local_db:
+            result = search(local_db, payload, workspace.ACCESS, directory)
             return workspace.without_live_links(result.model_dump(mode="json"))
     except (ValueError, OSError, SQLAlchemyError) as exc:
         raise _failure(exc) from None

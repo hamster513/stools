@@ -143,7 +143,9 @@ def test_migration_removes_scan_data_and_columns(scratch: tuple[Engine, Config])
         member = db.execute(select(AssetGroupMember)).scalar_one()
         assert member.asset_id is None and member.member_name == "X$"
         # Расписания скана (и осиротевшее) и задачи скана удалены, прочие остались.
-        assert [s.id for s in db.execute(select(PlatformSchedule)).scalars()] == [ids["dns_sched"]]
+        # Новые миграции могут добавлять расписания других модулей.
+        schedules = db.scalars(select(PlatformSchedule).where(PlatformSchedule.module == "assets")).all()
+        assert [s.id for s in schedules] == [ids["dns_sched"]]
         assert [j.kind for j in db.execute(select(AssetJob)).scalars()] == ["dns"]
     with engine.connect() as conn:
         cols = {r[0] for r in conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'network'"))}

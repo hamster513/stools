@@ -53,3 +53,24 @@ test('diagnostic relation lookups use only the chosen imported dataset endpoint'
     }
   } finally { globalThis.fetch = originalFetch }
 })
+
+test('module slices open ordinary AD, Assets and KSC instead of an isolated dossier', async () => {
+  const { DiagnosticModuleImport } = await server.ssrLoadModule('/src/platform/settings/pages/DiagnosticModuleImport.tsx')
+  const dataset = {
+    id: 'c'.repeat(32), mode: 'modules', created_at: '2026-11-15T12:00:00Z',
+    root: { kind: 'user', id: 42, title: 'entity-1234567890abcdef' },
+    summary: { counts: { asset_user: 1 }, limitations: [] }, status: 'ready',
+    links: [
+      { module: 'assets', title: 'Пользователь', href: '/assets/users?user=42' },
+      { module: 'ad', title: 'AD', href: '/ad/domains/7' },
+      { module: 'ksc', title: 'AV/KSC', href: '/ksc/servers/8' },
+    ],
+  }
+  const html = renderToStaticMarkup(createElement(DiagnosticModuleImport, { dataset }))
+  for (const path of ['/assets/users?user=42', '/ad/domains/7', '/ksc/servers/8']) assert.ok(html.includes(`href="${path}"`))
+  assert.match(html, /обычных модулях/)
+  assert.doesNotMatch(html, /Поиск внутри пакета|diagnostics\/.*\/search/)
+  const missing = renderToStaticMarkup(createElement(DiagnosticModuleImport, { dataset: { ...dataset, status: 'incomplete', missing_records: 1, links: [] } }))
+  assert.match(missing, /изменены или удалены/)
+  assert.doesNotMatch(missing, /href=/)
+})
