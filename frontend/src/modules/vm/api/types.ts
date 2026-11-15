@@ -355,6 +355,8 @@ export interface RefState {
   last_mode: 'full' | 'delta' | 'snapshot' | 'unchanged' | null
   last_counts: { upserted: number; deleted: number } | null
   pending_rebuild: boolean
+  partial_window?: { since: string; until: string } | null
+  last_period_imported_at?: string | null
 }
 
 // ---- Образы контейнеров (Harbor) -------------------------------------------------

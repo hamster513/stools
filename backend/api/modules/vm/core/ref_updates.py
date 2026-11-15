@@ -347,9 +347,18 @@ def _nvd(base: Json, now: datetime, http: Callable[[str, dict[str, str]], HttpRe
     since = _date(base["cursor"])
     if since > now:
         raise ValueError("NVD checkpoint is later than this check")
-    start = since - timedelta(minutes=2)
-    files = []
     years = sorted(set(base["years"]) | set(range(since.year + 1, now.year + 1)))
+    files, deleted = _nvd_window(since - timedelta(minutes=2), now, years, http, payloads)
+    return {"cursor": _iso(now), "years": years}, files, deleted
+
+
+def _nvd_window(since: datetime, now: datetime, years: Iterable[int],
+                http: Callable[[str, dict[str, str]], HttpResponse], payloads: _Payloads, *,
+                exclude_since: bool = False) -> tuple[list[dict[str, str]], list[str]]:
+    """Collect bounded native pages, optionally excluding the initial boundary."""
+    start = since
+    files = []
+    years = set(years)
     seen: dict[str, str] = {}
     window = 0
     while start < now:
@@ -392,7 +401,7 @@ def _nvd(base: Json, now: datetime, http: Callable[[str, dict[str, str]], HttpRe
                 seen[identifier] = fingerprint
                 if len(seen) > 1000000:
                     raise ValueError("NVD delta exceeds safe row count")
-                if int(match.group(1)) in years:
+                if int(match.group(1)) in years and not (exclude_since and modified == since):
                     selected.append(row)
             if selected:
                 content = {**data, "vulnerabilities": selected}
@@ -403,12 +412,20 @@ def _nvd(base: Json, now: datetime, http: Callable[[str, dict[str, str]], HttpRe
         window += 1
         if window > 512:
             raise ValueError("NVD checkpoint is too old")
-    return {"cursor": _iso(now), "years": years}, files, []
+    return files, []
 
 
 def _ghsa(base: Json, http: Callable[[str, dict[str, str]], HttpResponse], payloads: _Payloads,
           provider: GitAdvisorySource) -> tuple[Json, list[dict[str, str]], list[str]]:
     target, changed, removed = provider.changes(base["revision"])
+    files, deleted = _ghsa_payloads(target, changed, removed, http, payloads)
+    return {"revision": target}, files, deleted
+
+
+def _ghsa_payloads(target: str, changed: Iterable[str], removed: Iterable[str],
+                   http: Callable[[str, dict[str, str]], HttpResponse],
+                   payloads: _Payloads) -> tuple[list[dict[str, str]], list[str]]:
+    """Preserve native OSV bytes and distinguish moves from real deletions."""
     files, upserts = [], set()
     for path in changed:
         advisory = _advisory_id(path)
@@ -424,7 +441,7 @@ def _ghsa(base: Json, http: Callable[[str, dict[str, str]], HttpResponse], paylo
         upserts.add(advisory)
         files.append(payloads.add(path, reply.body))
     deleted = sorted({_advisory_id(path) for path in removed} - upserts)
-    return {"revision": target}, files, deleted
+    return files, deleted
 
 
 def _validate_snapshot(name: str, filename: str, body: bytes) -> None:

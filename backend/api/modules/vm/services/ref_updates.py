@@ -1,6 +1,7 @@
 """Validated, sequenced update archives with atomic catalog/checkpoint publication."""
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 import hashlib
 import json
@@ -56,7 +57,7 @@ def _safe_path(value: Any) -> str:
     return value
 
 
-def _read_manifest(archive: zipfile.ZipFile) -> list[dict[str, Any]]:
+def _read_manifest(archive: zipfile.ZipFile) -> dict[str, Any]:
     from api.modules.vm.core.ref_updates import (
         MAX_FILES,
         MAX_UNPACKED_BYTES,
@@ -78,9 +79,11 @@ def _read_manifest(archive: zipfile.ZipFile) -> list[dict[str, Any]]:
     if MANIFEST_NAME not in names or archive.getinfo(MANIFEST_NAME).file_size > MAX_MANIFEST_BYTES:
         raise ValueError("Описание пакета обновлений отсутствует или превышает лимит")
     manifest = json.loads(archive.read(MANIFEST_NAME))
-    if not isinstance(manifest, dict) or manifest.get("format") != "stools-reference-update" or type(manifest.get("version")) is not int or manifest.get("version") != 1:
+    if not isinstance(manifest, dict) or manifest.get("format") != "stools-reference-update" or type(manifest.get("version")) is not int or manifest.get("version") not in (1, 2):
         raise ValueError("Неподдерживаемая версия или формат пакета обновлений")
-    _timestamp(manifest.get("created_at"))
+    created = _timestamp(manifest.get("created_at"))
+    if manifest["version"] == 2:
+        _validate_window(manifest, created)
     sources = manifest.get("sources")
     if not isinstance(sources, list) or not sources or len(sources) > len(REF_NAMES):
         raise ValueError("Недопустимый список источников пакета обновлений")
@@ -95,20 +98,28 @@ def _read_manifest(archive: zipfile.ZipFile) -> list[dict[str, Any]]:
             raise ValueError("Недопустимый режим пакета обновлений")
         if mode == "delta" and name not in ("nvd", "ghsa") or mode == "snapshot" and name in ("nvd", "ghsa"):
             raise ValueError("Источник не поддерживает этот режим обновления")
-        if "base" not in entry or "target" not in entry:
-            raise ValueError("Не указана исходная или конечная версия пакета обновлений")
-        if entry["base"] is not None:
-            validate_checkpoint(name, entry["base"])
-        validate_checkpoint(name, entry["target"])
-        if name == "ghsa" and any(not isinstance(checkpoint["revision"], str)
-                                  for checkpoint in (entry["base"], entry["target"]) if checkpoint is not None):
-            raise ValueError("GHSA: версия источника должна быть строкой с Git-ревизией")
-        if name == "nvd":
-            _timestamp(entry["target"]["cursor"])
-        if name == "nvd" and entry["base"] is not None:
-            base, target = entry["base"], entry["target"]
-            if _timestamp(target["cursor"]) < _timestamp(base["cursor"]) or not set(base["years"]).issubset(target["years"]):
-                raise ValueError("NVD: пакет обновлений уменьшает исходную версию или список лет")
+        if manifest["version"] == 1:
+            if "base" not in entry or "target" not in entry:
+                raise ValueError("Не указана исходная или конечная версия пакета обновлений")
+            if entry["base"] is not None:
+                validate_checkpoint(name, entry["base"])
+            validate_checkpoint(name, entry["target"])
+            if name == "ghsa" and any(not isinstance(checkpoint["revision"], str)
+                                      for checkpoint in (entry["base"], entry["target"]) if checkpoint is not None):
+                raise ValueError("GHSA: версия источника должна быть строкой с Git-ревизией")
+            if name == "nvd":
+                _timestamp(entry["target"]["cursor"])
+            if name == "nvd" and entry["base"] is not None:
+                base, target = entry["base"], entry["target"]
+                if _timestamp(target["cursor"]) < _timestamp(base["cursor"]) or not set(base["years"]).issubset(target["years"]):
+                    raise ValueError("NVD: пакет обновлений уменьшает исходную версию или список лет")
+        else:
+            if not isinstance(entry.get("provenance"), dict) or "base" in entry or "target" in entry:
+                raise ValueError("Периодический пакет не должен содержать checkpoint; требуется provenance")
+            if "checked_at" in entry["provenance"]:
+                _timestamp(entry["provenance"]["checked_at"])
+            if name in SNAPSHOTS and "validators" in entry["provenance"]:
+                validate_checkpoint(name, {"validators": entry["provenance"]["validators"]})
         files, deleted = entry.get("files"), entry.get("deleted_ids")
         if not isinstance(files, list) or not isinstance(deleted, list) or len(deleted) > MAX_FILES:
             raise ValueError("Недопустимый список файлов или удалений в пакете обновлений")
@@ -132,8 +143,10 @@ def _read_manifest(archive: zipfile.ZipFile) -> list[dict[str, Any]]:
             if set(paths) != {item[0] for item in SNAPSHOTS[name]}:
                 raise ValueError("Снимок должен содержать все файлы источника")
             digests = {item["path"]: item["sha256"] for item in files}
-            if any(entry["target"]["validators"].get(url, {}).get("sha256") != digests[filename]
-                   for filename, url in SNAPSHOTS[name]):
+            validators = (entry["target"]["validators"] if manifest["version"] == 1
+                          else entry["provenance"].get("validators"))
+            if validators is not None and any(validators.get(url, {}).get("sha256") != digests[filename]
+                                              for filename, url in SNAPSHOTS[name]):
                 raise ValueError("Контрольная сумма исходной версии не совпадает с файлом снимка")
         if name == "nvd" and any(not path.startswith("nvd/") or not path.endswith(".json") for path in paths):
             raise ValueError("Недопустимый путь файла обновлений NVD")
@@ -141,7 +154,126 @@ def _read_manifest(archive: zipfile.ZipFile) -> list[dict[str, Any]]:
             raise ValueError("Недопустимый путь файла обновлений GHSA")
     if listed != names:
         raise ValueError("Архив содержит файл, не указанный в описании пакета")
-    return sources
+    return manifest
+
+
+def _validate_window(manifest: dict[str, Any], created: dt.datetime) -> None:
+    window = manifest.get("window")
+    if manifest.get("scope") != "window" or not isinstance(window, dict) or set(window) != {"since", "until"}:
+        raise ValueError("Недопустимое описание периода обновлений")
+    since, until = _timestamp(window["since"]), _timestamp(window["until"])
+    month_index = until.year * 12 + until.month - 1 - 3
+    year, month = divmod(month_index, 12)
+    earliest = until.replace(year=year, month=month + 1,
+                             day=min(until.day, calendar.monthrange(year, month + 1)[1]))
+    if not earliest <= since < until or until > created:
+        raise ValueError("Период обновлений должен быть положительным и не превышать три календарных месяца")
+
+
+def _period_replay(state: VmRefSyncState | None, manifest: dict[str, Any], digest: str) -> bool:
+    previous = state.period_import if state else None
+    if not previous or not previous.get("digests"):
+        return False
+    if digest in previous["digests"]:
+        return True
+    until, created = _timestamp(manifest["window"]["until"]), _timestamp(manifest["created_at"])
+    last_until, last_created = _timestamp(previous["until"]), _timestamp(previous["created_at"])
+    if until < last_until or created < last_created or (until == last_until and created == last_created):
+        raise ValueError("Устаревший период обновлений: более новый пакет уже применён")
+    return False
+
+
+
+def _validate_period_coverage(db: Session, state: VmRefSyncState | None, entry: dict[str, Any],
+                              manifest: dict[str, Any], paths: dict[str, Path]) -> None:
+    """Use upstream dates only; local import/check times cannot order source data."""
+    if entry["name"] not in {"nvd", "ghsa"} or not (entry["files"] or entry["deleted_ids"]):
+        return
+    until = _timestamp(manifest["window"]["until"])
+    complete = (state.period_import or {}).get("complete_check") if state else None
+    if complete and complete["checkpoint"] == state.checkpoint and _timestamp(complete["until"]) > until:
+        raise ValueError("Устаревший период: источник полностью проверен до более новой даты")
+    incoming: dict[str, Any] = {}
+    if entry["name"] == "nvd":
+        import ijson
+
+        from api.modules.vm.core.refs import _date
+        from api.modules.vm.models import VmRefNvd
+
+        checkpoint = (state.checkpoint or {}) if state else {}
+        known = (state.baseline_years or {}) if state else {}
+        for item in entry["files"]:
+            with paths[item["path"]].open("rb") as stream:
+                for row in ijson.items(stream, "vulnerabilities.item"):
+                    cve = row.get("cve", {}) if isinstance(row, dict) else {}
+                    identifier = cve.get("id") if isinstance(cve, dict) else None
+                    if not isinstance(identifier, str) or not re.fullmatch(r"CVE-\d{4}-\d{4,}", identifier):
+                        raise ValueError("Недопустимый идентификатор NVD")
+                    year = identifier.split("-")[1]
+                    dates = [known[year]] if year in known else []
+                    if int(year) in checkpoint.get("years", []):
+                        dates.append(checkpoint["cursor"])
+                    if any(_timestamp(stamp) > until for stamp in dates):
+                        raise ValueError("Устаревший период: год NVD уже полностью проверен до более новой даты")
+                    incoming[identifier] = _date(cve.get("lastModified"))
+        identity, modified, bound = VmRefNvd.cve_id, VmRefNvd.modified, until.date()
+    else:
+        for item in entry["files"]:
+            record = parse_advisory(json.loads(paths[item["path"]].read_bytes()),
+                                    reviewed=item["path"].startswith("advisories/github-reviewed/"))
+            incoming[record.ghsa_id] = record.modified
+        incoming.update(dict.fromkeys(entry["deleted_ids"]))
+        identity, modified, bound = VmRefGhsa.ghsa_id, VmRefGhsa.modified, until
+    identifiers = list(incoming)
+    for start in range(0, len(identifiers), 1000):
+        rows = db.execute(select(identity, modified).where(identity.in_(identifiers[start:start + 1000])))
+        for identifier, current in rows:
+            candidate = incoming[identifier]
+            if current is not None and (current > bound or candidate is not None and current > candidate):
+                raise ValueError("Устаревший период: затронутая запись источника уже содержит более новую версию")
+
+
+def _record_complete_verification(state: VmRefSyncState, entry: dict[str, Any],
+                                  manifest: dict[str, Any], replay: bool) -> bool:
+    """An unchanged response verifies the same revision; replaying a delta does not."""
+    if replay and not (entry["mode"] == "unchanged" and entry["base"] == entry["target"]):
+        return False
+    metadata = state.period_import or {}
+    previous = metadata.get("complete_check")
+    checked = _timestamp(manifest["created_at"])
+    if previous and previous["checkpoint"] == entry["target"] and _timestamp(previous["until"]) >= checked:
+        return False
+    state.period_import = {**metadata, "complete_check": {"checkpoint": entry["target"],
+                                                        "until": manifest["created_at"]}}
+    return True
+
+
+def _nvd_covers_partial(db: Session, state: VmRefSyncState, checkpoint: dict[str, Any] | None) -> bool:
+    from api.modules.vm.services.refs import NVD_T
+
+    if not state.partial_window:
+        return True
+    return bool(checkpoint and _timestamp(checkpoint["cursor"]) >= _timestamp(state.partial_window["until"])
+                and set(db.scalars(select(NVD_T.c.year).distinct())).issubset(checkpoint["years"]))
+
+
+def _record_period(state: VmRefSyncState, entry: dict[str, Any], manifest: dict[str, Any], digest: str) -> None:
+    previous = state.period_import or {}
+    state.period_import = {**previous, **manifest["window"], "created_at": manifest["created_at"],
+                           "imported_at": dt.datetime.now(dt.UTC).isoformat(),
+                           "digests": [*previous.get("digests", []), digest],
+                           "target_revision": entry["provenance"].get("target_revision")}
+    if state.name in {"nvd", "ghsa"}:
+        # Importing a bounded window proves neither baseline completeness nor freshness.
+        state.partial_window = dict(manifest["window"])
+    elif entry["mode"] == "snapshot":
+        validators = entry["provenance"].get("validators")
+        state.checkpoint = {"validators": validators} if validators is not None else None
+        state.last_checked_at = _timestamp(manifest["created_at"])
+    elif entry["mode"] == "unchanged" and state.checkpoint is not None:
+        validators = entry["provenance"].get("validators")
+        if validators is not None and state.checkpoint == {"validators": validators}:
+            state.last_checked_at = _timestamp(manifest["created_at"])
 
 
 def _extract(archive: zipfile.ZipFile, sources: list[dict[str, Any]], into: Path, handle: Any) -> dict[str, Path]:
@@ -252,7 +384,10 @@ def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bun
     preflight_bundle(path)
     changed: set[str] = set()
     with tempfile.TemporaryDirectory(prefix="ref-update-") as directory, zipfile.ZipFile(path) as archive:
-        entries = _read_manifest(archive)
+        manifest = _read_manifest(archive)
+        entries = manifest["sources"]
+        windowed = manifest["version"] == 2
+        digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         paths = _extract(archive, entries, Path(directory), handle)
         for entry in entries:
             if entry["name"] == "attack" and entry["mode"] == "snapshot":
@@ -266,6 +401,12 @@ def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bun
             planned = []
             for entry in entries:
                 state = catalog.get(VmRefSyncState, entry["name"])
+                if windowed:
+                    replay = _period_replay(state, manifest, digest)
+                    if not replay:
+                        _validate_period_coverage(catalog, state, entry, manifest, paths)
+                    planned.append((entry, state, replay))
+                    continue
                 current = state.checkpoint if state else None
                 replay = current == entry["target"]
                 if not replay and current != entry["base"]:
@@ -275,6 +416,8 @@ def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bun
                 planned.append((entry, state, replay))
             for entry, state, replay in planned:
                 name = entry["name"]
+                if windowed and replay:
+                    continue
                 if state is None:
                     state = VmRefSyncState(name=name)
                     catalog.add(state)
@@ -309,10 +452,27 @@ def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bun
                     loaded.detail = f"{entry['mode']}: +{count}, -{len(entry['deleted_ids'])}"
                     state.pending_rebuild = True
                     changed.add(name)
-                state.checkpoint = entry["target"]
-                if name == "nvd":
-                    state.baseline_years = {str(year): entry["target"]["cursor"] for year in entry["target"]["years"]}
-                state.last_checked_at = dt.datetime.now(dt.UTC)
+                if windowed:
+                    _record_period(state, entry, manifest, digest)
+                else:
+                    verified = False
+                    state.checkpoint = entry["target"]
+                    if name == "nvd":
+                        state.baseline_years = {str(year): entry["target"]["cursor"] for year in entry["target"]["years"]}
+                        if _nvd_covers_partial(catalog, state, entry["target"]):
+                            state.partial_window = None
+                    elif name == "ghsa":
+                        verified = _record_complete_verification(state, entry, manifest, replay)
+                        metadata = state.period_import or {}
+                        complete = metadata.get("complete_check")
+                        unchanged = entry["mode"] == "unchanged" and entry["base"] == entry["target"]
+                        if state.partial_window and complete and (verified or unchanged):
+                            same_revision = metadata.get("target_revision") == entry["target"]["revision"]
+                            if ((not replay or same_revision) and complete["checkpoint"] == entry["target"]
+                                    and _timestamp(complete["until"]) >= _timestamp(state.partial_window["until"])):
+                                state.partial_window = None
+                    if not state.partial_window and (name != "ghsa" or not replay or verified):
+                        state.last_checked_at = dt.datetime.now(dt.UTC)
                 state.last_mode = "unchanged" if replay else entry["mode"]
                 state.last_counts = {"upserted": count, "deleted": len(entry["deleted_ids"]) if did_change else 0}
                 handle.tick(count, message=f"{name}: {state.last_mode}")
@@ -402,8 +562,14 @@ def record_full_checkpoint(db: Session, name: str, path: Path, years: set[int] |
         if loaded_years and all(str(year) in known for year in loaded_years):
             checkpoint = {"cursor": min((known[str(year)] for year in loaded_years), key=_timestamp), "years": loaded_years}
     # Full snapshots invalidate old HTTP validators, never infer a revision from loaded_at.
+    if name == "ghsa" and state.period_import:
+        complete = state.period_import.get("complete_check")
+        if complete and complete["checkpoint"] != checkpoint:
+            state.period_import = {key: value for key, value in state.period_import.items() if key != "complete_check"}
     state.checkpoint = checkpoint
-    state.last_checked_at = dt.datetime.now(dt.UTC)
+    if name != "nvd" or _nvd_covers_partial(db, state, checkpoint):
+        state.partial_window = None
+        state.last_checked_at = dt.datetime.now(dt.UTC)
     state.last_mode = "full"
     state.pending_rebuild = True
     state.last_counts = None

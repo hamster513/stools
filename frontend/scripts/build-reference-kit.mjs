@@ -1,65 +1,11 @@
-// Build the downloadable kit with Node only (the frontend image has no Python).
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deflateRawSync } from 'node:zlib';
+import { writeKit } from './write-kit.mjs';
 
 const frontend = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const destination = resolve(frontend, 'public/vm');
-const canonical = resolve(frontend, '../backend/api/modules/vm/core/ref_updates.py');
 mkdirSync(destination, { recursive: true });
-copyFileSync(canonical, resolve(destination, 'ref_updates.py'));
-
-const table = Array.from({ length: 256 }, (_, i) => {
-  let crc = i;
-  for (let bit = 0; bit < 8; bit++) crc = (crc & 1) ? (0xedb88320 ^ (crc >>> 1)) : (crc >>> 1);
-  return crc >>> 0;
-});
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) crc = table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-const entries = ['download-references.sh', 'download-references.ps1', 'ref_updates.py'];
-const chunks = [];
-const directory = [];
-let offset = 0;
-for (const filename of entries) {
-  const name = Buffer.from(filename);
-  const raw = readFileSync(resolve(destination, filename));
-  const compressed = deflateRawSync(raw, { level: 9 });
-  const crc = crc32(raw);
-  const header = Buffer.alloc(30);
-  header.writeUInt32LE(0x04034b50, 0);
-  header.writeUInt16LE(20, 4);
-  header.writeUInt16LE(8, 8);
-  header.writeUInt16LE(33, 12); // Stable 1980-01-01 DOS date for reproducible kits.
-  header.writeUInt32LE(crc, 14);
-  header.writeUInt32LE(compressed.length, 18);
-  header.writeUInt32LE(raw.length, 22);
-  header.writeUInt16LE(name.length, 26);
-  chunks.push(header, name, compressed);
-  const central = Buffer.alloc(46);
-  central.writeUInt32LE(0x02014b50, 0);
-  central.writeUInt16LE(20, 4);
-  central.writeUInt16LE(20, 6);
-  central.writeUInt16LE(8, 10);
-  central.writeUInt16LE(33, 14);
-  central.writeUInt32LE(crc, 16);
-  central.writeUInt32LE(compressed.length, 20);
-  central.writeUInt32LE(raw.length, 24);
-  central.writeUInt16LE(name.length, 28);
-  central.writeUInt32LE(offset, 42);
-  directory.push(central, name);
-  offset += header.length + name.length + compressed.length;
-}
-const index = Buffer.concat(directory);
-const end = Buffer.alloc(22);
-end.writeUInt32LE(0x06054b50, 0);
-end.writeUInt16LE(entries.length, 8);
-end.writeUInt16LE(entries.length, 10);
-end.writeUInt32LE(index.length, 12);
-end.writeUInt32LE(offset, 16);
-writeFileSync(resolve(destination, 'reference-update-scripts.zip'), Buffer.concat([...chunks, index, end]));
-console.log('Reference update kit: canonical helper + sh + PowerShell');
+copyFileSync(resolve(frontend, '../backend/api/modules/vm/core/ref_updates.py'), resolve(destination, 'ref_updates.py'));
+writeKit(destination, ['download-references.sh', 'download-references.ps1', 'ref_updates.py'], resolve(destination, 'reference-update-scripts.zip'));
+console.log('Reference update kit built');

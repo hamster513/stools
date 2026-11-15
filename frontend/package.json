@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run check:help && npm run build:reference-kit && tsc -b && vite build",
+    "build": "npm run check:help && npm run build:reference-kit && npm run build:offline-kit && tsc -b && vite build",
+    "build:offline-kit": "node scripts/build-offline-kit.mjs",
     "build:reference-kit": "node scripts/build-reference-kit.mjs",
     "check:help": "node scripts/check-help.ts",
     "lint": "eslint .",

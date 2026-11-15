@@ -43,6 +43,8 @@ class RefView(BaseModel):
     last_checked_at: dt.datetime | None = None
     last_mode: str | None = None
     last_counts: dict[str, int] | None = None
+    partial_window: dict[str, str] | None = None
+    last_period_imported_at: dt.datetime | None = None
     pending_rebuild: bool = False
 
 
@@ -57,7 +59,8 @@ def ref_views(db: Session) -> list[RefView]:
         checkpoint = sync.checkpoint if sync else None
         available = name not in {"nvd", "ghsa"} or checkpoint is not None
         checked = sync.last_checked_at if sync else None
-        fresh = checked or (s.loaded_at if s else None)
+        partial = sync.partial_window if sync else None
+        fresh = checked or (s.loaded_at if s and not partial else None)
         if fresh is not None and fresh.tzinfo is None:
             fresh = fresh.replace(tzinfo=dt.UTC)
         # Архив грузит все справочники сразу: его задача видна на каждой карточке.
@@ -80,6 +83,8 @@ def ref_views(db: Session) -> list[RefView]:
                 update_reason=None if available else "Неизвестна версия исходной базы. Повторно загрузите полный исходный архив с метаданными источника",
                 checkpoint=checkpoint,
                 last_checked_at=checked,
+                partial_window=partial,
+                last_period_imported_at=(sync.period_import or {}).get("imported_at") if sync else None,
                 last_mode=sync.last_mode if sync else None,
                 last_counts=sync.last_counts if sync else None,
                 pending_rebuild=sync.pending_rebuild if sync else False,

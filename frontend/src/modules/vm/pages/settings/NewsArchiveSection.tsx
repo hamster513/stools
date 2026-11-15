@@ -36,10 +36,10 @@ export function NewsArchiveSection() {
   return <Section id="news-archive" title="Архив новостей" about="Загрузка публикаций в VM из ZIP, собранного автономным скриптом на компьютере с интернетом.">
     <div className="space-y-4">
     <div className="space-y-2 text-xs">
-      <a className="inline-flex items-center gap-1 text-primary hover:underline" href="/siem/download-intel.py" download><Download size={14} />Скачать скрипт сбора</a>
+      <a className="inline-flex items-center gap-1 text-primary hover:underline" href="/offline/stools-download-kit.zip" download><Download size={14} />Единый загрузчик — Linux и PowerShell</a>
       <p>Запустите на компьютере с интернетом (Python 3.11+), затем перенесите ZIP сюда:</p>
-      <code className="block overflow-x-auto rounded bg-app-bg p-2">python3 download-intel.py --output news.zip</code>
-      <p className="text-text-secondary">По умолчанию — доступные публикации RSS за 30 дней и правила SigmaHQ/Elastic. --days 0 сохраняет всё доступное в лентах; --articles дополнительно загружает текст HTML-статей. Полная история интернета недоступна через RSS.</p>
+      <code className="block overflow-x-auto rounded bg-app-bg p-2">sh download-stools.sh --datasets news --mode updates --period 7d</code>
+      <p className="text-text-secondary">Без параметров открывается меню: новости, SigmaHQ и Elastic выбираются отдельно. Доступны полный сбор и обновления за день, неделю или три календарных месяца. RSS отдаёт только доступное издателю окно; неполный сбор отмечается в отчёте.</p>
     </div>
     {admin && <div className="flex flex-wrap items-center gap-3">
       <input ref={file} type="file" accept=".zip,application/zip" className="hidden" aria-label="Архив новостей" onChange={(e) => {

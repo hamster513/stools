@@ -9,7 +9,9 @@ from tests.findings.test_migration_siem import scratch  # noqa: F401
 def test_harbor_policy_migration_preserves_rows(scratch):  # noqa: F811
     engine, cfg = scratch
     before, after = 'f2d9a1c8b640', 'a63d1e7c9b20'
-    assert ScriptDirectory.from_config(cfg).get_heads() == [after]
+    script = ScriptDirectory.from_config(cfg)
+    assert len(script.get_heads()) == 1
+    assert after in {revision.revision for revision in script.iterate_revisions("heads", "base")}
     command.upgrade(cfg, before)
     with engine.begin() as conn:
         conn.execute(text("""INSERT INTO vm_image

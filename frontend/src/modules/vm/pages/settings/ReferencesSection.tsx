@@ -50,7 +50,7 @@ function RefCard({ r }: { r: RefState }) {
       <div className="mb-1 flex items-center justify-between">
         <span className="text-sm font-medium text-text">{r.title}</span>
         <span className={cn('text-[11px]', r.stale ? 'text-risk-medium' : 'text-text-secondary')}>
-          {r.loaded_at ? `${new Date(r.loaded_at).toLocaleDateString('ru-RU')} · ${SOURCE[r.source ?? ''] ?? 'файл'}` : 'не загружен'}
+          {r.loaded_at ? `${new Date(r.loaded_at).toLocaleDateString('ru-RU')} · ${r.partial_window ? 'частичное обновление' : SOURCE[r.source ?? ''] ?? 'файл'}` : 'не загружен'}
           {r.stale && r.loaded_at && ' · устарел'}
         </span>
       </div>
@@ -58,8 +58,13 @@ function RefCard({ r }: { r: RefState }) {
       <div className="mb-2 font-mono text-[11px] tabular-nums text-text-secondary">
         {r.records ? `${r.records.toLocaleString('ru-RU')} записей` : '—'}{r.detail && ` · ${r.detail}`}
       </div>
+      {r.partial_window && <p className="mb-2 text-[11px] text-risk-medium">
+        Изменения за {new Date(r.partial_window.since).toLocaleString('ru-RU')} — {new Date(r.partial_window.until).toLocaleString('ru-RU')}.
+        {' '}Полнота базы за остальные даты не подтверждена.
+        {!r.last_checked_at && ' Дата последней полной проверки неизвестна.'}
+      </p>}
       {r.last_checked_at && <p className="mb-2 text-[11px] text-text-secondary">
-        Проверено: {new Date(r.last_checked_at).toLocaleString('ru-RU')}
+        {r.partial_window ? 'Последняя полная проверка' : 'Проверено'}: {new Date(r.last_checked_at).toLocaleString('ru-RU')}
         {r.last_mode === 'unchanged' ? <span className="ml-2 text-risk-low">Обновлений нет</span> : r.last_counts && <span> · Применено: {r.last_counts.upserted.toLocaleString('ru-RU')} · Удалено: {r.last_counts.deleted.toLocaleString('ru-RU')}</span>}
       </p>}
       {r.pending_rebuild && <p className="mb-2 text-[11px] text-risk-medium">Ожидается пересчёт риска по обновлённой базе.</p>}
@@ -114,16 +119,17 @@ function BundleUpload({ refs }: { refs: RefState[] }) {
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
       <div className="w-full space-y-2">
-        <p>Для закрытого контура: <a className={LINK} href="/vm/reference-update-scripts.zip" download>Скачать комплект скриптов</a>{' · '}<a className={LINK} href="/api/vm/refs/update-state" download="vm-reference-state.json">Скачать состояние баз</a></p>
-        <details><summary className="cursor-pointer">Как получать только обновления</summary>
+        <p>Для закрытого контура: <a className={LINK} href="/offline/stools-download-kit.zip" download>Единый загрузчик — Linux и PowerShell</a></p>
+        <details><summary className="cursor-pointer">Полная выгрузка и обновления за период</summary>
           <ol className="mt-2 list-inside list-decimal space-y-1">
-            <li>Сохраните состояние баз и распакуйте комплект скриптов на машине с интернетом. Для обновлений нужны Python 3 и Git.</li>
-            <li>Запустите скрипт в режиме обновления, указав файл состояния. Сохраните созданные архивы: их нужно переносить по порядку.</li>
-            <li>Загрузите архив здесь. STools проверит исходную версию базы и применит изменения.</li>
+            <li>Распакуйте комплект на компьютере с интернетом. Нужен Python 3.11+, для обновлений GHSA и правил — Git.</li>
+            <li>Запустите без параметров для меню: выберите данные, полный режим или изменения за день, неделю либо три календарных месяца.</li>
+            <li>Самостоятельно проверьте давность баз в STools: скрипт выгрузит ровно выбранный период.</li>
+            <li>Архивы справочников загрузите здесь, архивы новостей и правил — в блоке «Архив новостей».</li>
           </ol>
-          <p className="mt-2">Linux/macOS:</p><code className="mt-1 block break-all rounded bg-app-bg p-2">MODE=updates STATE=vm-reference-state.json sh download-references.sh</code>
-          <p className="mt-2">Windows:</p><code className="mt-1 block break-all rounded bg-app-bg p-2">.\download-references.ps1 -Mode Updates -State vm-reference-state.json</code>
-          <p className="mt-2">Для первой загрузки и восстановления доступен полный снимок: <a className={LINK} href="/vm/download-references.ps1" download>PowerShell</a>{' · '}<a className={LINK} href="/vm/download-references.sh" download>Linux/macOS</a>. GitHub-база сохраняется отдельной частью; загрузите обе части.</p>
+          <p className="mt-2">Linux:</p><code className="mt-1 block break-all rounded bg-app-bg p-2">sh download-stools.sh --datasets nvd,ghsa --mode updates --period 7d --lang ru --quiet</code>
+          <p className="mt-2">PowerShell:</p><code className="mt-1 block break-all rounded bg-app-bg p-2">.\download-stools.ps1 -Datasets nvd,ghsa -Mode Updates -Period 7d -Lang ru -Quiet</code>
+          <p className="mt-2">Файл состояния STools не нужен. Частичный импорт не подтверждает актуальность всей базы. Прокси используется из системы; язык меню — русский или английский.</p>
         </details>
       </div>
       {admin && (
