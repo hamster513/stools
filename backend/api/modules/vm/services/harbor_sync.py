@@ -18,7 +18,8 @@ import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from itertools import batched
-from typing import Any, cast
+from tempfile import TemporaryFile
+from typing import Any, TextIO, cast
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
@@ -66,6 +67,7 @@ from api.modules.vm.services.scoring import (
 )
 from api.modules.vm.services.settings import load_settings
 from api.platform.scheduler import PlatformSchedule
+from api.settings import get_settings
 
 log = logging.getLogger(__name__)
 
@@ -131,12 +133,13 @@ class _Repo:
 
 @dataclass
 class _Planned:
-    """Образ к записи: артефакт, его пары и почему он не обновлён."""
+    """Образ к записи: метаданные и ссылка на отчёт во временном файле."""
 
     repo: _Repo
     art: HarborArtifact
-    #: None — пары не трогать; список — заменить пары образа на эти.
-    pairs: list[dict[str, Any]] | None = None
+    #: None — пары не трогать; смещение (в том числе 0) — заменить из файла.
+    report_offset: int | None = None
+    pair_count: int = 0
     #: Время скана к записи: при непрочитанном отчёте — прежнее, чтобы следующий прогон прочёл его снова.
     scanned_at: dt.datetime | None = None
     error: str | None = None
@@ -314,6 +317,7 @@ class _Sync:
         self.failed_projects: dict[str, str] = {}
         self.failed_repos: dict[tuple[str, str], str] = {}
         self.ok_repos: list[_Repo] = []
+        self.reports: TextIO
 
     def _error(self, name: str, stage: Stage, exc: HarborError) -> None:
         if name not in self.errors:
@@ -331,9 +335,16 @@ class _Sync:
             for repo in self.ok_repos
             for art in newest_tagged(repo.artifacts, self.conn.tags_per_repo)
         ]
-        skipped = self._read_reports(planned, known)
-        self._read_runtime(planned)
-        self._write(planned, known)
+        # Reports are unlinked temporary files on POSIX: failures/cancellation close
+        # them, and a killed worker cannot leave named report files behind.
+        # Keep only one image's report in memory; release disk space before scoring.
+        report_dir = get_settings().data_dir / "vm"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        with TemporaryFile(mode="w+t", encoding="utf-8", dir=report_dir) as reports:
+            self.reports = reports
+            skipped = self._read_reports(planned, known)
+            self._read_runtime(planned)
+            self._write(planned, known)
 
         self.handle.stage("enriching", message="витрина CVE")
         pending = self._unbuilt_cves()
@@ -444,13 +455,19 @@ class _Sync:
         for i, p in enumerate(need, 1):
             try:
                 report = self.client.vulnerabilities(p.repo.project, p.repo.name, p.art.digest)
-                p.pairs = collapse(report)
+                pairs = collapse(report)
                 # The existing finding deduplication prefers known severities. Do not
                 # let a discarded unknown duplicate turn a pull assessment green.
                 unknown_raw = {v.vuln_id for v in report if v.severity == "unknown"}
-                unknown_kept = {r["cve_id"] for r in p.pairs if r["trivy_severity"] == "unknown"}
+                unknown_kept = {r["cve_id"] for r in pairs if r["trivy_severity"] == "unknown"}
                 p.report_complete = (p.art.reported_total is not None and p.art.scanned_at is not None
                                      and len(report) >= p.art.reported_total and not (unknown_raw - unknown_kept))
+                p.report_offset = self.reports.tell()
+                p.pair_count = len(pairs)
+                for row in pairs:
+                    self.reports.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+                # Do not keep the previous raw/collapsed report while fetching the next.
+                del report, pairs, unknown_raw, unknown_kept
             except HarborError as exc:
                 log.warning("Harbor: отчёт %s/%s не прочитан: %s", p.repo.project, p.repo.name, exc.kind)
                 p.error = exc.kind
@@ -494,14 +511,24 @@ class _Sync:
         self._mark_failed()
         dropped = self._drop_missing(planned, known)
 
-        replaced = [p for p in planned if p.pairs is not None]
-        for chunk in batched([ids[p.key] for p in replaced], UPSERT_CHUNK):
+        replaced = [p for p in planned if p.report_offset is not None]
+        for chunk in batched((ids[p.key] for p in replaced), UPSERT_CHUNK):
             self.db.execute(delete(PAIR_T).where(PAIR_T.c.image_id.in_(chunk)))
-        rows = [{**row, "image_id": ids[p.key]} for p in replaced for row in p.pairs or []]
-        insert_chunked(self.db, VmImageCve, rows, len(rows), self.handle, "пар")
+        insert_chunked(self.db, VmImageCve, self._pair_rows(replaced, ids),
+                       sum(p.pair_count for p in replaced), self.handle, "пар")
         self.db.commit()
         if dropped or replaced:
             drop_orphan_cves(self.db)
+
+    def _pair_rows(self, planned: Iterable[_Planned], ids: dict[Key, int]) -> Iterable[dict[str, Any]]:
+        """Read one row at a time; insert_chunked alone controls the write batch size."""
+        for p in planned:
+            assert p.report_offset is not None
+            self.reports.seek(p.report_offset)
+            for _ in range(p.pair_count):
+                row = json.loads(self.reports.readline())
+                row["image_id"] = ids[p.key]
+                yield row
 
     def _unbuilt_cves(self) -> list[str]:
         """CVE/GHSA пар образов, которых нет в витрине или чьи поля ещё не собраны из справочников.
