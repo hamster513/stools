@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Interactive and unattended STools offline collection. Python 3.11+, stdlib."""
 
 from __future__ import annotations

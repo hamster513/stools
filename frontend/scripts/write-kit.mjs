@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 
@@ -34,7 +34,7 @@ export function writeKit(destination, entries, output) {
     chunks.push(header, name, compressed);
     const central = Buffer.alloc(46);
     central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE((3 << 8) | 20, 4); // Unix permissions for script entry points.
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(8, 10);
     central.writeUInt16LE(33, 14);
@@ -42,6 +42,8 @@ export function writeKit(destination, entries, output) {
     central.writeUInt32LE(compressed.length, 20);
     central.writeUInt32LE(raw.length, 24);
     central.writeUInt16LE(name.length, 28);
+    const mode = (statSync(resolve(destination, filename)).mode & 0o111) ? 0o100755 : 0o100644;
+    central.writeUInt32LE((mode << 16) >>> 0, 38);
     central.writeUInt32LE(offset, 42);
     directory.push(central, name);
     offset += header.length + name.length + compressed.length;

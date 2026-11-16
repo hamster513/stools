@@ -31,7 +31,13 @@ def intel_module():
 
 
 def full_reference(
-    name: str, output: Path, transport: Transport, now: dt.datetime, progress
+    name: str,
+    output: Path,
+    transport: Transport,
+    now: dt.datetime,
+    progress,
+    *,
+    lang="ru",
 ) -> dict:
     if name == "nvd":
         files = [
@@ -68,6 +74,7 @@ def full_reference(
                     ),
                     timeout=120,
                 )
+                progress(("Проверка: " if lang == "ru" else "Validating: ") + filename)
                 if not path.stat().st_size:
                     raise ValueError("empty_source_file: " + filename)
                 with path.open("rb") as stream:
@@ -78,11 +85,19 @@ def full_reference(
                     raise ValueError("invalid_zip: " + filename)
                 if name in ref_updates.SNAPSHOTS:
                     ref_updates._validate_snapshot(name, filename, path.read_bytes())
-                archive.write(path, filename)
+                progress(("Упаковка: " if lang == "ru" else "Packaging: ") + filename)
+                # Already compressed upstream archives need no second compression pass.
+                compression = (
+                    zipfile.ZIP_STORED
+                    if filename.endswith((".zip", ".gz"))
+                    else zipfile.ZIP_DEFLATED
+                )
+                archive.write(path, filename, compress_type=compression)
                 path.unlink()
         if temporary.stat().st_size > ref_updates.MAX_BUNDLE_BYTES:
             raise ValueError("Full reference archive exceeds the STools500MiB limit")
         os.link(temporary, output)
+    progress(("Готово: " if lang == "ru" else "Ready: ") + output.name)
     return {
         "status": "ok",
         "archive": output.name,
@@ -305,14 +320,14 @@ def intel_archive(
 def execute_dataset(name, config, run_dir, progress):
     now = config.as_of
     cache = config.output / ".stools-cache" / name
-    transport = Transport(no_proxy=config.no_proxy, progress=progress)
+    transport = Transport(no_proxy=config.no_proxy, progress=progress, lang=config.lang)
     output = run_dir / (name + "-" + config.mode + ".zip")
     if name in ("news", "sigma", "elastic"):
         return intel_archive(
             name, output, transport, config.mode, config.period, now, cache, progress
         )
     if config.mode == "full":
-        return full_reference(name, output, transport, now, progress)
+        return full_reference(name, output, transport, now, progress, lang=config.lang)
     manifest = ref_window.build_window_bundle(
         output,
         [name],

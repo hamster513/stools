@@ -1,6 +1,6 @@
 # STools — единая выгрузка / Unified offline download
 
-Распакуйте весь комплект. Нужен Python 3.11+. Git нужен для обновлений GHSA и правил Sigma/Elastic. Установка зависимостей автоматически не выполняется.
+Распакуйте весь комплект. На macOS/Linux доступны `sh download-stools.sh`, `python3 offline_download.py` и прямой запуск `./offline_download.py`. Не передавайте `.py` в `sh`. Нужен Python 3.11+. Git нужен для обновлений GHSA и правил Sigma/Elastic. Установка зависимостей автоматически не выполняется.
 Unpack the entire kit. Python 3.11+ is required; Git is required for GHSA and rule updates. No dependencies are installed automatically.
 
 ## Меню / Menu
@@ -45,6 +45,16 @@ sh download-stools.sh --datasets all --mode full --output ./transfer --lang en -
 Архивы справочников загрузите в **Настройки → VM → Справочники → Загрузить архив**. Новости и правила — в **Настройки → VM → Архив новостей**. Новости появятся в **VM → Трендовые уязвимости**; правила останутся справочными материалами. Файлы внутри архивов не переименовывайте. Лимиты STools сохраняются: 500 МиБ для справочников, 64 МиБ для новостей/правил.
 
 Upload reference ZIPs to **Settings → VM → References → Upload archive**; news/rule ZIPs to **Settings → VM → News archive**. News appears in VM trends; rules remain reference materials. Do not rename archive contents. Existing 500 MiB/64 MiB upload limits still apply.
+
+## Диагностика загрузки / Download diagnostics
+
+Для macOS используется тот же `sh download-stools.sh`, что и для Linux. При скачивании каждые 5 секунд показываются ожидание ответа/получение данных, объём, средняя скорость, прошедшее время и время без новых данных. HTTP-код появляется после получения заголовков. Процент отображается только когда сервер сообщает размер: GitHub codeload может не присылать `Content-Length`, тогда показывается «размер неизвестен». Проверка и упаковка отмечаются отдельно; уже сжатые ZIP/GZIP не сжимаются повторно.
+
+macOS uses the same `sh download-stools.sh` as Linux. Every 5 seconds, downloads report the current stage, received bytes, average speed, elapsed time and time without new data. HTTP status appears after headers arrive. A percentage is shown only when the server provides a size; GitHub codeload may omit it. Validation and packaging are separate stages; ZIP/GZIP files are not recompressed.
+
+Диагностика сохраняется в `run.log` внутри каталога запуска, в том числе при `--quiet` / `-Quiet`. Тихий режим намеренно ничего не печатает в консоль. Для проверки запускайте без него. Ошибки DNS, TLS, HTTP и тайм-аут выводятся без паролей прокси и параметров URL. В Python тайм-аут относится к ожиданию ответа/следующих данных, в нативном Windows-транспорте — ко всему запросу. Обновлённый комплект нужно распаковать полностью: одной замены `.sh` недостаточно.
+
+Diagnostics are also written to the run directory's `run.log` in quiet mode. Run without `--quiet` / `-Quiet` to see them in the terminal. DNS, TLS, HTTP and timeout errors do not expose proxy passwords or URL query parameters. Python timeouts bound response/data waits; the native Windows transport bounds the entire request. Unpack the entire updated kit, not just the `.sh` launcher.
 
 ## Обновления / Updates
 

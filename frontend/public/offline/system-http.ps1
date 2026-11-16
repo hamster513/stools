@@ -240,7 +240,7 @@ try {
                 foreach ($header in $response.Content.Headers) {
                     $responseHeaders[$header.Key.ToLowerInvariant()] = $header.Value -join ', '
                 }
-                $outputPart = Join-Path $directory ([Guid]::NewGuid().ToString() + '.part')
+                $outputPart = Join-Path $directory ('body-' + [Guid]::NewGuid().ToString() + '.part')
                 $outputStream = [IO.File]::Open($outputPart, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
                 $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
                 $buffer = New-Object byte[] 65536
