@@ -348,7 +348,6 @@ def rescore_image_pairs(db: Session, weights: Weights) -> int:
         ),
     )
     pairs = IMAGE_PAIR_T.alias("p")
-    of_image = pairs.c.image_id == IMAGE_T.c.id
     # Many images repeat the same identifier. Resolve its bounded alias component
     # once per distinct observed ID, rather than once per package finding.
     identifiers = select(IMAGE_PAIR_T.c.cve_id).distinct().cte("observed_image_ids")
@@ -357,12 +356,25 @@ def rescore_image_pairs(db: Session, weights: Weights) -> int:
         canonical_finding_id(identifiers.c.cve_id).label("canonical"),
     ).cte("canonical_image_ids").prefix_with("MATERIALIZED")
     counted_pairs = pairs.join(canonical_ids, canonical_ids.c.cve_id == pairs.c.cve_id)
+    # Aggregate all scored findings together: correlated per-image subqueries can
+    # repeatedly scan the global risk index/table on large Harbor inventories.
+    totals = select(
+        pairs.c.image_id,
+        func.max(pairs.c.risk).label("risk_max"),
+        func.count(func.distinct(tuple_(
+            canonical_ids.c.canonical, pairs.c.package, pairs.c.installed_version,
+        ))).label("cves_scored"),
+    ).select_from(counted_pairs).where(pairs.c.risk.is_not(None)).group_by(pairs.c.image_id).cte("image_risk_totals")
+    # Include images without scored findings so stale summaries become NULL / 0.
+    images = IMAGE_T.alias("images_to_score")
+    summaries = select(
+        images.c.id, totals.c.risk_max,
+        func.coalesce(totals.c.cves_scored, 0).label("cves_scored"),
+    ).select_from(images.outerjoin(totals, totals.c.image_id == images.c.id)).cte("image_risk_summaries")
     db.execute(
-        update(IMAGE_T).values(
-            risk_max=select(func.max(pairs.c.risk)).where(of_image).scalar_subquery(),
-            cves_scored=select(func.count(func.distinct(tuple_(
-                canonical_ids.c.canonical, pairs.c.package, pairs.c.installed_version,
-            )))).select_from(counted_pairs).where(of_image, pairs.c.risk.is_not(None)).scalar_subquery(),
+        update(IMAGE_T).where(IMAGE_T.c.id == summaries.c.id).values(
+            risk_max=summaries.c.risk_max,
+            cves_scored=summaries.c.cves_scored,
         )
     )
     db.commit()
