@@ -547,7 +547,7 @@ def test_document_conversion_download_and_report(seeded, auth_client, monkeypatc
         'word/media/host01.png': b'private image',
     })
     monkeypatch.setattr(files, 'convert', lambda data, suffix: converted)
-    job_id = upload(auth_client, b'legacy', 'sample.doc')
+    job_id = upload(auth_client, b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1\x00legacy', 'sample.doc')
     assert item(findings(auth_client, job_id), 'host', 'host01')['checked']
     job = apply(auth_client, job_id)
     assert job['status'] == 'done', job
@@ -561,3 +561,35 @@ def test_document_conversion_download_and_report(seeded, auth_client, monkeypatc
     assert 'Конвертация .DOC → .DOCX' in report
     assert 'Исключено: изображения' in report
     assert 'host01' not in report
+
+
+@pytest.mark.parametrize('name', ['sample.MSG', 'sample.doc', 'sample.docx', 'sample.xls', 'sample.xlsx',
+                                  'sample.ppt', 'sample.pptx', 'sample.docm', 'sample.xlsm', 'sample.pptm',
+                                  'sample.odt', 'sample.ods', 'sample.odp'])
+def test_binary_document_upload_reaches_scanner(auth_client, monkeypatch, name):
+    from api.modules.toolbox.services import scrub
+    reached = []
+    monkeypatch.setattr(scrub, 'run_scan', lambda db, handle, job_id: reached.append(job_id))
+    response = auth_client.post(f'{API}/jobs', files={'file': (name, b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1\x00payload', 'application/octet-stream')})
+    assert response.status_code == 202, response.text
+    assert reached == [response.json()['job_id']]
+
+
+def test_msg_nul_padding_full_api_flow(seeded, auth_client, monkeypatch):
+    from email.message import EmailMessage
+    from email.parser import BytesParser
+    from email import policy
+    from api.modules.toolbox.core.scrub import files
+    msg = EmailMessage()
+    msg['Subject'] = 'host01\x00'
+    msg.set_content('host01\x00 10.1.2.15\x00', cte='base64')
+    monkeypatch.setattr(files, 'convert', lambda data, suffix: msg.as_bytes())
+    job_id = upload(auth_client, b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1\x00payload', 'sample.msg')
+    assert item(findings(auth_client, job_id), 'host', 'host01')['checked']
+    job = apply(auth_client, job_id)
+    assert job['status'] == 'done', job
+    response = auth_client.get(f'{API}/jobs/{job_id}/result')
+    assert response.status_code == 200 and 'sample.eml' in response.headers['content-disposition']
+    clean = BytesParser(policy=policy.default).parsebytes(response.content)
+    assert '\x00' not in str(clean['Subject']) + clean.get_content()
+    assert 'host01' not in clean.get_content()

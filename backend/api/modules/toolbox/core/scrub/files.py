@@ -27,7 +27,7 @@ from typing import IO, Any, NamedTuple
 
 from kbaudit.safe_io import MB
 
-from .documents import DocumentError, MODERN, LEGACY, LIMIT, office, output_name
+from .documents import DocumentError, MODERN, LEGACY, LIMIT, STRUCTURED_EXTENSIONS, office, output_name
 from .conversion import convert
 from .mail import email_file, html_text
 
@@ -243,7 +243,7 @@ def _classify(name: str, opener: Opener) -> str:
         return "broken"
     low = name.lower()
     suffix = Path(low).suffix
-    if suffix in MODERN or suffix in LEGACY or suffix in {'.eml', '.html', '.htm'}:
+    if suffix in STRUCTURED_EXTENSIONS:
         return 'structured'
     if suffix in {'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.svg', '.webp',
                   '.exe', '.dll', '.bin', '.7z', '.rar', '.p7m', '.p7s', '.dat',

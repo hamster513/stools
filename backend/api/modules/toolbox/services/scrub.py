@@ -37,6 +37,7 @@ from api.jobs import (
 )
 from api.limits import MB, TOOLBOX_UPLOAD
 from api.modules.toolbox.core.scrub import engine
+from api.modules.toolbox.core.scrub.documents import STRUCTURED_EXTENSIONS
 from api.modules.toolbox.core.scrub.engine import EDGE_AFTER, EDGE_BEFORE, Status, VerifyError
 from api.modules.toolbox.core.scrub.files import UnpackLimit, Entry, output_name
 from api.modules.toolbox.core.scrub.types import KINDS, STORED_KINDS, Ctx, Finding
@@ -50,8 +51,8 @@ from api.timeutil import utcnow
 log = logging.getLogger("stools.toolbox")
 
 TEXT_MAX = 1 * MB
-#: Расширения из спеки §3; файл с другим именем принимается, если он текст.
-EXTENSIONS = (".json", ".gz", ".zip", ".csv", ".txt", ".log", ".xml", ".conf", ".ini", ".yaml", ".yml")
+#: Допустимые расширения: структурные форматы берём из того же списка, что использует движок.
+EXTENSIONS = (".json", ".gz", ".zip", ".csv", ".txt", ".log", ".xml", ".conf", ".ini", ".yaml", ".yml") + tuple(sorted(STRUCTURED_EXTENSIONS))
 #: Сколько начала файла смотреть, чтобы отличить текст от двоичного.
 SNIFF = 8192
 TEXT_NAME = "text.txt"
@@ -159,9 +160,9 @@ def create_job(db: Session, *, user: AppUser, upload: UploadFile | None, text: s
         upload.file.seek(0)
         if not head:
             raise ScrubError("пустой файл")
-        # Офисные форматы и двоичные файлы — не в этой версии (спека «Не входит»).
+        # Содержимое поддерживаемых форматов проверит сканер; неизвестный бинарный файл отклоняем здесь.
         if not name.lower().endswith(EXTENSIONS) and b"\x00" in head:
-            raise ScrubError("файл не текстовый: поддерживаются текст, json, csv, xml, zip и gz с ними")
+            raise ScrubError("двоичный формат не поддерживается: доступны Office, RTF, OpenDocument, EML/MSG, текст, ZIP и GZ")
 
     job_id = start_job(db, ToolboxJob, "scan", user.login)
     folder = job_dir(settings.data_dir, job_id) / "in"

@@ -12,6 +12,7 @@ from lxml import etree
 MODERN = {'.docx', '.xlsx', '.pptx', '.docm', '.xlsm', '.pptm'}
 LEGACY = {'.doc': '.docx', '.xls': '.xlsx', '.ppt': '.pptx', '.rtf': '.docx',
           '.odt': '.docx', '.ods': '.xlsx', '.odp': '.pptx', '.msg': '.eml'}
+STRUCTURED_EXTENSIONS = MODERN | LEGACY.keys() | {'.eml', '.html', '.htm'}
 LIMIT = 64 * 1024 * 1024
 MAX_PARTS = 10000
 W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'

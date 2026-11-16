@@ -96,9 +96,9 @@ def email_file(data: bytes, transform: Callable[[str, str], str],
             if getattr(value, 'defects', ()):
                 raise DocumentError('некорректная кодировка заголовка письма')
             # Decode RFC2047, unfold before transform, then let email encode/fold safely.
-            clean = transform('', str(value)).replace('\r', '').replace('\n', ' ')
+            clean = transform('', str(value).replace('\x00', '')).replace('\r', '').replace('\n', ' ')
             out[key] = clean
-        filename = part.get_filename()
+        filename = (part.get_filename() or '').replace('\x00', '') or None
         if typ == 'message/rfc822':
             payload = part.get_payload()
             if not isinstance(payload, list) or len(payload) != 1:
@@ -134,7 +134,7 @@ def email_file(data: bytes, transform: Callable[[str, str], str],
                 name = _typed_name(name, MIME_SUFFIXES[typ])
             if typ == 'text/html':
                 try:
-                    raw = raw.decode(part.get_content_charset() or 'ascii').encode('utf-8')
+                    raw = raw.decode(part.get_content_charset() or 'ascii').replace('\x00', '').encode('utf-8')
                 except (UnicodeError, LookupError) as exc:
                     raise DocumentError('неизвестная кодировка HTML-вложения') from exc
             clean = attachment(name, raw)
@@ -148,7 +148,9 @@ def email_file(data: bytes, transform: Callable[[str, str], str],
                 raise DocumentError('повреждённая кодировка текста письма')
             add(len(raw))
             try:
-                text = raw.decode(part.get_content_charset() or 'ascii')
+                # MAPI strings may retain terminating NULs after MSG → EML conversion.
+                # Drop them before detection: findings/contexts are stored in PostgreSQL text.
+                text = raw.decode(part.get_content_charset() or 'ascii').replace('\x00', '')
             except (UnicodeError, LookupError) as exc:
                 raise DocumentError('неизвестная кодировка письма') from exc
             if typ == 'text/html':

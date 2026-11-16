@@ -309,3 +309,21 @@ def test_unsupported_structured_formats_are_not_treated_as_plain_text(suffix, tm
     assert texts(src)[0][0].kind == 'skipped'
     rewrite(src, out, replace)
     assert not out.exists()
+
+
+def test_email_nul_padding_does_not_reach_findings_or_output(tmp_path):
+    msg = EmailMessage()
+    msg['Subject'] = 'host\x0001'
+    msg.set_content('host\x0001\x00', cte='base64')
+    msg.add_attachment(b'host01', maintype='text', subtype='plain', filename='note\x00.txt')
+    src = tmp_path / 'mail.eml'
+    src.write_bytes(msg.as_bytes())
+    chunks = [t for _, pieces in texts(src) for _, t in pieces]
+    assert all('\x00' not in t for t in chunks)
+    assert any('host01' in t for t in chunks)
+    out = tmp_path / 'clean.eml'
+    rewrite(src, out, replace)
+    clean = BytesParser(policy=policy.default).parsebytes(out.read_bytes())
+    assert str(clean['Subject']) == 'host-0001'
+    assert 'host-0001' in clean.get_body().get_content()
+    assert list(clean.iter_attachments())[0].get_filename() == 'note.txt'
