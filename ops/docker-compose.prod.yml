@@ -31,12 +31,28 @@ services:
     cpus: ${STOOLS_DB_CPUS:-2}
     restart: unless-stopped
 
+  document-converter:
+    image: ${STOOLS_REGISTRY:-hamster5133}/stools-document-converter:${STOOLS_VERSION:?задайте STOOLS_VERSION в .env}
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,uid=10001,gid=10001
+    volumes:
+      - document-queue:/queue
+    mem_limit: 1g
+    cpus: 1
+    pids_limit: 128
+    restart: unless-stopped
+
   api:
     image: ${STOOLS_REGISTRY:-hamster5133}/stools-api:${STOOLS_VERSION:?задайте STOOLS_VERSION в .env}
     environment:
       STOOLS_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-kbaudit}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kbaudit}
       STOOLS_SESSION_SECRET: ${STOOLS_SESSION_SECRET:?задайте STOOLS_SESSION_SECRET в .env}
       STOOLS_DATA_DIR: /data
+      STOOLS_DOCUMENT_QUEUE: /document-queue
       STOOLS_SESSION_COOKIE_NAME: ${STOOLS_SESSION_COOKIE_NAME:-stools_session}
       STOOLS_IRP_SERVICE_TOKEN: ${STOOLS_IRP_SERVICE_TOKEN:-}
       STOOLS_IRP_ENRICHMENT_SCOPES: ${STOOLS_IRP_ENRICHMENT_SCOPES:-}
@@ -54,6 +70,7 @@ services:
       # Архивы выгрузок и кэш разбора. Владелец каталога — uid 10001
       # (пользователь stools в образе API), иначе загрузка не запишется.
       - ${STOOLS_DATA_ROOT:-/data/stools}/archives:/data
+      - document-queue:/document-queue
       # Файл сертификатов сервера: Debian/Ubuntu — умолчание ниже,
       # RHEL/CentOS/Astra — /etc/pki/tls/certs/ca-bundle.crt (STOOLS_CA_BUNDLE).
       - ${STOOLS_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/stools/ca-bundle.crt:ro
@@ -64,6 +81,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      document-converter:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/auth/oidc/status', timeout=3).status==200 else 1)"]
       interval: 10s
@@ -104,3 +123,6 @@ services:
     mem_limit: 256m
     cpus: 0.5
     restart: unless-stopped
+
+volumes:
+  document-queue:
