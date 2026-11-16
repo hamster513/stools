@@ -9,7 +9,7 @@ import { FindingWorkBlock } from '@/platform/findings/FindingWorkBlock'
 import { Spinner } from '@/components/ui/Spinner'
 import { Link } from '@/lib/router'
 import { cn } from '@/lib/cn'
-import { FactorRow, FormulaBlock, SectionTitle } from './RiskParts'
+import { PriorityBreakdown, SectionTitle } from './RiskParts'
 
 interface Props {
   item: VulnItem | null
@@ -73,31 +73,7 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                     <span className="text-[11px] text-text-secondary">порог {r.threshold}{r.score >= r.threshold ? ' — требует действия' : ''}</span>
                   </div>
 
-                  <FormulaBlock r={r} valueLabel="ценность хоста" />
-                  <table className="mb-4 w-full">
-                    <tbody>
-                      <FactorRow label="Вероятность эксплуатации" f={r.likelihood} total />
-                      <FactorRow label="· KEV" f={r.likelihood_parts.kev} loaded={d.refs_loaded_at.kev} />
-                      <FactorRow label="· EPSS" f={r.likelihood_parts.epss} loaded={d.refs_loaded_at.epss} />
-                      <FactorRow label="· эксплойт ExploitDB" f={r.likelihood_parts.exploit} loaded={d.refs_loaded_at.exploitdb} />
-                      <FactorRow label="· модуль Metasploit" f={r.likelihood_parts.msf} loaded={d.refs_loaded_at.msf} />
-                      <FactorRow label="Тяжесть" f={r.severity} total />
-                      <FactorRow label="· CVSS ÷ 10" f={r.severity_parts.cvss} loaded={d.refs_loaded_at.nvd} />
-                      <FactorRow label="· достижимость" f={r.severity_parts.reach} />
-                      <FactorRow label="Ценность хоста" f={r.value} total />
-                      <FactorRow label="· критичность" f={r.value_parts.criticality} />
-                      <FactorRow label="· конфиденциальные данные" f={r.value_parts.confidential} />
-                      <FactorRow label="· доступ из интернета" f={r.value_parts.internet} />
-                    </tbody>
-                  </table>
-                  {(r.value_parts.internet.substituted || r.value_parts.criticality.substituted || r.likelihood_parts.kev.substituted) && (
-                    <p className="mb-4 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-[11px] text-text-secondary">
-                      {r.value_parts.internet.substituted && <>Зона «{d.host.zone || '—'}» не размечена — доступ из интернета и конфиденциальные данные взяты как «нет». <Link to="/settings/vm#zones" className="text-text underline">Разметить зоны</Link>. </>}
-                      {r.value_parts.criticality.substituted && <>Критичность хоста в VM не задана — учтена как None. </>}
-                      {/* Без каталога «нет в KEV» не факт: эксплуатируемая CVE считается только по EPSS и эксплойтам. */}
-                      {r.likelihood_parts.kev.substituted && <>Справочник CISA KEV не загружен — факт эксплуатации не учтён. <Link to="/settings/vm#references" className="text-text underline">Загрузить справочники</Link>.</>}
-                    </p>
-                  )}
+                  <PriorityBreakdown r={r} />
 
                   <SectionTitle>CVE</SectionTitle>
                   <p className="mb-2 leading-relaxed text-text">{d.cve.description ?? <span className="text-text-secondary">описания нет — CVE отсутствует в загруженном NVD</span>}</p>

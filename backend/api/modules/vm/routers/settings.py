@@ -23,7 +23,8 @@ from api.hosts import (
     take_slot,
 )
 from api.modules.vm.core.mpvm import MpVmClient, MpVmError, MpVmLoginError, make_client
-from api.modules.vm.core.weights import DEFAULT_THRESHOLD, Weights
+from api.modules.vm.core.priority import LEVELS, priority_policy
+from api.modules.vm.core.weights import Weights
 from api.modules.vm.services.settings import (
     DEFAULT_ATTACK_MIN_RISK,
     SecretsRequired,
@@ -38,6 +39,7 @@ router = APIRouter(prefix="/settings", tags=["vm"])
 
 
 class SettingsView(BaseModel):
+    risk_model: dict[str, Any]
     connection: dict[str, Any]
     weights: Weights
     threshold: int
@@ -50,13 +52,14 @@ def _view(s: VmSettings) -> SettingsView:
     conn["api_token_set"] = bool(s.connection.api_token)
     conn["configured"] = s.connection.configured
     return SettingsView(
+        risk_model=priority_policy(),
         connection=conn,
         weights=s.weights,
         threshold=s.threshold,
         attack_min_risk=s.attack_min_risk,
         # Умолчания отдаются рядом, чтобы «сбросить» на экране не требовало
         # ещё одной ручки и не расходилось с бэкендом.
-        defaults={"weights": Weights().model_dump(), "threshold": DEFAULT_THRESHOLD, "attack_min_risk": DEFAULT_ATTACK_MIN_RISK},
+        defaults={"weights": VmSettings().weights.model_dump(), "threshold": LEVELS["high"], "attack_min_risk": DEFAULT_ATTACK_MIN_RISK},
     )
 
 

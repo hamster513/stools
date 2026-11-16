@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from api.modules.ksc.models import KscSnapshot
 from api.modules.ksc.software_models import KscSoftware, KscSoftwareInventory
-from api.modules.vm.core.risk import CveInputs, explain, level
+from api.modules.vm.core.priority import AssetContext, priority_score
+from api.modules.vm.core.risk import CveInputs, level
 from api.modules.vm.core.weights import CRITICALITIES
 from api.modules.vm.models import VmHost, VmHostCve, VmImage, VmImageCve
 from api.modules.vm.software_models import VmKscCve
@@ -23,10 +24,9 @@ def risk_range(data: dict, weights) -> dict:
         kev=data['known_exploited'] is True, kev_loaded=data['known_exploited'] is not None)
     scenarios, assumptions = [], set()
     for criticality, internet, confidential in product((c for c in CRITICALITIES if c != 'None'), (False, True), (False, True)):
-        result = explain(inputs, criticality, internet, confidential, True, weights)
+        result = priority_score(inputs, AssetContext(criticality, internet, confidential))
         scenarios.append({'score': result.score, 'criticality': criticality, 'internet': internet, 'confidential': confidential})
-        for name, value in {**result.likelihood_parts, **result.severity_parts}.items():
-            if value.substituted: assumptions.add(name)
+        assumptions.update(result.missing)
     low, high = min(scenarios, key=lambda v: v['score']), max(scenarios, key=lambda v: v['score'])
     return {'min': low['score'], 'max': high['score'], 'min_profile': low, 'max_profile': high,
         'min_level': level(low['score'], weights.levels), 'max_level': level(high['score'], weights.levels),

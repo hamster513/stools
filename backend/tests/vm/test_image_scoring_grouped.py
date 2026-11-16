@@ -62,9 +62,9 @@ def test_summary_preserves_aliases_packages_versions_and_empty_images(db_session
     db_session.flush()
     db_session.add(VmRefGhsaAlias(ghsa_id=ghsa, alias=cve))
     db_session.add_all([
-        VmCve(cve_id=cve, likelihood=0.5, cvss10=0.8, av_class="network"),
-        VmCve(cve_id=ghsa, likelihood=0.25, cvss10=0.8, av_class="network"),
-        VmCve(cve_id="CVE-2026-00000", likelihood=0, cvss10=0.8, av_class="network"),
+        VmCve(cve_id=cve, epss=.5, cvss=8, v3_av="NETWORK", av_class="network"),
+        VmCve(cve_id=ghsa, epss=.01, cvss=8, v3_av="NETWORK", av_class="network"),
+        VmCve(cve_id="CVE-2026-00000", epss=0, cvss=0, v3_av="NETWORK", av_class="network"),
     ])
     images = [VmImage(project="test", repository=str(i), digest=f"sha256:{i}",
                       risk_max=99, cves_scored=99) for i in range(5)]
@@ -87,7 +87,7 @@ def test_summary_preserves_aliases_packages_versions_and_empty_images(db_session
     db_session.expire_all()
     assert [image.cves_scored for image in images] == [3, 1, 0, 0, 1]
     assert images[0].risk_max > images[1].risk_max > 0
-    assert [image.risk_max for image in images[2:]] == [None, None, 0]
+    assert [image.risk_max for image in images[2:]] == [None, None, 22]
     stored = list(db_session.scalars(select(VmImageCve)))
     assert len(stored) == len(records)
     assert {(p.image_id, p.cve_id, p.package, p.installed_version) for p in stored} == {

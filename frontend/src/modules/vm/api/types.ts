@@ -118,11 +118,7 @@ export interface VulnsQuery {
   offset?: number
 }
 
-export interface Factor {
-  value: number
-  source: string
-  substituted: boolean
-}
+
 
 export interface RiskCard {
   host: {
@@ -160,15 +156,15 @@ export interface RiskCard {
     level: RiskLevel
     level_word: string
     threshold: number
-    /** L — вероятность эксплуатации. */
-    likelihood: Factor
-    likelihood_parts: { kev: Factor; epss: Factor; exploit: Factor; msf: Factor }
-    /** S — тяжесть: CVSS ÷ 10 × достижимость. */
-    severity: Factor
-    severity_parts: { cvss: Factor; reach: Factor }
-    /** V — ценность хоста. */
-    value: Factor
-    value_parts: { criticality: Factor; confidential: Factor; internet: Factor }
+    model: 'additive'
+    model_version: string
+    levels: { medium: number; high: number; critical: number }
+    base_score: number
+    computed_score: number
+    blocks: Record<string, { label: string; points: number; maximum: number; source: string; assumed: boolean }>
+    floor: number
+    rules: { code: string; label: string; minimum: number }[]
+    missing: string[]
   }
   refs_loaded_at: Record<string, string | null>
 }
@@ -248,6 +244,12 @@ export interface ConnectionView {
 }
 
 export interface SettingsView {
+  risk_model: {
+    version: string
+    caps: Record<string, number>
+    levels: { medium: number; high: number; critical: number }
+    floors: { kev_minimum: number; kev_network_external_zone: number; ready_exploit_critical_asset: number }
+  }
   connection: ConnectionView
   weights: Weights
   threshold: number
@@ -534,7 +536,7 @@ export interface ImageVulnsQuery {
 export interface ImageRiskCard {
   image: ImageItem
   vuln: ImageVulnItem
-  /** Те же L, S, V, что у пары хоста, с условиями образа: интернета, критичности и конфиденциальности нет. */
+  /** Те же четыре блока приоритета, что у хоста; доступность, критичность и конфиденциальность образа неизвестны. */
   factors: RiskCard['risk'] | null
   nvd_url: string | null
   source_url?: string | null

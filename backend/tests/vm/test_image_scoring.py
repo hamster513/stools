@@ -5,12 +5,12 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from api.modules.vm.core.risk import reach, score
+from api.modules.vm.core.priority import AssetContext, priority_score
+from api.modules.vm.core.risk import CveInputs
 from api.modules.vm.core.weights import Weights
 from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmImage, VmImageCve
 from api.modules.vm.services.scoring import (
     drop_orphan_cves,
-    image_value,
     rescore_all,
     rescore_image_pairs,
 )
@@ -32,7 +32,7 @@ def _pair(db: Any, image: VmImage, cve_id: str = CVE, package: str = "busybox") 
 
 def test_rescore_image_pairs_uses_cve_mart(db_session: Any) -> None:
     w = Weights()
-    db_session.add(VmCve(cve_id=CVE, likelihood=0.5, cvss10=0.8, av_class="network"))
+    db_session.add(VmCve(cve_id=CVE, likelihood=0.5, cvss10=0.8, cvss=8, epss=.5, v3_av="NETWORK", av_class="network"))
     image = _image(db_session)
     _pair(db_session, image)
     # Второй образ без CVE из витрины: максимум считается по своим парам, а не по всем.
@@ -43,7 +43,7 @@ def test_rescore_image_pairs_uses_cve_mart(db_session: Any) -> None:
     assert rescore_image_pairs(db_session, w) == 1
 
     db_session.expire_all()
-    expected = score(0.5 * 0.8 * reach("network", False, w) * image_value(w))
+    expected = priority_score(CveInputs(cvss=8, epss=.5, av="NETWORK"), AssetContext()).score
     pair = db_session.get(VmImageCve, (image.id, CVE, "busybox", "1.36.1-r0"))
     assert pair.risk == expected and expected > 0
     img = db_session.get(VmImage, image.id)
@@ -83,7 +83,7 @@ def test_drop_orphan_keeps_image_cves(db_session: Any) -> None:
 
 
 def test_rescore_all_counts_both(db_session: Any) -> None:
-    db_session.add(VmCve(cve_id=CVE, likelihood=0.5, cvss10=0.8, av_class="network"))
+    db_session.add(VmCve(cve_id=CVE, likelihood=0.5, cvss10=0.8, cvss=8, epss=.5, v3_av="NETWORK", av_class="network"))
     host = VmHost(hostname="srv01", ip="10.0.0.1")
     db_session.add(host)
     db_session.flush()
@@ -95,7 +95,7 @@ def test_rescore_all_counts_both(db_session: Any) -> None:
 
 
 def test_import_keeps_image_cves(auth_client: TestClient, db_session: Any) -> None:
-    db_session.add(VmCve(cve_id=CVE, likelihood=0.5, cvss10=0.8, av_class="network"))
+    db_session.add(VmCve(cve_id=CVE, likelihood=0.5, cvss10=0.8, cvss=8, epss=.5, v3_av="NETWORK", av_class="network"))
     image = _image(db_session)
     _pair(db_session, image)
     db_session.commit()

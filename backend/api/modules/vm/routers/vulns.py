@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
+from api.modules.vm.core.priority import AssetContext, priority_score
 from api.modules.vm.core.refs import REF_NAMES
-from api.modules.vm.core.risk import explain
 from api.modules.vm.models import (
     VmCve,
     VmHost,
@@ -142,14 +142,10 @@ def risk_card(
     settings = load_settings(db)
     refs = {s.name: s.loaded_at for s in db.execute(select(VmRefState)).scalars()}
     inputs = cve_inputs(cve, kev_loaded="kev" in refs)
-    e = explain(
-        inputs,
-        host.criticality or None,
-        internet=bool(zone and zone.internet_access),
-        confidential=bool(zone and zone.confidential_data),
-        zone_marked=bool(zone and zone.marked),
-        w=settings.weights,
-    )
+    marked = bool(zone and zone.marked)
+    e = priority_score(inputs, AssetContext(host.criticality or None,
+                       zone.internet_access if marked else None,
+                       zone.confidential_data if marked else None))
     exploits = db.execute(
         select(VmRefExploitdb.exploit_id, VmRefExploitdb.type, VmRefExploitdb.verified, VmRefExploitdb.published)
         .join(VmRefExploitdbCve, VmRefExploitdbCve.exploit_id == VmRefExploitdb.exploit_id)

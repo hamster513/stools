@@ -9,17 +9,17 @@ def test_defaults_and_secrets_hidden(auth_client: TestClient) -> None:
     r = auth_client.get("/api/vm/settings")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["threshold"] == 70
+    assert body["threshold"] == 80
     w = body["weights"]
     assert (w["prior_epss"], w["cvss_missing"], w["reach_unknown"]) == (0.01, 0.5, 0.8)
     assert w["p_exdb"]["remote"] == 0.3 and w["p_msf"]["excellent"] == 0.5
     assert w["reach"] == {"network_internet": 1.0, "network_internal": 0.8, "adjacent": 0.6, "local": 0.4}
     assert w["value"]["criticality"]["Critical"] == 1.0 and w["value"]["conf_bonus"] == 0.1
-    assert w["levels"] == {"medium": 15, "high": 35, "critical": 60}
+    assert w["levels"] == {"medium": 40, "high": 80, "critical": 85}
     assert body["defaults"]["weights"] == w
     assert body["connection"]["api_token_set"] is False
     assert "api_token" not in body["connection"]
-    assert body["defaults"]["threshold"] == 70
+    assert body["defaults"]["threshold"] == 80
 
 
 def test_put_keeps_secrets_when_empty(auth_client: TestClient) -> None:
@@ -265,7 +265,7 @@ def test_levels_must_be_ordered(auth_client: TestClient) -> None:
     for levels in ({"medium": 35, "high": 35, "critical": 60}, {"medium": 15, "high": 70, "critical": 60}, {"medium": 15, "high": 35, "critical": 101}):
         r = auth_client.put("/api/vm/settings", json={"weights": {"levels": levels}})
         assert r.status_code == 422, (levels, r.text)
-    assert auth_client.get("/api/vm/settings").json()["weights"]["levels"]["critical"] == 60
+    assert auth_client.get("/api/vm/settings").json()["weights"]["levels"]["critical"] == 85
 
 
 def test_weight_dicts_need_known_keys_and_shares(auth_client: TestClient) -> None:

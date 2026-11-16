@@ -63,9 +63,9 @@ def test_list_sorted_nulls_last_with_facets(auth_client: TestClient, seeded: dic
     assert web["name"] == "stools/web" and web["tags"] == ["1.2.3", "stable"]
     assert len(web["digest_short"]) == 12 and web["digest"].startswith("sha256:")
     assert web["trivy"] == {"critical": 1, "high": 1, "medium": 0, "low": 0, "unknown": 0, "total": 2}
-    assert web["level"] == "critical" and body["items"][2]["level"] is None
+    assert web["level"] == "high" and body["items"][2]["level"] is None
     facets = body["facets"]
-    assert facets["level"] == {"none": 1, "low": 1, "medium": 0, "high": 0, "critical": 1}
+    assert facets["level"] == {"none": 1, "low": 1, "medium": 0, "high": 1, "critical": 0}
     assert facets["project"] == {"stools": 2, "library": 1}
     assert facets["scan_status"] == {"success": 2, "none": 1}
     page = auth_client.get("/api/vm/images?offset=1&limit=1").json()
@@ -86,7 +86,7 @@ def test_list_filters_project_and_search(auth_client: TestClient, seeded: dict[s
     assert names("q=stable") == ["stools/web"]
     assert names("q=web&project=library") == []
     assert names("level=none") == ["library/alpine"]
-    assert names("level=critical&level=low") == ["stools/web", "stools/api"]
+    assert names("level=high&level=low") == ["stools/web", "stools/api"]
     assert names("scan_status=none") == ["library/alpine"]
     assert names("trivy=critical") == ["stools/web"]
     assert names("trivy=high") == ["stools/web", "stools/api"]
@@ -143,7 +143,7 @@ def test_image_vulns_filters_and_card(auth_client: TestClient, seeded: dict[str,
     assert body["total"] == 4
     assert [i["cve_id"] for i in body["items"]] == ["CVE-2024-1111", "CVE-2024-2222", "CVE-2024-3333", "GHSA-aaaa-bbbb-cccc"]
     top = body["items"][0]
-    assert top["risk"] == 80 and top["level"] == "critical" and top["is_cve"] is True
+    assert top["risk"] == 80 and top["level"] == "high" and top["is_cve"] is True
     assert top["epss"] == 0.5 and top["kev"] is True and top["cvss"] == 9.8 and top["trivy_cvss"] == 9.8
     ghsa = body["items"][-1]
     assert ghsa["risk"] is None and ghsa["level"] is None and ghsa["is_cve"] is False and ghsa["epss"] is None
@@ -168,12 +168,12 @@ def test_image_vulns_filters_and_card(auth_client: TestClient, seeded: dict[str,
     body = card.json()
     assert body["image"]["name"] == "stools/web" and body["vuln"]["cve_id"] == "CVE-2024-1111"
     factors = body["factors"]
-    assert factors["score"] == 80 and factors["level"] == "critical"
-    assert factors["likelihood"]["value"] == 1.0
-    assert factors["value"]["source"] and "likelihood_parts" in factors and "severity_parts" in factors
-    # «Хост внутри» для образа — условие формулы, а не подстановка за неразмеченную зону.
-    assert factors["severity_parts"]["reach"]["substituted"] is False
-    assert factors["value_parts"]["internet"]["substituted"] is False
+    assert factors["score"] == 80 and factors["level"] == "high"
+    assert factors["blocks"]["exploitation"]["points"] == 40
+    assert factors["blocks"]["exposure"]["points"] == 12
+    assert factors["blocks"]["exposure"]["assumed"] is True
+    assert factors["blocks"]["asset"]["assumed"] is True
+    assert factors["computed_score"] == 85  # stored 80 remains visible until recalc
     assert body["nvd_url"] == "https://nvd.nist.gov/vuln/detail/CVE-2024-1111"
 
     ghsa_card = auth_client.get(f"{base}/GHSA-aaaa-bbbb-cccc", params={"package": "pkg", "installed_version": "1.0"})
@@ -194,7 +194,7 @@ def test_export_csv_rows(auth_client: TestClient, seeded: dict[str, int]) -> Non
     assert len(rows) == 5 and {row[0] for row in rows[1:]} == {"stools/web"}
     first = dict(zip(rows[0], rows[1], strict=True))
     assert first["CVE"] == "CVE-2024-1111" and first["Пакет"] == "openssl" and first["Исправлена"] == "3.0.2"
-    assert first["Риск"] == "80" and first["Уровень"] == "critical" and first["KEV"] == "да"
+    assert first["Риск"] == "80" and first["Уровень"] == "high" and first["KEV"] == "да"
     assert first["Теги"] == "1.2.3, stable" and first["Статус скана"] == "success"
     ghsa = dict(zip(rows[0], rows[-1], strict=True))
     assert ghsa["CVE"] == "GHSA-aaaa-bbbb-cccc" and ghsa["Риск"] == "" and ghsa["Уровень"] == "" and ghsa["EPSS"] == ""

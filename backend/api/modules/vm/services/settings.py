@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from api.crypto import decrypt
 from api.db.models import AppSetting
 from api.hosts import validate_host
-from api.modules.vm.core.weights import DEFAULT_THRESHOLD, Weights
+from api.modules.vm.core.priority import LEVELS, MODEL_VERSION
+from api.modules.vm.core.weights import DEFAULT_THRESHOLD, Levels, Weights
 from api.platform.secret_fields import put_setting, seal_secrets, secrets_again
 
 VM_KEY = "vm"
@@ -84,9 +85,16 @@ class SecretsRequired(ValueError):
 
 
 class VmSettings(BaseModel):
+    score_model: str = MODEL_VERSION
+
+    @field_validator("weights", mode="after")
+    @classmethod
+    def scoring_levels(cls, value: Weights) -> Weights:
+        return value.model_copy(update={"levels": Levels(**LEVELS)})
+
     connection: Connection = Field(default_factory=Connection)
-    weights: Weights = Field(default_factory=Weights)
-    threshold: int = Field(default=DEFAULT_THRESHOLD, ge=0, le=100)
+    weights: Weights = Field(default_factory=lambda: Weights(levels=Levels(**LEVELS)))
+    threshold: int = Field(default=LEVELS["high"], ge=0, le=100)
     #: Порог слоя ATT&CK: пары ниже него в матрицу не попадают. Отдельный
     #: от `threshold`: матрица про способ атаки, а не про очередь работ.
     attack_min_risk: int = Field(default=DEFAULT_ATTACK_MIN_RISK, ge=0, le=100)
@@ -100,8 +108,8 @@ class VmSettingsIn(BaseModel):
     """
 
     connection: ConnectionIn = Field(default_factory=ConnectionIn)
-    weights: Weights = Field(default_factory=Weights)
-    threshold: int = Field(default=DEFAULT_THRESHOLD, ge=0, le=100)
+    weights: Weights = Field(default_factory=lambda: Weights(levels=Levels(**LEVELS)))
+    threshold: int = Field(default=LEVELS["high"], ge=0, le=100)
     attack_min_risk: int | None = Field(default=None, ge=0, le=100)
 
 
@@ -110,6 +118,11 @@ def load_settings(db: Session) -> VmSettings:
     if row is None or not row.value_json or row.value_json == "{}":
         return VmSettings()
     data = json.loads(row.value_json)
+    # Migrate the former default action threshold; keep intentional custom values.
+    # The original stored JSON stays untouched until settings are saved explicitly.
+    if data.get("score_model") != MODEL_VERSION and data.get("threshold", DEFAULT_THRESHOLD) == DEFAULT_THRESHOLD:
+        data["threshold"] = LEVELS["high"]
+    data["score_model"] = MODEL_VERSION
     weights = data.get("weights")
     if isinstance(weights, dict) and "levels" not in weights:
         # Веса первой итерации (impact, cvss_v3, exploitdb, msf…) в новую формулу не
@@ -130,7 +143,7 @@ def changed_fields(current: VmSettings, incoming: VmSettingsIn) -> list[str]:
         new = getattr(incoming.connection, name)
         if new != getattr(current.connection, name) and (name not in SECRET_FIELDS or new):
             changed.append(name)
-    if incoming.weights != current.weights:
+    if VmSettings(weights=incoming.weights).weights != current.weights:
         changed.append("weights")
     if incoming.threshold != current.threshold:
         changed.append("threshold")

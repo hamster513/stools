@@ -35,6 +35,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement, Subquery
 
+from api.modules.vm.core.priority import LEVELS as PRIORITY_LEVELS
 from api.modules.vm.core.risk import level as risk_level
 from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmFindingStateRef, VmHost, VmHostCve
@@ -181,7 +182,7 @@ class VulnFilters:
     #: По умолчанию — все статусы: обзор и карточка хоста считают все пары.
     status: StatusFilter = field(default_factory=StatusFilter)
     #: Пороги уровней из настроек — для фильтра `level` и фасета уровней; не фильтр.
-    levels: Levels = field(default_factory=Levels)
+    levels: Levels = field(default_factory=lambda: Levels(**PRIORITY_LEVELS))
 
     def data_empty(self) -> bool:
         """Нет фильтров по данным пары (статус и пороги не в счёт)."""

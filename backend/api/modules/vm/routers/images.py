@@ -16,7 +16,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.vm.core.harbor import is_cve
-from api.modules.vm.core.risk import explain
+from api.modules.vm.core.priority import AssetContext, priority_score
 from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmImage, VmRefState
 from api.modules.vm.services import images_query as q
@@ -226,18 +226,13 @@ def image_risk_card(
         False if has_cve and db.get(VmRefState, "kev") is not None else None
     )
     if cve is not None:
-        # Расчёт для образа: критичности, зоны и интернета нет — V базовая (`scoring.image_value`).
-        # «Внутри, без интернета и конфиденциальности» для образа — условие формулы, а не подстановка
-        # за неразмеченную зону: `zone_marked=True`.
-        e = explain(
-            cve_inputs(cve, kev_loaded=known_exploited is not None),
-            None, internet=False, confidential=False, zone_marked=True, w=settings.weights,
-        )
+        # Images have unknown asset context, not an assumed internal network.
+        e = priority_score(cve_inputs(cve, kev_loaded=known_exploited is not None), AssetContext())
         # Пара ещё без риска (до пересчёта) — показываем расчёт.
         factors = risk_view(e, settings, row.risk if row.risk is not None else e.score,
-                            row.risk_raw if row.risk_raw is not None else e.raw)
+                            row.risk_raw if row.risk_raw is not None else e.score / 100.0)
         if is_ghsa(vuln_id) and not has_cve and known_exploited is None:
-            factors["likelihood_parts"]["kev"]["source"] = "нет CVE для проверки по KEV"
+            factors["missing"] = ["нет CVE для проверки по KEV" if field == "сведения KEV" else field for field in factors["missing"]]
     return {
         "image": q.image_item(image, levels),
         "vuln": q.vuln_item(row, levels),

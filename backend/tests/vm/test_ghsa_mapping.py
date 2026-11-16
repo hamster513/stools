@@ -182,8 +182,7 @@ def test_ghsa_image_card_has_factors_source_and_unknown_kev(
     assert body["vuln"]["cve_id"] == scanner_id
     assert body["source_url"] == f"https://github.com/advisories/{GHSA}"
     assert body["nvd_url"] is None and body["known_exploited"] is None
-    assert body["factors"]["likelihood_parts"]["kev"]["substituted"] is True
-    assert body["factors"]["likelihood_parts"]["kev"]["source"] == "нет CVE для проверки по KEV"
+    assert "нет CVE для проверки по KEV" in body["factors"]["missing"]
 
 
 def test_oversized_alias_component_does_not_partially_merge_findings(db_session: Any, monkeypatch: pytest.MonkeyPatch) -> None:

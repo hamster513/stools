@@ -71,7 +71,7 @@ export function AttackThresholdSection({ settings }: { settings: SettingsView })
           aria-label="Порог риска для матрицы ATT&CK"
           disabled={!admin}
         />
-        <span className="text-[11px] text-text-secondary">40 — граница High</span>
+        <span className="text-[11px] text-text-secondary">40 — порог матрицы по умолчанию</span>
       </div>
       {admin && (
         <div className="mt-4 flex items-center gap-2 border-t border-grid pt-3">

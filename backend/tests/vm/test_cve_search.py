@@ -36,7 +36,7 @@ def test_potential_range_and_actual_host_risks_are_separate(auth_client, db_sess
     db_session.add_all([VmHostCve(host_id=hosts[0].id,cve_id=CVE,risk=45), VmHostCve(host_id=hosts[1].id,cve_id=CVE,risk=90)])
     db_session.commit()
     result=auth_client.get(BASE+'/'+CVE).json()
-    assert (result['risk']['min'], result['risk']['max']) == (32, 100)
+    assert (result['risk']['min'], result['risk']['max']) == (80, 100)
     assert result['known_exploited'] is True
     assert (result['matches']['risk_min'], result['matches']['risk_max']) == (45,90)
     assert result['matches']['hosts_total'] == 2
@@ -49,7 +49,7 @@ def test_zero_and_missing_metrics_not_confused(auth_client, db_session):
     data=auth_client.get(BASE+'/'+CVE).json()
     assert data['cvss'] == 0 and data['epss'] == 0
     assert data['known_exploited'] is None
-    assert data['risk']['max'] == 0
+    assert data['risk']['max'] == 37
     assert data['severity'] == 'none'
 
 
@@ -167,13 +167,13 @@ def test_ksc_matches_use_latest_snapshot_and_keep_evidence_kind(auth_client,db_s
     assert auth_client.get(BASE+'/'+CVE).json()['software_matches']['total']==0
 
 
-def test_risk_uses_current_configured_weights(auth_client,db_session):
+def test_legacy_weights_do_not_change_additive_policy(auth_client,db_session):
     from api.db.models import AppSetting
     from api.modules.vm.core.weights import Weights
     weights=Weights().model_dump();weights['reach']['network_internal']=0.1
     db_session.add_all([nvd(),VmRefKev(cve_id=CVE),AppSetting(key='vm',value_json=json.dumps({'weights':weights}))]);db_session.commit()
     data=auth_client.get(BASE+'/'+CVE).json()
-    assert (data['risk']['min'],data['risk']['max'])==(4,100)
+    assert (data['risk']['min'],data['risk']['max'])==(80,100)
 
 
 def test_collector_cvss_v2_preserves_version_and_high_severity(auth_client,db_session):

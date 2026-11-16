@@ -6,8 +6,7 @@ import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
 import { RiskBadge } from '@/modules/vm/components/RiskBadge'
 import { Spinner } from '@/components/ui/Spinner'
 import { cn } from '@/lib/cn'
-import { Link } from '@/lib/router'
-import { FactorRow, FormulaBlock, SectionTitle } from '../vulns/RiskParts'
+import { PriorityBreakdown, SectionTitle } from '../vulns/RiskParts'
 import { epssPercent } from './format'
 import { TrivyBadge } from './TrivyCounts'
 
@@ -77,29 +76,8 @@ export function ImageRiskDrawer({ imageId, item, onClose }: Props) {
                     <span className="text-[11px] text-text-secondary">порог {r.threshold}{r.score >= r.threshold ? ' — требует действия' : ''}</span>
                   </div>
 
-                  <FormulaBlock r={r} valueLabel="ценность" />
-                  <table className="mb-2 w-full">
-                    <tbody>
-                      <FactorRow label="Вероятность эксплуатации" f={r.likelihood} total />
-                      <FactorRow label="· KEV" f={r.likelihood_parts.kev} />
-                      <FactorRow label="· EPSS" f={r.likelihood_parts.epss} />
-                      <FactorRow label="· эксплойт ExploitDB" f={r.likelihood_parts.exploit} />
-                      <FactorRow label="· модуль Metasploit" f={r.likelihood_parts.msf} />
-                      <FactorRow label="Тяжесть" f={r.severity} total />
-                      <FactorRow label="· CVSS ÷ 10" f={r.severity_parts.cvss} />
-                      <FactorRow label="· достижимость" f={r.severity_parts.reach} />
-                      <FactorRow label="Ценность" f={r.value} total />
-                    </tbody>
-                  </table>
-                  <p className="mb-4 rounded border border-grid bg-app-bg px-3 py-2 text-[11px] text-text-secondary">
-                    Образ: ценность одинаковая для всех образов, доступ из интернета не учитывается.
-                  </p>
-                  {/* Без каталога «нет в KEV» не факт: эксплуатируемая CVE считается только по EPSS и эксплойтам. */}
-                  {r.likelihood_parts.kev.substituted && (
-                    <p className="mb-4 rounded border border-risk-medium/40 bg-risk-medium/5 px-3 py-2 text-[11px] text-text-secondary">
-                      В загруженных данных нет сведений об эксплуатации для этого идентификатора. <Link to="/settings/vm#references" onNavigate={onClose} className="text-text underline">Загрузить справочники</Link>.
-                    </p>
-                  )}
+                  <PriorityBreakdown r={r} />
+                  <p className="mb-4 text-[11px] text-text-secondary">Критичность, зона размещения и конфиденциальность образа неизвестны. Использованы значения для неизвестного контекста.</p>
                 </>
               )}
               {supported && d && !r && (

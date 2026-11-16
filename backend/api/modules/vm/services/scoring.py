@@ -1,4 +1,4 @@
-"""Обогащение витрины `vm_cve`, ценность хостов и пересчёт пар (спека 2026-10-21 §9).
+"""Обогащение витрины `vm_cve` и массовый пересчёт аддитивного приоритета.
 
 Порядок всегда один: справочники → `vm_cve.likelihood`, `cvss10`, `av_class`, KEV;
 зоны и веса → `vm_host.value`, `internet`; затем `vm_host_cve` и `vm_image_cve` —
@@ -35,11 +35,11 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from api.db.models import AppSetting
 from api.llm_settings import read_setting
+from api.modules.vm.core.priority import strongest_msf_rank
 from api.modules.vm.core.risk import (
     CveInputs,
     av_class,
     best_exploit_type,
-    best_msf_rank,
     host_value,
     likelihood,
 )
@@ -62,6 +62,7 @@ from api.modules.vm.services.jobs import (
     run_job,
     start_job,
 )
+from api.modules.vm.services.priority_sql import priority_raw
 
 log = logging.getLogger(__name__)
 
@@ -186,7 +187,8 @@ def rebuild_cves(
                     v3_ui = {"N": "NONE", "R": "REQUIRED", "P": "PASSIVE", "A": "ACTIVE"}.get(vector.get("UI", ""))
                     v2_av, v2_ac, v2_au = None, None, None
             exdb_type = best_exploit_type(reference.exploit_types, weights)
-            msf_rank = best_msf_rank(reference.msf_ranks, weights)
+            # A ready module must not be hidden by obsolete probability weights.
+            msf_rank = strongest_msf_rank(reference.msf_ranks)
             inputs = CveInputs(
                 epss=e.epss if e is not None else None,
                 cvss=cvss,
@@ -268,30 +270,20 @@ def rebuild_hosts_value(db: Session, weights: Weights, handle: JobHandle | None 
 
 
 def rescore_pairs(db: Session, weights: Weights) -> int:
-    """risk_raw = L × CVSS' × reach × V, risk = round(100 × risk_raw) в 0..100 — одним
-    `UPDATE vm_host_cve … FROM vm_host, vm_cve`. reach — `CASE` по классу вектора CVE и
-    доступу хоста из интернета; веса уходят параметрами запроса.
-
-    Округление — FLOOR(x + 0.5), а не CAST(x + 0.5): CAST double precision
-    в integer Postgres сам округляет (до чётного), и прибавленная половина
-    округлялась второй раз — риск завышался на единицу (67.18 → 68).
-    FLOOR отбрасывает дробную часть на обоих диалектах, так что половина
-    добавляется ровно один раз (`core.risk.score` округляет так же).
-    """
-    w = weights
-    reach = case(
-        ((CVE_T.c.av_class == "network") & HOST_T.c.internet, w.reach.network_internet),
-        (CVE_T.c.av_class == "network", w.reach.network_internal),
-        (CVE_T.c.av_class == "adjacent", w.reach.adjacent),
-        (CVE_T.c.av_class == "local", w.reach.local),
-        else_=w.reach_unknown,
-    )
-    raw = CVE_T.c.likelihood * func.coalesce(CVE_T.c.cvss10, w.cvss_missing) * reach * HOST_T.c.value
+    """Additive priority in one UPDATE; marked zones supply known context only."""
+    zones = VmZone.__table__
+    context = select(
+        HOST_T.c.id, HOST_T.c.criticality,
+        case((zones.c.marked.is_(True), zones.c.internet_access), else_=null()).label("internet"),
+        case((zones.c.marked.is_(True), zones.c.confidential_data), else_=null()).label("confidential"),
+    ).select_from(HOST_T.outerjoin(zones, zones.c.name == HOST_T.c.zone)).cte("host_priority_context")
+    raw = priority_raw(CVE_T.c, criticality=context.c.criticality,
+                       internet=context.c.internet, confidential=context.c.confidential)
     result = typing_cast(
         CursorResult[Any],
         db.execute(
             update(PAIR_T)
-            .where(HOST_T.c.id == PAIR_T.c.host_id, CVE_T.c.cve_id == PAIR_T.c.cve_id)
+            .where(context.c.id == PAIR_T.c.host_id, CVE_T.c.cve_id == PAIR_T.c.cve_id)
             .values(risk_raw=raw, risk=_clamped(raw))
         ),
     )
@@ -312,27 +304,11 @@ def _clamped(raw: ColumnElement[Any]) -> ColumnElement[Any]:
     )
 
 
-def image_value(w: Weights) -> float:
-    """V образа: базовая ценность — у образа нет ни критичности, ни зоны. Одна функция,
-    чтобы потом заменить её ценностью из Assets."""
-    return host_value(None, False, False, w)
-
-
 def rescore_image_pairs(db: Session, weights: Weights) -> int:
-    """Риск пар «образ × CVE» по той же формуле, что у хостов: одним
-    `UPDATE vm_image_cve … FROM vm_cve`, reach — как у хоста без доступа из интернета,
-    V — `image_value`. Пары, чьего идентификатора нет в витрине, получают NULL.
-    Затем на образе — наибольший риск и число находок с риском без дублей CVE/GHSA.
-    Возвращает число пар, получивших риск.
+    """Additive priority with unknown asset context, then grouped image totals.
+    Missing mart entries remain NULL; canonical CVE/GHSA/package dedup is unchanged.
     """
-    w = weights
-    reach = case(
-        (CVE_T.c.av_class == "network", w.reach.network_internal),
-        (CVE_T.c.av_class == "adjacent", w.reach.adjacent),
-        (CVE_T.c.av_class == "local", w.reach.local),
-        else_=w.reach_unknown,
-    )
-    raw = CVE_T.c.likelihood * func.coalesce(CVE_T.c.cvss10, w.cvss_missing) * reach * image_value(w)
+    raw = priority_raw(CVE_T.c)
     in_mart = exists().where(CVE_T.c.cve_id == IMAGE_PAIR_T.c.cve_id)
     db.execute(
         update(IMAGE_PAIR_T)
@@ -388,11 +364,11 @@ def rescore_all(db: Session, weights: Weights) -> int:
 
 def recalculate(db: Session, handle: JobHandle, weights: Weights) -> None:
     """Задача `recalculate`: после смены весов или разметки зон."""
-    handle.stage("cves", message="вероятность и тяжесть CVE")
+    handle.stage("cves", message="факторы приоритета CVE")
     rebuild_cves(db, weights, None, handle)
     handle.stage("hosts", message="ценность хостов")
     rebuild_hosts_value(db, weights, handle)
-    handle.stage("pairs", message="риск пар")
+    handle.stage("pairs", message="скоринговый приоритет пар, High от 80")
     n = rescore_all(db, weights)
     # Маркер — только после полного прохода: прерванный пересчёт оставит его старым,
     # и следующий старт API поставит пересчёт заново.
@@ -402,7 +378,7 @@ def recalculate(db: Session, handle: JobHandle, weights: Weights) -> None:
 
 #: Версия формулы риска. Растёт, когда меняется сама формула: риск пар, посчитанный
 #: прежней версией, неверен, пока не пройдёт полный `recalculate`.
-FORMULA_VERSION = 2
+FORMULA_VERSION = 3
 #: Ключ в `app_setting`: какой версией формулы посчитан риск пар.
 FORMULA_VERSION_KEY = "vm_formula_version"
 
@@ -446,7 +422,8 @@ def ensure_rescored(db: Session) -> int | None:
     поставит её снова. Возвращает номер поставленной задачи или None."""
     from api.modules.vm.services.settings import load_settings
 
-    if db.execute(select(VmHostCve.host_id).limit(1)).first() is None:
+    if (db.execute(select(VmHostCve.host_id).limit(1)).first() is None
+            and db.execute(select(VmImageCve.image_id).limit(1)).first() is None):
         return None
     if read_formula_version(db) >= FORMULA_VERSION:
         return None

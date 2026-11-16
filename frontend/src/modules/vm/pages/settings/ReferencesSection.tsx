@@ -10,11 +10,11 @@ import { Section } from '@/platform/collector/ui'
 
 const ABOUT: Record<string, string> = {
   ghsa: 'GitHub Advisory Database: GHSA, связи с CVE, пакеты и диапазоны версий. Включает уязвимости без CVE; ZIP официального репозитория.',
-  epss: 'Вероятность эксплуатации за 30 дней от FIRST; без неё берётся априор из настроек (0.01) с пометкой.',
+  epss: 'Вероятность эксплуатации за 30 дней от FIRST; в скоринге даёт 2–30 баллов. Если EPSS нет — 8 баллов; эксплойт или KEV может дать больше.',
   nvd: 'Балл CVSS, метрики и описания CVE; фиды по годам, можно грузить частями.',
-  exploitdb: 'Публичные эксплойты; тип эксплойта даёт вероятность p_exdb в члене L.',
-  msf: 'Модули Metasploit; ранг модуля даёт вероятность p_msf в члене L.',
-  kev: 'Каталог эксплуатируемых уязвимостей CISA; попадание — вероятность эксплуатации 1.0.',
+  exploitdb: 'Публичные эксплойты; наличие даёт 24 балла в блоке эксплуатации, если нет более сильного сигнала.',
+  msf: 'Модули Metasploit: 24 балла, готовые good/great/excellent — 32. В блоке эксплуатации учитывается самый сильный сигнал.',
+  kev: 'Каталог эксплуатируемых уязвимостей CISA: 40 баллов в блоке эксплуатации и итоговый приоритет не ниже High (80).',
 }
 const ACCEPT: Record<string, string> = { ghsa: '.zip', epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }
 const LINK = 'text-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'

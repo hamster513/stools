@@ -20,6 +20,7 @@ from sqlalchemy.sql import ColumnElement
 
 from api.modules.vm.core.harbor import SEVERITIES, is_cve
 from api.modules.vm.core.harbor_policy import ARTIFACT_LABELS
+from api.modules.vm.core.priority import LEVELS as PRIORITY_LEVELS
 from api.modules.vm.core.risk import level as risk_level
 from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmImage, VmImageCve
@@ -95,7 +96,7 @@ class ImageFilters:
     level: frozenset[str] | None = None
     trivy: frozenset[str] | None = None
     image_id: int | None = None
-    levels: Levels = field(default_factory=Levels)
+    levels: Levels = field(default_factory=lambda: Levels(**PRIORITY_LEVELS))
     running_only: bool = False
     artifact_kind: frozenset[str] | None = None
 
@@ -213,7 +214,7 @@ class VulnFilters:
     level: frozenset[str] | None = None
     #: True — исправление есть, False — нет, None — не важно.
     fixed: bool | None = None
-    levels: Levels = field(default_factory=Levels)
+    levels: Levels = field(default_factory=lambda: Levels(**PRIORITY_LEVELS))
 
 
 def _is_fixed() -> ColumnElement[bool]:

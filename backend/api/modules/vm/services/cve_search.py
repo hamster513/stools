@@ -1,3 +1,5 @@
+from api.modules.vm.core.priority import strongest_msf_rank
+
 """Read-only CVE lookup across locally loaded references and observations."""
 import math
 import re
@@ -6,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import case, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
-from api.modules.vm.core.risk import best_exploit_type, best_msf_rank
+from api.modules.vm.core.risk import best_exploit_type
 from api.modules.vm.ghsa_models import VmRefGhsa, VmRefGhsaAlias
 from api.modules.vm.models import (
     VmCve,
@@ -151,7 +153,7 @@ def public_cve(db: Session, value: str) -> dict:
             'published': nvd.published.isoformat() if nvd and nvd.published else (ghsa or direct_advisory).published.isoformat() if (ghsa or direct_advisory) and (ghsa or direct_advisory).published else local.published.isoformat() if local and local.published else None,
             'modified': nvd.modified.isoformat() if nvd and nvd.modified else (ghsa or direct_advisory).modified.isoformat() if (ghsa or direct_advisory) and (ghsa or direct_advisory).modified else None, 'av': av,
             'exploitdb_type': best_exploit_type([e.type for e in exploits], weights) or (local.exploitdb_type if local else None),
-            'msf_rank': best_msf_rank([m.rank for m in modules], weights) or (local.msf_rank if local else None),
+            'msf_rank': strongest_msf_rank(m.rank for m in modules) or (local.msf_rank if local else None),
             'exploits': [{'id': e.exploit_id, 'type': e.type, 'verified': e.verified, 'url': f'https://www.exploit-db.com/exploits/{e.exploit_id}'} for e in exploits],
             'msf_modules': [{'name': m.fullname, 'title': m.name} for m in modules], 'attack': attack,
             'sources': [{'id': s, 'name': SOURCES[s], 'url': urls.get(s, ''),

@@ -235,7 +235,7 @@ export function OverviewPage() {
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-text-secondary"><AlertTriangle size={12} aria-hidden /> Пропуски</div>
               <ul className="flex flex-col gap-1 text-xs">
                 <li className="flex justify-between"><Link to="/vm/vulns?cvss_source=none" className="text-text hover:text-primary">CVE без записи в NVD</Link><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_nvd.toLocaleString('ru-RU')}</span></li>
-                <li className="flex justify-between"><span className="text-text">CVE без EPSS ({weights ? `взято ${weights.prior_epss.toLocaleString('ru-RU')}` : 'подставлено'})</span><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_epss.toLocaleString('ru-RU')}</span></li>
+                <li className="flex justify-between"><span className="text-text" title="Если EPSS отсутствует — 8 баллов в блоке эксплуатации; эксплойт или KEV может дать больше.">CVE без EPSS</span><span className="font-mono tabular-nums text-text-secondary">{o.data.cves_without_epss.toLocaleString('ru-RU')}</span></li>
                 <li className="flex justify-between"><Link to="/settings/vm#zones" className="text-text hover:text-primary">Зоны без разметки</Link><span className={cn('font-mono tabular-nums', o.data.unmarked_zones ? 'text-risk-medium' : 'text-text-secondary')}>{o.data.unmarked_zones}</span></li>
               </ul>
             </div>

@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from api.modules.vm.core.risk import CveInputs, explain
+from api.modules.vm.core.priority import AssetContext, priority_score
+from api.modules.vm.core.risk import CveInputs
 from api.modules.vm.core.weights import DEFAULT_WEIGHTS as W
 from api.modules.vm.core.weights import Weights
 from api.modules.vm.models import (
@@ -97,9 +98,9 @@ def test_control_example_through_database(app_settings: Any, db_session: Any) ->
     h2 = db_session.execute(select(VmHost).where(VmHost.hostname == "ws02")).scalar_one()
     assert h2.value == pytest.approx(0.6) and h2.internet is False  # критичность не задана, зоны нет
     risks = {(p.host_id, p.cve_id): p.risk for p in db_session.execute(select(VmHostCve)).scalars()}
-    assert risks[(h1.id, "CVE-2021-44228")] == 66  # 0.825 × 0.8 × 1.0 × 1.0
-    assert risks[(h2.id, "CVE-2021-44228")] == 32  # 0.825 × 0.8 × 0.8 × 0.6 = 0.3168
-    assert risks[(h1.id, "CVE-2020-0001")] == 0  # 0.01 × 0.5 × 0.8 × 1.0
+    assert risks[(h1.id, "CVE-2021-44228")] == 87  # 32 + 20 + 20 + 15
+    assert risks[(h2.id, "CVE-2021-44228")] == 72  # 32 + 20 + 12 + 8; unknown zone
+    assert risks[(h1.id, "CVE-2020-0001")] == 48  # 8 + 12.5 + 12 + 15, rounded
 
 
 #: Веса, отличные от умолчаний, — проверяют, что SQL берёт их из параметров, а не из констант.
@@ -115,7 +116,7 @@ CUSTOM = Weights.model_validate(
 
 
 @pytest.mark.parametrize("weights", [W, CUSTOM], ids=["default", "custom"])
-def test_sql_rescore_matches_explain(app_settings: Any, db_session: Any, weights: Weights) -> None:
+def test_sql_rescore_matches_priority(app_settings: Any, db_session: Any, weights: Weights) -> None:
     """Главный тест раскладки: 5 хостов × 4 CVE — все классы вектора, с интернетом и без,
     KEV, подстановки CVSS и EPSS; балл каждой пары из UPDATE равен баллу `explain`."""
     db = db_session
@@ -166,19 +167,17 @@ def test_sql_rescore_matches_explain(app_settings: Any, db_session: Any, weights
     for pair in db.execute(select(VmHostCve)).scalars():
         host, cve = db.get(VmHost, pair.host_id), db.get(VmCve, pair.cve_id)
         zone = zones.get(host.zone)
-        e = explain(
+        e = priority_score(
             CveInputs(
                 epss=cve.epss, cvss=cve.cvss, av=cve.v3_av or cve.v2_av, exploitdb_type=cve.exploitdb_type,
                 msf_rank=cve.msf_rank, kev=cve.kev, kev_added=cve.kev_added, kev_loaded=True,
             ),
-            host.criticality or None,
-            internet=bool(zone and zone.internet_access),
-            confidential=bool(zone and zone.confidential_data),
-            zone_marked=bool(zone and zone.marked),
-            w=weights,
+            AssetContext(host.criticality or None,
+                         zone.internet_access if zone and zone.marked else None,
+                         zone.confidential_data if zone and zone.marked else None),
         )
-        assert pair.risk == e.score, (host.hostname, cve.cve_id, pair.risk_raw, e.raw)
-        assert pair.risk_raw == pytest.approx(e.raw)
+        assert pair.risk == e.score, (host.hostname, cve.cve_id, pair.risk_raw, e.score)
+        assert pair.risk_raw == pytest.approx(max(sum(b.points for b in e.blocks.values()), e.floor) / 100)
         seen.add(e.score)
     assert len(seen) > 5  # пары действительно разные, а не 20 нулей
     kev = db.get(VmCve, "CVE-2026-0003")
@@ -213,7 +212,7 @@ def test_rescore_once_after_migration(app_settings: Any, db_session: Any, monkey
     job = db_session.get(VmJob, job_id)
     assert (job.kind, job.status, job.started_by) == ("recalculate", "done", scoring.AUTO_STARTED_BY)
     assert db_session.get(VmCve, "CVE-2021-44228").likelihood == pytest.approx(0.825)
-    assert max(p.risk for p in db_session.execute(select(VmHostCve)).scalars()) == 66
+    assert max(p.risk for p in db_session.execute(select(VmHostCve)).scalars()) == 87
     assert scoring.read_formula_version(db_session) == scoring.FORMULA_VERSION
     # Второй старт: маркер записан — задачи нет.
     assert ensure_rescored(db_session) is None
