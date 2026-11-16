@@ -10,6 +10,7 @@ export type ScrubJob = Job
 export interface ScrubStats {
   files?: number
   skipped?: number
+  notes?: Record<string, number>
   /** Сколько уникальных значений найдено по категориям. */
   findings?: Partial<Record<string, number>>
   /** Сколько вхождений заменено по категориям — после применения. */
@@ -111,8 +112,8 @@ export const STATUS_CLASS: Record<Job['status'], string> = {
   cancelled: 'text-text-secondary',
 }
 
-/** Что сервер принимает как текст без оговорок (спека §3); остальное читается как текст, если в нём нет нулевых байтов. */
-export const KNOWN_EXTENSIONS = ['.json', '.gz', '.zip', '.csv', '.txt', '.log', '.xml', '.conf', '.ini', '.yaml', '.yml']
+/** Поддерживаемые текстовые, архивные, офисные и почтовые форматы. */
+export const KNOWN_EXTENSIONS = ['.json', '.gz', '.zip', '.csv', '.txt', '.log', '.xml', '.conf', '.ini', '.yaml', '.yml', '.doc', '.docx', '.docm', '.xls', '.xlsx', '.xlsm', '.ppt', '.pptx', '.pptm', '.rtf', '.odt', '.ods', '.odp', '.eml', '.msg', '.html', '.htm']
 
 export const MB = 1024 * 1024
 

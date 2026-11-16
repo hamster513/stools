@@ -18,7 +18,7 @@ import zipfile
 import zlib
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from ipaddress import IPv4Address
 from itertools import chain
@@ -26,6 +26,10 @@ from pathlib import Path
 from typing import IO, Any, NamedTuple
 
 from kbaudit.safe_io import MB
+
+from .documents import DocumentError, MODERN, LEGACY, LIMIT, office, output_name
+from .conversion import convert
+from .mail import email_file, html_text
 
 #: Потолок распакованного, как у AD: gzip разворачивается до ~1000:1.
 MAX_UNPACKED = 512 * MB
@@ -61,6 +65,7 @@ class Entry:
     path: str  # «архив.zip:внутри/файл.json»
     # json | text | skipped (не текст) | broken (ошибка чтения или повреждённый архив)
     kind: str
+    note: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +242,15 @@ def _classify(name: str, opener: Opener) -> str:
     except BROKEN:
         return "broken"
     low = name.lower()
+    suffix = Path(low).suffix
+    if suffix in MODERN or suffix in LEGACY or suffix in {'.eml', '.html', '.htm'}:
+        return 'structured'
+    if suffix in {'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.svg', '.webp',
+                  '.exe', '.dll', '.bin', '.7z', '.rar', '.p7m', '.p7s', '.dat',
+                  '.xlsb', '.docb', '.dot', '.dotx', '.dotm', '.xlt', '.xltx', '.xltm',
+                  '.pot', '.potx', '.potm', '.pps', '.ppsx', '.ppsm', '.one',
+                  '.emlx', '.mbox', '.pst', '.ost'}:
+        return 'skipped'
     if low.endswith(".zip") or head == b"PK\x03\x04":
         return "zip"
     if low.endswith(".gz") or head[:2] == b"\x1f\x8b":
@@ -358,17 +372,39 @@ def _octets(key: str, value: dict[str, Any]) -> str | None:
 # --- обход -------------------------------------------------------------------------------------
 
 def _walk(label: str, name: str, opener: Opener, budget: _Budget,
-          names: list[tuple[str, str]]) -> Iterator[tuple[Entry, Chunks]]:
+          names: list[tuple[str, str]], depth: int = 0) -> Iterator[tuple[Entry, Chunks]]:
+    if depth > 20:
+        raise UnpackLimit('вложенность файлов больше 20')
     kind = _classify(name, opener)
+    if kind == 'structured':
+        chunks: list[tuple[str, str]] = []
+        entries: list[Entry] = []
+        def collect(key: str, text: str) -> str:
+            chunks.append((key, text))
+            return text
+        try:
+            _structured(label, name, opener, budget, collect, entries, depth, scan=True)
+        except DocumentError as exc:
+            yield Entry(label, 'broken', 'Не прочитано: ' + str(exc)), iter(())
+            return
+        except BROKEN:
+            yield Entry(label, 'broken', 'Не прочитано: повреждённый файл'), iter(())
+            return
+        pending = names[:]
+        names.clear()
+        yield Entry(label, 'text'), chain(pending, chunks)
+        for entry in entries:
+            yield entry, iter(())
+        return
     if kind == "zip":
-        yield from _walk_zip(label, opener, budget, names)
+        yield from _walk_zip(label, opener, budget, names, depth)
         return
     if kind == "gz":
-        yield from _walk(label, _inner(name), _gunzip(opener), budget, names)
+        yield from _walk(label, _inner(name), _gunzip(opener), budget, names, depth + 1)
         return
     leaf = _leaf(opener, budget) if kind == "file" else kind
     if isinstance(leaf, str):
-        yield Entry(label, leaf), iter(())
+        yield Entry(label, leaf, "Исключено: неподдерживаемый или повреждённый файл"), iter(())
         return
     # Имена архивов и файлов на пути к этому файлу — первыми его кусками: в результат они попадут с ним.
     pending = names[:]
@@ -382,7 +418,7 @@ def _walk(label: str, name: str, opener: Opener, budget: _Budget,
 
 
 def _walk_zip(label: str, opener: Opener, budget: _Budget,
-              names: list[tuple[str, str]]) -> Iterator[tuple[Entry, Chunks]]:
+              names: list[tuple[str, str]], depth: int = 0) -> Iterator[tuple[Entry, Chunks]]:
     with ExitStack() as stack:
         try:
             zin = stack.enter_context(_zip_in(opener, budget))
@@ -394,7 +430,7 @@ def _walk_zip(label: str, opener: Opener, budget: _Budget,
                 continue
             mark = len(names)
             names.append((NAME, info.filename))
-            yield from _walk(f"{label}:{info.filename}", info.filename, partial(zin.open, info), budget, names)
+            yield from _walk(f"{label}:{info.filename}", info.filename, partial(zin.open, info), budget, names, depth + 1)
             # Имя не забрал ни один файл — в результат эта запись не попадёт (не текст или пустой архив).
             del names[mark:]
 
@@ -430,17 +466,32 @@ def _json_chunks(value: Any, key: str) -> Chunks:
 # --- сборка результата -------------------------------------------------------------------------
 
 def _rewrite(label: str, name: str, opener: Opener, budget: _Budget, transform: Transform,
-             entries: list[Entry], sink: Opener, *, top: bool = False) -> bool:
+             entries: list[Entry], sink: Opener, *, top: bool = False, depth: int = 0) -> bool:
     """Пишет результат в `sink`, только если есть что писать; True — записан."""
+    if depth > 20:
+        raise UnpackLimit('вложенность файлов больше 20')
     kind = _classify(name, opener)
+    if kind == 'structured':
+        budget.begin(label)
+        try:
+            data = _structured(label, name, opener, budget, transform, entries, depth)
+        except (DocumentError, *BROKEN):
+            entries.append(Entry(label, 'broken', 'Исключено: повреждённый или зашифрованный файл'))
+            budget.entry_done()
+            return False
+        with sink() as out:
+            out.write(data)
+        entries.append(Entry(label, 'text'))
+        budget.entry_done()
+        return True
     if kind == "zip":
-        return _rewrite_zip(label, opener, budget, transform, entries, sink, top=top)
+        return _rewrite_zip(label, opener, budget, transform, entries, sink, top=top, depth=depth)
     if kind == "gz":
-        return _rewrite(label, _inner(name), _gunzip(opener), budget, transform, entries, _gzip(sink), top=top)
+        return _rewrite(label, _inner(name), _gunzip(opener), budget, transform, entries, _gzip(sink), top=top, depth=depth + 1)
     leaf = _leaf(opener, budget) if kind == "file" else kind
     budget.begin(label)
     if isinstance(leaf, str):
-        entries.append(Entry(label, leaf))
+        entries.append(Entry(label, leaf, "Исключено: неподдерживаемый или повреждённый файл"))
         budget.entry_done()
         return False
     codec, data = leaf
@@ -462,7 +513,7 @@ def _rewrite(label: str, name: str, opener: Opener, budget: _Budget, transform: 
 
 
 def _rewrite_zip(label: str, opener: Opener, budget: _Budget, transform: Transform,
-                 entries: list[Entry], sink: Opener, *, top: bool) -> bool:
+                 entries: list[Entry], sink: Opener, *, top: bool, depth: int = 0) -> bool:
     with ExitStack() as stack:
         try:
             zin = stack.enter_context(_zip_in(opener, budget))
@@ -478,7 +529,7 @@ def _rewrite_zip(label: str, opener: Opener, budget: _Budget, transform: Transfo
                 if info.is_dir():
                     continue
                 if _rewrite(f"{label}:{info.filename}", info.filename, partial(zin.open, info), budget, transform,
-                            entries, partial(_member, zout, info, transform)):
+                            entries, partial(_member, zout, info, transform), depth=depth + 1):
                     written = True
         if not written:
             return False
@@ -491,7 +542,9 @@ def _rewrite_zip(label: str, opener: Opener, budget: _Budget, transform: Transfo
 def _member(zout: zipfile.ZipFile, info: zipfile.ZipInfo, transform: Transform) -> IO[bytes]:
     # Имя меняется, только когда член пишется: имя пропущенного файла не считается и не попадает в таблицу.
     # Дата из исходника, а не текущая: два прогона дают один и тот же архив байт в байт.
-    member = zipfile.ZipInfo(transform(NAME, info.filename), info.date_time)
+    member = zipfile.ZipInfo(transform(NAME, output_name(info.filename)), info.date_time)
+    if member.filename in zout.namelist():
+        raise ValueError('после очистки совпало имя файлов в архиве; переименуйте исходные файлы')
     member.compress_type = zipfile.ZIP_DEFLATED
     return zout.open(member, "w")
 
@@ -532,3 +585,59 @@ def _json_rewrite(value: Any, key: str, transform: Transform) -> Any:
     if isinstance(value, str):
         return transform(key, value)
     return value
+
+
+def _structured(label: str, name: str, opener: Opener, budget: _Budget, transform: Transform,
+                entries: list[Entry], depth: int, *, scan: bool = False) -> bytes:
+    with opener() as raw:
+        data = raw.read(LIMIT + 1)
+    if len(data) > LIMIT:
+        raise DocumentError('документ или письмо больше 64 МБ')
+    budget.add(len(data))
+    suffix = Path(name.lower()).suffix
+    if suffix in LEGACY:
+        data = convert(data, suffix)
+        entries.append(Entry(label, 'converted', f'Конвертация {suffix.upper()} → {LEGACY[suffix].upper()}'))
+        suffix = LEGACY[suffix]
+    if suffix in {'.html', '.htm'}:
+        try:
+            text = data.decode('utf-8-sig')
+        except UnicodeError as exc:
+            raise DocumentError('HTML-вложение должно быть в UTF-8') from exc
+        result = transform('', html_text(text)).encode('utf-8')
+        omitted = ['HTML-оформление и активное содержимое (сохранён текст)']
+    elif suffix in MODERN:
+        result, omitted = office(data, transform, budget.add)
+    else:
+        omitted = []
+        def attachment(filename: str, payload: bytes) -> bytes | None:
+            path = label + ':' + filename
+            if scan:
+                present = False
+                for entry, chunks in _walk(path, filename, lambda: io.BytesIO(payload), budget,
+                                           [], depth + 1):
+                    if entry.kind in ('text', 'json'):
+                        present = True
+                    else:
+                        entries.append(entry)
+                    for key, text in chunks:
+                        transform(key, text)
+                return payload if present else None
+            out = io.BytesIO()
+            @contextmanager
+            def sink():
+                yield out
+            written = _rewrite(path, filename, lambda: io.BytesIO(payload), budget, transform, entries,
+                               sink, depth=depth + 1)
+            return out.getvalue() if written else None
+        result = email_file(data, transform, attachment, budget.add, omitted)
+    for part in omitted:
+        if suffix in MODERN:
+            low = part.lower()
+            what = ('макросы' if 'vba' in low else 'изображения' if '/media/' in low else
+                    'вложенные объекты' if '/embeddings/' in low else 'связи документа' if '.rels#' in low else
+                    'непроверяемые части документа')
+        else:
+            what = part
+        entries.append(Entry(label + ':' + part, 'skipped', 'Исключено: ' + what))
+    return result

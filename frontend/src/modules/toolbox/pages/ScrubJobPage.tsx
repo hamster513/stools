@@ -64,7 +64,7 @@ function Result({ id, info, canDownload }: { id: number; info: JobInfo; canDownl
         </tbody>
       </table>
       {info.stats.files !== undefined && (
-        <p className="mt-2 text-xs text-text-secondary">Файлов: {info.stats.files}{info.stats.skipped ? `, пропущено (не текст): ${info.stats.skipped}` : ''}</p>
+        <p className="mt-2 text-xs text-text-secondary">Файлов: {info.stats.files}{info.stats.skipped ? `, исключено частей/файлов: ${info.stats.skipped}` : ''}</p>
       )}
     </Section>
   )
@@ -130,6 +130,13 @@ export function ScrubJobPage({ id }: { id: number }) {
         {running && <Progress job={j} canCancel={write} onCancel={() => cancel.mutate(id)} />}
         {(j.status === 'failed' || j.status === 'cancelled') && (
           <ErrorState message={`${stopTitle(j)}${j.error ? `: ${j.error}` : ''}.${applyStopped && editable ? ' Поправьте находки и нажмите «Очистить» снова.' : ''}`} />
+        )}
+        {!!Object.keys(i.stats.notes ?? {}).length && (
+          <Section title="Обработка формата" about="Преобразования и исключения в очищенной копии. Исходный файл сохраняется без изменений.">
+            <ul className="list-disc space-y-1 pl-4 text-xs text-text-secondary">
+              {Object.entries(i.stats.notes ?? {}).map(([note, count]) => <li key={note}>{note}: {count}</li>)}
+            </ul>
+          </Section>
         )}
         {j.kind === 'apply' && j.status === 'done' && <Result id={id} info={i} canDownload={write} />}
         {(scanDone || applyStopped) && (

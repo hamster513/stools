@@ -57,10 +57,10 @@ RUN python -c 'import pyexpat,sqlite3; assert pyexpat.version_info >= (2,10,0); 
 WORKDIR /app
 
 # Preserve the existing data-volume ownership across Debian/Alpine deployments.
-RUN mkdir -p /data/archives \
+RUN mkdir -p /data/archives /document-queue \
     && addgroup -g 10001 stools \
     && adduser -D -H -u 10001 -G stools -s /sbin/nologin stools \
-    && chown -R stools:stools /data
+    && chown -R stools:stools /data /document-queue
 ENV STOOLS_DATA_DIR=/data
 
 EXPOSE 8000

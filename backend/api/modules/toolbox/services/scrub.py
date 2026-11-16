@@ -38,7 +38,7 @@ from api.jobs import (
 from api.limits import MB, TOOLBOX_UPLOAD
 from api.modules.toolbox.core.scrub import engine
 from api.modules.toolbox.core.scrub.engine import EDGE_AFTER, EDGE_BEFORE, Status, VerifyError
-from api.modules.toolbox.core.scrub.files import UnpackLimit
+from api.modules.toolbox.core.scrub.files import UnpackLimit, Entry, output_name
 from api.modules.toolbox.core.scrub.types import KINDS, STORED_KINDS, Ctx, Finding
 from api.modules.toolbox.models import ToolboxAlias, ToolboxFinding, ToolboxJob, ToolboxSettings
 from api.modules.toolbox.services.aliases import AliasTaken, DbAliases
@@ -268,7 +268,8 @@ def run_scan(db: Session, handle: JobHandle, job_id: int) -> None:
     handle.stage("persisting", total=len(findings), message="запись находок")
     insert_chunked(db, ToolboxFinding, _finding_rows(job_id, findings, aliases), len(findings), handle, "находок")
     job.stats = {
-        "files": len(result.entries),
+        "files": sum(e.kind != "converted" for e in result.entries),
+        "notes": dict(Counter(e.note for e in result.entries if e.note)),
         "skipped": sum(1 for e in result.entries if e.kind in ("skipped", "broken")),
         "findings": dict(Counter(f.kind for f in findings)),
     }
@@ -429,12 +430,14 @@ def start_apply(db: Session, job_id: int) -> None:
 
 
 def _write_report(path: Path, job: ToolboxJob, findings: list[Finding], counts: dict[str, int],
-                  files: int, skipped: int) -> None:
+                  files: int, skipped: int, entries: list[Entry] | None = None) -> None:
     values = Counter(f.kind for f in findings if f.checked)
     lines = [f"Очистка, задание #{job.id}"]
     lines += [f"{LABELS[k]}: значений {values[k]}, вхождений {counts.get(k, 0)}"
               for k in KINDS if values[k] or counts.get(k)]
-    lines.append(f"файлов: {files}, пропущено (не текст): {skipped}")
+    lines.append(f"файлов: {files}, исключено частей/файлов: {skipped}")
+    notes = Counter(e.note for e in (entries or []) if e.note)
+    lines.extend(f"{note}: {count}" for note, count in sorted(notes.items()))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -477,7 +480,7 @@ def run_apply(db: Session, handle: JobHandle, job_id: int) -> None:
 
     out = job_dir(data_dir, job_id) / "out"
     shutil.rmtree(out, ignore_errors=True)
-    target = out / source.name
+    target = out / output_name(source.name)
 
     def reporter(stage: str, total: int) -> _Throttle:
         # Ход — отдельной транзакцией: tick и stage зафиксировали бы основную на середине применения.
@@ -515,7 +518,7 @@ def run_apply(db: Session, handle: JobHandle, job_id: int) -> None:
         raise ValueError(f"в результате осталось {len(left)} значений ({detail})")
 
     skipped = sum(1 for e in entries if e.kind in ("skipped", "broken"))
-    _write_report(out / REPORT, job, findings, counts, len(entries), skipped)
+    _write_report(out / REPORT, job, findings, counts, sum(e.kind != "converted" for e in entries), skipped, entries)
     _write_mapping(out / MAPPING, findings)
     db.flush()
     db.execute(
@@ -526,7 +529,8 @@ def run_apply(db: Session, handle: JobHandle, job_id: int) -> None:
     )
     replaced = sum(counts.values())
     job.result_name = target.name
-    job.stats = {**(job.stats or {}), "replaced": counts}
+    job.stats = {**(job.stats or {}), "replaced": counts,
+                 "notes": dict(Counter(e.note for e in entries if e.note))}
     handle.stage("done", message=f"заменено вхождений: {replaced}")
     # Результат уже зафиксирован: сбой записи в журнал не должен превращать задание в failed.
     try:

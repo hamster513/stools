@@ -60,7 +60,7 @@ export function NewJobForm() {
       <Link to="/toolbox" className="mb-3 inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text"><ArrowLeft size={13} aria-hidden />Задания</Link>
       <h2 className="mb-4 text-base font-semibold text-text">Новое задание</h2>
       <div className="max-w-3xl space-y-4">
-        <Section title="Что очистить" about="Текстовые форматы и архивы с ними: json, json.gz, gz, zip (и вложенные), csv, txt, log, xml, conf, ini, yaml. Офисные документы и pdf не поддерживаются.">
+        <Section title="Что очистить" about="Текстовые форматы и архивы с ними: json, json.gz, gz, zip (и вложенные), csv, txt, log, xml, conf, ini, yaml. Также Office (DOC/DOCX, XLS/XLSX, PPT/PPTX), RTF, ODT/ODS/ODP и письма EML/MSG с вложениями. Документ или письмо — до 64 МБ. Старые форматы преобразуются в DOCX/XLSX/PPTX и EML; изображения, макросы и непроверяемые части исключаются с отметкой в отчёте. PDF и OCR не поддерживаются.">
           <div className="mb-3 inline-flex gap-1 rounded border border-border p-0.5" role="tablist">
             {(['file', 'text'] as const).map((m) => (
               <button key={m} type="button" role="tab" aria-selected={mode === m} onClick={() => { setMode(m); create.reset() }} className={cn(TAB, mode === m ? 'bg-row-selected text-text' : 'text-text-secondary hover:text-text')}>

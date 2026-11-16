@@ -537,3 +537,27 @@ def test_aliases_export_applies_filters_in_both_formats(
     assert auditor.get("/api/toolbox/aliases/export", params={"q": "web01"}).status_code == 403
     last = db_session.query(AuditEvent).order_by(AuditEvent.id.desc()).first()
     assert last is not None and last.status == 403 and "web01" not in (last.summary or "")
+
+
+def test_document_conversion_download_and_report(seeded, auth_client, monkeypatch):
+    from api.modules.toolbox.core.scrub import files
+    from tests.toolbox.test_documents import package, W
+    converted = package({
+        'word/document.xml': f'<w:document xmlns:w="{W}"><w:p><w:r><w:t>host</w:t></w:r><w:r><w:t>01 10.1.2.15</w:t></w:r></w:p></w:document>',
+        'word/media/host01.png': b'private image',
+    })
+    monkeypatch.setattr(files, 'convert', lambda data, suffix: converted)
+    job_id = upload(auth_client, b'legacy', 'sample.doc')
+    assert item(findings(auth_client, job_id), 'host', 'host01')['checked']
+    job = apply(auth_client, job_id)
+    assert job['status'] == 'done', job
+    result = auth_client.get(f'{API}/jobs/{job_id}/result')
+    assert result.status_code == 200
+    assert 'sample.docx' in result.headers['content-disposition']
+    with zipfile.ZipFile(io.BytesIO(result.content)) as z:
+        assert 'word/media/host01.png' not in z.namelist()
+        assert b'host01' not in z.read('word/document.xml')
+    report = auth_client.get(f'{API}/jobs/{job_id}/report').text
+    assert 'Конвертация .DOC → .DOCX' in report
+    assert 'Исключено: изображения' in report
+    assert 'host01' not in report

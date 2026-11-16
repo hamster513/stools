@@ -48,6 +48,7 @@ api = [
     "detect-secrets>=1.5",
     # Экспорт списков в XLSX (api/platform/export.py): книга write-only, потолок строк.
     "openpyxl>=3.1",
+    "lxml>=6.0.2",
 ]
 
 [project.scripts]
