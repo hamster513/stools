@@ -1,6 +1,6 @@
 import type { PocItem } from '../pages/trends/PocEvidence'
 import type { Enrichment, Applicability } from '../pages/trends/ApplicabilityPanel'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { FindingStatus } from '@/platform/findings/types'
 import { api, buildQuery } from '@/api/client'
 
@@ -59,7 +59,7 @@ export interface TrendDetail extends Trend {
 }
 
 export function useTrends(params: Record<string, string | number | boolean | undefined>, enabled = true) {
-  return useQuery({ queryKey: ['vm-trends', 'list', params], queryFn: () => api.get<{ items: Trend[]; total: number; received_at: string | null }>(TREND_BASE + buildQuery(params)), enabled })
+  return useQuery({ queryKey: ['vm-trends', 'list', params], queryFn: () => api.get<{ items: Trend[]; total: number; received_at: string | null }>(TREND_BASE + buildQuery(params)), enabled, staleTime: 60_000, placeholderData: keepPreviousData })
 }
 export function useTrend(id: string, scope: TrendScope = DEFAULT_TREND_SCOPE) {
   return useQuery({ queryKey: ['vm-trends', 'detail', id, scope], queryFn: () => api.get<TrendDetail>(TREND_BASE + '/' + encodeURIComponent(id) + buildQuery({ ...scope })), enabled: Boolean(id) })

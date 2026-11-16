@@ -45,7 +45,8 @@ def test_trend_matches_next_local_import_and_review(auth_client, db_session):
 def test_manual_identity_and_decision_survive_full_replay(auth_client, db_session):
     data = page()
     pub = data['events'][1]['payload']
-    pub.update(title='Early product signal', identifiers=[], text='Original research without identifier')
+    pub.update(title='Early product signal', identifiers=[], text='Original research without identifier',
+               published_at=dt.datetime.now(dt.UTC).isoformat())
     apply_page(db_session, data)
     process_pending(db_session)
     detail = auth_client.get('/api/vm/trends/signal-pub-1').json()

@@ -107,3 +107,32 @@ def test_background_does_not_qualify_but_audit_and_manual_restore_remain():
     assert len(period_evidence(evidence,now,include_excluded=True)) == 2
     for entry in evidence: entry["included_manually"] = True
     assert evaluate(evidence,now)["active"]
+
+
+def test_single_publication_does_not_build_reprint_markers(monkeypatch):
+    from api.modules.vm.services.trends import rules
+    def unexpected(_):
+        raise AssertionError('A single publication has no reprints to join')
+    monkeypatch.setattr(rules, 'canonical_url', unexpected)
+    result = rules.evaluate([evidence()], NOW)
+    assert result['publication_count'] == 1
+    assert result['independent_sources'] == 1 and not result['active']
+
+
+def test_batch_reuses_publication_markers_without_reusing_card_decisions(monkeypatch):
+    from api.modules.vm.services.trends import rules
+    original = rules.canonical_url
+    calls = []
+    def capture(value):
+        calls.append(value)
+        return original(value)
+    monkeypatch.setattr(rules, 'canonical_url', capture)
+    rows = [evidence(publication_id=1), evidence('two', publication_id=2)]
+    cache = {}
+    assert rules.evaluate(rows, NOW, marker_cache=cache)['active']
+    first = len(calls)
+    assert first > 0
+    changed = [{**rows[0], 'independent': False}, rows[1]]
+    result = rules.evaluate(changed, NOW, marker_cache=cache)
+    assert not result['active'] and result['independent_sources'] == 1
+    assert len(calls) == first

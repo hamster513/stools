@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -59,8 +60,22 @@ def publication_period_conditions(period: str, tz: str, date_from: str, date_to:
     return conditions
 
 
+@dataclass(frozen=True)
+class EvidenceContext:
+    generation: str
+    sources: dict[str, Any]
+    policies: list[Any]
+
+
+def evidence_context(db: Session, generation: str) -> EvidenceContext:
+    sources = {row.external_id: row.data for row in db.scalars(
+        select(VmTrendSource).where(VmTrendSource.generation == generation))}
+    return EvidenceContext(generation, sources, active_policies(db))
+
+
 def evidence_for(db: Session, card_ids: Any, generation: Any, period: str | None = None,
-                 tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "", now: Any = None, include_retracted: bool = False) -> Any:
+                 tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "", now: Any = None, include_retracted: bool = False,
+                 *, context: EvidenceContext | None = None) -> Any:
     if not card_ids:
         return {}
     query = select(VmTrendEvidence.card_id, VmTrendPublication).join(VmTrendPublication).where(
@@ -72,17 +87,27 @@ def evidence_for(db: Session, card_ids: Any, generation: Any, period: str | None
     decisions = {}
     for review in reviews:
         if review.decision.get("publication_key"):
-            key = (review.card_id, review.decision["publication_key"], review.decision.get("revision"), review.decision.get("fingerprint"))
-            decisions.setdefault(key, {}).update({field: value for field, value in review.decision.items() if value is not None})
-    sources = {row.external_id: row.data for row in db.scalars(select(VmTrendSource).where(VmTrendSource.generation == generation))}
+            key = (review.card_id, review.decision["publication_key"], review.decision.get("revision"))
+            decisions.setdefault(key, {}).setdefault(review.decision.get("fingerprint"), {}).update(
+                {field: value for field, value in review.decision.items() if value is not None})
+    context = context or evidence_context(db, generation)
+    if context.generation != generation:
+        raise ValueError("evidence context generation mismatch")
+    sources = context.sources
     result: dict[str, list[dict[str, Any]]] = {id_: [] for id_ in card_ids}
-    policies = active_policies(db)
+    policies = context.policies
+    fingerprints = {}
     for card_id, publication in rows:
         source = sources.get(publication.source_id, {})
         value = dict(publication.data)
         value["classification"] = value.get("classification") or classify_publication(value, source).model_dump()
         value["identifier_role"] = next((r["role"] for r in value["classification"]["identifier_roles"] if r["identifier"] == card_id), "primary")
-        decision = decisions.get((card_id, publication.external_id, publication.revision, publication_fingerprint(publication.data)), {})
+        versions = decisions.get((card_id, publication.external_id, publication.revision))
+        decision = {}
+        if versions:
+            if publication.id not in fingerprints:
+                fingerprints[publication.id] = publication_fingerprint(publication.data)
+            decision = versions.get(fingerprints[publication.id], {})
         value.update({"publication_id": publication.id, "publication_key": publication.external_id,
             "revision": publication.revision, "retracted": publication.retracted,
             "publisher_id": value.get("publisher_id", source.get("publisher_id", "unknown")),

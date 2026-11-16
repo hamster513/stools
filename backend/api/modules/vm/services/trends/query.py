@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from api.modules.vm.models import VmHost, VmHostCve, VmImage, VmImageCve, VmImport
 from api.modules.vm.trend_models import (
-    VmTrendEnrichment,
     VmTrendCard,
+    VmTrendEnrichment,
     VmTrendEvidence,
     VmTrendIngestState,
     VmTrendPublication,
@@ -15,12 +15,12 @@ from api.modules.vm.trend_models import (
 )
 from api.platform.findings.models import FindingState
 
-from .poc import list_pocs
-from .severity import card_severities
-from .policies import visible_match
+from .analyze import evidence_context, evidence_for, publication_period_conditions, refresh_cards
 from .applicability import evaluate_applicability
-from .analyze import evidence_for, publication_period_conditions, refresh_cards
+from .poc import list_pocs
+from .policies import visible_match
 from .rules import (
+    IDENTIFIER,
     date,
     evaluate,
     extract_identifiers,
@@ -29,6 +29,7 @@ from .rules import (
     period_evidence,
     publication_fingerprint,
 )
+from .severity import card_severities
 
 
 def match_aggregates(card_ids: Any) -> Any:
@@ -45,9 +46,9 @@ def card_view(card: Any, hosts: Any=0, images: Any=0, risk: Any=0) -> Any:
             "independent_sources": card.independent_sources, "hosts": hosts, "images": images, "risk": risk or 0}
 
 
-def period_card_view(card: Any, evidence: Any, now: Any, period: str, tz: str, date_from: str, date_to: str, archive: bool = False) -> Any:
+def period_card_view(card: Any, evidence: Any, now: Any, period: str, tz: str, date_from: str, date_to: str, archive: bool = False, marker_cache: dict | None = None) -> Any:
     current = period_evidence(evidence, now, period, tz, date_from, date_to, include_excluded=archive)
-    result = {**card_view(card), **evaluate(current, now, period, tz, date_from, date_to), "period": period}
+    result = {**card_view(card), **evaluate(current, now, period, tz, date_from, date_to, marker_cache=marker_cache), "period": period}
     result["active"] = result["active"] and card.status != "rejected"
     news = [entry for entry in current if is_news(entry) and entry.get("title")]
     titled = news or [entry for entry in current if entry.get("title")]
@@ -73,6 +74,11 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
     if from_archive:
         publication = publication.where(VmTrendPublication.data["offline_archive"].as_boolean().is_(True))
     conditions = [VmTrendCard.id.in_(publication)]
+    if view == "mentions":
+        # extract_identifiers returns canonical uppercase IDs. Drop signal cards
+        # before reading their publication bodies, retaining CVE/GHSA/BDU IDs.
+        pattern = "^" + IDENTIFIER.pattern.replace(r"\b", "").replace("a-z", "A-Z") + "$"
+        conditions.append(VmTrendCard.id.op("~")(pattern))
     if source_id:
         # Narrow candidates in SQL; retain all publishers' evidence for each CVE.
         conditions.append(VmTrendCard.id.in_(publication.where(VmTrendPublication.source_id == source_id)))
@@ -91,16 +97,18 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
         conditions.append(or_(VmTrendCard.title.ilike(needle),func.concat("cve:",VmTrendCard.id).in_(metadata)))
     cards = list(db.scalars(select(VmTrendCard).where(*conditions)))
     selected = {}
+    context = evidence_context(db, generation) if cards else None
     # A month can include tens of thousands of CVEs with full article bodies.
     # Keep only one evidence batch in memory; pagination still uses the full result.
     for start in range(0, len(cards), 100):
         batch = cards[start:start+100]
-        evidence = evidence_for(db, [card.id for card in batch], generation, period, tz, date_from, date_to, now)
+        evidence = evidence_for(db, [card.id for card in batch], generation, period, tz, date_from, date_to, now, context=context)
+        marker_cache: dict = {}
         for card in batch:
             card_evidence = evidence[card.id]
             if from_archive:
                 card_evidence = [entry for entry in card_evidence if entry.get("offline_archive")]
-            result, current = period_card_view(card, card_evidence, now, period, tz, date_from, date_to, archive=view=="archive")
+            result, current = period_card_view(card, card_evidence, now, period, tz, date_from, date_to, archive=view=="archive", marker_cache=marker_cache)
             if not current or (view in ("all", "matched") and not result["active"]):
                 continue
             if view == "review" and result["active"]:
@@ -115,20 +123,28 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
                     ("region", region), ("language", language), ("publisher_id", publisher), ("source_id", source_id))) for entry in current):
                 continue
             selected[card.id] = result
-    if selected:
-        hosts, images = match_aggregates(list(selected))
-        rows = db.execute(select(VmTrendCard.id, func.coalesce(hosts.c.count, 0), func.coalesce(images.c.count, 0),
-            func.greatest(func.coalesce(hosts.c.risk, 0), func.coalesce(images.c.risk, 0))).outerjoin(
-            hosts, hosts.c.identifier == VmTrendCard.id).outerjoin(images, images.c.identifier == VmTrendCard.id)
-            .where(VmTrendCard.id.in_(selected)))
-        for card_id, host_count, image_count, risk in rows:
-            selected[card_id].update(hosts=host_count, images=image_count, risk=risk or 0)
-    items = [item for item in selected.values() if view != "matched" or item["hosts"] or item["images"]]
     def order(item: Any) -> Any:
         timestamp = date(item["last_event_at"]).timestamp() if date(item["last_event_at"]) else 0
         primary = {"date": -timestamp, "identifier": item["id"],
                    "impact": -(item["hosts"] + item["images"])}.get(sort, -int(item["reason"] == "confirmed_exploitation"))
         return primary, -int(item["reason"] == "confirmed_exploitation"), -item["risk"], -timestamp, item["id"]
+    matching_ids = list(selected)
+    if view != "matched" and sort in ("date", "identifier"):
+        ordered = sorted(selected.values(), key=order)
+        # Risk only breaks ties after date/reason (or the unique identifier).
+        # Include the complete boundary groups before slicing: ranking within
+        # those groups still uses every candidate's actual host/image risk.
+        heads = {order(item)[:2] for item in ordered[offset:offset+limit]}
+        matching_ids = [item["id"] for item in ordered if order(item)[:2] in heads]
+    if matching_ids:
+        hosts, images = match_aggregates(matching_ids)
+        rows = db.execute(select(VmTrendCard.id, func.coalesce(hosts.c.count, 0), func.coalesce(images.c.count, 0),
+            func.greatest(func.coalesce(hosts.c.risk, 0), func.coalesce(images.c.risk, 0))).outerjoin(
+            hosts, hosts.c.identifier == VmTrendCard.id).outerjoin(images, images.c.identifier == VmTrendCard.id)
+            .where(VmTrendCard.id.in_(matching_ids)))
+        for card_id, host_count, image_count, risk in rows:
+            selected[card_id].update(hosts=host_count, images=image_count, risk=risk or 0)
+    items = [item for item in selected.values() if view != "matched" or item["hosts"] or item["images"]]
     items.sort(key=order)
     page = items[offset:offset+limit]
     severities = card_severities(db, [item["id"] for item in page], generation)

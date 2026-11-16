@@ -83,7 +83,24 @@ def is_news(entry: Any) -> bool:
     return entry.get("origin_adapter") == "rss" or entry.get("evidence_kind") == "news"
 
 
-def evaluate(evidence: Any, now: Any = None, period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "") -> Any:
+def _reporting_markers(entry: Any) -> tuple[str, set[str], set[str]]:
+    """Content-only markers; analyst decisions remain specific to each CVE."""
+    url = canonical_url(entry["url"]) if entry.get("url") else ""
+    keys = set()
+    publisher = publisher_key(entry)
+    if publisher:
+        keys.add("publisher:" + publisher)
+    if url:
+        keys.add("url:" + url)
+    text = re.sub(r"\s+", " ", entry.get("text", "")).strip().lower()
+    if text:
+        content = text if len(text) >= 80 else text + " " + entry.get("title", "").strip().lower()
+        keys.add("text:" + hashlib.sha256(content.encode()).hexdigest())
+    return url, keys, {canonical_url(link) for link in entry.get("links", []) if link}
+
+
+def evaluate(evidence: Any, now: Any = None, period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "",
+             *, marker_cache: dict | None = None) -> Any:
     now = now or dt.datetime.now(dt.UTC)
     current = period_evidence(evidence, now, period, tz, date_from, date_to)
     exploited = [e for e in current if e.get("exploitation_verified") or
@@ -95,29 +112,31 @@ def evaluate(evidence: Any, now: Any = None, period: str = "7d", tz: str = "Euro
             index = parents[index]
         return index
 
-    markers: dict[str, int] = {}
-    # Only a citation to another article joins a reporting chain. Shared CVE,
-    # catalog and vendor advisory references are not evidence of a reprint.
-    article_urls = {canonical_url(e.get("url", "")) for e in current
-                    if e.get("evidence_kind") not in ("kev", "vendor", "advisory")
-                    and e.get("origin_adapter") not in ("kev", "msrc", "github") and e.get("url")}
-    for index, entry in enumerate(current):
-        text = re.sub(r"\s+", " ", entry.get("text", "")).strip().lower()
-        keys = set()
-        if publisher_key(entry):
-            keys.add("publisher:" + publisher_key(entry))
-        if entry.get("url"):
-            keys.add("url:" + canonical_url(entry["url"]))
-        if text:
-            # Short feed stubs often repeat boilerplate across unrelated news.
-            content = text if len(text) >= 80 else text + " " + entry.get("title", "").strip().lower()
-            keys.add("text:" + hashlib.sha256(content.encode()).hexdigest())
-        keys.update("url:" + canonical_url(url) for url in entry.get("links", []) if url and canonical_url(url) in article_urls)
-        for key in keys:
-            if key in markers:
-                parents[root(index)] = root(markers[key])
-            else:
-                markers[key] = index
+    # There is nothing to deduplicate for a single publication. For batches,
+    # reuse content markers of publications shared by several CVEs; never cache
+    # decisions or period results. The caller discards the cache after a batch.
+    if len(current) > 1:
+        features = []
+        for entry in current:
+            key = (entry.get("publication_id"), entry.get("revision"))
+            value = marker_cache.get(key) if marker_cache is not None and key[0] is not None else None
+            if value is None:
+                value = _reporting_markers(entry)
+                if marker_cache is not None and key[0] is not None:
+                    marker_cache[key] = value
+            features.append(value)
+        # Shared CVE/catalog/vendor references do not imply a reprint.
+        article_urls = {feature[0] for entry, feature in zip(current, features)
+                        if entry.get("evidence_kind") not in ("kev", "vendor", "advisory")
+                        and entry.get("origin_adapter") not in ("kev", "msrc", "github") and feature[0]}
+        markers: dict[str, int] = {}
+        for index, (_, base_keys, links) in enumerate(features):
+            keys = base_keys | {"url:" + url for url in links & article_urls}
+            for key in keys:
+                if key in markers:
+                    parents[root(index)] = root(markers[key])
+                else:
+                    markers[key] = index
     independent = {root(index) for index, item in enumerate(current) if item.get("independent")}
     active = bool(exploited) or len(independent) >= 2
     reason = "confirmed_exploitation" if exploited else "independent_reports" if active else "needs_review"

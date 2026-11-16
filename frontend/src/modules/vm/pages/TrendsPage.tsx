@@ -107,7 +107,12 @@ export function TrendsPage() {
       </div>
       <p className="text-xs text-text-secondary">{VIEWS.find(item => item.value === view)?.description}</p>
       <MonitoringStatus />
-      <p className="text-xs text-text-secondary">Последнее получение публикаций — {when(data.data?.received_at)} · {validPeriod ? `Найдено ${data.data?.total ?? 0}` : 'Период не задан'}</p>
+      <p role="status" aria-live="polite" className="text-xs text-text-secondary">
+        {!validPeriod ? 'Период не задан' : !data.data
+          ? data.isError ? 'Не удалось загрузить список публикаций' : 'Загрузка публикаций…'
+          : data.isPlaceholderData ? 'Обновление списка… Пока показан предыдущий результат.'
+          : <>Последнее получение публикаций — {data.data.received_at ? when(data.data.received_at) : 'Дата получения не указана'} · Найдено {data.data.total}{data.isFetching && ' · Обновление…'}</>}
+      </p>
     </div>
     {data.isLoading && <Spinner />}
     {data.error && <ErrorState message={data.error.message} onRetry={() => data.refetch()} />}
@@ -132,7 +137,7 @@ export function TrendsPage() {
         <Section title="Издатель"><input aria-label="Издатель" className={FIELD} placeholder="Издатель, например cert-fr" value={publisher} onChange={e => change(() => setPublisher(e.target.value))} /></Section>
         <Section title="Статус проверки"><select className={FIELD} aria-label="Статус" value={status} onChange={e => change(() => setStatus(e.target.value))}><option value="">Все статусы</option><option value="new">Новые</option><option value="verified">Проверенные</option><option value="rejected">Отклонённые</option></select></Section>
       </aside>}
-    <div className="min-w-0 flex-1 overflow-auto bg-app-bg" data-col-resize-root>
+    <div className="min-w-0 flex-1 overflow-auto bg-app-bg" aria-busy={data.isFetching} data-col-resize-root>
       <div className="sticky top-0 z-10 grid border-b border-grid bg-surface text-[11px] font-semibold tracking-wide text-text-secondary uppercase" style={columns.gridStyle}><ResizableHeader as="div" cols={columns} className="px-2 py-2" /></div>
       {validPeriod && data.data?.items.map(item => {
         const url = publicationUrl(item.source_url, item.id)
@@ -145,10 +150,10 @@ export function TrendsPage() {
         <span className="px-2 py-2">{item.hosts} хостов · {item.images} образов</span>
         <span className="px-2 py-2 text-xs">{when(item.last_event_at)}</span>
       </div>})}
-      {validPeriod && data.data?.total === 0 && <div className="space-y-2 p-8 text-xs text-text-secondary"><p>{view === 'matched' ? 'За выбранный период нет трендов с точными совпадениями в локальных данных. Откройте «Обсуждаемые CVE» и проверьте актуальность сканов.' : view === 'all' ? 'За выбранный период нет публикаций, подтверждающих критерии тренда. Другие упоминания доступны в «Обсуждаемые CVE».' : 'За выбранный период публикаций по этим условиям нет.'}</p><p>Измените период или фильтры. Если ожидались свежие сообщения, проверьте получение источников в настройках сборщика.</p></div>}
+      {validPeriod && !data.isFetching && !data.isError && data.data?.total === 0 && <div className="space-y-2 p-8 text-xs text-text-secondary"><p>{view === 'matched' ? 'За выбранный период нет трендов с точными совпадениями в локальных данных. Откройте «Обсуждаемые CVE» и проверьте актуальность сканов.' : view === 'all' ? 'За выбранный период нет публикаций, подтверждающих критерии тренда. Другие упоминания доступны в «Обсуждаемые CVE».' : 'За выбранный период публикаций по этим условиям нет.'}</p><p>Измените период или фильтры. Если ожидались свежие сообщения, проверьте получение источников в настройках сборщика.</p></div>}
     </div>
     </div>
-    <div className="flex shrink-0 items-center gap-3 border-t border-grid bg-surface px-4 py-2"><Button className="px-2 py-1 text-xs" disabled={!validPeriod || offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>Назад</Button><span className="text-xs">Страница {Math.floor(offset / 50) + 1}</span><Button className="px-2 py-1 text-xs" disabled={!validPeriod || offset + 50 >= (data.data?.total ?? 0)} onClick={() => setOffset(offset + 50)}>Далее</Button></div>
+    <div className="flex shrink-0 items-center gap-3 border-t border-grid bg-surface px-4 py-2"><Button className="px-2 py-1 text-xs" disabled={!validPeriod || data.isPlaceholderData || data.isLoading || data.isError || offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>Назад</Button><span className="text-xs">{data.isPlaceholderData ? 'Обновление…' : `Страница ${Math.floor(offset / 50) + 1}`}</span><Button className="px-2 py-1 text-xs" disabled={!validPeriod || data.isPlaceholderData || data.isLoading || data.isError || offset + 50 >= (data.data?.total ?? 0)} onClick={() => setOffset(offset + 50)}>Далее</Button></div>
     {selected && validPeriod && <TrendDrawer key={selected} id={selected} scope={scope} close={() => setSelected('')} />}
   </div>
 }
