@@ -158,6 +158,8 @@ def app_settings(
     # Расписание истечения рисков, которое заводит старт API, в тестах не заводится: тесты
     # расписаний модулей считают строки platform_schedule. Его проверяет test_mine_and_expiry.py.
     monkeypatch.setattr("api.main.ensure_platform_schedules", lambda: None)
+    # Queue dispatch is driven explicitly in tests; never leave background network jobs after TRUNCATE.
+    monkeypatch.setattr("api.platform.sync_queue.worker.QueueWorker.start", lambda self, factory: None)
     # Так же расписания Threat Hunting: их проверяет tests/siem_hunting/test_dispatcher.py.
     monkeypatch.setattr("api.main.ensure_hunting_schedules", lambda: None)
     # Recovery is tested explicitly; a daemon must not outlive the test and race TRUNCATE.

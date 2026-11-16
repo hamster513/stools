@@ -55,6 +55,7 @@ class PlatformSchedule(Base):
     next_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     last_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 #: Обработчик получает сессию тика и расписание; возвращает id запущенной задачи или None (занято).
@@ -158,6 +159,37 @@ def tick(db: Session, now: dt.datetime, *, period_s: float = 60, tz: str = "UTC"
             sched.next_run_at = None
             db.commit()
             continue
+        from api.platform.sync_queue.catalog import is_queueable
+        if is_queueable(module, kind):
+            from fastapi import HTTPException
+
+            from api.platform.sync_queue.catalog import resolve
+            from api.platform.sync_queue.service import enqueue, schedule_failure
+            try:
+                from api.collector_routes import SCHEDULE_STARTED_BY
+                run = enqueue(db, [{"key": f"{module}/{kind}/{sched.target_id}"}],
+                              actor=SCHEDULE_STARTED_BY, origin="schedule")
+                sched.last_run_at, sched.last_run_id, sched.last_job_id = now, run.id, None
+                sched.next_run_at = nxt
+                db.commit()
+                started.append(run.id)
+            except HTTPException as exc:
+                db.rollback()
+                sched = db.get(PlatformSchedule, schedule_id)
+                if sched is None:
+                    continue
+                try:
+                    resolve(db, f"{module}/{kind}/{sched.target_id}")
+                except HTTPException:
+                    db.delete(sched)  # Deleted source: preserve legacy orphan-schedule cleanup.
+                else:
+                    schedule_failure(db, sched, str(exc.detail))
+                    sched.last_run_at, sched.next_run_at = now, nxt
+                db.commit()
+            except Exception:
+                db.rollback()
+                log.exception("не удалось поставить расписание %s в очередь", schedule_id)
+            continue
         handler = _handlers.get((module, kind))
         if handler is None:
             log.warning("расписание %s: обработчика %s/%s нет", schedule_id, module, kind)
@@ -246,6 +278,8 @@ class Scheduler:
     def __init__(self) -> None:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        from api.platform.sync_queue.worker import QueueWorker
+        self._queue_worker = QueueWorker()
 
     @property
     def alive(self) -> bool:
@@ -262,8 +296,10 @@ class Scheduler:
             name="stools-scheduler", daemon=True,
         )
         self._thread.start()
+        self._queue_worker.start(session_factory)
 
     def stop(self, timeout_s: float = 10) -> None:
+        self._queue_worker.stop()
         self._stop.set()
         if self._thread is None:
             return

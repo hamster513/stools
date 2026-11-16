@@ -378,6 +378,7 @@ class AssetJob(JobColumns, Base):
     """DNS-обновления, проходы RackTables и синхронизация с модулями: kind ∈ dns, rt, sync."""
 
     __tablename__ = "asset_job"
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
 
 
 class AssetSettings(Base):

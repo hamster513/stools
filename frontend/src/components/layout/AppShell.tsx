@@ -2,6 +2,7 @@ import { useRef, type ReactNode } from 'react'
 import { ModuleRail } from '@/platform/ModuleRail'
 import { HelpPanel } from '@/help/HelpPanel'
 import { useHelpOpen } from '@/help/useHelpOpen'
+import { QueueNotice } from '@/platform/syncQueue/QueueNotice'
 
 interface AppShellProps {
   /** Сайдбар активного модуля; у заглушек его нет. */
@@ -19,6 +20,7 @@ export function AppShell({ sidebar, children }: AppShellProps) {
       <ModuleRail helpOpen={help.open} onHelp={help.toggle} helpButtonRef={helpButton} />
       {sidebar}
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">{children}</main>
+      <QueueNotice />
       <HelpPanel open={help.open} onClose={help.close} buttonRef={helpButton} />
     </div>
   )

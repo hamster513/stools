@@ -126,9 +126,12 @@ def test_scheduler_tick_runs_collect(
     assert r.status_code == 200, r.text
     started = tick(db_session, NOW + dt.timedelta(hours=2))
     assert len(started) == 1
+    from api.platform.sync_queue.worker import dispatch
+    assert at_start == []
+    dispatch(db_session)
     assert at_start == [("collect", SCHEDULE_STARTED_BY, "ksc01.corp.local")]
     (job,) = _jobs(db_session)
-    assert job.id == started[0] and job.status == "done", job.error
+    assert job.status == "done", job.error
     (snap,) = db_session.execute(select(KscSnapshot)).scalars().all()
     assert snap.source == "online"
     # Итог — тот же, что у сбора кнопкой.
@@ -145,11 +148,13 @@ def test_tick_waits_while_module_job_is_running(auth_client: TestClient, db_sess
     assert auth_client.put(f"/api/ksc/connections/{cid}/schedule", json=SCHEDULE).status_code == 200
     busy = start_job(db_session, KscJob, "collect", "tester", message="вручную")
     now = NOW + dt.timedelta(hours=2)
-    assert tick(db_session, now) == []
+    from api.platform.sync_queue.worker import dispatch
+    assert len(tick(db_session, now)) == 1
+    dispatch(db_session)
     assert [j.id for j in _jobs(db_session)] == [busy]
     (sched,) = _schedules(db_session)
-    # Повтор через период тика, а не через интервал: занято — не «отработало».
-    assert sched.next_run_at == now + dt.timedelta(seconds=60)
+    # The persisted queue owns retries; the next scheduled occurrence remains unchanged.
+    assert sched.next_run_at == now + dt.timedelta(hours=1)
     assert sched.enabled is True and sched.last_job_id is None
     assert fake.calls == []
 
@@ -160,15 +165,18 @@ def test_tick_waits_while_slots_are_taken(auth_client: TestClient, db_session: S
     slots = [take_slot("ksc", SCHEDULE_USER_ID) for _ in range(2)]
     try:
         now = NOW + dt.timedelta(hours=2)
-        assert tick(db_session, now) == []
+        from api.platform.sync_queue.worker import dispatch
+        assert len(tick(db_session, now)) == 1
+        dispatch(db_session)
         assert _jobs(db_session) == []
         (sched,) = _schedules(db_session)
-        assert sched.next_run_at == now + dt.timedelta(seconds=60) and sched.enabled is True
+        assert sched.next_run_at == now + dt.timedelta(hours=1) and sched.enabled is True
     finally:
         for slot in slots:
             slot.release()
     # Слоты свободны — следующий тик запускает сбор, и слот после задачи освобождён.
-    assert len(tick(db_session, NOW + dt.timedelta(hours=2, minutes=1))) == 1
+    dispatch(db_session)
+    assert tick(db_session, NOW + dt.timedelta(hours=2, minutes=1)) == []
     assert _jobs(db_session)[-1].status == "done"
     extra = take_slot("ksc", SCHEDULE_USER_ID)
     extra.release()
@@ -177,7 +185,9 @@ def test_tick_waits_while_slots_are_taken(auth_client: TestClient, db_session: S
 def test_connection_without_password_disables_schedule(auth_client: TestClient, db_session: Session, fake: FakeKsc) -> None:
     cid = _create(auth_client, password="")
     assert auth_client.put(f"/api/ksc/connections/{cid}/schedule", json=SCHEDULE).status_code == 200
-    assert tick(db_session, NOW + dt.timedelta(hours=2)) == []
+    from api.platform.sync_queue.worker import dispatch
+    assert len(tick(db_session, NOW + dt.timedelta(hours=2))) == 1
+    dispatch(db_session)
     (sched,) = _schedules(db_session)
     assert sched.enabled is False and sched.last_job_id is None
     assert _jobs(db_session) == [] and fake.calls == []

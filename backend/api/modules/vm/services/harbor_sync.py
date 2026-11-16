@@ -623,7 +623,13 @@ def sync_work(started_by: str) -> Callable[[Session, JobHandle], None]:
     """Работа задачи для `run_job`: настройки читаются в её сессии, на момент старта."""
 
     def work(session: Session, handle: JobHandle) -> None:
-        run_harbor_sync(session, handle, load_harbor(session), load_settings(session).weights, started_by)
+        from api.modules.vm.models import VmJob
+        result = run_harbor_sync(session, handle, load_harbor(session), load_settings(session).weights, started_by)
+        row = session.get(VmJob, handle.id)
+        assert row is not None
+        row.result = {"status": "partial" if result.errors else "completed", "errors_count": len(result.errors),
+                      "images": result.images, "cves": result.cves}
+        session.commit()
 
     return work
 

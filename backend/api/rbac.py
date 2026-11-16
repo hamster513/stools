@@ -80,6 +80,10 @@ def needed(method: str, path: str) -> tuple[str, str] | None:
     sync = re.fullmatch(r"/api/settings/schedules/(ad|ksc|assets|vm|siem|attack)/[a-z_]+/[0-9]+", path)
     if sync:
         return sync[1], "read" if read else "admin"
+    if path == "/api/settings/sync-tasks" or re.fullmatch(r"/api/settings/sync-runs(?:/[0-9]+(?:/(?:cancel|retry))?)?", path):
+        return None  # The queue checks every target and dependency itself.
+    if re.fullmatch(r"/api/settings/schedules/(?:ad|ksc|assets|vm|siem|attack|platform)/[a-z_]+/[0-9]+/dependencies", path):
+        return None  # Per-target administrator and dependency permissions in the handler.
     if path.startswith("/api/settings/attack"):
         # Состояние базы ATT&CK показывают страницы всех модулей; меняет его администратор модуля ATT&CK.
         return None if read else ("attack", "admin")

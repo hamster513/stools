@@ -58,7 +58,8 @@ USERS_FAILED = "users_failed"
 USERS_FAILED_TEXT = "пользователи: сбой, см. журнал"
 GROUPS_FAILED = "groups_failed"
 GROUPS_FAILED_TEXT = "группы: сбой, см. журнал"
-FAILED_TEXTS = {USERS_FAILED: USERS_FAILED_TEXT, GROUPS_FAILED: GROUPS_FAILED_TEXT}
+FAILED_TEXTS = {USERS_FAILED: USERS_FAILED_TEXT, GROUPS_FAILED: GROUPS_FAILED_TEXT,
+                **{f"{source}_failed": f"{title}: источник прочитан не полностью" for source, title in SOURCE_TITLES.items()}}
 #: Кто запустил задачу после импорта модуля: человека у неё нет.
 AUTO_STARTED_BY = "после импорта"
 #: Прогресс и проверка отмены — раз в столько наблюдений.
@@ -87,6 +88,9 @@ def request_sync(db: Session, source: str) -> int | None:
     Вызывается после фиксации импорта модуля: задача читает уже записанные данные."""
     if not load_settings(db)["sync_after_import"]:
         return None
+    from api.platform.sync_queue.service import defer_asset_sync
+    if defer_asset_sync(db, source):
+        return None
     if active_job(db, AssetJob, ("sync",)) is not None:
         _set_rerun(db, True)
         return None
@@ -107,6 +111,11 @@ def schedule_handler(db: Session, schedule: PlatformSchedule) -> int | None:
 def sync_job(db: Session, handle: JobHandle, trigger: str) -> None:
     """Итог задачи — что её запустило и сколько наблюдений дал каждый источник."""
     counts = run_sync(db, handle)
+    row = db.get(AssetJob, handle.id)
+    assert row is not None
+    row.result = {"status": "partial" if counts is None or any(counts.get(k) for k in FAILED_TEXTS) else "completed",
+                  "counts": counts or {}, "deferred": counts is None}
+    db.commit()
     if counts is None:
         return
     parts = [FAILED_TEXTS.get(s) or f"{COUNT_TITLES[s]} {n}" for s, n in counts.items()]
@@ -388,6 +397,8 @@ def _sync_pass(db: Session, handle: JobHandle, sources: tuple[str, ...]) -> dict
                     index.put(asset, [observed(r, extra={}) for r in per_asset[asset_id]])
         db.commit()
         counts[source] = len(seen)
+        if not complete:
+            counts[f"{source}_failed"] = 1
     # Пользователи — последним шагом: связям с хостами нужны уже сопоставленные активы.
     # Сбой шага не ломает проход: хосты уже записаны, сверка находок и повторный проход идут дальше.
     if "ad" in sources or "ksc" in sources:

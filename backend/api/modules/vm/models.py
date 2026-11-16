@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -327,6 +328,7 @@ class VmJob(JobColumns, Base):
     """
 
     __tablename__ = "vm_job"
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 class VmStageHost(Base):

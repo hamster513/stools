@@ -51,8 +51,16 @@ def test_feeds_run_through_scheduler(auth_client, db_session, monkeypatch):
     monkeypatch.setattr(collector_routes, "spawn", queued.append)
     saved = auth_client.put(f"{URL}/vm/ref_epss/0", json=WEEK).json()
     due = dt.datetime.fromisoformat(saved["next_run_at"])
-    jobs = tick(db_session, due, tz=saved["tz"])
-    job = db_session.get(VmJob, jobs[0])
+    runs = tick(db_session, due, tz=saved["tz"])
+    from sqlalchemy import select
+
+    from api.platform.sync_queue.models import SyncStep
+    from api.platform.sync_queue.worker import dispatch
+    assert len(runs) == 1
+    assert queued == []
+    dispatch(db_session)
+    step = db_session.scalar(select(SyncStep).where(SyncStep.run_id == runs[0]))
+    job = db_session.get(VmJob, step.job_id)
     assert job.kind == "ref_epss" and job.started_by == collector_routes.SCHEDULE_STARTED_BY
     assert len(queued) == 1
     assert tick(db_session, due, tz=saved["tz"]) == []

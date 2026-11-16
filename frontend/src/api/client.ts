@@ -1,3 +1,4 @@
+import { queuedPost } from '@/platform/syncQueue/client'
 /**
  * Тонкая обёртка над fetch. Все запросы идут с cookie сессии и разбирают
  * ошибку контракта {"detail": "текст"} в понятное исключение.
@@ -69,7 +70,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }),
+    queuedPost<T>(path, body, request, (status, message) => new ApiRequestError(status, message)),
   postForm: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }),

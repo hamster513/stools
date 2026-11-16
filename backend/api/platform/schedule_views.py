@@ -32,6 +32,7 @@ class ScheduleView(BaseModel):
     next_run_at: dt.datetime | None
     last_run_at: dt.datetime | None
     last_job_id: int | None
+    last_run_id: int | None = None
     #: Пояс окна — STOOLS_TZ.
     tz: str
 
@@ -39,5 +40,5 @@ class ScheduleView(BaseModel):
 def schedule_view(s: PlatformSchedule) -> ScheduleView:
     return ScheduleView(
         weekdays=[int(day) for day in s.weekdays or ""], run_time=s.run_time, id=s.id, interval_hours=s.interval_hours, window_from=s.window_from, window_to=s.window_to, enabled=s.enabled,
-        next_run_at=s.next_run_at, last_run_at=s.last_run_at, last_job_id=s.last_job_id, tz=get_settings().tz,
+        next_run_at=s.next_run_at, last_run_at=s.last_run_at, last_job_id=s.last_job_id, last_run_id=s.last_run_id, tz=get_settings().tz,
     )

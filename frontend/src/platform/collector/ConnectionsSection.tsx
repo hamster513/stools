@@ -112,7 +112,7 @@ export function CollectorConnectionsSection<C extends ConnectionBase, CI extends
                       <td className="py-2 text-right">
                         <div className="flex flex-wrap justify-end gap-1 whitespace-nowrap">
                           {admin && <Button variant="ghost" onClick={() => test.mutate(c.id, { onSuccess: (r) => setTestResult({ id: c.id, ...r }) })} loading={test.isPending}><PlugZap size={13} aria-hidden /> проверить</Button>}
-                          <Button variant="ghost" onClick={() => collect.mutate(c.id)} loading={collect.isPending} disabled={!c.password_set}><ServerCog size={13} aria-hidden /> собрать</Button>
+                          <Button variant="ghost" onClick={() => collect.mutate(c.id)} loading={collect.isPending && collect.variables === c.id} disabled={!c.password_set}><ServerCog size={13} aria-hidden /> собрать</Button>
                           {admin && (
                             <>
                               <Link to="/settings/schedules" className="text-xs text-primary hover:underline">расписание</Link>

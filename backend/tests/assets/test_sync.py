@@ -410,7 +410,11 @@ def test_scheduler_tick_runs_sync(loaded: Session, client_as: Any, monkeypatch: 
     assert r.status_code == 200, r.text
     started = tick(loaded, dt.datetime.now(dt.UTC) + dt.timedelta(hours=2))
     assert len(started) == 1
-    job = loaded.get(AssetJob, started[0])
+    from api.platform.sync_queue.models import SyncStep
+    from api.platform.sync_queue.worker import dispatch
+    dispatch(loaded)
+    step = loaded.scalar(select(SyncStep).where(SyncStep.run_id == started[0]))
+    job = loaded.get(AssetJob, step.job_id)
     assert job is not None
     loaded.refresh(job)
     assert (job.kind, job.status, job.started_by) == ("sync", "done", "расписание"), job.error
