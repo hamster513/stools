@@ -31,7 +31,7 @@ def preg(*entries: tuple[str, str, int, bytes]) -> bytes:
 GROUPS = """<?xml version="1.0" encoding="utf-8"?>
 <Groups clsid="{3125E937-EB16-4b4c-9934-544FC6D24D26}">
   <User clsid="{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}" name="localadm" changed="2019-01-01 00:00:00">
-    <Properties action="U" userName="localadm" cpassword="j1Uyj3Vx8TY9LtLZil2uAuZkFQA/4latT76ZwgdHdhw"/>
+    <Properties action="U" userName="localadm" cpassword="TEST_ONLY_NOT_A_REAL_PASSWORD"/>
   </User>
   <Group clsid="{6D4A79E4-529C-4481-ABD0-F5BD7EA93BA7}" name="Administrators (built-in)">
     <Properties action="U" groupSid="S-1-5-32-544" groupName="Administrators (built-in)">

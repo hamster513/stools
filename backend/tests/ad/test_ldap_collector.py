@@ -376,7 +376,7 @@ def test_collector_reads_gpo_files_with_whitelist_and_redaction() -> None:
     assert [(r["value"], r["data"]) for r in data["registry"]] == [("NoLMHash", 0), ("DefaultPassword", "")]
     assert data["gpp"][0]["cpassword"] is True and data["audit"][0]["setting"] == 3 and data["scripts"][0]["phase"] == "logon"
     assert data["acl"] is None and any("Registry.pol" in n for n in data["notes"])
-    assert "secret" not in json.dumps(out) and "P@ssw0rd" not in json.dumps(out) and "j1Uyj3Vx8TY9" not in json.dumps(out)
+    assert "secret" not in json.dumps(out) and "P@ssw0rd" not in json.dumps(out) and "TEST_ONLY_NOT_A_REAL_PASSWORD" not in json.dumps(out)
     root = next(o for o in out["objects"] if o["class"] == "domainDNS")
     assert "gpLink" in root and out["collector"]["version"] == "1.4"
     # Блок доходит до модели: у GPO без файлов — пустая запись, а не «не прочитано».

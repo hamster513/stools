@@ -477,7 +477,7 @@ foreach ($p in $c.ini.PSObject.Properties) { $ini[$p.Name] = @(Read-ScriptsIni $
 """
     out = _pwsh(tmp_path, body, ("Read-GppFile", "Read-AuditCsv", "Read-ScriptsIni"))
     assert out["gpp"] == g.parse_gpp("Groups.xml", "machine", GROUPS)
-    assert out["gpp"][0]["cpassword"] is True and "j1Uyj3Vx8TY9" not in json.dumps(out)
+    assert out["gpp"][0]["cpassword"] is True and "TEST_ONLY_NOT_A_REAL_PASSWORD" not in json.dumps(out)
     for name, message in out["gpp_bad"].items():
         with pytest.raises(ValueError):
             g.parse_gpp("Groups.xml", "machine", GPP_BAD[name])
@@ -1197,7 +1197,7 @@ def test_script_reads_gpo_files_acl_and_links(tmp_path: Path, web_server: int) -
     assert "Сбор прерван" not in console, console
     [ad_file] = list(out.glob("ad-CORP-*.json.gz"))
     text = gzip.decompress(ad_file.read_bytes()).decode()
-    for secret in ("P@ssw0rd", "j1Uyj3Vx8TY9", "secret", "Zm9vYmFyMTIz", "S3cretParam"):
+    for secret in ("P@ssw0rd", "TEST_ONLY_NOT_A_REAL_PASSWORD", "secret", "Zm9vYmFyMTIz", "S3cretParam"):
         assert secret not in text, secret
     export = load_export(ad_file.read_bytes())
     assert export.gpo is not None and list(export.sysvol) == [GPO_DN]

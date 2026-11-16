@@ -73,7 +73,7 @@ def test_gpp_items_never_carry_the_password():
                         "action": "U", "members": [], "group_sid": "", "group_name": "", "path": "", "filtered": False, "delete_all": False,
                         "disabled": False}
     assert items[1]["group_sid"] == "S-1-5-32-544" and items[1]["members"] == [{"name": "CORP\\Domain Users", "sid": "S-1-5-21-1000-2000-3000-513", "action": "ADD"}]
-    assert "j1Uyj3Vx8TY9" not in repr(items)
+    assert "TEST_ONLY_NOT_A_REAL_PASSWORD" not in repr(items)
 
 
 def _gpp_group(props_attrs: str, tail: str = "") -> str:
