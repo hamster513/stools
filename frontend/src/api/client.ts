@@ -1,4 +1,4 @@
-import { queuedPost } from '@/platform/syncQueue/client'
+import { queuedPost } from '../platform/syncQueue/client.ts'
 /**
  * Тонкая обёртка над fetch. Все запросы идут с cookie сессии и разбирают
  * ошибку контракта {"detail": "текст"} в понятное исключение.
