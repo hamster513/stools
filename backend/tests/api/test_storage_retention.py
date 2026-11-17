@@ -1,5 +1,7 @@
 import datetime as dt
+
 from sqlalchemy import select, text
+
 URL = '/api/settings/storage/retention'
 
 
@@ -81,15 +83,33 @@ def test_expired_preview_cannot_run(auth_client, db_session):
     assert auth_client.post(URL+'/run',json={'preview_id':row.id}).status_code==409
 
 
-def test_scheduler_executes_retention_once(auth_client, db_session):
+def test_scheduler_executes_retention_once(auth_client, db_session, monkeypatch):
     from api.platform.scheduler import tick
     from api.platform.storage_retention import RetentionRun
-    value=auth_client.put('/api/settings/schedules/platform/storage_cleanup/0',json={'interval_hours':24,'weekdays':[0,1,2,3,4,5,6],'run_time':'03:30'})
-    assert value.status_code==200,value.text
-    when=dt.datetime.fromisoformat(value.json()['next_run_at'])
-    tick(db_session,when)
+    from api.platform.sync_queue.models import SyncRun
+    from api.platform.sync_queue.worker import dispatch
+
+    monkeypatch.setattr('api.collector_routes.spawn', lambda work: work())
+    value = auth_client.put('/api/settings/schedules/platform/storage_cleanup/0', json={
+        'interval_hours': 24, 'weekdays': list(range(7)), 'run_time': '03:30',
+    })
+    assert value.status_code == 200, value.text
+    when = dt.datetime.fromisoformat(value.json()['next_run_at'])
+    tick(db_session, when)
+    queued = db_session.scalar(select(SyncRun).limit(1))
+    assert queued is not None and queued.status == 'queued'
+    assert db_session.scalar(select(RetentionRun).limit(1)) is None
+
+    dispatch(db_session, when)  # Launch the real cleanup through its queue adapter.
+    dispatch(db_session, when)  # Observe completion and finish the queued run.
     db_session.expire_all()
-    first=list(db_session.scalars(select(RetentionRun)))
-    assert len(first)==1 and first[0].finished_at is not None
-    tick(db_session,when)
-    assert len(list(db_session.scalars(select(RetentionRun))))==1
+    first = list(db_session.scalars(select(RetentionRun).limit(2)))
+    assert len(first) == 1 and first[0].finished_at is not None
+    # An unconfigured external collector makes the successful local cleanup partial.
+    assert first[0].data['status'] in ('completed', 'partial')
+    assert db_session.get(SyncRun, queued.id).status in ('done', 'partial')
+
+    tick(db_session, when)
+    dispatch(db_session, when)
+    assert len(list(db_session.scalars(select(RetentionRun).limit(2)))) == 1
+    assert len(list(db_session.scalars(select(SyncRun).limit(2)))) == 1
