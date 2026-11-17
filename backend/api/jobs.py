@@ -22,7 +22,7 @@ from collections.abc import Callable, Iterable
 from itertools import batched
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, select, text, update
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, select, text, update
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 from sqlalchemy.orm.attributes import set_committed_value
@@ -42,8 +42,8 @@ class JobColumns:
     #: running | done | failed | cancelled
     status: Mapped[str] = mapped_column(String(16), default="running", index=True)
     progress: Mapped[int] = mapped_column(Integer, default=0)
-    processed: Mapped[int] = mapped_column(Integer, default=0)
-    total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processed: Mapped[int] = mapped_column(BigInteger, default=0)
+    total: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     message: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)

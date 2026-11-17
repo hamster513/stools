@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.modules.vm.services.jobs import JobHandle, run_job, start_job
@@ -19,6 +20,32 @@ def test_job_progress_and_done(auth_client: TestClient, db_session: Any) -> None
     body = auth_client.get(f"/api/vm/jobs/{job_id}").json()
     assert body["status"] == "done" and body["progress"] == 100 and body["stage"] == "done"
     assert body["finished_at"] is not None
+
+
+@pytest.mark.parametrize("size", [2**31 - 1, 2**31, 2_976_578_498])
+@pytest.mark.parametrize("separate_transaction", [False, True])
+def test_job_progress_supports_large_exports(
+    auth_client: TestClient, db_session: Any, size: int, separate_transaction: bool,
+) -> None:
+    job_id = start_job(db_session, "import_vm", "tester")
+
+    def work(db: Any, h: JobHandle) -> None:
+        h.stage("docker")
+        if separate_transaction:
+            h.report_progress(size - 1, size, "чтение CSV", stage="parsing")
+        else:
+            h.stage("parsing", total=size)
+            h.tick(size - 1)
+        body = auth_client.get(f"/api/vm/jobs/{job_id}").json()
+        assert (body["stage"], body["processed"], body["total"], body["progress"]) == (
+            "parsing", size - 1, size, 99,
+        )
+        h.tick(size)
+
+    run_job(job_id, work)
+    body = auth_client.get(f"/api/vm/jobs/{job_id}").json()
+    assert body["status"] == "done", (body["stage"], body["error"])
+    assert (body["processed"], body["total"], body["progress"]) == (size, size, 100)
 
 
 def test_job_failure_keeps_first_line_of_error(auth_client: TestClient, db_session: Any) -> None:
