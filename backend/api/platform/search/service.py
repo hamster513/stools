@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 
 from api.modules.ad.models import AdDomain
 from api.modules.assets.models import Asset, AssetGroup, AssetObservation, AssetUser, AssetUserHost
@@ -112,35 +112,24 @@ def vulnerabilities(db, obj, access):
     host_ids = [obj.id]
     if isinstance(obj, AssetUser):
         sources = [s for s in ("ad", "ksc", "vm") if allows(access, s, "read")]
-        host_ids = list(
-            db.scalars(
-                select(AssetUserHost.asset_id)
-                .where(
-                    AssetUserHost.user_id == obj.id,
-                    AssetUserHost.source.in_(sources),
-                    AssetUserHost.gone_at.is_(None),
-                )
-                .distinct()
-                .limit(101)
-            )
+        host_ids = select(AssetUserHost.asset_id).where(
+            AssetUserHost.user_id == obj.id,
+            AssetUserHost.source.in_(sources),
+            AssetUserHost.gone_at.is_(None),
         )
         section.note = "Уязвимости связанных хостов, не самой учётной записи. " + section.note
-    # VM source_key is the collected hostname|IP; use the saved mapping rather than a shared IP.
-    obs = db.scalars(
-        select(AssetObservation)
-        .where(
-            AssetObservation.asset_id.in_(host_ids),
-            AssetObservation.source == "vm",
-            AssetObservation.gone_at.is_(None),
-        )
-        .order_by(AssetObservation.id)
-        .limit(101)
-    ).all()
-    keys = {o.source_key.partition("|")[::2] for o in obs if "|" in o.source_key}
-    if not keys:
+    # Keep the complete scope in SQL; limiting it would hide high-risk hosts from both totals and ranking.
+    # VM source_key is hostname|IP, matching the indexed key in vm_host rather than a shared IP.
+    keys = select(AssetObservation.source_key).where(
+        AssetObservation.asset_id.in_(host_ids),
+        AssetObservation.source == "vm",
+        AssetObservation.gone_at.is_(None),
+        AssetObservation.source_key.contains("|"),
+    )
+    if db.execute(keys.limit(1)).first() is None:
         section.note += " Нет подтверждённой связи с инвентарём VM."
         return section
-    condition = or_(*(and_(VmHost.hostname == name, VmHost.ip == ip) for name, ip in keys))
+    condition = (VmHost.hostname + "|" + VmHost.ip).in_(keys)
     total, unique, risk = db.execute(
         select(func.count(), func.count(func.distinct(VmHostCve.cve_id)), func.max(VmHostCve.risk))
         .select_from(VmHost)

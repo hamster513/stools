@@ -248,6 +248,41 @@ def test_vm_links_do_not_attach_another_host_with_same_ip(auth_client, db_sessio
     assert [x["title"] for x in section(r, "vulnerabilities")["items"]] == ["CVE-2026-1111"]
 
 
+@pytest.mark.parametrize("subject_kind", ["user", "host"])
+def test_vulnerability_summary_covers_all_hosts_before_limiting_rows(client_as, db_session, people, subject_kind):
+    from api.modules.vm.models import VmCve, VmHost, VmHostCve
+
+    host, user, _ = people
+    db_session.add(VmCve(cve_id="CVE-2026-9999"))
+    for index in range(102):
+        name, ip = f"node-{index}.example.test", f"198.51.100.{index + 1}"
+        asset = Asset(name=name, name_key=name, fqdn=name, ip=ip) if subject_kind == "user" else host
+        vm = VmHost(hostname=name, ip=ip)
+        db_session.add_all([asset, vm])
+        db_session.flush()
+        if subject_kind == "user":
+            # Two allowed sources must not count the same host twice.
+            db_session.add_all([
+                AssetUserHost(user_id=user.id, asset_id=asset.id, source=source,
+                              kind="local_group", seen_at=NOW)
+                for source in ("vm", "ksc")
+            ])
+        db_session.add_all([
+            AssetObservation(asset_id=asset.id, source="vm", source_key=f"{name}|{ip}", seen_at=NOW),
+            VmHostCve(host_id=vm.id, cve_id="CVE-2026-9999", risk=99 if index == 101 else 10),
+        ])
+    db_session.commit()
+    subject = user if subject_kind == "user" else host
+    response = client_as({"assets": "read", "vm": "read", "ksc": "read"}).post(
+        API, json={"query": "review", "entity_id": f"{subject_kind}:{subject.id}"},
+    )
+    assert response.status_code == 200, response.text
+    result = section(response.json(), "vulnerabilities")
+    assert "Пар хост–CVE: 102; уникальных CVE: 1; максимальный риск: 99." in result["note"]
+    assert len(result["items"]) == 100 and result["has_more"]
+    assert result["items"][0]["reason"] == "node-101.example.test"
+
+
 @pytest.mark.parametrize("subject_class,disabled_bit", [("user", 1), ("computer", 2)])
 def test_ad_scope_honours_inheritance_enforced_links_and_disabled_parts(
     subject_class, disabled_bit
