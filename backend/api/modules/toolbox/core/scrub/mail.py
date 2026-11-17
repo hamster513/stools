@@ -97,6 +97,14 @@ def email_file(data: bytes, transform: Callable[[str, str], str],
                 raise DocumentError('некорректная кодировка заголовка письма')
             # Decode RFC2047, unfold before transform, then let email encode/fold safely.
             clean = transform('', str(value).replace('\x00', '')).replace('\r', '').replace('\n', ' ')
+            if low == 'message-id':
+                # Placeholders can break ID syntax; check the serialized header too.
+                probe = EmailMessage(policy=policy.SMTP)
+                probe[key] = clean
+                parsed = BytesParser(policy=policy.default).parsebytes(probe.as_bytes())
+                if probe[key].defects or parsed[key].defects:
+                    omitted.append('заголовок Message-ID: подстановка нарушила формат идентификатора')
+                    continue
             out[key] = clean
         filename = (part.get_filename() or '').replace('\x00', '') or None
         if typ == 'message/rfc822':

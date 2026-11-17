@@ -593,3 +593,23 @@ def test_msg_nul_padding_full_api_flow(seeded, auth_client, monkeypatch):
     clean = BytesParser(policy=policy.default).parsebytes(response.content)
     assert '\x00' not in str(clean['Subject']) + clean.get_content()
     assert 'host01' not in clean.get_content()
+
+
+def test_msg_notification_redacted_message_id_full_api_flow(seeded, auth_client, monkeypatch):
+    from email import policy
+    from email.parser import BytesParser
+
+    from api.modules.toolbox.core.scrub import files
+    from tests.toolbox.test_documents import notification_mail
+    monkeypatch.setattr(files, 'convert', lambda data, suffix: notification_mail().as_bytes())
+    job_id = upload(auth_client, b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1\x00payload', 'notification.msg')
+    job = apply(auth_client, job_id)
+    assert job['status'] == 'done', job
+    response = auth_client.get(f'{API}/jobs/{job_id}/result')
+    assert response.status_code == 200 and 'notification.eml' in response.headers['content-disposition']
+    mail = BytesParser(policy=policy.default).parsebytes(response.content)
+    assert mail['Message-ID'] is None
+    assert len(list(mail.walk())) == 5
+    report = auth_client.get(f'{API}/jobs/{job_id}/report')
+    assert 'Message-ID' in report.text
+    assert 'synthetic-msg-secret' not in report.text

@@ -327,3 +327,61 @@ def test_email_nul_padding_does_not_reach_findings_or_output(tmp_path):
     assert str(clean['Subject']) == 'host-0001'
     assert 'host-0001' in clean.get_body().get_content()
     assert list(clean.iter_attachments())[0].get_filename() == 'note.txt'
+
+
+def notification_mail(message_id='<password=synthetic-msg-secret-12345@corp.test>'):
+    """Same MIME topology as the reported Outlook notification, with synthetic content."""
+    msg = EmailMessage()
+    msg['Subject'] = 'Synthetic notification'
+    msg['Message-ID'] = message_id
+    msg.make_mixed()
+    related = EmailMessage()
+    related.make_related()
+    alternative = EmailMessage()
+    alternative.set_content('host01 10.1.2.15')
+    alternative.add_alternative('<table><tr><td>host01 10.1.2.15</td></tr></table>', subtype='html')
+    related.attach(alternative)
+    msg.attach(related)
+    return msg
+
+
+def test_redacted_message_id_is_omitted_without_breaking_mime(tmp_path):
+    from api.modules.toolbox.core.scrub import engine
+    from tests.toolbox.synthetic import CTX, MemoryAliases
+    msg = notification_mail()
+    original = msg.as_bytes(policy=policy.SMTP)
+    src = tmp_path / 'notice.eml'
+    src.write_bytes(original)
+    aliases = MemoryAliases()
+    findings = engine.scan(src, CTX, aliases).findings
+    assert any(f.kind == 'secret' and f.checked for f in findings)
+    out = tmp_path / 'clean.eml'
+    entries, _counts = engine.apply(src, out, findings, CTX, aliases)
+    clean = BytesParser(policy=policy.default).parsebytes(out.read_bytes())
+    assert clean['Message-ID'] is None
+    assert [p.get_content_type() for p in clean.walk()] == [
+        'multipart/mixed', 'multipart/related', 'multipart/alternative', 'text/plain', 'text/plain']
+    assert all(not p.defects for p in clean.walk())
+    assert engine.verify(out, findings, CTX) == []
+    assert any(e.kind == 'skipped' and 'Message-ID' in e.note for e in entries)
+    assert not any('synthetic-msg-secret' in e.note for e in entries)
+    assert src.read_bytes() == original
+
+
+def test_valid_message_id_is_kept_and_anonymized(tmp_path):
+    src = tmp_path / 'notice.eml'
+    src.write_bytes(notification_mail('<host01@example.test>').as_bytes())
+    out = tmp_path / 'clean.eml'
+    rewrite(src, out, replace)
+    msg = BytesParser(policy=policy.default).parsebytes(out.read_bytes())
+    assert str(msg['Message-ID']) == '<host-0001@example.test>'
+    assert not msg['Message-ID'].defects
+
+
+def test_verification_still_rejects_invalid_message_id(tmp_path):
+    from api.modules.toolbox.core.scrub import engine
+    from tests.toolbox.synthetic import CTX
+    src = tmp_path / 'bad.eml'
+    src.write_bytes(notification_mail('<<secret-123>@example.test>').as_bytes())
+    with pytest.raises(engine.VerifyError):
+        engine.verify(src, [], CTX)
