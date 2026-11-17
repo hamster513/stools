@@ -149,11 +149,9 @@ class FakeVm:
         token = request.url.params["pdqlToken"]
         if token in self.fail:
             return httpx.Response(500)
-        if request.url.path.endswith("/data"):
+        if request.url.path.endswith("/row_count"):
             records = list(csv.reader(io.StringIO(self.csv[token].decode()), delimiter=";"))[1:]
-            offset = int(request.url.params["offset"])
-            limit = int(request.url.params["limit"])
-            return httpx.Response(200, json={"records": records[offset:offset + limit]})
+            return httpx.Response(200, json={"rowCount": len(records)})
         return httpx.Response(200, content=self.csv[token])
 
     def client(self, conn: Any, timeout: float = 60.0) -> httpx.Client:
@@ -224,7 +222,7 @@ def test_linux_export_failure_keeps_previous_linux_rows(db_session: Any, tmp_pat
     when = _seed_previous(db_session)
     handle = _run_vm(db_session, tmp_path, monkeypatch, FakeVm(fail={"lin"}))
     assert _message(db_session, handle) == (
-        "локальные группы: Windows — строк 3, хостов 1; Linux не получены (экспорт не отдан: HTTP 500) — прежний снимок от 01.10 00:00 UTC"
+        "локальные группы: Windows — строк 3, хостов 1; Linux не получены (проверка полноты экспорта: HTTP 500) — прежний снимок от 01.10 00:00 UTC"
     )
     groups = _groups(db_session)
     assert ("linux", "oldlin.corp.local", "wheel", "user01") in groups
@@ -246,8 +244,8 @@ def test_both_group_exports_fail_import_still_succeeds(db_session: Any, tmp_path
     (snap,) = db_session.execute(select(VmGroupImport)).scalars().all()
     assert snap.finished_at == when
     assert _message(db_session, handle) == (
-        "локальные группы: Windows не получены (экспорт не отдан: HTTP 500) — прежний снимок от 01.10 00:00 UTC; "
-        "Linux не получены (экспорт не отдан: HTTP 500) — прежний снимок от 01.10 00:00 UTC"
+        "локальные группы: Windows не получены (проверка полноты экспорта: HTTP 500) — прежний снимок от 01.10 00:00 UTC; "
+        "Linux не получены (проверка полноты экспорта: HTTP 500) — прежний снимок от 01.10 00:00 UTC"
     )
     assert list((tmp_path / "vm").iterdir()) == []
 

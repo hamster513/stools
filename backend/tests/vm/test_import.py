@@ -81,24 +81,35 @@ def test_incomplete_csv_preserves_previous_snapshot(
     assert list(db_session.scalars(select(VmHost.id).order_by(VmHost.id).limit(10))) == old_ids
 
 
-def test_api_truncated_export_preserves_previous_snapshot(
-    auth_client: TestClient, db_session: Any, tmp_path: Path, monkeypatch: Any,
+@pytest.mark.parametrize("failure", ["truncated", "timeout", "invalid_json", "download_http", "download_timeout"])
+def test_api_unverified_export_preserves_previous_snapshot(
+    auth_client: TestClient, db_session: Any, tmp_path: Path, monkeypatch: Any, failure: str,
 ) -> None:
     import httpx
 
     from api.modules.vm.core.mpvm import MpVmError
     from tests.vm.test_groups_import import FakeVm, _run_vm
 
-    class TruncatedVm(FakeVm):
+    class UnverifiedVm(FakeVm):
         def handler(self, request: httpx.Request) -> httpx.Response:
-            if request.url.path.endswith("/data") and request.url.params["pdqlToken"] == "main":
-                return httpx.Response(200, json={"records": [{}, {}]})
+            if request.url.path.endswith("/export") and request.url.params["pdqlToken"] == "main":
+                if failure == "download_timeout":
+                    raise httpx.ReadTimeout("test timeout", request=request)
+                if failure == "download_http":
+                    return httpx.Response(503)
+            if request.url.path.endswith("/row_count") and request.url.params["pdqlToken"] == "main":
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("test timeout", request=request)
+                if failure == "invalid_json":
+                    return httpx.Response(200, content=b"<html>not JSON</html>")
+                if failure == "truncated":
+                    return httpx.Response(200, json={"rowCount": 999})
             return super().handler(request)
 
     assert _upload(auth_client, "hosts.csv")["status"] == "done"
     before = list(db_session.scalars(select(VmHost.id).order_by(VmHost.id).limit(10)))
-    with pytest.raises(MpVmError, match="полнот"):
-        _run_vm(db_session, tmp_path, monkeypatch, TruncatedVm())
+    with pytest.raises(MpVmError, match="полнот|экспорт"):
+        _run_vm(db_session, tmp_path, monkeypatch, UnverifiedVm())
     assert list(db_session.scalars(select(VmHost.id).order_by(VmHost.id).limit(10))) == before
 
 

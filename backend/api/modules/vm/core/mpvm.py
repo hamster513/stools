@@ -1,6 +1,6 @@
 """Клиент MaxPatrol VM (спека §2, §5).
 
-Два шага: PDQL в `assets_grid` за токеном экспорта, CSV по этому токену.
+PDQL в `assets_grid` за токеном, ожидаемое число строк и CSV по этому токену.
 Авторизация — персональный API-токен MaxPatrol как Bearer, без обмена
 пароля на токен. HTTP-клиент
 передаётся снаружи, чтобы тесты подменяли транспорт, а не сеть.
@@ -157,6 +157,7 @@ class MpVmClient:
     def export_csv(self, pdql: str, to_path: Path, on_bytes: object = None) -> int:
         """Скачать и проверить полноту CSV потоково; возвращает число байт."""
         token = self.export_token(pdql)
+        expected_rows = self._export_row_count(token)
         url = (
             f"{self.base}/api/assets_temporal_readmodel/v1/assets_grid/export"
             f"?pdqlToken={quote(token, safe='')}"
@@ -174,33 +175,40 @@ class MpVmClient:
                             on_bytes(size)
         except httpx.HTTPError as exc:
             raise MpVmError(f"экспорт прерван — {exc.__class__.__name__}") from exc
-        self._verify_export(token, to_path)
+        self._verify_export(to_path, expected_rows)
         return size
 
-    def _verify_export(self, token: str, path: Path) -> None:
+    def _export_row_count(self, token: str) -> int:
+        # A query result can expire while a large CSV is parsed locally. Obtain
+        # its count before downloading, without querying a different result later.
+        url = f"{self.base}/api/assets_temporal_readmodel/v1/assets_grid/row_count"
+        params = {"pdqlToken": token}
+        try:
+            with self.http.stream("GET", url, params=params, headers=self._headers(), timeout=600.0) as r:
+                if r.status_code != 200:
+                    raise MpVmError(f"проверка полноты экспорта: HTTP {r.status_code}", r.status_code)
+                body = self._json(r)
+        except httpx.TimeoutException as exc:
+            raise MpVmError(f"проверка полноты экспорта: тайм-аут ({type(exc).__name__})") from exc
+        except httpx.HTTPError as exc:
+            raise MpVmError(f"проверка полноты экспорта: ошибка HTTP ({type(exc).__name__})") from exc
+        except ValueError as exc:
+            raise MpVmError(f"проверка полноты экспорта: некорректный JSON ({type(exc).__name__})") from exc
+        count = body.get("rowCount") if isinstance(body, dict) else None
+        if type(count) is not int or count < 0:
+            raise MpVmError("проверка полноты экспорта: ответ без корректного rowCount")
+        return count
+
+    def _verify_export(self, path: Path, expected_rows: int) -> None:
         try:
             with path.open(encoding="utf-8-sig", newline="") as fh:
                 rows = sum(1 for _ in iter_csv_records(fh))
         except ValueError as exc:
             raise MpVmError(f"MaxPatrol VM: некорректный CSV — {exc}") from exc
-        # Same query token: the final exported record must exist, and the next
-        # must not. A round row count alone (e.g. 50,000) does not prove truncation.
-        url = f"{self.base}/api/assets_temporal_readmodel/v1/assets_grid/data"
-        params = {"pdqlToken": token, "offset": max(0, rows - 1), "limit": 2}
-        try:
-            with self.http.stream("GET", url, params=params, headers=self._headers()) as r:
-                if r.status_code != 200:
-                    raise MpVmError(f"проверка полноты экспорта: HTTP {r.status_code}", r.status_code)
-                body = self._json(r)
-        except (httpx.HTTPError, ValueError) as exc:
-            raise MpVmError("проверка полноты экспорта не выполнена") from exc
-        records = body.get("records") if isinstance(body, dict) else None
-        if not isinstance(records, list):
-            raise MpVmError("проверка полноты экспорта: ответ без списка records")
-        if len(records) != (1 if rows else 0):
+        if rows != expected_rows:
             raise MpVmError(
                 f"проверка полноты экспорта: количество строк CSV ({rows}) "
-                "не совпадает с результатом PDQL; выгрузка отклонена"
+                f"не совпадает с rowCount MaxPatrol ({expected_rows}); выгрузка отклонена"
             )
 
     def probe(self) -> str:
