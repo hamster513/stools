@@ -18,6 +18,7 @@ from typing import cast as typing_cast
 from sqlalchemy import Integer as SaInteger
 from sqlalchemy import (
     Table,
+    any_,
     bindparam,
     case,
     cast,
@@ -29,6 +30,7 @@ from sqlalchemy import (
     tuple_,
     update,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -279,20 +281,19 @@ def rescore_pairs(db: Session, weights: Weights) -> int:
     ).select_from(HOST_T.outerjoin(zones, zones.c.name == HOST_T.c.zone)).cte("host_priority_context")
     raw = priority_raw(CVE_T.c, criticality=context.c.criticality,
                        internet=context.c.internet, confidential=context.c.confidential)
-    result = typing_cast(
-        CursorResult[Any],
-        db.execute(
-            update(PAIR_T)
-            .where(context.c.id == PAIR_T.c.host_id, CVE_T.c.cve_id == PAIR_T.c.cve_id)
-            .values(risk_raw=raw, risk=_clamped(raw))
-        ),
+    risk = _clamped(raw)
+    db.execute(
+        update(PAIR_T)
+        .where(context.c.id == PAIR_T.c.host_id, CVE_T.c.cve_id == PAIR_T.c.cve_id)
+        .where(PAIR_T.c.risk_raw.is_distinct_from(raw) | PAIR_T.c.risk.is_distinct_from(risk))
+        .values(risk_raw=raw, risk=risk)
     )
     db.commit()
     # Обзор читает кэш: пересчёт — единственное, что меняет риск.
     from api.modules.vm.services.stats import refresh_stats
 
-    refresh_stats(db)
-    return int(result.rowcount or 0)
+    stats = refresh_stats(db)
+    return int(stats["pairs"])
 
 
 def _clamped(raw: ColumnElement[Any]) -> ColumnElement[Any]:
@@ -304,29 +305,60 @@ def _clamped(raw: ColumnElement[Any]) -> ColumnElement[Any]:
     )
 
 
-def rescore_image_pairs(db: Session, weights: Weights) -> int:
+def rescore_image_pairs(db: Session, weights: Weights, *, only_unscored: bool = False) -> int:
     """Additive priority with unknown asset context, then grouped image totals.
     Missing mart entries remain NULL; canonical CVE/GHSA/package dedup is unchanged.
     """
-    raw = priority_raw(CVE_T.c)
     in_mart = exists().where(CVE_T.c.cve_id == IMAGE_PAIR_T.c.cve_id)
-    db.execute(
+    image_ids: list[int] | None = None
+    if only_unscored:
+        image_ids = list(db.scalars(
+            select(IMAGE_PAIR_T.c.image_id).distinct().where(IMAGE_PAIR_T.c.risk.is_(None), in_mart)
+        ))
+        if not image_ids:
+            db.commit()
+            return 0
+    else:
+        # Do not combine the anti-join with risk IS NOT NULL: just after the
+        # first score write, stale NULL statistics can estimate one row and
+        # scan the entire CVE mart again for every finding (nested loop).
+        missing = select(IMAGE_PAIR_T.c.cve_id).where(~in_mart).distinct()
+        for identifiers in db.scalars(missing.execution_options(yield_per=BATCH)).partitions(BATCH):
+            db.execute(
+                update(IMAGE_PAIR_T)
+                .where(IMAGE_PAIR_T.c.cve_id.in_(identifiers))
+                .where(IMAGE_PAIR_T.c.risk_raw.is_not(None) | IMAGE_PAIR_T.c.risk.is_not(None))
+                .values(risk_raw=null(), risk=null())
+            )
+    # Keep mart statistics visible: MATERIALIZED can make PostgreSQL 16 hash
+    # the entire findings table instead of the small CVE mart and spill to disk.
+    raw = priority_raw(CVE_T.c)
+    affected_images = bindparam("scoring_image_ids", value=image_ids, type_=ARRAY(SaInteger))
+    priorities = select(
+        CVE_T.c.cve_id, raw.label("risk_raw"), _clamped(raw).label("risk"),
+    ).cte("image_cve_priorities")
+    write_pairs = (
         update(IMAGE_PAIR_T)
-        .where(~in_mart, IMAGE_PAIR_T.c.risk_raw.is_not(None) | IMAGE_PAIR_T.c.risk.is_not(None))
-        .values(risk_raw=null(), risk=null())
+        .where(priorities.c.cve_id == IMAGE_PAIR_T.c.cve_id)
+        .where(IMAGE_PAIR_T.c.risk_raw.is_distinct_from(priorities.c.risk_raw)
+               | IMAGE_PAIR_T.c.risk.is_distinct_from(priorities.c.risk))
+        .values(risk_raw=priorities.c.risk_raw, risk=priorities.c.risk)
     )
+    if image_ids is not None:
+        write_pairs = write_pairs.where(
+            IMAGE_PAIR_T.c.image_id == any_(affected_images), IMAGE_PAIR_T.c.risk.is_(None),
+        )
     result = typing_cast(
         CursorResult[Any],
-        db.execute(
-            update(IMAGE_PAIR_T)
-            .where(CVE_T.c.cve_id == IMAGE_PAIR_T.c.cve_id)
-            .values(risk_raw=raw, risk=_clamped(raw))
-        ),
+        db.execute(write_pairs),
     )
     pairs = IMAGE_PAIR_T.alias("p")
     # Many images repeat the same identifier. Resolve its bounded alias component
     # once per distinct observed ID, rather than once per package finding.
-    identifiers = select(IMAGE_PAIR_T.c.cve_id).distinct().cte("observed_image_ids")
+    observed = select(IMAGE_PAIR_T.c.cve_id).distinct()
+    if image_ids is not None:
+        observed = observed.where(IMAGE_PAIR_T.c.image_id == any_(affected_images))
+    identifiers = observed.cte("observed_image_ids")
     canonical_ids = select(
         identifiers.c.cve_id,
         canonical_finding_id(identifiers.c.cve_id).label("canonical"),
@@ -334,27 +366,43 @@ def rescore_image_pairs(db: Session, weights: Weights) -> int:
     counted_pairs = pairs.join(canonical_ids, canonical_ids.c.cve_id == pairs.c.cve_id)
     # Aggregate all scored findings together: correlated per-image subqueries can
     # repeatedly scan the global risk index/table on large Harbor inventories.
-    totals = select(
+    totals_query = select(
         pairs.c.image_id,
         func.max(pairs.c.risk).label("risk_max"),
+        func.count().label("pairs_scored"),
         func.count(func.distinct(tuple_(
             canonical_ids.c.canonical, pairs.c.package, pairs.c.installed_version,
         ))).label("cves_scored"),
-    ).select_from(counted_pairs).where(pairs.c.risk.is_not(None)).group_by(pairs.c.image_id).cte("image_risk_totals")
+    ).select_from(counted_pairs).where(pairs.c.risk.is_not(None)).group_by(pairs.c.image_id)
+    if image_ids is not None:
+        totals_query = totals_query.where(pairs.c.image_id == any_(affected_images))
+    totals = totals_query.cte("image_risk_totals")
     # Include images without scored findings so stale summaries become NULL / 0.
     images = IMAGE_T.alias("images_to_score")
-    summaries = select(
+    summaries_query = select(
         images.c.id, totals.c.risk_max,
         func.coalesce(totals.c.cves_scored, 0).label("cves_scored"),
-    ).select_from(images.outerjoin(totals, totals.c.image_id == images.c.id)).cte("image_risk_summaries")
-    db.execute(
-        update(IMAGE_T).where(IMAGE_T.c.id == summaries.c.id).values(
+    ).select_from(images.outerjoin(totals, totals.c.image_id == images.c.id))
+    if image_ids is not None:
+        summaries_query = summaries_query.where(images.c.id == any_(affected_images))
+    summaries = summaries_query.cte("image_risk_summaries")
+    write_summaries = (
+        update(IMAGE_T).where(IMAGE_T.c.id == summaries.c.id)
+        .where(IMAGE_T.c.risk_max.is_distinct_from(summaries.c.risk_max)
+               | IMAGE_T.c.cves_scored.is_distinct_from(summaries.c.cves_scored))
+        .values(
             risk_max=summaries.c.risk_max,
             cves_scored=summaries.c.cves_scored,
         )
     )
+    # Preserve the public processed-pair count even when nothing changed, using
+    # the same grouped scan as the summaries rather than another full-table scan.
+    updated = write_summaries.returning(IMAGE_T.c.id).cte("updated_image_summaries")
+    scored = db.execute(
+        select(func.coalesce(func.sum(totals.c.pairs_scored), 0)).add_cte(updated)
+    ).scalar_one()
     db.commit()
-    return int(result.rowcount or 0)
+    return int(result.rowcount or 0) if only_unscored else int(scored)
 
 
 def rescore_all(db: Session, weights: Weights) -> int:

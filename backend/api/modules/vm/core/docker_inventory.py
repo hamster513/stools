@@ -29,7 +29,7 @@ def build_docker_pdql(kind: str) -> str:
             "@Id", "ID", "Name", "Status", "Created", "Started",
             "Ports.ContainerPort", "Ports.HostPorts", "Ports.Protocol",
         )]
-    return f"select({', '.join(columns)})"
+    return f"select({', '.join(columns)}) | limit(0)"
 
 
 def _rows(path: Path, kind: str) -> Iterator[dict[str, str]]:

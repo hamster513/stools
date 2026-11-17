@@ -16,6 +16,7 @@ import httpx
 
 from api.hosts import url_host
 from api.limits import MAX_API_RESPONSE, ResponseTooLarge, read_limited
+from api.modules.vm.core.sources import iter_csv_records
 
 
 class ConnectionLike(Protocol):
@@ -80,9 +81,8 @@ def _os_conditions(conn: ConnectionLike, column: str) -> list[str]:
 
 def _with_limit(pdql: str, conn: ConnectionLike, limit: int | None) -> str:
     effective = conn.limit if limit is None else limit
-    if effective and effective > 0:
-        pdql += f" | limit({effective})"
-    return pdql
+    # Omission uses MaxPatrol's default cap; only explicit limit(0) is unlimited.
+    return f"{pdql} | limit({effective})"
 
 
 def build_pdql(conn: ConnectionLike, limit: int | None = None) -> str:
@@ -155,7 +155,7 @@ class MpVmClient:
         return str(token)
 
     def export_csv(self, pdql: str, to_path: Path, on_bytes: object = None) -> int:
-        """Скачать CSV потоково в файл; возвращает число байт."""
+        """Скачать и проверить полноту CSV потоково; возвращает число байт."""
         token = self.export_token(pdql)
         url = (
             f"{self.base}/api/assets_temporal_readmodel/v1/assets_grid/export"
@@ -174,7 +174,34 @@ class MpVmClient:
                             on_bytes(size)
         except httpx.HTTPError as exc:
             raise MpVmError(f"экспорт прерван — {exc.__class__.__name__}") from exc
+        self._verify_export(token, to_path)
         return size
+
+    def _verify_export(self, token: str, path: Path) -> None:
+        try:
+            with path.open(encoding="utf-8-sig", newline="") as fh:
+                rows = sum(1 for _ in iter_csv_records(fh))
+        except ValueError as exc:
+            raise MpVmError(f"MaxPatrol VM: некорректный CSV — {exc}") from exc
+        # Same query token: the final exported record must exist, and the next
+        # must not. A round row count alone (e.g. 50,000) does not prove truncation.
+        url = f"{self.base}/api/assets_temporal_readmodel/v1/assets_grid/data"
+        params = {"pdqlToken": token, "offset": max(0, rows - 1), "limit": 2}
+        try:
+            with self.http.stream("GET", url, params=params, headers=self._headers()) as r:
+                if r.status_code != 200:
+                    raise MpVmError(f"проверка полноты экспорта: HTTP {r.status_code}", r.status_code)
+                body = self._json(r)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise MpVmError("проверка полноты экспорта не выполнена") from exc
+        records = body.get("records") if isinstance(body, dict) else None
+        if not isinstance(records, list):
+            raise MpVmError("проверка полноты экспорта: ответ без списка records")
+        if len(records) != (1 if rows else 0):
+            raise MpVmError(
+                f"проверка полноты экспорта: количество строк CSV ({rows}) "
+                "не совпадает с результатом PDQL; выгрузка отклонена"
+            )
 
     def probe(self) -> str:
         """Проверка подключения: токен и PDQL с `limit(1)`; возвращает первые

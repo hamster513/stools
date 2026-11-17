@@ -1,6 +1,7 @@
 """Локальные группы из VM (спека 2026-10-23 §2): разбор, PDQL, отдельный снимок после импорта."""
 from __future__ import annotations
 
+import csv
 import datetime as dt
 import io
 import json
@@ -109,7 +110,7 @@ def test_groups_pdql_windows() -> None:
     assert tail.startswith("WindowsHost.OsName != null and WindowsHost.OsName != 'Windows 10' and WindowsHost.OsName != 'O\\'Reilly OS')")
     assert not re.search(r"(?<![A-Za-z])Host\.", pdql)
     assert "UF_Zone" not in pdql and "DMZ" not in pdql
-    assert "limit" not in pdql
+    assert pdql.endswith("| limit(0)")
 
 
 def test_groups_pdql_linux_and_limit() -> None:
@@ -148,6 +149,11 @@ class FakeVm:
         token = request.url.params["pdqlToken"]
         if token in self.fail:
             return httpx.Response(500)
+        if request.url.path.endswith("/data"):
+            records = list(csv.reader(io.StringIO(self.csv[token].decode()), delimiter=";"))[1:]
+            offset = int(request.url.params["offset"])
+            limit = int(request.url.params["limit"])
+            return httpx.Response(200, json={"records": records[offset:offset + limit]})
         return httpx.Response(200, content=self.csv[token])
 
     def client(self, conn: Any, timeout: float = 60.0) -> httpx.Client:
@@ -291,7 +297,7 @@ def test_missing_required_column_is_rejected(family: str, column: str) -> None:
 
 
 @pytest.mark.parametrize(("token", "body", "reason"), [
-    ("lin", b"", "пустая выгрузка, нет даже заголовка"),
+    ("lin", b"", "MaxPatrol VM: некорректный CSV — CSV: отсутствует заголовок"),
     ("lin", b"<html><body>login</body></html>\n", "в заголовке нет столбцов"),
     ("lin", (LIN_HEADER + "\n").encode(), "выгрузка пуста, а в прежнем снимке 1 строк"),
     ("win", b'{"error": "x"}', "в заголовке нет столбцов"),

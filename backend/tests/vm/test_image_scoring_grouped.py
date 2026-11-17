@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import insert, select, text
 
 from api.modules.vm.core.weights import Weights
 from api.modules.vm.ghsa_models import VmRefGhsa, VmRefGhsaAlias
@@ -10,18 +10,61 @@ from api.modules.vm.models import VmCve, VmImage, VmImageCve
 from api.modules.vm.services.scoring import rescore_image_pairs
 
 
-def _summary_statement():
+def _scoring_statements():
     class Capture:
+        def __init__(self):
+            self.statements = []
+
         def execute(self, statement):
-            self.last = statement
-            return SimpleNamespace(rowcount=0)
+            self.statements.append(statement)
+            return SimpleNamespace(rowcount=0, scalar_one=lambda: 0)
+
+        def scalars(self, statement):
+            self.statements.append(statement)
+            return SimpleNamespace(partitions=lambda _size: iter(()))
 
         def commit(self):
             pass
 
     capture = Capture()
     rescore_image_pairs(capture, Weights())
-    return capture.last
+    return capture.statements
+
+
+def _summary_statement():
+    return _scoring_statements()[-1]
+
+
+def test_missing_cve_cleanup_does_not_rescan_mart_with_stale_risk_statistics(db_session: Any) -> None:
+    image = VmImage(project="test", repository="stale", digest="sha256:stale")
+    db_session.add(image)
+    db_session.execute(insert(VmCve), [
+        {"cve_id": f"CVE-2026-{i:07}", "cvss": 8, "epss": .5, "av_class": "network"}
+        for i in range(33999)
+    ])
+    db_session.flush()
+    db_session.add_all([
+        VmImageCve(image_id=image.id, cve_id=f"CVE-2026-{i:07}", package=str(i),
+                   installed_version="1", trivy_severity="High") for i in range(5000)
+    ])
+    db_session.flush()
+    db_session.execute(text("ANALYZE vm_cve"))
+    db_session.execute(text("ANALYZE vm_image_cve"))
+    # The first score write changes all NULLs; statistics still say all are NULL.
+    db_session.execute(text("UPDATE vm_image_cve SET risk=40,risk_raw=0.4"))
+    db_session.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    sql = str(_scoring_statements()[0].compile(
+        dialect=db_session.get_bind().dialect, compile_kwargs={"literal_binds": True},
+    ))
+    plan = db_session.execute(text("EXPLAIN (ANALYZE, FORMAT JSON, TIMING OFF) " + sql)).scalar_one()[0]["Plan"]
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from nodes(child)
+
+    scans = [n for n in nodes(plan) if n.get("Relation Name") == "vm_cve" and n["Node Type"] == "Seq Scan"]
+    assert all(n["Actual Loops"] <= 1 for n in scans), [(n["Actual Loops"], n["Actual Rows"]) for n in scans]
 
 
 def test_summary_does_not_rescan_findings_for_every_image(db_session: Any) -> None:

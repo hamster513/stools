@@ -13,6 +13,7 @@ import csv
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import IO, Any
 
@@ -78,19 +79,32 @@ def _row_from_csv(row: dict[str, str]) -> HostRow | None:
     )
 
 
-def iter_csv(fh: IO[str]) -> Iterator[HostRow]:
-    """CSV с `;` и кавычками, как отдаёт экспорт MP VM. Разделитель
-    определяется по заголовку: у ручных выгрузок встречается запятая."""
+def iter_csv_records(fh: IO[str], required: tuple[str, ...] = ()) -> Iterator[dict[str, str]]:
+    """Read complete logical records; never silently accept a truncated CSV row."""
     header = fh.readline()
     if not header:
-        return
+        raise ValueError("CSV: отсутствует заголовок")
     delimiter = ";" if header.count(";") >= header.count(",") else ","
-    columns = [c.strip().strip('"') for c in next(csv.reader([header], delimiter=delimiter))]
-    reader = csv.reader(fh, delimiter=delimiter)
-    for values in reader:
-        if not values or all(not v.strip() for v in values):
-            continue
-        row = dict(zip(columns, values, strict=False))
+    reader = csv.reader(chain([header], fh), delimiter=delimiter, strict=True)
+    try:
+        columns = [c.strip() for c in next(reader)]
+        if not columns or any(not c for c in columns) or len(set(columns)) != len(columns):
+            raise ValueError("CSV: пустые или повторяющиеся имена столбцов")
+        if not set(required).issubset(columns):
+            raise ValueError("CSV: отсутствуют обязательные столбцы")
+        for values in reader:
+            if not values or all(not v.strip() for v in values):
+                continue
+            if len(values) != len(columns):
+                raise ValueError(f"CSV: неверное число столбцов в строке {reader.line_num}")
+            yield dict(zip(columns, values, strict=True))
+    except csv.Error as exc:
+        raise ValueError(f"CSV: повреждённая запись в строке {reader.line_num}") from exc
+
+
+def iter_csv(fh: IO[str]) -> Iterator[HostRow]:
+    """CSV MaxPatrol с `;` или запятой; обязательны хост и список CVE."""
+    for row in iter_csv_records(fh, required=(COL_HOST, COL_CVES)):
         parsed = _row_from_csv(row)
         if parsed is not None:
             yield parsed

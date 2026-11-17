@@ -63,6 +63,45 @@ def test_broken_file_keeps_previous_data(auth_client: TestClient, db_session: An
     assert db_session.execute(select(VmHost)).scalars().all().__len__() == 3
 
 
+@pytest.mark.parametrize("body", [
+    b'@Host;Host.@Vulners.CVEs\nnew;CVE-2026-12345\n"unfinished;CVE-2026-12346',
+    b"@Host;Host.@Vulners.CVEs\nnew;CVE-2026-12345\nmissing-column\n",
+    b"@Host;Host.@Vulners.CVEs\nnew;CVE-2026-12345;unexpected-column\n",
+])
+def test_incomplete_csv_preserves_previous_snapshot(
+    auth_client: TestClient, db_session: Any, body: bytes, monkeypatch: Any,
+) -> None:
+    from api.modules.vm.services import importer
+
+    assert _upload(auth_client, "hosts.csv")["status"] == "done"
+    old_ids = list(db_session.scalars(select(VmHost.id).order_by(VmHost.id).limit(10)))
+    monkeypatch.setattr(importer, "PAIR_BATCH", 1)  # At least one staging commit before the broken row.
+    job = _upload(auth_client, "partial.csv", body)
+    assert job["status"] == "failed"
+    assert list(db_session.scalars(select(VmHost.id).order_by(VmHost.id).limit(10))) == old_ids
+
+
+def test_api_truncated_export_preserves_previous_snapshot(
+    auth_client: TestClient, db_session: Any, tmp_path: Path, monkeypatch: Any,
+) -> None:
+    import httpx
+
+    from api.modules.vm.core.mpvm import MpVmError
+    from tests.vm.test_groups_import import FakeVm, _run_vm
+
+    class TruncatedVm(FakeVm):
+        def handler(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/data") and request.url.params["pdqlToken"] == "main":
+                return httpx.Response(200, json={"records": [{}, {}]})
+            return super().handler(request)
+
+    assert _upload(auth_client, "hosts.csv")["status"] == "done"
+    before = list(db_session.scalars(select(VmHost.id).order_by(VmHost.id).limit(10)))
+    with pytest.raises(MpVmError, match="полнот"):
+        _run_vm(db_session, tmp_path, monkeypatch, TruncatedVm())
+    assert list(db_session.scalars(select(VmHost.id).order_by(VmHost.id).limit(10))) == before
+
+
 def test_second_import_rejected_while_running(auth_client: TestClient, db_session: Any) -> None:
     db_session.add(VmJob(kind="import_vm", stage="parsing", status="running", started_by="x"))
     db_session.commit()
