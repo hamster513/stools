@@ -25,6 +25,10 @@ def tls_context(pem: Any) -> Any:
 
 class CollectorClient:
     def __init__(self, connection: Any) -> None:
+        from .settings import OFFLINE_MESSAGE
+        if connection.mode == "offline":
+            raise CollectorError(OFFLINE_MESSAGE)
+        self.before_request = None
         if not connection.configured:
             raise CollectorError("подключение к сборщику не настроено")
         self.connection = connection
@@ -45,6 +49,8 @@ class CollectorClient:
         self.client.close()
 
     def request(self, method: Any, path: Any, **kwargs: Any) -> Any:
+        if self.before_request is not None:
+            self.before_request()
         try:
             with self.client.stream(method, path, **kwargs) as response:
                 if response.status_code >= 300:

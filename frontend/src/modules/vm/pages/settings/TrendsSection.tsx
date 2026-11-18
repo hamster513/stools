@@ -18,13 +18,15 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'О
 export function TrendsSection() {
   const [tab, setTab] = useState('connection')
   const connection = useQuery({ queryKey: ['vm-trends', 'settings'], queryFn: () => api.get<TrendConnection>(TREND_BASE + '/settings') })
+  const offline = connection.data?.mode === 'offline'
   return <Section id="trends" title="Трендовые уязвимости" about="Получение внешних сигналов из отдельного сборщика. STools устанавливает соединение по HTTPS напрямую или через настроенный прокси.">
     {connection.isLoading && <Spinner />}
     {connection.error && <ErrorState message={message(connection.error)} onRetry={() => connection.refetch()} />}
     <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Настройки мониторинга">{Object.entries({ connection: 'Подключение', sources: 'Источники', telegram: 'Telegram', enrichment: 'Обогащение и PoC', diagnostics: 'Диагностика', policies: 'Исключения' }).map(([key, label]) => <Button key={key} variant={tab === key ? 'primary' : 'secondary'} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</Button>)}</div>
     {tab === 'connection' && connection.data && <ConnectionForm data={connection.data} />}
-    {(tab === 'sources' || tab === 'telegram') && <SourcesTable key={tab} telegram={tab === 'telegram'} />}
-    {tab === 'enrichment' && <MonitoringSettings />}{tab === 'diagnostics' && <RunHistory />}{tab === 'policies' && <Policies />}
+    {!offline && connection.data && (tab === 'sources' || tab === 'telegram') && <SourcesTable key={tab} telegram={tab === 'telegram'} />}
+    {!offline && connection.data && tab === 'enrichment' && <MonitoringSettings />}{!offline && connection.data && tab === 'diagnostics' && <RunHistory />}
+    {offline && ['sources', 'telegram', 'enrichment', 'diagnostics'].includes(tab) && <p className="text-sm text-text-secondary">Offline: обращения к сборщику отключены. <Link className="underline" to="/settings/vm#news-archive">Загрузить архив новостей</Link></p>}{tab === 'policies' && <Policies />}
   </Section>
 }
 
@@ -47,7 +49,13 @@ function ConnectionForm({ data }: { data: TrendConnection }) {
   const imported = useTrendMutation((file: File) => { const body = new FormData(); body.append('file', file); return api.postForm(TREND_BASE + (confirmFull && admin ? '/import/full' : '/import'), body) })
   const status = useQuery({ queryKey: ['vm-trends', 'status'], queryFn: () => api.get<{ received_at: string | null; cursor: number; processing: Record<string, number>; job_id: number | null; rebuilding: boolean }>(TREND_BASE + '/status'), refetchInterval: 5000 })
   return <div className="space-y-4">
-    <fieldset disabled={!admin || save.isPending || test.isPending} className="grid max-w-4xl gap-3 md:grid-cols-2">
+    <Field label="Режим получения данных" hint="Архивы доступны в обоих режимах. Настройки подключения сохраняются при переключении.">
+      <select className={FIELD} aria-label="Режим получения данных" disabled={!admin || save.isPending} value={form.mode ?? 'online'} onChange={e => patch({ mode: e.target.value as 'online' | 'offline' })}>
+        <option value="online">Online — сборщик и архивы</option><option value="offline">Offline — только архивы</option>
+      </select>
+    </Field>
+    {form.mode === 'offline' && <p className="text-sm text-text-secondary">После сохранения обращения к сборщику будут отключены. Импорт архивов и просмотр загруженных публикаций остаются доступны.</p>}
+    <fieldset disabled={!admin || form.mode === 'offline' || save.isPending || test.isPending} className="grid max-w-4xl gap-3 md:grid-cols-2">
       <Field label="HTTPS-адрес сборщика"><input className={FIELD} value={form.url} placeholder="https://collector.example:8443" onChange={e => patch({ url: e.target.value })} /></Field>
       <Field label="Токен доступа" hint={data.token_set ? 'Токен задан. Пустое поле сохраняет его.' : 'Токен создаётся на сборщике.'}><input className={FIELD} type="password" autoComplete="new-password" value={form.token} onChange={e => patch({ token: e.target.value })} /></Field>
       <Field label="Дополнительный CA сборщика (PEM)"><textarea className={FIELD} rows={3} value={form.ca_pem} onChange={e => patch({ ca_pem: e.target.value })} /></Field>
@@ -64,7 +72,7 @@ function ConnectionForm({ data }: { data: TrendConnection }) {
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={Boolean(form.clear_proxy_password)} onChange={e => patch({ clear_proxy_password: e.target.checked })} />Удалить сохранённый пароль прокси</label>
     </fieldset>
     <div className="flex flex-wrap items-center gap-3">
-      {admin && <><Button disabled={save.isPending} onClick={() => save.mutate()}>Сохранить</Button><Button disabled={test.isPending} onClick={() => test.mutate()}>Проверить связь</Button></>}
+      {admin && <><Button disabled={save.isPending} onClick={() => save.mutate()}>Сохранить</Button><Button disabled={test.isPending || form.mode === 'offline' || data.mode === 'offline'} onClick={() => test.mutate()}>Проверить связь</Button></>}
       {write && <Button disabled={!data.configured || sync.isPending || Boolean(status.data?.job_id)} onClick={() => sync.mutate()}>Получить обновления</Button>}
       <Link to="/settings/schedules" className="text-sm underline">Расписание получения</Link>
       <Link to="/vm/trends" className="text-sm underline">Открыть тренды</Link>
@@ -76,7 +84,7 @@ function ConnectionForm({ data }: { data: TrendConnection }) {
     {status.data?.job_id && <Link className="text-sm underline" to="/vm/jobs">Выполняется задача #{status.data.job_id}</Link>}
     {write && <details className="text-sm"><summary className="cursor-pointer">Перенос пакета и восстановление</summary><div className="mt-3 space-y-3">
       <Field label="Пакет сборщика (ZIP, до 100 MiB)"><input type="file" accept=".zip" disabled={imported.isPending || Boolean(status.data?.job_id)} onChange={e => { const file = e.target.files?.[0]; if (file) imported.mutate(file) }} /></Field>
-      {admin && <><p>Полная синхронизация перечитывает историю сборщика. Решения аналитиков сохраняются.</p><label className="flex items-center gap-2"><input type="checkbox" checked={confirmFull} onChange={e => setConfirmFull(e.target.checked)} />Перечитать историю полностью</label><Button disabled={!confirmFull || full.isPending || Boolean(status.data?.job_id)} onClick={() => full.mutate()}>Начать восстановление</Button></>}
+      {admin && <><p>Полная синхронизация перечитывает историю сборщика. Решения аналитиков сохраняются.</p><label className="flex items-center gap-2"><input type="checkbox" checked={confirmFull} onChange={e => setConfirmFull(e.target.checked)} />Перечитать историю полностью</label><Button disabled={data.mode === 'offline' || !confirmFull || full.isPending || Boolean(status.data?.job_id)} onClick={() => full.mutate()}>Начать восстановление</Button></>}
     </div></details>}
 
   </div>

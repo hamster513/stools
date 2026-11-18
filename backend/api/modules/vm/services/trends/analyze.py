@@ -45,11 +45,12 @@ def analyze_text(publication: Any, provider: Any) -> Any:
     return result.model_dump()
 
 
-def publication_period_conditions(period: str, tz: str, date_from: str, date_to: str, now: Any, include_retracted: bool = False) -> Any:
+def publication_period_conditions(period: str, tz: str, date_from: str, date_to: str, now: Any, include_retracted: bool = False, *, published_value=None) -> Any:
     start, end = period_bounds(period, tz, date_from, date_to, now)
     # Stored timestamps can have offsets. This coarse date-prefix
     # candidate filter keeps a full day of slack; rules apply exact UTC bounds.
-    published_day = func.substr(VmTrendPublication.data["published_at"].astext, 1, 10)
+    raw_date = VmTrendPublication.data["published_at"].astext if published_value is None else published_value
+    published_day = func.substr(raw_date, 1, 10)
     conditions = [or_(published_day.is_(None), published_day <= (now.date() + dt.timedelta(days=1)).isoformat()) if period == "all" else published_day <= (now.date() + dt.timedelta(days=1)).isoformat()]
     if not include_retracted:
         conditions.append(VmTrendPublication.retracted.is_(False))

@@ -10,10 +10,12 @@ from api.db.models import AppSetting
 from api.platform.secret_fields import put_setting, seal_secrets, secrets_again
 
 SETTING_KEY = "vm_trends_connection"
+OFFLINE_MESSAGE = "Offline: данные поступают из архивов; обращения к сборщику отключены"
 SECRET_FIELDS = ("token", "proxy_password")
 
 
 class TrendConnectionIn(BaseModel):
+    mode: Literal["online", "offline"] = "online"
     url: str = Field(default="", max_length=512)
     token: str = Field(default="", max_length=2048)
     ca_pem: str = Field(default="", max_length=65536)
@@ -45,7 +47,7 @@ class TrendConnectionIn(BaseModel):
 
     @property
     def configured(self) -> Any:
-        return bool(self.url and self.token)
+        return self.mode == "online" and bool(self.url and self.token)
 
     def unsealed(self) -> Any:
         return self.model_copy(update={field: decrypt(getattr(self, field)) for field in SECRET_FIELDS})
@@ -54,8 +56,8 @@ class TrendConnectionIn(BaseModel):
 TrendConnection = TrendConnectionIn
 
 
-def load_connection(db: Session) -> TrendConnection:
-    row = db.get(AppSetting, SETTING_KEY)
+def load_connection(db: Session, *, refresh: bool = False) -> TrendConnection:
+    row = db.get(AppSetting, SETTING_KEY, populate_existing=refresh)
     return TrendConnection.model_validate_json(row.value_json) if row else TrendConnection()
 
 

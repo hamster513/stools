@@ -8,13 +8,15 @@ from api.modules.vm.services.jobs import active_job, fail_job, run_job, start_jo
 from api.modules.vm.trend_models import VmTrendIngestState
 
 from .analyze import process_pending
-from .client import CollectorClient, CollectorCursorExpired
+from .client import CollectorClient, CollectorCursorExpired, CollectorError
 from .ingest import apply_page, apply_snapshot_page
-from .settings import load_connection
+from .settings import OFFLINE_MESSAGE, load_connection
 
 
 def start_trend_sync(db: Session, started_by: Any, submit: Any, reset: Any=False) -> Any:
     connection = load_connection(db)
+    if connection.mode == "offline":
+        raise HTTPException(409, OFFLINE_MESSAGE)
     if not connection.configured:
         raise HTTPException(400, "настройте подключение к сборщику")
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext('vm_trend_start'))"))
@@ -22,7 +24,15 @@ def start_trend_sync(db: Session, started_by: Any, submit: Any, reset: Any=False
         raise HTTPException(409, "получение трендов уже выполняется")
     job_id = start_job(db, "trends_sync", started_by, "Получение внешних сигналов")
     def work(session: Session, handle: Any) -> Any:
-        with CollectorClient(connection.unsealed()) as client:
+        # A queued job may start after the operator switched the saved mode.
+        current = load_connection(session, refresh=True)
+        def check_mode():
+            if load_connection(session, refresh=True).mode == "offline":
+                raise CollectorError(OFFLINE_MESSAGE)
+        check_mode()
+        with CollectorClient(current.unsealed()) as client:
+            # Stop subsequent pages if offline is selected while this job is running.
+            client.before_request = check_mode
             receive_changes(session, client, handle, reset=reset)
             handle.stage("analyzing", message="Анализ внешних сигналов")
             process_pending(session)

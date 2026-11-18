@@ -62,8 +62,8 @@ def period_card_view(card: Any, evidence: Any, now: Any, period: str, tz: str, d
 
 
 def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, limit: Any=50, offset: Any=0, region: Any="", language: Any="", reason: Any="", publisher: Any="", status: Any="", sort: Any="priority",
-               period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "", source_id: str = "", product: str = "", poc_state: str = "", from_archive: bool = False) -> Any:
-    now = dt.datetime.now(dt.UTC)
+               period: str = "7d", tz: str = "Europe/Moscow", date_from: str = "", date_to: str = "", source_id: str = "", product: str = "", poc_state: str = "", from_archive: bool = False, *, _fast: bool = True, _candidate_ids=None, _now=None, _context=None) -> Any:
+    now = _now or dt.datetime.now(dt.UTC)
     period_bounds(period, tz, date_from, date_to, now)
     state = db.get(VmTrendIngestState, 1)
     if not state or not state.active_generation:
@@ -95,9 +95,35 @@ def list_cards(db: Session, view: Any="matched", q: Any="", active: Any=True, li
         metadata = select(VmTrendEnrichment.external_id).where(VmTrendEnrichment.generation==generation,
             VmTrendEnrichment.data["affected_products"].cast(Text).ilike(needle))
         conditions.append(or_(VmTrendCard.title.ilike(needle),func.concat("cve:",VmTrendCard.id).in_(metadata)))
+    if _candidate_ids is not None:
+        conditions.append(VmTrendCard.id.in_(_candidate_ids))
+    if _fast and view == "mentions" and sort in ("date", "identifier") and not reason and not poc_state:
+        from .list_page import mentions_page
+        options = {
+            'view': view,
+            'q': q,
+            'active': active,
+            'limit': limit,
+            'offset': offset,
+            'region': region,
+            'language': language,
+            'reason': reason,
+            'publisher': publisher,
+            'status': status,
+            'sort': sort,
+            'period': period,
+            'tz': tz,
+            'date_from': date_from,
+            'date_to': date_to,
+            'source_id': source_id,
+            'product': product,
+            'poc_state': poc_state,
+            'from_archive': from_archive,
+        }
+        return mentions_page(db, conditions, generation, now, options, state)
     cards = list(db.scalars(select(VmTrendCard).where(*conditions)))
     selected = {}
-    context = evidence_context(db, generation) if cards else None
+    context = (_context or evidence_context(db, generation)) if cards else None
     # A month can include tens of thousands of CVEs with full article bodies.
     # Keep only one evidence batch in memory; pagination still uses the full result.
     for start in range(0, len(cards), 100):

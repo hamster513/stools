@@ -15,6 +15,6 @@ export interface MonitoringData {
   pending: Record<string, number>; settings: MonitoringOptions; sample: string; runs: SourceRun[]
   poc_search: { id: string; cve_id: string; checked_at?: string; error?: string; truncated?: boolean; total?: number; next_attempt?: string }[]
 }
-export const useMonitoring = () => useQuery({ queryKey: ['vm-trends', 'monitoring'], queryFn: () => api.get<MonitoringData>(TREND_BASE + '/monitoring'), refetchInterval: 15000 })
+export const useMonitoring = (enabled = true) => useQuery({ enabled, queryKey: ['vm-trends', 'monitoring'], queryFn: () => api.get<MonitoringData>(TREND_BASE + '/monitoring'), refetchInterval: enabled ? 15000 : false })
 export const useSources = () => useQuery({ queryKey: ['vm-trends', 'sources'], queryFn: () => api.get<{ items: TrendSource[] }>(TREND_BASE + '/sources'), refetchInterval: 30000 })
 export const useProfiles = () => useQuery({ queryKey: ['vm-trends', 'outbound-profiles'], queryFn: () => api.get<{ name: string; ready: boolean; route?: string; error?: string }[]>(TREND_BASE + '/outbound-profiles') })

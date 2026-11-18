@@ -20,6 +20,7 @@ export function trendPeriodLabel(scope: TrendScope) {
 }
 
 export interface TrendConnection {
+  mode: 'online' | 'offline'
   url: string; token?: string; token_set: boolean; ca_pem: string; configured: boolean
   proxy_enabled: boolean; proxy_scheme: 'http' | 'https'; proxy_host: string; proxy_port: number
   proxy_username: string; proxy_password?: string; proxy_password_set: boolean; proxy_ca_pem: string

@@ -16,6 +16,7 @@ from api.modules.vm.services.trends.client import CollectorClient, CollectorErro
 from api.modules.vm.services.trends.rules import extract_identifiers
 from api.modules.vm.services.trends.settings import (
     TrendConnectionIn,
+    OFFLINE_MESSAGE,
     load_connection,
     merge_connection,
     public_connection,
@@ -43,7 +44,10 @@ def save(payload: TrendConnectionIn, db: Session = Depends(get_db), user: Any=De
 @router.post("/settings/test")
 def test(payload: TrendConnectionIn, db: Session = Depends(get_db)) -> Any:
     try:
-        connection = merge_connection(load_connection(db), payload).unsealed()
+        saved = load_connection(db)
+        if saved.mode == "offline":
+            return {"ok": False, "message": OFFLINE_MESSAGE}
+        connection = merge_connection(saved, payload).unsealed()
         with CollectorClient(connection) as client:
             info = client.info()
         return {"ok": True, "message": "Подключение установлено", "route": "proxy" if connection.proxy_enabled else "direct", "info": info}
@@ -57,14 +61,17 @@ def status(db: Session = Depends(get_db)) -> Any:
     counts = {key: count for key, count in db.execute(select(VmTrendPublication.processing, func.count()).where(
         VmTrendPublication.generation == (state.generation if state else "")).group_by(VmTrendPublication.processing)).all()}
     running = active_job(db, ("trends_sync", "trends_import"))
-    return {"received_at": state.received_at if state else None, "cursor": state.cursor if state else 0,
+    return {"mode": load_connection(db).mode, "received_at": state.received_at if state else None, "cursor": state.cursor if state else 0,
             "collector_id": state.collector_id if state else None, "processing": counts,
             "rebuilding": bool(state and state.generation != state.active_generation), "job_id": running.id if running else None}
 
 
 def remote_request(db: Session, method: Any, path: Any, **kwargs: Any) -> Any:
+    connection = load_connection(db)
+    if connection.mode == "offline":
+        raise HTTPException(409, OFFLINE_MESSAGE)
     try:
-        with CollectorClient(load_connection(db).unsealed()) as client:
+        with CollectorClient(connection.unsealed()) as client:
             return client.request(method, path, **kwargs)
     except CollectorError as exc:
         raise HTTPException(502, str(exc)) from exc
