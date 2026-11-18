@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, FileText, UploadCloud } from 'lucide-react
 import { ApiRequestError } from '@/api/client'
 import { useImportState, useJob, useUploadImport } from '@/modules/vm/api/queries'
 import { STAGE_LABELS } from '@/modules/vm/api/types'
+import { JobProgress, RunningStatus, SqlQueryStatus } from '@/modules/vm/components/JobProgress'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
@@ -77,10 +78,14 @@ export function FileImport() {
         {busy && (
           <div className="w-full max-w-sm">
             <FileText size={28} strokeWidth={1.5} className="mx-auto mb-3 text-text-secondary" aria-hidden />
-            <div className="text-xs text-text">{upload.isPending ? 'загрузка файла на сервер…' : `${STAGE_LABELS[shown?.stage ?? ''] ?? shown?.stage} — ${shown?.message ?? ''}`}</div>
-            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-grid">
-              <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${shown?.progress ?? (upload.isPending ? 3 : 0)}%` }} />
-            </div>
+            {upload.isPending ? <div className="text-xs text-text">Загрузка файла на сервер…</div> : shown && (
+              <>
+                <div className="text-xs text-text">{STAGE_LABELS[shown.stage] ?? shown.stage} · <RunningStatus job={shown} /></div>
+                <div className="text-xs text-text-secondary">{shown.message}</div>
+                <div className="mt-1.5"><JobProgress job={shown} /></div>
+                <SqlQueryStatus job={shown} />
+              </>
+            )}
           </div>
         )}
         {shown?.status === 'done' && !busy && (

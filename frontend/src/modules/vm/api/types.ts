@@ -277,6 +277,7 @@ export interface SettingsUpdate {
 export type JobStatus = 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface Job {
+  sql_activity?: { pid: number; state: 'active' | 'lock' | 'io' | 'wait'; seconds: number } | null
   id: number
   kind: string
   stage: string
@@ -315,9 +316,11 @@ export const STAGE_LABELS: Record<string, string> = {
   listing: 'обход реестра',
   reports: 'чтение отчётов',
   fetching: 'экспорт из VM',
+  preparing: 'подготовка к разбору',
   parsing: 'разбор',
   writing: 'запись',
   enriching: 'обогащение',
+  reconciling: 'сверка статусов',
   scoring: 'расчёт риска',
   downloading: 'скачивание',
   extracting: 'распаковка',

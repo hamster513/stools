@@ -12,6 +12,7 @@ function date(value: string | null) { return value ? new Date(value).toLocaleStr
 function ImportResult({ result }: { result: NewsImport }) {
   const failed = result.sources.filter((s) => s.status !== 'ok')
   return <div className="rounded border border-grid p-3 text-xs">
+    <p className="mb-1 font-medium text-text">Последний успешный импорт</p>
     <p role="status">{result.duplicate ? 'Этот архив уже импортирован.' : `Добавлено: ${result.added}; обновлено: ${result.updated}; без изменений: ${result.unchanged}; устаревших пропущено: ${result.stale}.`}</p>
     {result.news_total !== undefined && <p className="mt-1 text-text-secondary">Новостей в VM: {result.news_total}.</p>}
     <p className="mt-1 text-text-secondary">Архив собран: {date(result.generated_at)}. Источников: {result.sources.length}.</p>
@@ -49,7 +50,7 @@ export function NewsArchiveSection() {
         upload.mutate(selectedFile)
       }} />
       <Button loading={upload.isPending} onClick={() => file.current?.click()}><Upload size={14} />Импортировать архив</Button>
-      <span className="text-xs text-text-secondary">ZIP до 64 МиБ. Повторная загрузка не создаёт копии.</span>
+      <span className="text-xs text-text-secondary">ZIP до 64 МиБ, распакованный items.jsonl до 128 МиБ. Повторная загрузка не создаёт копий.</span>
     </div>}
     {(localError || upload.isError) && <p role="alert" className="text-xs text-kind-1">{localError || upload.error?.message}</p>}
     {history.isError && <ErrorState message={history.error.message} onRetry={() => history.refetch()} />}

@@ -29,6 +29,7 @@ def test_limit_for_matches_exact_upload_routes() -> None:
     JSON-ручки рядом с ними получают 2 МБ по умолчанию."""
     assert limit_for("POST", "/api/siem/snapshots") == 300 * MB
     assert limit_for("POST", "/api/siem/hunting/intel/import") == 65 * MB
+    assert limit_for("POST", "/api/vm/trends/news-archive") == 65 * MB
     assert limit_for("POST", "/api/vm/import/file") == 500 * MB
     assert limit_for("POST", "/api/vm/refs/nvd/upload") == 500 * MB
     # GHSA и части офлайн-комплекта сохраняют общий ограниченный upload-бюджет.
@@ -46,6 +47,8 @@ def test_limit_for_matches_exact_upload_routes() -> None:
         ("POST", "/api/vm/refs/ghsa/download"),
         ("GET", "/api/vm/refs/ghsa/upload"),
         ("POST", "/api/vm/refs/ghsa/upload/extra"),
+        ("GET", "/api/vm/trends/news-archive"),
+        ("POST", "/api/vm/trends/news-archive/imports"),
         ("POST", "/api/vm/import/vm"),
         ("POST", "/api/siem/attack/reference/apply"),
         ("POST", "/api/settings/attack/download"),

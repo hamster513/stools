@@ -2,6 +2,7 @@ import { ListChecks, XCircle } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
 import { useCancelJob, useJobs } from '@/modules/vm/api/queries'
 import { JOB_KIND_LABELS, STAGE_LABELS, type Job } from '@/modules/vm/api/types'
+import { ElapsedTime, JobProgress, RunningStatus, SqlQueryStatus } from '@/modules/vm/components/JobProgress'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -29,13 +30,10 @@ const COLUMNS: ColumnDef[] = [
   { key: 'actions', label: 'Действие', width: 136, resizable: false },
 ]
 
-function duration(job: Job): string {
+function durationSeconds(job: Job): number {
   const start = new Date(job.started_at).getTime()
   const end = job.finished_at ? new Date(job.finished_at).getTime() : Date.now()
-  const s = Math.max(0, Math.round((end - start) / 1000))
-  if (s < 60) return `${s} с`
-  if (s < 3600) return `${Math.floor(s / 60)} мин ${s % 60} с`
-  return `${Math.floor(s / 3600)} ч ${Math.floor((s % 3600) / 60)} мин`
+  return Math.max(0, Math.round((end - start) / 1000))
 }
 
 function when(iso: string): string {
@@ -60,8 +58,8 @@ export function JobsPage() {
       <div className="mb-4">
         <h1 className="text-base font-semibold text-text">Задачи</h1>
         <p className="max-w-2xl text-xs text-text-secondary">
-          Импорт, справочники и пересчёт идут в фоне. Идущие — сверху; отмена срабатывает между
-          пакетами строк, а после стадии записи импорт уже не останавливается: данные заменены.
+          Активные задачи показаны сверху. Отмена проверяется между пакетами. Во время записи снимка
+          начатая операция PostgreSQL выполняется до конца.
         </p>
       </div>
 
@@ -96,31 +94,22 @@ export function JobsPage() {
                         j.status === 'cancelled' && 'text-text-secondary',
                       )}
                     >
-                      {STATUS_LABEL[j.status]}
-                      {j.cancel_requested && j.status === 'running' && ' (останавливается)'}
+                      {j.status === 'running' ? <RunningStatus job={j} /> : STATUS_LABEL[j.status]}
+                      {j.cancel_requested && j.status === 'running' && ' (отмена запрошена)'}
                     </span>
                   </td>
                   <td className="px-3 py-2">
-                    {j.status === 'running' ? (
-                      <div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-grid">
-                          <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${j.progress}%` }} />
-                        </div>
-                        <div className="mt-1 font-mono text-[11px] tabular-nums text-text-secondary">
-                          {j.total ? `${j.processed.toLocaleString('ru-RU')} / ${j.total.toLocaleString('ru-RU')}` : j.processed ? j.processed.toLocaleString('ru-RU') : ''}
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="font-mono tabular-nums text-text-secondary">{j.processed ? j.processed.toLocaleString('ru-RU') : ''}</span>
-                    )}
+                    <JobProgress job={j} />
                   </td>
                   <td className="px-3 py-2 break-words text-text-secondary">
-                    {j.error ? <span className="text-kind-1">{j.error}</span> : j.message}
+                    {j.message !== j.error && j.message}
+                    {j.error && <div className="text-kind-1">{j.error}</div>}
+                    <SqlQueryStatus job={j} />
                   </td>
                   <td className="truncate px-3 py-2 text-text-secondary" title={`${when(j.started_at)} ${j.started_by}`}>
                     {when(j.started_at)} <span className="font-mono">{j.started_by}</span>
                   </td>
-                  <td className="truncate px-3 py-2 text-right font-mono tabular-nums text-text-secondary">{duration(j)}</td>
+                  <td className="truncate px-3 py-2 text-right font-mono tabular-nums text-text-secondary"><ElapsedTime seconds={durationSeconds(j)} /></td>
                   <td className="px-3 py-2 text-right">
                     {write && j.status === 'running' && (
                       <Button variant="ghost" onClick={() => cancel.mutate(j.id)} aria-label={`Отменить задачу ${j.id}`}>

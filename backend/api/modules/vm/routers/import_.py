@@ -15,10 +15,11 @@ from api.deps import get_current_user
 from api.jobs import UPLOAD_INTERRUPTED
 from api.limits import VM_UPLOAD, check_upload_size
 from api.modules.vm.models import VmImport
-from api.modules.vm.routers.jobs import JobView
+from api.modules.vm.routers.jobs import JobView, job_views
 from api.modules.vm.services.harbor_sync import SYNC_KIND
 from api.modules.vm.services.importer import run_import
 from api.modules.vm.services.jobs import (
+    IMPORT_KINDS,
     REF_KINDS,
     JobHandle,
     active_job,
@@ -32,8 +33,6 @@ from api.platform.sync_jobs import Submit
 from api.settings import Settings, get_settings
 
 router = APIRouter(prefix="/import", tags=["vm"])
-
-IMPORT_KINDS = ("import_vm", "import_file")
 
 
 class JobStarted(BaseModel):
@@ -158,5 +157,5 @@ def import_state(db: Session = Depends(get_db), _user: AppUser = Depends(get_cur
     running = active_job(db, IMPORT_KINDS)
     return ImportState(
         last=ImportView.model_validate(last) if last else None,
-        active=JobView.model_validate(running) if running else None,
+        active=job_views(db, [running])[0] if running else None,
     )

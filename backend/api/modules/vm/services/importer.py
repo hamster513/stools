@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, cast
 
-from sqlalchemy import Table, delete, func, insert, select
-from sqlalchemy.orm import Session
+from sqlalchemy import Connection as SqlConnection
+from sqlalchemy import Table, delete, event, func, insert, select, text
+from sqlalchemy.orm import Session, SessionTransaction
 
 from api.modules.vm.core.groups import ROOT_TYPE, GroupsFormatError, iter_group_rows
 from api.modules.vm.core.mpvm import (
@@ -40,7 +41,7 @@ from api.modules.vm.models import (
     VmZone,
 )
 from api.modules.vm.services.bulk import bulk_insert
-from api.modules.vm.services.jobs import JobHandle
+from api.modules.vm.services.jobs import JobHandle, import_sql_name
 from api.modules.vm.services.scoring import (
     drop_orphan_cves,
     rebuild_cves,
@@ -53,6 +54,7 @@ from api.modules.vm.services.settings import Connection, VmSettings
 log = logging.getLogger(__name__)
 
 PAIR_BATCH = 50_000
+WRITE_STEPS = 7
 STAGE_HOST = cast(Table, VmStageHost.__table__)
 STAGE_PAIR = cast(Table, VmStagePair.__table__)
 HOST_T = cast(Table, VmHost.__table__)
@@ -139,21 +141,30 @@ def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[
     return hosts, written
 
 
-def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tuple[ImportStats, list[str]]:
-    """Атомарная замена: хосты, новые CVE, пары — в одной транзакции."""
+def _replace_current(
+    db: Session, hosts: dict[tuple[str, str], HostRow], staged_pairs: int, handle: JobHandle,
+) -> tuple[ImportStats, list[str]]:
+    """Хосты, новые CVE и пары заменяются атомарно. Шаги видны в отдельной транзакции."""
+    def step(completed: int, message: str) -> None:
+        handle.report_progress(completed, WRITE_STEPS, message)
+
+    handle.stage("writing", total=WRITE_STEPS, message=f"Готовим к записи хосты ({_num(len(hosts))})")
     bulk_insert(
         db,
         STAGE_HOST,
         ("hostname", "ip", "os_name", "groups", "criticality", "zone"),
         [(h.hostname, h.ip, h.os_name, h.groups, h.criticality, h.zone) for h in hosts.values()],
     )
+    step(1, "Ищем новые CVE в выгрузке")
     new_cves = list(
         db.execute(
             select(STAGE_PAIR.c.cve_id).distinct().where(STAGE_PAIR.c.cve_id.not_in(select(CVE_T.c.cve_id)))
         ).scalars()
     )
+    step(2, "Удаляем связи и хосты прежнего снимка")
     db.execute(delete(PAIR_T))
     db.execute(delete(HOST_T))
+    step(3, f"Записываем хосты ({_num(len(hosts))}) и новые CVE ({_num(len(new_cves))})")
     db.execute(
         insert(HOST_T).from_select(
             ["hostname", "ip", "os_name", "groups", "criticality", "zone"],
@@ -169,6 +180,7 @@ def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tupl
     )
     if new_cves:
         db.execute(insert(CVE_T), [{"cve_id": c} for c in new_cves])
+    step(4, f"Записываем уникальные пары хост–CVE из {_num(staged_pairs)} исходных записей")
     db.execute(
         insert(PAIR_T).from_select(
             ["host_id", "cve_id", "risk_raw", "risk"],
@@ -177,10 +189,12 @@ def _replace_current(db: Session, hosts: dict[tuple[str, str], HostRow]) -> tupl
             .join_from(STAGE_PAIR, HOST_T, (HOST_T.c.hostname == STAGE_PAIR.c.hostname) & (HOST_T.c.ip == STAGE_PAIR.c.ip)),
         )
     )
+    step(5, "Очищаем промежуточные таблицы и фиксируем снимок")
     db.execute(delete(STAGE_PAIR))
     db.execute(delete(STAGE_HOST))
     db.commit()
 
+    step(6, "Подсчитываем хосты и пары, обновляем зоны и список CVE")
     stats = ImportStats(
         hosts=int(db.execute(select(func.count()).select_from(HOST_T)).scalar() or 0),
         pairs=int(db.execute(select(func.count()).select_from(PAIR_T)).scalar() or 0),
@@ -367,6 +381,13 @@ def run_import(
     temp: Path | None = None
     client: MpVmClient | None = None
     docker_collected = False
+    sql_name = import_sql_name(handle.id)
+
+    def label_transaction(_: Session, tx: SessionTransaction, conn: SqlConnection) -> None:
+        if not tx.nested and conn.dialect.name == "postgresql":
+            # Transaction-local so a pooled connection never attributes a later job to this import.
+            conn.execute(text("SELECT set_config('application_name', :name, true)"), {"name": sql_name})
+
     try:
         if source == "vm":
             conn = settings.connection.unsealed()
@@ -382,24 +403,27 @@ def run_import(
             path = temp
             filename = f"{conn.host}: PDQL"
         assert path is not None
+        event.listen(db, "after_begin", label_transaction)
         if client is not None:
             from api.modules.vm.services.docker_inventory import collect_inventory
 
             handle.stage("docker", message="образы и контейнеры Docker")
             docker_collected = collect_inventory(db, client, conn, data_dir)
+        handle.stage("preparing", message="Очищаем промежуточные таблицы перед разбором файла")
         _clear_stage(db)
-        hosts, _ = _parse_into_stage(db, handle, path)
+        hosts, staged_pairs = _parse_into_stage(db, handle, path)
         if not hosts:
             raise ValueError("в выгрузке нет ни одного хоста с CVE — проверьте формат файла")
-        handle.stage("writing", message=f"хостов {len(hosts)}")
-        stats, new_cves = _replace_current(db, hosts)
-        handle.stage("enriching", total=len(new_cves) or 1, message=f"новых CVE {len(new_cves)}")
+        stats, new_cves = _replace_current(db, hosts, staged_pairs, handle)
+        handle.stage("enriching", total=len(new_cves) or None, message=f"Обогащаем новые CVE ({_num(len(new_cves))})")
         rebuild_cves(db, settings.weights, new_cves, handle if new_cves else None)
+        handle.stage("hosts", message=f"Обновляем значимость хостов ({_num(stats.hosts)})")
         rebuild_hosts_value(db, settings.weights)
-        handle.stage("scoring", message="риск пар")
+        handle.stage("scoring", message=f"Рассчитываем риск пар хост–CVE ({_num(stats.pairs)}) и обновляем сводку")
         rescore_pairs(db, settings.weights)
         # Only newly available CVEs / interrupted image scoring need recovery.
         # Host metadata does not enter the image priority formula.
+        handle.stage("scoring", message="Проверяем и рассчитываем недостающие оценки образов")
         rescore_image_pairs(db, settings.weights, only_unscored=True)
         done = VmImport(
             finished_at=dt.datetime.now(dt.UTC),
@@ -413,6 +437,7 @@ def run_import(
         db.add(done)
         db.commit()
         # Статусы пар: исчезнувшие с решением закрываются, вернувшиеся переоткрываются.
+        handle.stage("reconciling", message="Сверяем статусы исчезнувших и вернувшихся находок")
         reconcile_after_import(db, done.id)
         if client is not None:
             # Группы — отдельный снимок: их сбой не роняет записанный импорт хостов и CVE.
@@ -430,8 +455,12 @@ def run_import(
                 handle.stage("groups", message=f"локальные группы не получены: {exc.__class__.__name__}")
         _notify_assets(db)
         docker_collected = False
+        if client is None:
+            handle.stage("done", message=f"Хостов {_num(stats.hosts)}, уникальных пар хост–CVE {_num(stats.pairs)}")
         return stats
     finally:
+        if event.contains(db, "after_begin", label_transaction):
+            event.remove(db, "after_begin", label_transaction)
         if docker_collected:
             # Inventory remains useful even if there are no vulnerable hosts.
             db.rollback()

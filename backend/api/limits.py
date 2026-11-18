@@ -70,6 +70,7 @@ DEFAULT_LIMIT = 2 * MB
 BODY_LIMITS: list[tuple[str, str, int]] = [
     ("POST", "/api/siem/snapshots", SIEM_UPLOAD),
     ("POST", "/api/siem/hunting/intel/import", TH_INTEL_UPLOAD),
+    ("POST", "/api/vm/trends/news-archive", TH_INTEL_UPLOAD),
     ("POST", "/api/vm/import/file", VM_UPLOAD),
     ("POST", "/api/vm/refs/{name}/upload", VM_UPLOAD),
     ("POST", "/api/ad/snapshots/file", AD_UPLOAD),

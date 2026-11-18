@@ -1,6 +1,11 @@
 """Offline ZIP news must enter VM's publication pipeline, without SIEM rights."""
+import random
+from base64 import b64encode
+
 import pytest
 from sqlalchemy import func, select
+
+from api.limits import DEFAULT_LIMIT
 from api.modules.siem.hunting.intel import import_bundle
 from api.modules.siem.hunting.models import ThIntelImport, ThIntelItem
 from api.modules.vm.services.trends.analyze import process_pending
@@ -39,6 +44,33 @@ def test_vm_only_admin_imports_news_into_trends_and_repeats_safely(client_as, db
     assert upload(client, data).json()['duplicate']
     assert db_session.scalar(select(func.count()).select_from(VmTrendPublication)) == 1
     assert client.get(URL+'/imports').json()['items'][0]['added'] == 1
+
+
+def test_news_zip_larger_than_default_body_limit(client_as):
+    rng = random.Random(0)
+    articles = []
+    for i in range(10):
+        text = b64encode(rng.randbytes(230_000)).decode('ascii').ljust(930_000)
+        articles.append(item(external_id=f'news-{i}', url=f'https://example.org/news/{i}', text=text))
+    data = bundle(articles)
+    assert len(data) > DEFAULT_LIMIT
+
+    client = client_as({'vm': 'admin'})
+    response = upload(client, data)
+    assert response.status_code == 200, (len(data), response.text)
+    assert response.json()['added'] == len(articles)
+    repeated = upload(client, data).json()
+    assert repeated['duplicate'] and repeated['news_total'] == len(articles)
+
+
+def test_news_archive_size_boundary(auth_client, monkeypatch):
+    data = bundle()
+    monkeypatch.setattr('api.modules.siem.hunting.intel.MAX_ZIP', len(data))
+    assert upload(auth_client, data).status_code == 200
+    monkeypatch.setattr('api.modules.siem.hunting.intel.MAX_ZIP', len(data) - 1)
+    response = upload(auth_client, data)
+    assert response.status_code == 413
+    assert response.json()['detail'] == 'Архив превышает 64 МиБ'
 
 
 @pytest.mark.parametrize('role', ['read', 'write', 'deny'])
