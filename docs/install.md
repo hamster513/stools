@@ -149,26 +149,34 @@ curl -sI https://<имя>/ | grep -i -E 'strict-transport|content-security'
 
 ## Резервная копия
 
-Копируются оба каталога: база (дампом, а не файлами работающего Postgres)
-и выгрузки. Ключ `STOOLS_SESSION_SECRET` хранится отдельно.
+Для полного экспорта и восстановления PostgreSQL используйте
+[скрипт и инструкцию](database-backup.md). Команды из корня проекта:
 
 ```bash
-cd ops
-docker compose -f docker-compose.prod.yml exec -T db sh -c 'pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB"' > stools-db-$(date +%F).dump
-sudo tar -C /data/stools -czf stools-archives-$(date +%F).tar.gz archives
+STOOLS_BACKUP_DIR="$HOME/stools-backups/db-$(date -u +%Y%m%dT%H%M%SZ)"
+python3 ops/stools_db.py backup "$STOOLS_BACKUP_DIR" --container stools-db-1
+python3 ops/stools_db.py verify "$STOOLS_BACKUP_DIR" --container stools-db-1
 ```
 
-Дамп базы — целиком, а не по таблицам: в `app_setting` лежит соль ключей
-находок SIEM (`siem_finding_key`). Без неё решения по находкам SIEM не
-сопоставить с находками — STools не заведёт новую соль поверх старых
-решений, а покажет все находки как «Новая» и предупредит.
+Копируется вся БД, включая `app_setting.siem_finding_key`: без этой соли
+решения аналитика по находкам SIEM нельзя корректно сопоставить с находками.
+Сохраняйте также всё содержимое `/data` API, версию STools и отдельно ключ
+`STOOLS_SESSION_SECRET`. Файлы, ключ и SQLite коллектора не входят в PostgreSQL-дамп.
+Для согласованной копии БД и файлов сначала остановите API и остальных писателей.
 
-Восстановление — в пустую базу той же версии STools:
+Восстановление после остановки API и других подключений:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec -T db sh -c 'pg_restore --clean --if-exists -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < stools-db-<дата>.dump
-sudo tar -C /data/stools -xzf stools-archives-<дата>.tar.gz
+python3 ops/stools_db.py restore "$STOOLS_BACKUP_DIR" \
+  --container stools-db-1 --database kbaudit --confirm-database kbaudit
 ```
+
+Сначала дамп загружается в новую БД; после успешной загрузки она получает
+целевое имя. Прежняя БД сохраняется под именем `stools_before_...` с запретом
+подключений. Скрипт не запускает API автоматически. Перед запуском верните
+согласованные файлы `/data`, исходный ключ и ту же версию STools.
+Требования, перенос ARM/x86, обработка ошибок и откат описаны в
+[полной инструкции](database-backup.md).
 
 ## Откат
 
