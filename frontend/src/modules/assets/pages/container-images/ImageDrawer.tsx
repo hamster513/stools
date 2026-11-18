@@ -10,7 +10,7 @@ import { AssetLink } from '../../AssetLink'
 import { RegistryBadge } from './RegistryBadge'
 import { CONTAINER_STATES, SOURCES, STATES, sizeText, when, type Detail, type Image } from './types'
 
-export type ImageRef = Pick<Image, 'source' | 'id' | 'title'> & Partial<Pick<Image, 'collected_at'>>
+export type ImageRef = Pick<Image, 'source' | 'id' | 'title'> & Partial<Pick<Image, 'collected_at' | 'display_title'>>
 
 function ImageDetail({ image }: { image: ImageRef }) {
   const { read: vmRead } = useCan('vm')
@@ -92,7 +92,7 @@ export function ImageDrawer({ image, onClose }: { image: ImageRef; onClose: () =
     <div className="fixed inset-0 z-30 bg-black/50" onClick={onClose} aria-hidden />
     <aside ref={panel} role="dialog" aria-modal="true" aria-label="Образ контейнера" className="fixed top-0 right-0 z-40 flex h-full w-[600px] max-w-full flex-col border-l border-grid bg-surface">
       <div className="flex items-center justify-between gap-2 border-b border-grid px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2"><Box size={16} className="shrink-0 text-text-secondary" aria-hidden /><span className="truncate text-sm text-text" title={image.title}>{image.title}</span></div>
+        <div className="flex min-w-0 items-center gap-2"><Box size={16} className="shrink-0 text-text-secondary" aria-hidden /><span className="truncate text-sm text-text" title={image.display_title || image.title}>{image.display_title || image.title}</span></div>
         <button ref={close} type="button" onClick={onClose} className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" aria-label="Свернуть (Esc)"><X size={16} aria-hidden /></button>
       </div>
       <div ref={body} className="flex-1 overflow-y-auto px-4 py-3 text-xs"><ImageDetail image={image} /></div>

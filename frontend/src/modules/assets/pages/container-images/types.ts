@@ -4,7 +4,7 @@ export type RegistryInfo = { registry_origin: RegistryOrigin; registries: string
 export type Source = 'harbor' | 'mp_vm'
 export type State = 'running' | 'stopped' | 'unused' | 'unknown'
 export type Image = RegistryInfo & {
-  id: number; source: Source; title: string; image_id: string; tags: string[]; platform: string | null;
+  id: number; source: Source; title: string; display_title?: string; name_state?: 'present' | 'missing'; filter_tags?: string[]; image_id: string; tags: string[]; platform: string | null;
   size: number | null; collected_at: string; status: State; host_count: number | null; container_count: number | null
 }
 export type Container = {
@@ -22,7 +22,7 @@ export type Detail = RegistryInfo & {
 }
 export type Catalog = {
   items: Image[]; total: number;
-  facets: { source: Record<Source, number>; status: Record<State, number> } | null;
+  facets: { source: Record<Source, number>; status: Record<State, number>; registry_origin: Record<RegistryOrigin, number>; name_state: Record<string, number>; registry: Record<string, number>; tag: Record<string, number>; platform: Record<string, number> } | null;
   mp_vm: { collected_at: string | null; attempted_at: string; error: string } | null
 }
 
@@ -36,3 +36,6 @@ export const CONTAINER_STATES: Record<string, string> = {
 }
 export const when = (value?: string | null) => value ? new Date(value).toLocaleString('ru-RU') : '—'
 export const sizeText = (value: number | null) => value === null ? '—' : `${(value / 1024 / 1024).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} МиБ`
+
+export const ORIGINS = { corporate: 'Корпоративный', external: 'Только внешние', mixed: 'Корпоративный и внешние', unknown: 'Не определён' }
+export const NAME_STATES = { present: 'С названием', missing: 'Без названия' }

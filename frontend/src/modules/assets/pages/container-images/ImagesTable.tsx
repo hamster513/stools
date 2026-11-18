@@ -40,7 +40,7 @@ export function ImagesTable({ items, selectedIndex, onSelectIndex, onOpen, onRea
           className={cn(ROW_FOCUS, 'absolute top-0 left-0 grid w-full cursor-pointer items-center border-b border-grid text-xs', selectedIndex === v.index ? 'bg-row-selected' : external ? 'bg-risk-medium/5 hover:bg-risk-medium/10' : 'hover:bg-row-hover')}
           style={{ ...cols.gridStyle, height: 40, transform: `translateY(${v.start}px)` }}>
           {external && <span className="absolute inset-y-0 left-0 w-0.5 bg-risk-medium" aria-hidden />}
-          <div className="min-w-0 truncate px-2 font-mono text-text" title={image.title}>{image.title}</div>
+          <div className="min-w-0 truncate px-2 font-mono text-text" title={image.display_title || image.title}>{image.display_title || image.title}</div>
           <div className="min-w-0 truncate px-2 text-text-secondary" title={image.tags.join(', ')}>{image.tags.join(', ') || '—'}</div>
           <div className="min-w-0 truncate px-2 text-text-secondary">{SOURCES[image.source]}</div>
           <div className="min-w-0 px-2"><RegistryBadge origin={image.registry_origin} external={image.external_registries} /></div>
