@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Back up/verify/restore one STools PostgreSQL database through Docker.
 
-Requires Python 3.10+ and Docker; PostgreSQL tools run inside the DB container.
+Requires Python 3.7.3+ and Docker; PostgreSQL tools run inside the DB container.
 See docs/database-backup.md. No application services are started or stopped.
 """
 from __future__ import annotations
@@ -56,7 +56,11 @@ class Postgres:
         return ['docker', 'exec', '-i', self.container, 'sh', '-ec', ENV, 'stools-db', *args]
 
     def run(self, *args: str, source=None, output=None, text: str | None = None) -> str:
-        result = subprocess.run(self.command(*args), stdin=source, input=text.encode() if text is not None else None,
+        if source is not None and text is not None:
+            raise BackupError('Нельзя одновременно передать текст и поток ввода.')
+        # Python 3.7 rejects input combined with even an explicit stdin=None.
+        input_args = {'input': text.encode()} if text is not None else {'stdin': source}
+        result = subprocess.run(self.command(*args), **input_args,
                                 stdout=output if output is not None else subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode:
             # PostgreSQL errors can contain a whole failing row, passwords or user SQL.

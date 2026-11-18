@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import uuid
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'stools_db.py'
@@ -43,26 +44,65 @@ class InputTests(unittest.TestCase):
                 dbtool.read_manifest(path)
 
 
+class ProcessTests(unittest.TestCase):
+    def setUp(self):
+        self.pg = dbtool.Postgres('test-only')
+
+    def test_sql_text_reaches_process_on_supported_python(self):
+        command = [sys.executable, '-c', 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())']
+        with mock.patch.object(self.pg, 'command', return_value=command):
+            self.assertEqual(self.pg.sql("SELECT 'проверка';"), "SELECT 'проверка';")
+
+    def test_binary_archive_is_streamed_without_decoding(self):
+        payload = bytes(range(256)) * 100
+        command = [sys.executable, '-c', 'import shutil,sys; shutil.copyfileobj(sys.stdin.buffer,sys.stdout.buffer)']
+        with tempfile.TemporaryFile() as source, tempfile.TemporaryFile() as output:
+            source.write(payload)
+            source.seek(0)
+            with mock.patch.object(self.pg, 'command', return_value=command):
+                self.assertEqual(self.pg.run('pg_restore', source=source, output=output), '')
+            output.seek(0)
+            self.assertEqual(output.read(), payload)
+
+    def test_command_without_input(self):
+        command = [sys.executable, '-c', "print('ready')"]
+        with mock.patch.object(self.pg, 'command', return_value=command):
+            self.assertEqual(self.pg.run('probe'), 'ready')
+
+    def test_text_and_stream_are_rejected_before_launch(self):
+        with tempfile.TemporaryFile() as source, mock.patch.object(dbtool.subprocess, 'run') as run:
+            with self.assertRaisesRegex(dbtool.BackupError, 'текст и поток'):
+                self.pg.run('psql', source=source, text='SELECT 1')
+            run.assert_not_called()
+
+
 @unittest.skipUnless(os.environ.get('STOOLS_TEST_DOCKER') == '1', 'set STOOLS_TEST_DOCKER=1 for isolated PostgreSQL tests')
 class PostgresTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.container = 'stools-backup-test-' + uuid.uuid4().hex[:12]
-        subprocess.run(['docker', 'run', '-d', '--rm', '--network', 'none', '--name', cls.container,
-                        '-e', 'POSTGRES_USER=stools', '-e', 'POSTGRES_PASSWORD=synthetic-test-only',
-                        '-e', 'POSTGRES_DB=stools_test', 'postgres:16-alpine'],
-                       check=True, stdout=subprocess.DEVNULL)
-        cls.addClassCleanup(subprocess.run, ['docker', 'rm', '-fv', cls.container],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        for _ in range(100):
-            r = subprocess.run(['docker', 'exec', cls.container, 'pg_isready', '-h', '127.0.0.1', '-U', 'stools', '-d', 'stools_test'],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if r.returncode == 0:
-                break
-            time.sleep(.1)
-        else:
-            raise RuntimeError('temporary PostgreSQL did not start')
-        cls.pg = dbtool.Postgres(cls.container)
+        try:
+            subprocess.run(['docker', 'run', '-d', '--rm', '--network', 'none', '--name', cls.container,
+                            '-e', 'POSTGRES_USER=stools', '-e', 'POSTGRES_PASSWORD=synthetic-test-only',
+                            '-e', 'POSTGRES_DB=stools_test', 'postgres:16-alpine'],
+                           check=True, stdout=subprocess.DEVNULL)
+            for _ in range(100):
+                r = subprocess.run(['docker', 'exec', cls.container, 'pg_isready', '-h', '127.0.0.1', '-U', 'stools', '-d', 'stools_test'],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if r.returncode == 0:
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('temporary PostgreSQL did not start')
+            cls.pg = dbtool.Postgres(cls.container)
+        except BaseException:
+            cls.tearDownClass()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        subprocess.run(['docker', 'rm', '-fv', cls.container],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
