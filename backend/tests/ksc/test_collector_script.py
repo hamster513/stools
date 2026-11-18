@@ -677,7 +677,7 @@ def test_script_collects_general_inventory_outside_skip_products() -> None:
 
 
 @pytest.mark.skipif(not _image_present(), reason=f"нужен docker и образ {IMAGE}")
-@pytest.mark.parametrize("variant", ["", "params", "inventory_malformed", "inventory_denied"])
+@pytest.mark.parametrize("variant", ["", "params", "inventory_gnrl", "inventory_dual", "inventory_conflict", "inventory_malformed", "inventory_denied"])
 def test_script_general_inventory_matches_online(tmp_path: Path, variant: str, monkeypatch: Any) -> None:
     from api.modules.ksc.core.client import KscClient
     from api.modules.ksc.core.collector import collect
@@ -691,3 +691,8 @@ def test_script_general_inventory_matches_online(tmp_path: Path, variant: str, m
     assert {k: {x: v for x, v in e.items() if x != "error"} for k, e in offline.host_inventory.items()} == {k: {x: v for x, v in e.items() if x != "error"} for k, e in strip_params(online["host_inventory"]).items()}
     assert offline.host_inventory
     assert len(offline.host_inventory) == len(offline.hosts)
+    if variant in ("", "params", "inventory_gnrl", "inventory_dual"):
+        assert all(entry["status"] == "complete" for entry in offline.host_inventory.values())
+        assert any(entry["items"] for entry in offline.host_inventory.values())
+    else:
+        assert offline.host_inventory["h-ws01"]["status"] == "error"

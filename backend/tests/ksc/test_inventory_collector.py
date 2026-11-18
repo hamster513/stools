@@ -83,3 +83,26 @@ def test_normalize_inventory_preserves_raw_and_parses_fields() -> None:
     assert normalize_inventory({"status": "complete"}) == ("error", [])
     assert normalize_inventory({"status": "complete", "items": [42]}) == ("error", [])
     assert normalize_inventory({"status": "complete", "items": [{**PRODUCT, "InstallDate": "20260231"}]})[1][0]["installed_on"] is None
+
+
+@pytest.mark.parametrize("key", ["KLEVP_EA_PARAM_1", "GNRL_EA_PARAM_1"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("items", [[], [{"type": "params", "value": PRODUCT}]])
+def test_inventory_accepts_known_response_keys(monkeypatch, key, wrapped, items):
+    value = {key: items}
+    payload = {"type": "params", "value": value} if wrapped else value
+    data = collected(monkeypatch, {"h-ws01": {"PxgRetVal": payload}})
+    assert data["host_inventory"]["h-ws01"] == {"status": "complete", "items": items}
+
+
+@pytest.mark.parametrize("value", [None, {}, [42], [{"type": "params", "value": None}]])
+def test_bad_alternate_key_stays_error(monkeypatch, value):
+    data = collected(monkeypatch, {"h-ws01": {"PxgRetVal": {"GNRL_EA_PARAM_1": value}}})
+    assert data["host_inventory"]["h-ws01"]["status"] == "error"
+
+
+def test_dual_inventory_keys_cannot_silently_discard_software(monkeypatch):
+    data = collected(monkeypatch, {"h-ws01": {"PxgRetVal": {"KLEVP_EA_PARAM_1": [], "GNRL_EA_PARAM_1": [PRODUCT]}}})
+    assert data["host_inventory"]["h-ws01"]["status"] == "error"
+    data = collected(monkeypatch, {"h-ws01": {"PxgRetVal": {"KLEVP_EA_PARAM_1": [PRODUCT], "GNRL_EA_PARAM_1": [PRODUCT]}}})
+    assert data["host_inventory"]["h-ws01"]["items"] == [PRODUCT]

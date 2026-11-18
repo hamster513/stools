@@ -563,15 +563,27 @@ try {
         $response = Invoke-Ksc "InventoryApi.GetHostInvProducts" @{ szwHostId = $hid; pParams = @{} }
         $payload = Unwrap (Prop $response "PxgRetVal")
         # Читаем Value напрямую: PowerShell разворачивает пустой массив из функции в $null.
-        $property = if ($null -ne $payload) { $payload.PSObject.Properties["KLEVP_EA_PARAM_1"] } else { $null }
-        if ($null -eq $property -or $property.Value -isnot [array]) {
-          throw "InventoryApi.GetHostInvProducts: некорректный KLEVP_EA_PARAM_1"
-        }
-        $items = $property.Value
-        foreach ($item in $items) {
-          if ((Unwrap $item) -isnot [pscustomobject]) {
-            throw "InventoryApi.GetHostInvProducts: некорректный KLEVP_EA_PARAM_1"
+        $found = $false
+        $items = @()
+        foreach ($key in @("KLEVP_EA_PARAM_1", "GNRL_EA_PARAM_1")) {
+          $property = if ($null -ne $payload) { $payload.PSObject.Properties[$key] } else { $null }
+          if ($null -eq $property) { continue }
+          if ($property.Value -isnot [array]) {
+            throw "InventoryApi.GetHostInvProducts: некорректный $key"
           }
+          foreach ($item in $property.Value) {
+            if ((Unwrap $item) -isnot [pscustomobject]) {
+              throw "InventoryApi.GetHostInvProducts: некорректный $key"
+            }
+          }
+          if ($found -and (ConvertTo-Json -InputObject $items -Depth 100 -Compress) -cne (ConvertTo-Json -InputObject $property.Value -Depth 100 -Compress)) {
+            throw "InventoryApi.GetHostInvProducts: противоречивые списки ПО"
+          }
+          $items = $property.Value
+          $found = $true
+        }
+        if (-not $found) {
+          throw "InventoryApi.GetHostInvProducts: отсутствует список ПО (KLEVP_EA_PARAM_1 / GNRL_EA_PARAM_1)"
         }
         $hostInventory[$hid] = @{ status = "complete"; items = @($items) }
       } catch {

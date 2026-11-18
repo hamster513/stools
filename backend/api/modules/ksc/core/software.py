@@ -16,10 +16,17 @@ def _params_value(value: Any) -> Any:
 def inventory_items(value: Any) -> list[dict[str, Any]]:
     """Validate GetHostInvProducts without discarding the original product fields/wrappers."""
     value = _params_value(value)
-    items = value.get("KLEVP_EA_PARAM_1") if isinstance(value, dict) else None
-    if not isinstance(items, list) or any(not isinstance(_params_value(item), dict) for item in items):
-        raise ValueError("InventoryApi.GetHostInvProducts: некорректный KLEVP_EA_PARAM_1")
-    return items
+    keys = ("KLEVP_EA_PARAM_1", "GNRL_EA_PARAM_1")
+    present = [key for key in keys if isinstance(value, dict) and key in value]
+    if not present:
+        raise ValueError("InventoryApi.GetHostInvProducts: отсутствует список ПО (KLEVP_EA_PARAM_1 / GNRL_EA_PARAM_1)")
+    for key in present:
+        items = value[key]
+        if not isinstance(items, list) or any(not isinstance(_params_value(item), dict) for item in items):
+            raise ValueError(f"InventoryApi.GetHostInvProducts: некорректный {key}")
+    if len(present) == 2 and value[present[0]] != value[present[1]]:
+        raise ValueError("InventoryApi.GetHostInvProducts: противоречивые списки ПО")
+    return value[present[0]]
 
 
 def _field(item: dict[str, Any], name: str) -> str:

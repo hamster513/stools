@@ -127,6 +127,8 @@ class FakeKsc:
         self.mfa_secret = mfa_secret or (MFA_SECRET if variant == "mfa" else "")
         #: variant="params" — записи в обёртках, как у живого сервера.
         self.inventory_malformed = variant == "inventory_malformed"
+        self.inventory_key = "GNRL_EA_PARAM_1" if variant == "inventory_gnrl" else "KLEVP_EA_PARAM_1"
+        self.inventory_dual = variant if variant in ("inventory_dual", "inventory_conflict") else ""
         self.wrap = variant == "params"
         #: Имена методов, на которые отвечать 403 (нет прав).
         self.deny: set[str] = set(deny) if deny is not None else (set(DENIED_METHODS) if variant == "denied" else set())
@@ -258,7 +260,10 @@ class FakeKsc:
                 return 200, {"PxgRetVal": {}}
             items = [{"ProductID": "editor-1", "DisplayName": "Editor", "DisplayVersion": {"type": "wstring", "value": "2.3"},
                       "Publisher": "Example", "InstallDate": "20261030", "InstallDir": "C:\\Editor"}] if body["szwHostId"] == "h-ws01" else []
-            return 200, {"PxgRetVal": {"KLEVP_EA_PARAM_1": items}}
+            payload = {self.inventory_key: items}
+            if self.inventory_dual:
+                payload["GNRL_EA_PARAM_1"] = [] if self.inventory_dual == "inventory_conflict" else items
+            return 200, {"PxgRetVal": payload}
         if method == "HostGroup.GetHostProducts":
             return 200, {"PxgRetVal": d["host_products"].get(body["strHostName"], {})}
         if method == "HostGroup.GetComponentsForProductOnHost":
