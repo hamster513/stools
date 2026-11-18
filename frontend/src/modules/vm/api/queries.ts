@@ -1,3 +1,4 @@
+import { LIST_QUERY_OPTIONS } from '@/api/listCache'
 /** Хуки TanStack Query модуля VM. Ключи запросов держим здесь же. */
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
@@ -43,12 +44,12 @@ function invalidateData(qc: ReturnType<typeof useQueryClient>) {
 
 export function useVulns(query: Omit<VulnsQuery, 'limit' | 'offset'>) {
   return useInfiniteQuery<VulnsResponse, ApiRequestError>({
+    ...LIST_QUERY_OPTIONS,
     queryKey: ['vm-vulns', query],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) =>
-      api.get(`/api/vm/vulns${buildQuery({ ...query, limit: VULNS_PAGE_SIZE, offset: pageParam as number })}`),
+    queryFn: ({ pageParam, signal }) =>
+      api.get(`/api/vm/vulns${buildQuery({ ...query, limit: VULNS_PAGE_SIZE, offset: pageParam as number })}`, { signal }),
     getNextPageParam: nextOffset,
-    placeholderData: (prev) => prev,
   })
 }
 
@@ -60,12 +61,12 @@ function nextOffset(last: { items: unknown[] }, pages: { items: unknown[]; total
 
 export function useImages(query: Omit<ImagesQuery, 'limit' | 'offset'>) {
   return useInfiniteQuery<ImagesResponse, ApiRequestError>({
+    ...LIST_QUERY_OPTIONS,
     queryKey: ['vm-images', query],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) =>
-      api.get(`/api/vm/images${buildQuery({ ...query, limit: IMAGES_PAGE_SIZE, offset: pageParam as number })}`),
+    queryFn: ({ pageParam, signal }) =>
+      api.get(`/api/vm/images${buildQuery({ ...query, limit: IMAGES_PAGE_SIZE, offset: pageParam as number })}`, { signal }),
     getNextPageParam: nextOffset,
-    placeholderData: (prev) => prev,
   })
 }
 
@@ -165,7 +166,7 @@ export function useHost(hostId: number | undefined) {
 }
 
 export function useOverview() {
-  return useQuery<Overview, ApiRequestError>({ queryKey: ['vm-overview'], queryFn: () => api.get('/api/vm/overview') })
+  return useQuery<Overview, ApiRequestError>({ ...LIST_QUERY_OPTIONS, queryKey: ['vm-overview'], queryFn: ({ signal }) => api.get('/api/vm/overview', { signal }) })
 }
 
 export function useZones() {

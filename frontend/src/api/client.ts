@@ -68,7 +68,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, options?: { signal?: AbortSignal }) => request<T>(path, options),
   post: <T>(path: string, body?: unknown) =>
     queuedPost<T>(path, body, request, (status, message) => new ApiRequestError(status, message)),
   postForm: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),

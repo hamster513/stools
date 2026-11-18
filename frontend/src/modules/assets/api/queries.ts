@@ -1,3 +1,4 @@
+import { LIST_QUERY_OPTIONS } from '@/api/listCache'
 /** Хуки TanStack Query модуля Assets. */
 import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, buildQuery, ApiRequestError } from '@/api/client'
@@ -32,11 +33,11 @@ export function useCancelJob() {
 
 export function useAssets(query: AssetsQuery) {
   return useInfiniteQuery<AssetsResponse, ApiRequestError>({
+    ...LIST_QUERY_OPTIONS,
     queryKey: ['assets-list', query],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.get(`/api/assets/assets${buildQuery({ ...query, limit: ASSETS_PAGE_SIZE, offset: pageParam as number })}`),
+    queryFn: ({ pageParam, signal }) => api.get(`/api/assets/assets${buildQuery({ ...query, limit: ASSETS_PAGE_SIZE, offset: pageParam as number })}`, { signal }),
     getNextPageParam: nextPageOffset,
-    placeholderData: (prev) => prev,
   })
 }
 
@@ -223,7 +224,7 @@ export function useDeleteSyncSchedule() {
 }
 
 export function useOverview() {
-  return useQuery<AssetsOverview, ApiRequestError>({ queryKey: ['assets-overview'], queryFn: () => api.get('/api/assets/overview') })
+  return useQuery<AssetsOverview, ApiRequestError>({ ...LIST_QUERY_OPTIONS, queryKey: ['assets-overview'], queryFn: ({ signal }) => api.get('/api/assets/overview', { signal }) })
 }
 
 /** Сводка статусов расхождений (`/api/findings/summary`, module `assets`): строка под плитками обзора. */

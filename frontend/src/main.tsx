@@ -1,7 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import App from './App.tsx'
+import { createAppQueryClient } from './api/listCache'
 import { applyTheme, readStoredTheme } from '@/lib/theme'
 import './index.css'
 
@@ -9,14 +10,7 @@ import './index.css'
 // пока не ответит /api/auth/me.
 applyTheme(readStoredTheme() ?? 'dark')
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 15_000,
-      retry: 1,
-    },
-  },
-})
+const queryClient = createAppQueryClient()
 
 /**
  * Бэкенда пока нет: в dev-режиме поднимаем MSW и отвечаем на /api/* по

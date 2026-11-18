@@ -23,7 +23,11 @@ class Base:
 def make_engine(settings: Settings | None = None) -> Engine:
     settings = settings or get_settings()
     connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-    return create_engine(settings.database_url, connect_args=connect_args, future=True)
+    engine = create_engine(settings.database_url, connect_args=connect_args, future=True)
+    if settings.request_timing_enabled:
+        from api.platform.request_timing import instrument_engine
+        instrument_engine(engine)
+    return engine
 
 
 _engine: Engine | None = None

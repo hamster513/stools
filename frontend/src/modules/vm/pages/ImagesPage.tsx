@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useListState } from '@/hooks/useListState'
+import { useEffect, useMemo, useRef } from 'react'
 import { Container, FilterX, RefreshCw, Search } from 'lucide-react'
 import { buildQuery, errorText } from '@/api/client'
 import { useHarbor, useImages } from '@/modules/vm/api/queries'
@@ -41,21 +42,21 @@ const TRIVY_CHIP_LABELS = { critical: 'есть критические', high: '
 export function ImagesPage() {
   const params = useSearchParams()
   const { search, navigate } = useRouter()
-  const [filters, setFilters] = useState<ImageFilters>(() => ({
+  const [filters, setFilters] = useListState<ImageFilters>('vm-images:filters', () => ({
     artifact_kind: listFrom(params, 'artifact_kind', ARTIFACT_KINDS),
     project: listFrom(params, 'project'),
     scan_status: listFrom<ImageScanStatus>(params, 'scan_status', SCAN_STATUSES),
     level: listFrom<ImageLevel>(params, 'level', IMAGE_LEVELS),
     trivy: listFrom(params, 'trivy', TRIVY_FLAGS),
     running_only: ['true', '1'].includes(params.get('running_only') ?? '') || undefined,
-  }))
-  const [sort, setSort] = useState<ImageSort>(() => {
+  }), params.size === 0)
+  const [sort, setSort] = useListState<ImageSort>('vm-images:sort', () => {
     const s = params.get('sort') as ImageSort | null
     return s && SORTS.includes(s) ? s : DEFAULT_SORT
-  })
-  const [searchInput, setSearchInput] = useState(() => params.get('q') ?? '')
+  }, params.size === 0)
+  const [searchInput, setSearchInput] = useListState('vm-images:searchInput', () => params.get('q') ?? '', params.size === 0)
   const q = useDebouncedValue(searchInput, 250)
-  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [selectedIndex, setSelectedIndex] = useListState('vm-images:selectedIndex', 0, params.size === 0)
   const searchRef = useRef<HTMLInputElement>(null)
   const filtersPanel = useFiltersPanel('vm-images')
   const { write } = useCan()
@@ -78,7 +79,12 @@ export function ImagesPage() {
     if (next !== search) navigate(`/vm/images${next}`, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryArgs])
-  useEffect(() => { setSelectedIndex(0) }, [queryArgs])
+  const previousQuery = useRef(queryArgs)
+  useEffect(() => {
+    if (previousQuery.current === queryArgs) return
+    previousQuery.current = queryArgs
+    setSelectedIndex(0)
+  }, [queryArgs])
 
   const selected: ImageItem | null = items[selectedIndex] ?? null
 
@@ -198,6 +204,7 @@ export function ImagesPage() {
           )}
           {!query.isLoading && !errorMessage && items.length > 0 && (
             <ImagesTable
+              rememberKey={`vm-images:${JSON.stringify(queryArgs)}`}
               items={items}
               selectedIndex={selectedIndex}
               sort={sort}

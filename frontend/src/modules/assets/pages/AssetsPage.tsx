@@ -1,3 +1,4 @@
+import { useListState } from '@/hooks/useListState'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronRight, FilterX, Search, Trash2 } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
@@ -283,7 +284,8 @@ function SourceBadges({ item }: { item: AssetItem }) {
 }
 
 /** `checked` — отмеченные для массового изменения (undefined — отмечать нельзя: у аудитора флажков нет). */
-function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: {
+function AssetsTable({ rememberKey, items, selectedIndex, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: {
+  rememberKey: string
   items: AssetItem[]
   selectedIndex: number
   onSelectIndex: (i: number) => void
@@ -293,7 +295,7 @@ function AssetsTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd, 
   onCheck: (index: number, range: boolean) => void
   onCheckAll: (on: boolean) => void
 }) {
-  const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd)
+  const { parentRef, rows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd, rememberKey)
   const allChecked = checked !== undefined && items.length > 0 && items.every((a) => checked.has(a.id))
   const cols = useColumnWidths('assets-list-columns', checked ? CHECKED_COLUMNS : LIST_COLUMNS)
   return (
@@ -457,7 +459,7 @@ function BulkBar({ ids, total, selectingAll, onSelectAll, onClear, facets, code 
 export function AssetsPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
-  const [filters, setFilters] = useState<Filters>(() => ({
+  const [filters, setFilters] = useListState<Filters>('assets-list:filters', () => ({
     source_has: listFrom<AssetSource>(params, 'source_has', SOURCES),
     source_missing: listFrom<AssetSource>(params, 'source_missing', SOURCES),
     code: listFrom<CodeFilter>(params, 'code', ['any', ...CODES]),
@@ -469,13 +471,13 @@ export function AssetsPage() {
     network_id: networkIdsFrom(params),
     ad_snapshot: snapshotFrom(params),
     ad_cell: params.get('ad_cell') ?? undefined,
-  }))
-  const [disc, setDisc] = useState<DiscFilters>(() => discFromParams(params))
-  const [searchInput, setSearchInput] = useState(params.get('q') ?? '')
-  const [tagInput, setTagInput] = useState(params.get('tag') ?? '')
+  }), params.size === 0)
+  const [disc, setDisc] = useListState<DiscFilters>('assets-list:disc', () => discFromParams(params), params.size === 0)
+  const [searchInput, setSearchInput] = useListState('assets-list:searchInput', params.get('q') ?? '', params.size === 0)
+  const [tagInput, setTagInput] = useListState('assets-list:tagInput', params.get('tag') ?? '', params.size === 0)
   const q = useDebouncedValue(searchInput, 250)
   const tag = useDebouncedValue(tagInput, 250)
-  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [selectedIndex, setSelectedIndex] = useListState('assets-list:selectedIndex', 0, params.size === 0)
   const [openId, setOpenId] = useState<number | null>(() => (Number(params.get('asset')) > 0 ? Number(params.get('asset')) : null))
   const searchRef = useRef<HTMLInputElement>(null)
   const { write } = useCan()
@@ -499,7 +501,12 @@ export function AssetsPage() {
   // и при закрытии забывала бы), иначе вторую зону не выбрать.
   const zones = useRememberedFacets(first?.facets ? { zone: facetValues(first.facets.zone) } : undefined).zone ?? []
   // Новый фильтр — другой список: курсор в начало, отметки сняты.
-  useEffect(() => { setSelectedIndex(0); setChecked(new Set()); lastChecked.current = null }, [queryArgs])
+  const previousQuery = useRef(queryArgs)
+  useEffect(() => {
+    if (previousQuery.current === queryArgs) return
+    previousQuery.current = queryArgs
+    setSelectedIndex(0); setChecked(new Set()); lastChecked.current = null
+  }, [queryArgs])
   const selected: AssetItem | null = items[selectedIndex] ?? null
   const networkCards = useNetworkCards(filters.network_id ?? [])
 
@@ -607,7 +614,7 @@ export function AssetsPage() {
               </div>
             )}
             {!query.isLoading && !errorMessage && items.length > 0 && (
-              <AssetsTable items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenId(items[i].id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }}
+              <AssetsTable rememberKey={`assets:${JSON.stringify(queryArgs)}`} items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenId(items[i].id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }}
                 checked={write ? checked : undefined} onCheck={check} onCheckAll={checkAll} />
             )}
           </div>

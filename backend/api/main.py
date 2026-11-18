@@ -106,6 +106,9 @@ def create_app() -> FastAPI:
     app.add_middleware(AuditMiddleware)
     #: Последней — значит, снаружи всех остальных.
     app.add_middleware(BodyLimitMiddleware)
+    if settings.request_timing_enabled:
+        from api.platform.request_timing import RequestTimingMiddleware
+        app.add_middleware(RequestTimingMiddleware)
 
     app.include_router(auth.public_router)
     #: Тоже без сессии: вход через провайдера как раз её и выдаёт.

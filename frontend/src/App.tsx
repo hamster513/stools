@@ -1,5 +1,6 @@
-import { useEffect } from 'react'
-import { useMe } from '@/api/auth'
+import { useEffect, useMemo } from 'react'
+import { useMe, type MeResponse } from '@/api/auth'
+import { sessionKey } from '@/api/listCache'
 import { Redirect, RouterProvider, useRouter } from '@/lib/router'
 import { applyTheme, readStoredTheme } from '@/lib/theme'
 import { AppShell } from '@/components/layout/AppShell'
@@ -50,8 +51,13 @@ function legacyPath(path: string, tail: string): string | null {
 }
 
 function Root() {
-  const { path, search, navigate } = useRouter()
-  const { data: me, isLoading, isError, refetch } = useMe()
+  const { path, navigate } = useRouter()
+  const { data: me, dataUpdatedAt, isLoading, isError, refetch } = useMe()
+  const enteredAt = useMemo(() => Date.now(), [path])
+  const needsSessionCheck = !!me && dataUpdatedAt < enteredAt - 15_000
+  useEffect(() => {
+    if (needsSessionCheck && !isError) void refetch()
+  }, [needsSessionCheck, isError, refetch])
 
   useEffect(() => {
     if (isLoading || isError) return
@@ -81,11 +87,16 @@ function Root() {
     )
   }
 
-  if (isLoading || !me) {
+  if (isLoading || !me || needsSessionCheck) {
     // useEffect выше уже планирует переход на /login — не рендерим пусто.
     return <FullPageSpinner />
   }
 
+  return <AuthorizedRoutes key={sessionKey(me)} me={me} />
+}
+
+function AuthorizedRoutes({ me }: { me: MeResponse }) {
+  const { path, search } = useRouter()
   // Хвост — строка запроса и якорь: /vm/settings#zones ведёт к той же секции.
   const legacy = legacyPath(path, search + window.location.hash)
   if (legacy) return <Redirect to={legacy} />

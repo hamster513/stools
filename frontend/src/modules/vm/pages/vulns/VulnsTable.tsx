@@ -1,8 +1,7 @@
 import { useTrendBadges } from '../../api/trends'
 import { TrendBadge } from '../../components/TrendBadge'
-import { useEffect, useRef } from 'react'
 import { clickableRow, ROW_FOCUS } from '@/components/ui/clickableRow'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { useVirtualRows } from '@/hooks/useVirtualRows'
 import { ChevronRight } from 'lucide-react'
 import type { VulnItem, VulnSort } from '@/modules/vm/api/types'
 import { CVSS_SOURCE_LABELS } from '@/modules/vm/api/types'
@@ -34,6 +33,7 @@ const SORT_KEYS: Partial<Record<string, VulnSort>> = {
 }
 
 interface Props {
+  rememberKey?: string
   items: VulnItem[]
   selectedIndex: number
   sort: VulnSort
@@ -48,21 +48,9 @@ interface Props {
   onCheckAll?: (on: boolean) => void
 }
 
-export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: Props) {
+export function VulnsTable({ rememberKey, items, selectedIndex, sort, onSort, onSelectIndex, onOpen, onReachEnd, checked, onCheck, onCheckAll }: Props) {
   const trends = useTrendBadges(items.map(item => item.cve_id))
-  const parentRef = useRef<HTMLDivElement>(null)
-  const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_HEIGHT, overscan: 12 })
-
-  useEffect(() => {
-    if (selectedIndex >= 0 && selectedIndex < items.length) virtualizer.scrollToIndex(selectedIndex, { align: 'auto' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIndex])
-
-  const virtualRows = virtualizer.getVirtualItems()
-  const lastVisible = virtualRows.length ? virtualRows[virtualRows.length - 1].index : 0
-  useEffect(() => {
-    if (onReachEnd && items.length > 0 && lastVisible >= items.length - 20) onReachEnd()
-  }, [lastVisible, items.length, onReachEnd])
+  const { parentRef, rows: virtualRows, totalSize } = useVirtualRows(items.length, ROW_HEIGHT, selectedIndex, onReachEnd, rememberKey)
 
   const allChecked = items.length > 0 && items.every((i) => checked?.has(i.key))
   const cols = useColumnWidths('vm-vulns-columns', onCheck ? WITH_CHECK : COLUMNS)
@@ -75,7 +63,7 @@ export function VulnsTable({ items, selectedIndex, sort, onSort, onSelectIndex, 
           : <SortableTh key={c.key} cols={cols} col={c} sortKey={SORT_KEYS[c.key]} ascending={c.key === 'host' || c.key === 'cve'} sort={sort} onSort={onSort}>{c.label}</SortableTh>)}
       </div>
 
-      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+      <div style={{ height: totalSize, position: 'relative' }}>
         {virtualRows.map((v) => {
           const item = items[v.index]
           const selected = v.index === selectedIndex

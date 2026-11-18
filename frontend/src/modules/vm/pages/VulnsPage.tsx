@@ -1,3 +1,4 @@
+import { useListState } from '@/hooks/useListState'
 import { Activity, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { FilterX, Search, X } from 'lucide-react'
@@ -76,7 +77,7 @@ function ScannerVulnsPage() {
   const { navigate } = useRouter()
   const linked = splitKey(params.get('key'))
   // Адрес задаёт начальные фильтры: сюда ведут ссылки с обзора и из карточки.
-  const [filters, setFilters] = useState<VulnFilters>(() => ({
+  const [filters, setFilters] = useListState<VulnFilters>('vm-vulns:filters', () => ({
     level: listFrom<RiskLevel>(params, 'level', LEVELS),
     // `-` в адресе — «не задано» (пустое значение фасета).
     zone: fromWire(listFrom(params, 'zone')),
@@ -91,16 +92,16 @@ function ScannerVulnsPage() {
     assignee: listFrom(params, 'assignee'),
     overdue: params.get('overdue') === 'true' || undefined,
     risk_expiring: params.get('risk_expiring') === 'true' || undefined,
-  }))
+  }), params.size === 0)
   const cveParam = params.get('cve') ?? linked?.cve ?? undefined
   const hostIdParam = params.get('host_id') ? Number(params.get('host_id')) : undefined
-  const [sort, setSort] = useState<VulnSort>(() => {
+  const [sort, setSort] = useListState<VulnSort>('vm-vulns:sort', () => {
     const s = params.get('sort') as VulnSort | null
     return s && SORTS.includes(s) ? s : 'risk_desc'
-  })
-  const [searchInput, setSearchInput] = useState(linked?.hostname ?? '')
+  }, params.size === 0)
+  const [searchInput, setSearchInput] = useListState('vm-vulns:searchInput', linked?.hostname ?? '', params.size === 0)
   const q = useDebouncedValue(searchInput, 250)
-  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [selectedIndex, setSelectedIndex] = useListState('vm-vulns:selectedIndex', 0, params.size === 0)
   const [openKey, setOpenKey] = useState<string | null>(() => params.get('key'))
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set())
   const [anchor, setAnchor] = useState<number | null>(null)
@@ -139,7 +140,12 @@ function ScannerVulnsPage() {
     criticality: facetValues(facets.criticality).filter((c) => c.count > 0),
   } : undefined)
 
-  useEffect(() => { setSelectedIndex(0); setChecked(new Set()); setAnchor(null); setAllByFilter(false) }, [queryArgs])
+  const previousQuery = useRef(queryArgs)
+  useEffect(() => {
+    if (previousQuery.current === queryArgs) return
+    previousQuery.current = queryArgs
+    setSelectedIndex(0); setChecked(new Set()); setAnchor(null); setAllByFilter(false)
+  }, [queryArgs])
   // Массовая смена закончилась — список и карточки уже другие (useJob обновляет данные модуля).
   const jobStatus = job.data?.status
   useEffect(() => {
@@ -287,6 +293,7 @@ function ScannerVulnsPage() {
           )}
           {!query.isLoading && !errorMessage && items.length > 0 && (
             <VulnsTable
+              rememberKey={`vm-vulns:${JSON.stringify(queryArgs)}`}
               items={items}
               selectedIndex={selectedIndex}
               sort={sort}

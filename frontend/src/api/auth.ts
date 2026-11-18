@@ -34,9 +34,9 @@ export interface MeResponse {
   groups: MeGroup[]
 }
 
-export async function fetchMe(): Promise<MeResponse | null> {
+export async function fetchMe(options?: { signal?: AbortSignal }): Promise<MeResponse | null> {
   try {
-    return await api.get<MeResponse>('/api/auth/me')
+    return await api.get<MeResponse>('/api/auth/me', options)
   } catch (error) {
     // 401 — отсутствие сессии, а не ошибка загрузки. При ошибке фонового
     // запроса React Query сохраняет прежнего пользователя в data.
@@ -48,7 +48,7 @@ export async function fetchMe(): Promise<MeResponse | null> {
 export function useMe() {
   return useQuery<MeResponse | null, ApiRequestError>({
     queryKey: ['me'],
-    queryFn: fetchMe,
+    queryFn: ({ signal }) => fetchMe({ signal }),
     retry: false,
   })
 }
@@ -73,7 +73,11 @@ export function useLogin() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError, LoginRequest>({
     mutationFn: (body) => api.post('/api/auth/login', body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+    onSuccess: async () => {
+      await qc.cancelQueries({ queryKey: ['me'] })
+      qc.setQueryData(['me'], null)
+      return qc.invalidateQueries({ queryKey: ['me'] })
+    },
   })
 }
 
@@ -97,6 +101,9 @@ export function useLogout() {
   const qc = useQueryClient()
   return useMutation<void, ApiRequestError>({
     mutationFn: () => api.post('/api/auth/logout'),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['me'] }),
+    onSuccess: async () => {
+      await qc.cancelQueries({ queryKey: ['me'] })
+      qc.setQueryData(['me'], null)
+    },
   })
 }

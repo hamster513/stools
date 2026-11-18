@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     #: для локальной отладки: STOOLS_EXPOSE_DOCS=true.
     expose_docs: bool = False
 
+    #: Opt-in diagnostics without SQL text, URL parameters or response content.
+    request_timing_enabled: bool = False
+
     #: Часовой пояс окон расписаний планировщика (api/platform/scheduler.py),
     #: имя IANA: STOOLS_TZ=Europe/Moscow. Сроки в базе — по-прежнему UTC.
     tz: str = "UTC"
