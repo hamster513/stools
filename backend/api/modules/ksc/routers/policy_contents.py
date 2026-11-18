@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
-from api.modules.ksc.core.export import ExportIndex, _int, _str, load_export_path
+from api.modules.ksc.core.export import ExportIndex, _int, _str, load_snapshot_export
 from api.modules.ksc.core.policy_contents import lock_summary, truncate_value, walk_settings
 from api.modules.ksc.models import KscSnapshot
 from api.modules.ksc.services.snapshots import snapshot_path
@@ -68,7 +68,7 @@ def get_policy_contents(
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="файл выгрузки не найден")
     # Без хостов: нужен только путь группы, а записи хостов большой выгрузки строятся секундами.
-    idx = ExportIndex(load_export_path(path).model_copy(update={"hosts": []}))
+    idx = ExportIndex(load_snapshot_export(path).model_copy(update={"hosts": []}))
     policy = next((p for p in idx.export.policies if _int(p.get("KLPOL_ID")) == policy_id), None)
     if policy is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="политика не найдена")

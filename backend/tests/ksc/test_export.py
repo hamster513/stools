@@ -287,3 +287,65 @@ def test_export_host_users_tolerates_partial_items() -> None:
     raw["host_users"]["h-ws02"] = [{"sam": "LAB\\user09", "active": True}]
     by = {h.name: h for h in ExportIndex(load_export(json.dumps(raw).encode())).hosts}
     assert by["WS02"].users == [HostUser(sid="", sam="LAB\\user09", upn="", display_name="", domain="", local=False, group=False, active=True)]
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_snapshot_reader_matches_import_without_full_text_read(tmp_path, monkeypatch, packed):
+    from api.modules.ksc.core import export
+
+    raw = build_export()
+    raw["numeric_probe"] = {"large": 2**80, "decimal": 1.25, "array": [0.125, 2**64]}
+    data = json.dumps(raw, ensure_ascii=False).encode()
+    expected = load_export(data)
+    path = tmp_path / "snapshot.json.gz"
+    path.write_bytes(gzip.compress(data) if packed else data)
+    original = gzip.GzipFile.read
+
+    def bounded_read(self, size=-1):
+        assert size >= 0, "must not materialize the whole decompressed JSON"
+        return original(self, size)
+
+    monkeypatch.setattr(gzip.GzipFile, "read", bounded_read)
+    monkeypatch.setattr(export, "MAX_UNPACKED", 64)
+    actual = export.load_snapshot_export(path)
+    assert actual.model_dump() == expected.model_dump()
+    # Decimal from the streaming parser must not leak into stored JSON fields.
+    assert json.loads(json.dumps(actual.model_extra["numeric_probe"])) == raw["numeric_probe"]
+
+
+@pytest.mark.parametrize("body", [b"", b"{", b"{}{}", b"[]", b"null", b'{"format":"other"}', b'\xff'])
+@pytest.mark.parametrize("packed", [False, True])
+def test_snapshot_reader_rejects_invalid_documents(tmp_path, body, packed):
+    from api.modules.ksc.core.export import load_snapshot_export
+
+    path = tmp_path / "snapshot.json.gz"
+    path.write_bytes(gzip.compress(body) if packed else body)
+    with pytest.raises(ExportFormatError):
+        load_snapshot_export(path)
+
+
+@pytest.mark.parametrize("damage", ["deflate", "crc", "truncated", "trailing_json", "second_member"])
+def test_snapshot_reader_checks_entire_gzip(tmp_path, damage):
+    from api.modules.ksc.core.export import load_snapshot_export
+
+    compressed = gzip.compress(export_bytes())
+    if damage == "deflate":
+        compressed = corrupted_gzip()
+    elif damage == "crc":
+        compressed = compressed[:-8] + bytes([compressed[-8] ^ 255]) + compressed[-7:]
+    elif damage == "truncated":
+        compressed = compressed[:-4]
+    elif damage == "trailing_json":
+        compressed = gzip.compress(export_bytes() + b" {}")
+    else:
+        compressed += gzip.compress(b"{}")
+    path = tmp_path / "snapshot.json.gz"
+    path.write_bytes(compressed)
+    with pytest.raises(ExportFormatError):
+        load_snapshot_export(path)
+
+
+def test_synthetic_profiles_are_independent():
+    first, second = build_export(), build_export()
+    first["policy_profiles"]["1"]["profiles"][0]["attrs"]["KLSSPOL_PRF_ENABLED"] = False
+    assert second["policy_profiles"]["1"]["profiles"][0]["attrs"]["KLSSPOL_PRF_ENABLED"] is True

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.dictionary import describe
 from api.modules.ksc.core.exclusion_risks import exclusion_risks
-from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_export_path
+from api.modules.ksc.core.export import ExportFormatError, ExportIndex, load_snapshot_export
 from api.modules.ksc.core.policy_contents import flat_settings
 from api.modules.ksc.core.policy_index import policy_objects, policy_rows, profile_rows, scope_rows
 from api.modules.ksc.core.policy_model import (
@@ -175,7 +175,7 @@ def ensure_policy_tables(db: Session, snapshot: KscSnapshot, data_dir: Path) -> 
         return False
     sid, rewrite = snapshot.id, _has_policies(db, snapshot.id)
     try:
-        idx = ExportIndex(load_export_path(path))
+        idx = ExportIndex(load_snapshot_export(path))
         store_policies(db, snapshot, idx, load_config(db))
         groups: dict[int, list[str]] = {}
         for h in idx.hosts:

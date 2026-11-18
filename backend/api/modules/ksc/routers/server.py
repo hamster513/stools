@@ -16,7 +16,7 @@ from api.modules.ksc.core.certs import parse_cert
 from api.modules.ksc.core.checks import CHECK_BY_CODE
 from api.modules.ksc.core.checks.server import is_admin_role, role_account
 from api.modules.ksc.core.config import KscConfig
-from api.modules.ksc.core.export import ExportIndex, _dt, _int, _str, load_export_path, unwrap
+from api.modules.ksc.core.export import ExportIndex, _dt, _int, _str, load_snapshot_export, unwrap
 from api.modules.ksc.models import KscFinding, KscSnapshot
 from api.modules.ksc.services.settings import load_config
 from api.modules.ksc.services.snapshots import snapshot_path
@@ -137,7 +137,7 @@ def get_server(
     path = snapshot_path(settings.data_dir, snap.id)
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="файл выгрузки не найден")
-    idx = ExportIndex(load_export_path(path))
+    idx = ExportIndex(load_snapshot_export(path))
     cfg = load_config(db)
     rows = db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.check.in_(SERVER_CHECKS))).scalars()
     findings = [

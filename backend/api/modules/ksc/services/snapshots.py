@@ -21,7 +21,7 @@ from api.jobs import JobHandle, insert_chunked
 from api.modules.ksc.core.checks import ANALYZER_VERSION, run_all
 from api.modules.ksc.core.checks.policy_contents import protection_policies
 from api.modules.ksc.core.config import KscConfig
-from api.modules.ksc.core.export import ExportIndex, KscExport, _str, load_export_path
+from api.modules.ksc.core.export import ExportIndex, KscExport, _str, load_export_path, load_snapshot_export
 from api.modules.ksc.core.findings import SEVERITY_RANK, Finding
 from api.modules.ksc.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.ksc.models import KscChange, KscFinding, KscHost, KscServer, KscSnapshot
@@ -126,13 +126,14 @@ def _store(db: Session, snapshot: KscSnapshot, idx: ExportIndex, findings: list[
 
 def import_export(
     db: Session, handle: JobHandle | None, path: Path, source: str, filename: str, cfg: KscConfig, data_dir: Path,
-    sha256: str | None = None,
+    sha256: str | None = None, *, parsed: KscExport | None = None,
 ) -> KscSnapshot:
     """Как у AD: `path` — файл выгрузки в каталоге данных, становится файлом снапшота;
-    `sha256` — отпечаток исходного текста, не задан — по байтам файла."""
+    `sha256` — отпечаток исходного текста, не задан — по байтам файла;
+    `parsed` передаёт проверенные данные онлайн-сбора без повторного чтения файла."""
     if handle:
         handle.stage("parsing", message=filename)
-    export = load_export_path(path)
+    export = parsed if parsed is not None else load_export_path(path)
     if handle:
         handle.stage("analyzing", message=f"хостов {len(export.hosts)}")
     idx, findings = analyze(db, export, cfg, data_dir)
@@ -214,7 +215,7 @@ def reanalyze(db: Session, handle: JobHandle | None, snapshot: KscSnapshot, cfg:
         raise FileNotFoundError(f"файл выгрузки снапшота #{snapshot.id} не найден — пересчитать нельзя")
     if handle:
         handle.stage("analyzing", message=f"снапшот #{snapshot.id}")
-    idx, findings = analyze(db, load_export_path(path), cfg, data_dir)
+    idx, findings = analyze(db, load_snapshot_export(path), cfg, data_dir)
     if handle:
         handle.stage("persisting", total=len(findings), message=f"находок {len(findings)}")
     _store(db, snapshot, idx, findings, cfg, handle)

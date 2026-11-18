@@ -21,6 +21,7 @@ from api.jobs import JobHandle
 from api.modules.ksc.core.client import KscClient, KscError
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.config import KscConfig
+from api.modules.ksc.core.export import parse_export
 from api.modules.ksc.models import KscConnection, KscSnapshot
 from api.modules.ksc.services.snapshots import import_export
 
@@ -63,8 +64,10 @@ def collect_snapshot(db: Session, handle: JobHandle, conn: KscConnection, cfg: K
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         sha256 = write_json_gz(raw, path)
+        handle.stage("parsing", message="проверка собранной выгрузки")
+        parsed = parse_export(raw)
         del raw
-        snap = import_export(db, handle, path, "online", f"{conn.host} ({conn.title or conn.username})", cfg, data_dir, sha256=sha256)
+        snap = import_export(db, handle, path, "online", f"{conn.host} ({conn.title or conn.username})", cfg, data_dir, sha256=sha256, parsed=parsed)
     finally:
         path.unlink(missing_ok=True)
     conn.server_id = snap.server_id

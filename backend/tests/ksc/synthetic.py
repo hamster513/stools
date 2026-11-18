@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import json
+from copy import deepcopy
 from typing import Any
 
 from cryptography import x509
@@ -276,7 +277,7 @@ def _host_users(hosts: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]] |
 
 def _policy_profiles() -> dict[str, Any]:
     return {
-        "1": {"profiles": [P_NOTEBOOKS, P_DISABLED], "priorities": ["Ноутбуки", "Выключенный"], "errors": []},
+        "1": {"profiles": [deepcopy(P_NOTEBOOKS), deepcopy(P_DISABLED)], "priorities": ["Ноутбуки", "Выключенный"], "errors": []},
         "3": {"profiles": [], "priorities": [], "errors": []},
     }
 

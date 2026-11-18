@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import gzip
 import json
 import zlib
 from collections.abc import Callable
+from contextlib import nullcontext
+from decimal import Decimal
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import ijson
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.export_files import GZIP_MAGIC
@@ -26,7 +30,7 @@ if TYPE_CHECKING:
     from api.modules.ksc.core.coverage import AdComputer, Coverage
 
 FORMAT = "stools-ksc/1"
-#: Потолок распакованной выгрузки: сжатая загрузка ограничена 200 МБ,
+#: Потолок распакованной внешней выгрузки: сжатая загрузка ограничена 200 МБ,
 #: но gzip разворачивается до ~1000:1 (аудит H2). Распакованные байты плюс
 #: разобранный JSON должны помещаться в `mem_limit` контейнера API (STOOLS_API_MEM).
 MAX_UNPACKED = 512 * MB
@@ -116,7 +120,8 @@ def strip_params(value: Any) -> Any:
         return {k: strip_params(v) for k, v in value.items()}
     if isinstance(value, list):
         return [strip_params(v) for v in value]
-    return value
+    # ijson preserves arbitrary-sized integers; its non-integers are Decimal.
+    return float(value) if isinstance(value, Decimal) else value
 
 
 class ServerInfo(BaseModel):
@@ -201,13 +206,37 @@ def _hide_export_secrets(raw: dict[str, Any]) -> None:
 def load_export(data: bytes | bytearray) -> KscExport:
     if data[:2] == GZIP_MAGIC:
         data = _unpacked(lambda: decompress_gzip(data, MAX_UNPACKED))
-    return _validated(_parsed(data))
+    return parse_export(_parsed(data))
 
 
 def load_export_path(path: Path) -> KscExport:
     """Файл читается один раз, сжатый — распаковкой потоком с тем же потолком;
     текст освобождается до проверки модели."""
-    return _validated(_parsed(_read(path)))
+    return parse_export(_parsed(_read(path)))
+
+
+def load_snapshot_export(path: Path) -> KscExport:
+    """Read only an already accepted local snapshot, never an incoming upload.
+
+    Online snapshots may exceed the upload limit. Stream their JSON to avoid
+    holding the entire decompressed text alongside its parsed object tree.
+    """
+    with path.open("rb") as f:
+        packed = f.read(2) == GZIP_MAGIC
+        f.seek(0)
+        try:
+            with gzip.GzipFile(fileobj=f, mode="rb") if packed else nullcontext(f) as stream:
+                values = ijson.items(stream, "")
+                raw = next(values)
+                # Exhaust the stream to validate trailing JSON and the gzip CRC.
+                sentinel = object()
+                if next(values, sentinel) is not sentinel:
+                    raise ExportFormatError("файл не разобран как JSON выгрузки")
+        except (OSError, EOFError, zlib.error) as exc:
+            raise ExportFormatError("файл не разобран как JSON выгрузки (битый gzip)") from exc
+        except (ijson.JSONError, StopIteration, UnicodeDecodeError) as exc:
+            raise ExportFormatError("файл не разобран как JSON выгрузки") from exc
+    return parse_export(raw)
 
 
 def _read(path: Path) -> bytes | bytearray:
@@ -234,7 +263,8 @@ def _parsed(data: bytes | bytearray) -> Any:
         raise ExportFormatError("файл не разобран как JSON выгрузки") from exc
 
 
-def _validated(raw: Any) -> KscExport:
+def parse_export(raw: Any) -> KscExport:
+    """Validate collected or decoded data, unwrap containers and hide secrets."""
     if not isinstance(raw, dict) or raw.get("format") != FORMAT:
         found = raw.get("format") if isinstance(raw, dict) else "—"
         raise ExportFormatError(f"это не выгрузка формата {FORMAT}: в файле «{found}»")

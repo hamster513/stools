@@ -20,7 +20,7 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.ksc.core.checks import CHECK_BY_CODE
-from api.modules.ksc.core.export import ExportIndex, _str, load_export_path, unwrap
+from api.modules.ksc.core.export import ExportIndex, _str, load_snapshot_export, unwrap
 from api.modules.ksc.core.findings import SEVERITY_RANK
 from api.modules.ksc.core.policy_contents import lock_summary, truncate_value, walk_settings
 from api.modules.ksc.models import (
@@ -188,7 +188,7 @@ def _index(snap: KscSnapshot, settings: Settings) -> ExportIndex:
     path = snapshot_path(settings.data_dir, snap.id)
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="файл выгрузки не найден")
-    export = load_export_path(path)
+    export = load_snapshot_export(path)
     return ExportIndex(export.model_copy(update={"hosts": []}))
 
 

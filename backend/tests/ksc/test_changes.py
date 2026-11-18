@@ -487,13 +487,13 @@ def test_import_does_not_reread_own_file(auth_client: TestClient, db_session: Se
     from api.modules.ksc.services import changes as service
 
     read: list[str] = []
-    real = service.load_export_path
+    real = service.load_snapshot_export
 
     def spy(path: Any) -> KscExport:
         read.append(str(path))
         return real(path)
 
-    monkeypatch.setattr(service, "load_export_path", spy)
+    monkeypatch.setattr(service, "load_snapshot_export", spy)
     assert upload(auth_client, _raw("2026-09-14T12:00:00Z", "A"))["status"] == "done"
     assert upload(auth_client, _raw("2026-09-15T12:00:00Z", "B"))["status"] == "done"
     ids = _snapshot_ids(auth_client)

@@ -87,3 +87,41 @@ def test_collect_failure_after_collection_leaves_no_file(auth_client: TestClient
     job = auth_client.get(f"/api/ksc/jobs/{r.json()['job_id']}").json()
     assert job["status"] == "failed" and job["error"] == "сбой анализа"
     assert _files(app_settings) == []
+
+
+def test_online_above_upload_limit_can_be_read_compared_and_reanalyzed(auth_client, db_session, app_settings, fake, monkeypatch):
+    from api.modules.ksc.core import export
+    from api.modules.ksc.services.changes import summary_view
+
+    monkeypatch.setattr(export, "MAX_UNPACKED", 1024)
+    original = svc.collect
+    dates = iter(("2026-11-18T01:00:00Z", "2026-11-19T01:00:00Z"))
+
+    def collect(*args, **kwargs):
+        raw = original(*args, **kwargs)
+        raw["server"]["collected_at"] = next(dates)
+        return raw
+
+    monkeypatch.setattr(svc, "collect", collect)
+    cid = auth_client.post("/api/ksc/connections", json={"host": "ksc01", "username": USER, "password": PASSWORD}).json()["id"]
+    snapshots = []
+    for _ in range(2):
+        response = auth_client.post(f"/api/ksc/connections/{cid}/collect")
+        job = auth_client.get(f"/api/ksc/jobs/{response.json()['job_id']}").json()
+        assert job["status"] == "done", job
+        snap = _last_snapshot(db_session)
+        snapshots.append(snap.id)
+        body = snapshot_path(app_settings.data_dir, snap.id).read_bytes()
+        assert len(gzip.decompress(body)) > export.MAX_UNPACKED
+        software = auth_client.get(f"/api/ksc/snapshots/{snap.id}/hosts/h-ws01/software")
+        assert software.status_code == 200, software.text
+        assert software.json()["software"]["total"] == 1
+    summary = summary_view(_last_snapshot(db_session))
+    assert summary["prev"] == snapshots[0] and summary["reason"] is None
+    response = auth_client.post(f"/api/ksc/snapshots/{snapshots[1]}/reanalyze")
+    job = auth_client.get(f"/api/ksc/jobs/{response.json()['job_id']}").json()
+    assert job["status"] == "done", job
+    # A saved online archive is still untrusted when uploaded through the public endpoint.
+    job = _upload(auth_client, "copied-online.json.gz", body)
+    assert job["status"] == "failed" and "распакованный размер больше лимита" in job["error"]
+    assert len(auth_client.get("/api/ksc/snapshots").json()) == 2

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from api.jobs import insert_chunked
 from api.modules.ksc.core.changes import KINDS, diff_exports
-from api.modules.ksc.core.export import KscExport, load_export_path
+from api.modules.ksc.core.export import KscExport, load_snapshot_export
 from api.modules.ksc.models import KscChange, KscSnapshot
 from api.modules.ksc.services.snapshots import previous_snapshot, snapshot_path, stats
 
@@ -55,8 +55,8 @@ def recompute_changes(db: Session, snapshot: KscSnapshot, data_dir: Path, curren
                                "reason": "файл предыдущего снапшота не найден"})
         return
     if current is None:
-        current = load_export_path(snapshot_path(data_dir, snapshot.id))
-    diff = diff_exports(load_export_path(prev_path), current)
+        current = load_snapshot_export(snapshot_path(data_dir, snapshot.id))
+    diff = diff_exports(load_snapshot_export(prev_path), current)
     rows = (
         {"snapshot_id": snapshot.id, "prev_snapshot_id": prev.id, "kind": c.kind, "action": c.action, "policy_id": c.policy_id,
          "policy_name": c.policy_name[:255], "profile": c.profile[:255], "section": c.section[:255], "path": c.path,

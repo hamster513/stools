@@ -18,7 +18,7 @@ from api.modules.ksc.core.export import (
     _dt,
     _int,
     _str,
-    load_export_path,
+    load_snapshot_export,
     parent_id,
     unwrap,
 )
@@ -206,7 +206,7 @@ def get_policies(
     path = snapshot_path(settings.data_dir, snap.id)
     if not path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="файл выгрузки не найден")
-    idx = ExportIndex(load_export_path(path))
+    idx = ExportIndex(load_snapshot_export(path))
     rows = db.execute(select(KscFinding).where(KscFinding.snapshot_id == snapshot_id, KscFinding.check.in_(GROUP_CHECKS))).scalars()
     findings_by_target: dict[str, list[KscFinding]] = {}
     for f in rows:
