@@ -236,9 +236,16 @@ class QueueWorker:
         self.thread.start()
 
     def _loop(self, session_factory: Callable[[], Session]) -> None:
+        import time
+
+        from api.platform.read_model_jobs import ensure_queued
+        next_maintenance = 0.0
         while not self.stop_event.wait(2):
             try:
                 with session_factory() as db:
+                    if time.monotonic() >= next_maintenance:
+                        next_maintenance = time.monotonic() + 60
+                        ensure_queued(db)
                     dispatch(db)
             except Exception:
                 log.exception("Не удалось обработать очередь синхронизаций")

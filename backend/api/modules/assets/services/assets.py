@@ -722,6 +722,18 @@ def discrepancy_keys(db: Session, ids: Iterable[int], code: str) -> list[str]:
     """Ключи расхождений кода у этих активов — тех, что есть сейчас (у расхождений полей — все
     ключи кода у актива): массовая смена не заводит строк для расхождений, которых нет."""
     wanted = set(ids)
+    from api.modules.assets.models import AssetReadFinding
+    from api.platform.data_revision import read_revision
+    now = utcnow()
+    generation = _sql_generation(db, now)
+    revision = read_revision(db, "assets") if generation else None
+    if generation:
+        found_keys = list(dict.fromkeys(db.scalars(select(AssetReadFinding.key).where(
+            AssetReadFinding.generation == generation, AssetReadFinding.asset_id.in_(wanted),
+            AssetReadFinding.code == code).order_by(AssetReadFinding.asset_id, AssetReadFinding.ordinal))))
+        if _sql_generation(db, utcnow()) == generation and read_revision(db, "assets") == revision:
+            return found_keys
+        db.expire_all()
     keys: dict[str, None] = {}
     for asset, found in current_discrepancies(db) or []:
         if asset.id in wanted:
@@ -743,7 +755,7 @@ def _disc_split(picked: Picked, f: DiscFilter, states: dict[str, FindingState], 
     return passed, all_tracked
 
 
-def matching_ids(
+def _legacy_matching_ids(
     db: Session, *, code: frozenset[str] | None = None, disc_status: Values = None, assignee: Values = None,
     overdue: bool | None = None, login: str = "", **filters: Any,
 ) -> list[int]:
@@ -759,7 +771,7 @@ def matching_ids(
     return [asset.id for asset, _, _ in passed]
 
 
-def list_assets(
+def _legacy_list_assets(
     db: Session,
     *,
     limit: int = 200,
@@ -933,3 +945,42 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
         "links": _links(db, rows),
         **host_users(db, asset.id, rows),
     }
+
+
+def _sql_generation(db: Session, now: dt.datetime) -> str | None:
+    from api.modules.assets.services.read_model import ready_generation
+    from api.settings import get_settings
+    return ready_generation(db, now) if get_settings().assets_sql_list_enabled else None
+
+
+def list_assets(db: Session, *, limit: int = 200, offset: int = 0, now: dt.datetime | None = None,
+                **filters: Any) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
+    from api.modules.assets.services.list_query import Query
+    from api.platform.data_revision import read_revision
+    fixed_now = now
+    now = now or utcnow()
+    generation = _sql_generation(db, now)
+    revision = read_revision(db, "assets") if generation else None
+    if generation:
+        query = Query(db, generation, **filters)
+        total, facets = query.facets()
+        page = query.page(query.ids(limit=limit, offset=offset), now)
+        if (_sql_generation(db, fixed_now or utcnow()) == generation
+                and read_revision(db, "assets") == revision):
+            return page, total, facets
+        db.expire_all()  # Source changed after the SQL snapshot; do not reuse ORM rows.
+    return _legacy_list_assets(db, limit=limit, offset=offset, now=now, **filters)
+
+
+def matching_ids(db: Session, **filters: Any) -> list[int]:
+    from api.modules.assets.services.list_query import Query
+    from api.platform.data_revision import read_revision
+    now = utcnow()
+    generation = _sql_generation(db, now)
+    revision = read_revision(db, "assets") if generation else None
+    if generation:
+        ids = Query(db, generation, **filters).ids()
+        if _sql_generation(db, utcnow()) == generation and read_revision(db, "assets") == revision:
+            return ids
+        db.expire_all()
+    return _legacy_matching_ids(db, **filters)

@@ -87,6 +87,9 @@ def start_task(db: Session, task: Task, actor: str, options: dict[str, Any]) -> 
             if task.kind == "storage":
                 from api.platform.storage_usage.service import measure
                 result = measure(session)
+            elif task.kind == "assets_read_refresh":
+                from api.platform.read_model_jobs import run
+                result = run(session, handle)
             else:
                 from api.platform import storage_retention
                 preview_id = options.get("preview_id")

@@ -25,7 +25,8 @@ class Target:
 
 def _sources(db: Session, module: str) -> list[Target]:
     if module == "platform":
-        return [Target("storage", 0, "Замер объёма хранилища"), Target("storage_cleanup", 0, "Очистка хранилища")]
+        return [Target("storage", 0, "Замер объёма хранилища"), Target("storage_cleanup", 0, "Очистка хранилища"),
+                Target("assets_read_refresh", 0, "Обновление индекса активов")]
     if module in ("ad", "ksc"):
         from api.modules.ad.models import AdConnection
         from api.modules.ksc.models import KscConnection

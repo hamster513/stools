@@ -24,6 +24,8 @@ RECENT = 10
 
 @router.get("/overview")
 def get_overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+    from api.modules.assets.services.list_query import start_snapshot
+    start_snapshot(db)
     _, total, facets = list_assets(db, limit=0)
     by_zone = dict(facets["zone"])
     # Актив без сети или в сети без зоны — ключ "": обзор показывает и их.

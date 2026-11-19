@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -23,7 +24,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.db.models import Base, _utcnow
@@ -389,3 +390,49 @@ class AssetSettings(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     data: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+# Rebuildable read model. No FK to business rows: revision gates visibility.
+class AssetReadState(Base):
+    __tablename__ = "asset_read_state"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    generation: Mapped[str] = mapped_column(String(32))
+    revision: Mapped[int] = mapped_column(BigInteger)
+    version: Mapped[int] = mapped_column(Integer)
+    calculated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AssetReadDirty(Base):
+    __tablename__ = "asset_read_dirty"
+    # 0 means metadata changed / full rebuild; asset identifiers are positive.
+    asset_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+
+
+class AssetReadEntry(Base):
+    __tablename__ = "asset_read_entry"
+    generation: Mapped[str] = mapped_column(String(32), primary_key=True)
+    asset_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    sort_name: Mapped[str] = mapped_column(Text(collation="C"))
+    sort_ip: Mapped[str] = mapped_column(Text(collation="C"))
+    network_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    zone: Mapped[str] = mapped_column(Text)
+    placement: Mapped[str] = mapped_column(Text)
+    criticality: Mapped[str] = mapped_column(Text)
+    cluster: Mapped[str | None] = mapped_column(Text, nullable=True)
+    laps: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sources: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    ad_keys: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    search_terms: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    valid_until: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AssetReadFinding(Base):
+    __tablename__ = "asset_read_finding"
+    generation: Mapped[str] = mapped_column(String(32), primary_key=True)
+    asset_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    ordinal: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    key: Mapped[str] = mapped_column(String(400))
+    code: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONType)

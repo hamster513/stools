@@ -212,7 +212,10 @@ def get_assets(
     db: Session = Depends(get_db),
     user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    items, total, facets = list_assets(db, **filters, limit=limit, offset=offset, login=user.login)
+    from api.modules.assets.services.list_query import start_snapshot
+    login = user.login
+    start_snapshot(db)
+    items, total, facets = list_assets(db, **filters, limit=limit, offset=offset, login=login)
     body = {"total": total, "items": items, "facets": facets if offset == 0 else None}
     if ad is not None and offset == 0:
         body["ad_cell"] = assets_check(db, ad)
@@ -224,13 +227,17 @@ def get_asset_ids(
     filters: dict[str, Any] = Depends(_filters), db: Session = Depends(get_db), user: AppUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Id всех активов под фильтрами (не больше `MAX_BULK`) — для выбора «всех по фильтру»."""
-    ids = matching_ids(db, **filters, login=user.login)
+    from api.modules.assets.services.list_query import start_snapshot
+    login = user.login
+    start_snapshot(db)
+    ids = matching_ids(db, **filters, login=login)
     return {"total": len(ids), "ids": ids[:MAX_BULK]}
 
 
 #: Подписи источников — как на экране (SOURCE_LABELS фронтенда).
 SOURCE_TITLES = {"vm": "VM", "ksc": "KSC", "ad": "AD", "dns": "DNS", "rt": "RT", "siem": "SIEM"}
-#: Выгрузке нужен весь отбор: страница списка ограничена `MAX_LIMIT`, здесь — нет.
+
+#: Shared by other Assets exports; the host export streams pages.
 EXPORT_ALL = 10**9
 
 EXPORT_COLUMNS = [
@@ -247,14 +254,15 @@ def export_assets(
     user: AppUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Активы под фильтрами списка, в его порядке — тот же отбор (`list_assets`) без страницы."""
-    items, _total, _facets = list_assets(db, **filters, limit=EXPORT_ALL, offset=0, login=user.login)
-    rows = [
+    from api.modules.assets.services.list_query import export_items
+    items = export_items(db, login=user.login, **filters)
+    rows = (
         {"name": a["name"], "ip": a["ip"], "network": a["network"]["cidr"] if a["network"] else None,
          "zone": a["network"]["zone"] if a["network"] else None, "os": a["os"],
          "sources": ", ".join(SOURCE_TITLES.get(src["source"], src["source"]) for src in a["sources"]),
          "last_seen": dt.datetime.fromisoformat(a["last_seen"]) if a["last_seen"] else None, "discrepancies": a["discrepancy_count"]}
         for a in items
-    ]
+    )
     return export_response(fmt, EXPORT_COLUMNS, rows, module="assets", name="assets")
 
 
@@ -263,6 +271,8 @@ def bulk(payload: BulkIn, db: Session = Depends(get_db), _user: AppUser = Depend
     if payload.criticality is None and not payload.tags_add and not payload.tags_remove:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="не задано, что менять: критичность или теги")
     updated = bulk_update(db, payload.ids, criticality=payload.criticality, tags_add=payload.tags_add, tags_remove=payload.tags_remove)
+    from api.modules.assets.services.read_model import refresh_small
+    refresh_small(db)
     db.commit()
     return {"updated": updated}
 
@@ -308,6 +318,8 @@ def get_asset(asset_id: int, db: Session = Depends(get_db), _user: AppUser = Dep
 @router.patch("/assets/{asset_id}")
 def patch_asset(asset_id: int, payload: AssetPatch, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     _errors(update_manual, db, asset_id, payload.model_dump(include=payload.model_fields_set))
+    from api.modules.assets.services.read_model import refresh_small
+    refresh_small(db)
     db.commit()
     if payload.model_fields_set & {"network_id", "network_manual"}:
         reconcile_findings(db, f"сеть актива #{asset_id} изменена вручную")
@@ -319,6 +331,8 @@ def bulk_delete(payload: IdsIn, db: Session = Depends(get_db), _user: AppUser = 
     """Удаление вручную: актив с наблюдениями исчезает; если источник его ещё видит — вернётся при синхронизации."""
     _no_running_sync(db)
     deleted = delete_assets(db, payload.ids)
+    from api.modules.assets.services.read_model import refresh_small
+    refresh_small(db)
     db.commit()
     return {"deleted": deleted}
 
@@ -328,6 +342,8 @@ def delete_asset(asset_id: int, db: Session = Depends(get_db), _user: AppUser = 
     _no_running_sync(db)
     if delete_assets(db, [asset_id]) == 0:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="актив не найден")
+    from api.modules.assets.services.read_model import refresh_small
+    refresh_small(db)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -335,6 +351,8 @@ def delete_asset(asset_id: int, db: Session = Depends(get_db), _user: AppUser = 
 @router.post("/assets/{asset_id}/pin")
 def pin(asset_id: int, payload: PinIn, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     _errors(pin_field, db, asset_id, payload.field, payload.pinned)
+    from api.modules.assets.services.read_model import refresh_small
+    refresh_small(db)
     db.commit()
     reconcile_findings(db, f"поле актива #{asset_id} закреплено вручную")
     return dict(asset_detail(db, asset_id))
@@ -354,6 +372,8 @@ def _no_running_sync(db: Session) -> None:
 def merge(asset_id: int, payload: MergeIn, db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     _no_running_sync(db)
     _errors(merge_assets, db, asset_id, payload.other_id, user.login)
+    from api.modules.assets.services.read_model import refresh_small
+    refresh_small(db)
     db.commit()
     reconcile_findings(db, f"актив #{payload.other_id} объединён с #{asset_id}")
     return dict(asset_detail(db, asset_id))
@@ -363,6 +383,8 @@ def merge(asset_id: int, payload: MergeIn, db: Session = Depends(get_db), user: 
 def detach(observation_id: int, db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     _no_running_sync(db)
     fresh = _errors(detach_observation, db, observation_id)
+    from api.modules.assets.services.read_model import refresh_small
+    refresh_small(db)
     db.commit()
     reconcile_findings(db, f"наблюдение #{observation_id} отвязано в актив #{fresh.id}")
     return dict(asset_detail(db, fresh.id))

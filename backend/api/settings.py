@@ -58,6 +58,7 @@ class Settings(BaseSettings):
 
     #: Opt-in diagnostics without SQL text, URL parameters or response content.
     request_timing_enabled: bool = False
+    assets_sql_list_enabled: bool = True
 
     #: Часовой пояс окон расписаний планировщика (api/platform/scheduler.py),
     #: имя IANA: STOOLS_TZ=Europe/Moscow. Сроки в базе — по-прежнему UTC.

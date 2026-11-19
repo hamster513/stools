@@ -57,5 +57,5 @@ def is_queueable(module: str, kind: str) -> bool:
             or (module == "assets" and kind in ("sync", "dns", "rt"))
             or (module == "vm" and (kind in ("import_vm", "harbor", "trends_pull") or kind.startswith("ref_")))
             or (module == "siem" and kind in ("kb_collect", "logons"))
-            or (module == "platform" and kind in ("storage", "storage_cleanup"))
+            or (module == "platform" and kind in ("storage", "storage_cleanup", "assets_read_refresh"))
             or (module == "attack" and kind == "download"))
