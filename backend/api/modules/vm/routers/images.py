@@ -19,6 +19,7 @@ from api.modules.vm.core.harbor import is_cve
 from api.modules.vm.core.priority import AssetContext, priority_score
 from api.modules.vm.core.weights import Levels
 from api.modules.vm.models import VmCve, VmImage, VmRefState
+from api.modules.vm.routers.host_containers import list_host_containers
 from api.modules.vm.services import images_query as q
 from api.modules.vm.services.ghsa_mapping import equivalents, is_ghsa
 from api.modules.vm.services.harbor_sync import last_sync
@@ -133,6 +134,9 @@ def export_images(
         yield from q.iter_export_rows(db, f, sort)
 
     return export_response(fmt, EXPORT_COLUMNS, rows(), module="vm", name="images")
+
+
+router.add_api_route("/images/by-host", list_host_containers, methods=["GET"])
 
 
 @router.get("/images/{image_id}")

@@ -26,6 +26,7 @@ from api.modules.assets.services.image_origins import (
 )
 from api.modules.vm.docker_models import VmDockerImage, VmDockerSnapshot
 from api.modules.vm.models import VmImage
+from api.modules.vm.routers.host_containers import list_host_containers
 from api.platform.export import Column, export_response
 from api.platform.filters import QueryList, multi
 
@@ -161,6 +162,9 @@ def list_images(
             "limit": limit, "offset": offset,
             "mp_vm": {"collected_at": snapshot.collected_at, "attempted_at": snapshot.attempted_at,
                       "error": snapshot.error} if snapshot else None}
+
+
+router.add_api_route("/container-images/by-host", list_host_containers, methods=["GET"])
 
 
 @router.get("/container-images/export")

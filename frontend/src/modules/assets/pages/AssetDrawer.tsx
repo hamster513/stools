@@ -240,7 +240,7 @@ function SourcesTable({ a, write, onDetach }: { a: AssetDetail; write: boolean; 
   )
 }
 
-function LinksBlock({ a }: { a: AssetDetail }) {
+function LinksBlock({ a, beforeContainers }: { a: AssetDetail; beforeContainers: (id: number) => void }) {
   const { links } = a
   const ksc = a.observations.find((o) => o.source === 'ksc' && !o.gone_at)
   const components = ksc && Array.isArray(ksc.extra.components) ? (ksc.extra.components as [string, number][]) : []
@@ -277,6 +277,9 @@ function LinksBlock({ a }: { a: AssetDetail }) {
             <Link to={`/vm/vulns?host_id=${links.vm_host_id}`} className="text-text hover:text-primary">VM: CVE на хосте — {links.vm_cve_count ?? 0}</Link>
           </li>
         )}
+        <li><Link to={`/assets/container-images?view=hosts&asset_id=${a.id}`} className="text-primary hover:underline" onClickCapture={(e) => {
+          if (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) beforeContainers(a.id)
+        }}>Контейнеры на хосте</Link></li>
       </ul>
     </>
   )
@@ -465,7 +468,7 @@ function MergePicker({ a, onPick }: { a: AssetDetail; onPick: (other: { id: numb
 
 /** Карточка хоста справа (спека §6): каноническое с закреплением, наблюдения по источникам с подсветкой
  * расхождений, ссылки в модули, ручные поля, объединение и отвязка. */
-export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number | null; onClose: () => void; onOpenAsset: (id: number) => void }) {
+export function AssetDrawer({ assetId, onClose, onOpenAsset, beforeContainers }: { assetId: number | null; onClose: () => void; onOpenAsset: (id: number) => void; beforeContainers: (id: number) => void }) {
   const open = assetId !== null
   const { write } = useCan()
   const detail = useAsset(assetId)
@@ -513,7 +516,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset }: { assetId: number
                   <SectionTitle>По источникам</SectionTitle>
                   <SourcesTable a={a} write={write && a.merged_into === null} onDetach={setDetaching} />
 
-                  <LinksBlock a={a} />
+                  <LinksBlock a={a} beforeContainers={beforeContainers} />
                   <UsersBlock a={a} />
                   <SiemLogons key={a.id} assetId={a.id} />
 

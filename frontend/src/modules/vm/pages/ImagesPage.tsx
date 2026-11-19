@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { Container, FilterX, RefreshCw, Search } from 'lucide-react'
 import { buildQuery, errorText } from '@/api/client'
 import { useHarbor, useImages } from '@/modules/vm/api/queries'
+import { ContainerImageViews } from '@/modules/assets/pages/container-images/HostContainers'
 import {
   ARTIFACT_KINDS, ARTIFACT_LABELS, IMAGE_LEVEL_LABELS, IMAGE_LEVELS, SCAN_STATUS_LABELS, SCAN_STATUSES,
   type ImageItem, type ImageLevel, type ImageScanStatus, type ImageSort,
@@ -40,6 +41,10 @@ const TRIVY_CHIP_LABELS = { critical: 'есть критические', high: '
  * образа «назад» возвращает тот же отбор. Строка открывает страницу образа.
  */
 export function ImagesPage() {
+  return <ContainerImageViews area="vm"><HarborCatalog /></ContainerImageViews>
+}
+
+function HarborCatalog() {
   const params = useSearchParams()
   const { search, navigate } = useRouter()
   const [filters, setFilters] = useListState<ImageFilters>('vm-images:filters', () => ({
@@ -136,9 +141,8 @@ export function ImagesPage() {
   const retry = () => { if (query.isError) query.refetch(); else harbor.refetch() }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div role="tabpanel" aria-label="По образам" className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
-        <h1 className="text-sm font-semibold text-text">Образы контейнеров</h1>
         <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
         <ExportButton href={exportHref('/api/vm/images/export', queryArgs)} total={query.data?.pages[0]?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">

@@ -13,9 +13,11 @@ import { FiltersButton, FilterChips, type FilterChip } from '@/platform/filters/
 import { facetValues, useRememberedFacets, type FacetValue } from '@/platform/filters/useRememberedFacets'
 import { useFiltersPanel } from '@/platform/filters/useFiltersPanel'
 import { FacetRow, FacetSection } from './AssetsPage'
+import { ContainerImageViews } from './container-images/HostContainers'
 import { ImageDrawer, type ImageRef } from './container-images/ImageDrawer'
 import { ImagesTable } from './container-images/ImagesTable'
-import { SOURCES, STATES, ORIGINS, NAME_STATES, when, type Catalog, type Source, type State } from './container-images/types'
+import { SnapshotInfo } from './container-images/SnapshotInfo'
+import { SOURCES, STATES, ORIGINS, NAME_STATES, type Catalog, type Source, type State } from './container-images/types'
 
 const SOURCE_KEYS = Object.keys(SOURCES) as Source[]
 const STATE_KEYS = Object.keys(STATES) as State[]
@@ -37,6 +39,10 @@ function ValueFacet({ title, values, selected, emptyLabel, onToggle }: { title: 
 }
 
 export function ContainerImagesPage() {
+  return <ContainerImageViews area="assets"><ImagesCatalog /></ContainerImageViews>
+}
+
+function ImagesCatalog() {
   const params = useSearchParams()
   const { navigate } = useRouter()
   const searchRef = useRef<HTMLInputElement>(null)
@@ -116,9 +122,8 @@ export function ContainerImagesPage() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [items, selectedIndex, openImage, focusedKey])
 
-  return <div className="flex h-full min-h-0 flex-col">
+  return <div role="tabpanel" aria-label="По образам" className="flex min-h-0 flex-1 flex-col">
     <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-grid bg-surface px-4 py-2.5">
-      <h1 className="text-sm font-semibold text-text">Образы контейнеров</h1>
       <FiltersButton open={filtersPanel.open} onToggle={filtersPanel.toggle} count={chips.length} />
       <ExportButton href={exportHref('/api/assets/container-images/export', queryArgs)} total={first?.total} disabled={query.isPending || search !== q && !focusedId} />
       <div className="relative max-w-sm flex-1">
@@ -142,10 +147,7 @@ export function ContainerImagesPage() {
         {focusedId && <FacetSection title="Выбранный образ"><FacetRow active noCount count={undefined} onClick={() => { const next = new URLSearchParams(params); next.delete('image'); update(next) }}>Образ #{focusedId}</FacetRow></FacetSection>}
       </div>}
       <div className="flex min-w-0 flex-1 flex-col bg-app-bg">
-        {first && <div className="shrink-0 border-b border-grid px-4 py-2 text-[11px] text-text-secondary">
-          {first.mp_vm?.error ? <span role="alert" className="text-kind-1">{first.mp_vm.error}. {first.mp_vm.collected_at ? `Показан снимок от ${when(first.mp_vm.collected_at)}.` : 'Успешного снимка пока нет.'}</span>
-            : first.mp_vm?.collected_at ? `Снимок MP VM: ${when(first.mp_vm.collected_at)} · Статусы на момент сбора.` : 'Снимок Docker ещё не получен. Он собирается при синхронизации MaxPatrol VM.'}
-        </div>}
+        {first && <SnapshotInfo snapshot={first.mp_vm} />}
         <div className="min-h-0 flex-1">
           {query.isPending && <FullPageSpinner />}
           {query.isError && !items.length && <div className="p-6"><ErrorState message={query.error.message} onRetry={() => query.refetch()} /></div>}

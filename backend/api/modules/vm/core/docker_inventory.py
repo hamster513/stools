@@ -106,8 +106,10 @@ def parse_inventory(images: Path, containers: Path) -> list[dict[str, Any]]:
             container = host["containers"].setdefault(container_id, {
                 "id": container_id, "name": name, "status": row[cp + "Status"],
                 "created_at": row.get(cp + "Created", ""), "started_at": row.get(cp + "Started", ""),
-                "ports": [],
+                "ports": [], "references": [],
             })
+            if any(reference.values()) and reference not in container["references"]:
+                container["references"].append(reference)
             # A conflicting snapshot must not silently claim the container stopped.
             if container["status"] != row[cp + "Status"]:
                 container["status"] = "unknown"

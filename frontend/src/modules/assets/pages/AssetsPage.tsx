@@ -1,7 +1,9 @@
 import { useListState } from '@/hooks/useListState'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, FilterX, Search, Trash2 } from 'lucide-react'
-import { ApiRequestError } from '@/api/client'
+import { ApiRequestError, buildQuery } from '@/api/client'
+import { readViewState, viewOwner, writeViewState } from '@/api/listCache'
 import { NETWORK_PICK_LIMIT, useAssetIds, useAssets, useBulkDelete, useBulkUpdate, useDiscrepancyBulk, useNetworkCards, useNetworkSearch } from '@/modules/assets/api/queries'
 import {
   ANY_CODE_LABEL,
@@ -86,6 +88,7 @@ migrateFiltersOpen()
 type Filters = Omit<AssetsQuery, 'q' | 'tag' | 'disc_status' | 'assignee' | 'overdue'>
 /** Фильтр по статусам расхождений: статусы, исполнитель (`me`, `none`, логин), просроченные. */
 type DiscFilters = Omit<FindingFacetFilters, 'risk_expiring'>
+type ReturnSelection = { index: number; checked: Set<number>; lastChecked: number | null; scrollKey: string }
 
 function discFromParams(params: URLSearchParams): DiscFilters {
   return { status: listFrom<FindingStatus>(params, 'disc_status', STATUSES), assignee: listFrom(params, 'assignee'), overdue: params.get('overdue') === 'true' || undefined }
@@ -459,6 +462,8 @@ function BulkBar({ ids, total, selectingAll, onSelectAll, onClear, facets, code 
 export function AssetsPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
+  const client = useQueryClient()
+  const [returnSelection] = useState(() => readViewState<ReturnSelection>(client, window.history.state?.assetContainersReturn))
   const [filters, setFilters] = useListState<Filters>('assets-list:filters', () => ({
     source_has: listFrom<AssetSource>(params, 'source_has', SOURCES),
     source_missing: listFrom<AssetSource>(params, 'source_missing', SOURCES),
@@ -477,13 +482,13 @@ export function AssetsPage() {
   const [tagInput, setTagInput] = useListState('assets-list:tagInput', params.get('tag') ?? '', params.size === 0)
   const q = useDebouncedValue(searchInput, 250)
   const tag = useDebouncedValue(tagInput, 250)
-  const [selectedIndex, setSelectedIndex] = useListState('assets-list:selectedIndex', 0, params.size === 0)
+  const [selectedIndex, setSelectedIndex] = useListState('assets-list:selectedIndex', returnSelection?.index ?? 0, params.size === 0)
   const [openId, setOpenId] = useState<number | null>(() => (Number(params.get('asset')) > 0 ? Number(params.get('asset')) : null))
   const searchRef = useRef<HTMLInputElement>(null)
   const { write } = useCan()
   const filtersPanel = useFiltersPanel(FILTERS_PAGE)
-  const [checked, setChecked] = useState<Set<number>>(() => new Set())
-  const lastChecked = useRef<number | null>(null)
+  const [checked, setChecked] = useState<Set<number>>(() => returnSelection?.checked ?? new Set())
+  const lastChecked = useRef<number | null>(returnSelection?.lastChecked ?? null)
   const allIds = useAssetIds()
 
   const queryArgs = useMemo<AssetsQuery>(
@@ -502,6 +507,16 @@ export function AssetsPage() {
   const zones = useRememberedFacets(first?.facets ? { zone: facetValues(first.facets.zone) } : undefined).zone ?? []
   // Новый фильтр — другой список: курсор в начало, отметки сняты.
   const previousQuery = useRef(queryArgs)
+  const initialQuery = useRef(queryArgs)
+  const scrollKey = returnSelection && queryArgs === initialQuery.current ? returnSelection.scrollKey : `assets:${JSON.stringify(queryArgs)}`
+  function rememberForContainers(id: number) {
+    const key = `assets:containers-return:${crypto.getRandomValues(new Uint32Array(2)).join('-')}`
+    const owner = viewOwner(client)
+    writeViewState(client, key, owner, { index: selectedIndex, checked, lastChecked: lastChecked.current, scrollKey: key })
+    writeViewState(client, `scroll:${key}`, owner, readViewState<number>(client, `scroll:${scrollKey}`) ?? 0)
+    const url = '/assets/list' + buildQuery({ ...queryArgs, q: searchInput, tag: tagInput, asset: id })
+    window.history.replaceState({ ...window.history.state, assetContainersReturn: key }, '', url)
+  }
   useEffect(() => {
     if (previousQuery.current === queryArgs) return
     previousQuery.current = queryArgs
@@ -552,13 +567,13 @@ export function AssetsPage() {
   ]
   if (tagInput.trim()) chips.push({ label: `тег ${tagInput.trim()}`, clear: () => setTagInput('') })
   chips.push(...findingFacetChips(disc, setDisc).map((c) => ({ ...c, label: `расхождения · ${c.label.toLowerCase()}` })))
-  // Карточка по ссылке открывается один раз: параметр снимается, и закрытая карточка не откроется снова при обновлении страницы.
+  // Ссылка на открытую карточку остаётся в истории до её закрытия или смены.
   useEffect(() => {
-    if (!params.has('asset')) return
+    if (!params.has('asset') || Number(params.get('asset')) === openId) return
     const rest = new URLSearchParams(params)
     rest.delete('asset')
     navigate(`/assets/list${rest.size ? `?${rest}` : ''}`, { replace: true })
-  }, [params, navigate])
+  }, [params, navigate, openId])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -614,13 +629,13 @@ export function AssetsPage() {
               </div>
             )}
             {!query.isLoading && !errorMessage && items.length > 0 && (
-              <AssetsTable rememberKey={`assets:${JSON.stringify(queryArgs)}`} items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenId(items[i].id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }}
+              <AssetsTable rememberKey={scrollKey} items={items} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} onOpen={(i) => setOpenId(items[i].id)} onReachEnd={() => { if (query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage() }}
                 checked={write ? checked : undefined} onCheck={check} onCheckAll={checkAll} />
             )}
           </div>
         </div>
       </div>
-      <AssetDrawer assetId={openId} onClose={() => setOpenId(null)} onOpenAsset={setOpenId} />
+      <AssetDrawer assetId={openId} onClose={() => setOpenId(null)} onOpenAsset={setOpenId} beforeContainers={rememberForContainers} />
     </div>
   )
 }
