@@ -1913,5 +1913,140 @@
     "importance": 3,
     "telegram_mode": "web",
     "telegram_channel": "thehackernews"
+  },
+  {
+    "name": "Telegram: @WMXWAS",
+    "publisher_id": "telegram-wmxwas",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/wmxwas",
+    "catalog_key": "feed-68b6f0ddb9085c70",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/wmxwas"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "wmxwas"
+  },
+  {
+    "name": "Telegram: @cyberok_news",
+    "publisher_id": "telegram-cyberok_news",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/cyberok_news",
+    "catalog_key": "feed-4a91b858b6ef7620",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/cyberok_news"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "cyberok_news"
+  },
+  {
+    "name": "Telegram: @cyb3r53cr3t5",
+    "publisher_id": "telegram-cyb3r53cr3t5",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/cyb3r53cr3t5",
+    "catalog_key": "feed-8912ceec7a187a5c",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/cyb3r53cr3t5"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "cyb3r53cr3t5"
+  },
+  {
+    "name": "Telegram: @intosecurity",
+    "publisher_id": "telegram-intosecurity",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/intosecurity",
+    "catalog_key": "feed-b1a8e26c9c48674c",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/intosecurity"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "intosecurity"
+  },
+  {
+    "name": "Telegram: @poxek",
+    "publisher_id": "telegram-poxek",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/poxek",
+    "catalog_key": "feed-b345e7497f2509d5",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/poxek"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "poxek"
+  },
+  {
+    "name": "Telegram: @unsec",
+    "publisher_id": "telegram-unsec",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/unsec",
+    "catalog_key": "feed-6d92f29912b6ae43",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/unsec"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "unsec"
+  },
+  {
+    "name": "Telegram: @cyberyozh_official",
+    "publisher_id": "telegram-cyberyozh_official",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/cyberyozh_official",
+    "catalog_key": "feed-96c745057f84e890",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/cyberyozh_official"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "cyberyozh_official"
+  },
+  {
+    "name": "Telegram: @xor_journal",
+    "publisher_id": "telegram-xor_journal",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/xor_journal",
+    "catalog_key": "feed-2da83bda6ff77915",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/xor_journal"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "xor_journal"
+  },
+  {
+    "name": "Telegram: @haccking",
+    "publisher_id": "telegram-haccking",
+    "language": "ru",
+    "region": "RU",
+    "adapter": "telegram",
+    "url": "https://t.me/haccking",
+    "catalog_key": "feed-f4a9eed3bc229157",
+    "content_scope": "security_news",
+    "fallback_urls": [
+      "https://t.me/s/haccking"
+    ],
+    "telegram_mode": "web",
+    "telegram_channel": "haccking"
   }
 ]

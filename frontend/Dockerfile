@@ -14,6 +14,8 @@ RUN npm ci
 COPY frontend/ ./
 # The offline updater is distributed from the same source used by the API.
 COPY backend/api/modules/vm/core/ref_updates.py backend/api/modules/vm/core/ref_window.py /backend/api/modules/vm/core/
+COPY collector/src/stools_threat_collector/sources.json /collector/src/stools_threat_collector/
+COPY collector/src/stools_threat_collector/adapters/telegram_public.py /collector/src/stools_threat_collector/adapters/
 RUN npm run build
 
 # Caddy остаётся от root. Автоматический HTTPS (см. ops/Caddyfile,

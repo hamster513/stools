@@ -50,6 +50,8 @@ COPY --from=build /opt/venv /opt/venv
 # Preserve parser error handling on musl worker threads with a bounded native stack.
 COPY docker-sitecustomize.py /opt/venv/lib/python3.13/site-packages/sitecustomize.py
 COPY --from=build /app /app
+# Source archives may have restrictive modes; the runtime user must read the app.
+RUN chmod -R a+rX /app
 COPY --from=build /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENV PATH="/opt/venv/bin:$PATH"
 # A clean scanner report alone must not hide outdated embedded libraries.

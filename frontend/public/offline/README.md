@@ -32,7 +32,7 @@ sh download-stools.sh --datasets all --mode full --output ./transfer --lang en -
 .\download-stools.ps1 -Datasets all -Mode Full -Output D:\Transfer -Lang en -Quiet
 ```
 
-Данные / Datasets: `all`, `nvd`, `ghsa`, `epss`, `kev`, `exploitdb`, `msf`, `attack` (CVE→ATT&CK/CTID), `news` (RSS/Atom), `sigma`, `elastic`.
+Данные / Datasets: `all`, `nvd`, `ghsa`, `epss`, `kev`, `exploitdb`, `msf`, `attack` (CVE→ATT&CK/CTID), `news` (RSS/Atom + Telegram), `sigma`, `elastic`.
 
 Периоды / Periods: `1d` — сутки/day; `7d` — неделя/week; `3m` — три календарных месяца/three calendar months. Интервал UTC `(начало, конец]`; более трёх месяцев недопустимо. В полном режиме период не применяется. Один запуск использует общее время окончания для всех выбранных данных.
 
@@ -66,8 +66,14 @@ NVD: изменения по времени `lastModified`. GHSA: разница
 
 EPSS, KEV, ExploitDB, Metasploit и CTID не предоставляют используемой здесь построчной дельты: проверяется версия/хеш, при изменении загружается полный снимок. Это явно отмечено в отчёте. Сбой сервиса не заменяется скрытой полной загрузкой NVD/GHSA.
 
-News full mode retrieves only available RSS/Atom history; it cannot recover articles absent from the feed. Updates exclude undated and future items and report those exclusions. Feed/source limits and unavailable sources are reported as partial results.
-Полная выгрузка новостей получает доступную историю RSS/Atom. В режиме обновлений материалы без даты или за пределами периода не включаются; пропуски без даты отмечаются в отчёте. Ограничения лент и недоступные источники не выдаются за полный результат.
+News includes RSS/Atom and public Telegram channels via https://t.me/s/CHANNEL, without an account, bot or API keys. Full mode retrieves available history, not a complete site/channel archive. Telegram is limited to 200 text posts or 50 pages per channel per run, with a 2-second pause between pages. A limit or failed page produces a partial result, retaining collected posts. Updates exclude undated and future items and report those exclusions. Feed/source limits and unavailable sources are reported as partial results.
+Новости включают RSS/Atom и публичные Telegram-каналы через https://t.me/s/CHANNEL без аккаунта, бота и API-ключей. Полный режим получает доступную историю, а не весь архив сайта/канала. Для Telegram установлен предел: 200 текстовых постов или 50 страниц на канал за запуск, пауза между страницами — 2 секунды. Достижение лимита или ошибка страницы отмечается как частичный результат; найденные посты сохраняются. В режиме обновлений материалы без даты или за пределами периода не включаются; пропуски без даты отмечаются в отчёте. Ограничения лент и недоступные источники не выдаются за полный результат.
+
+Список Telegram-каналов лежит в `telegram-sources.json`. Встроенный каталог содержит 19 каналов, включая WMXWAS, cyberok_news, cyb3r53cr3t5, intosecurity, RalfHackerChannel, true_secator, poxek, unsec, cyberyozh_official, xor_journal, haccking. Существующие каналы сохранены, повторов нет. Сохраняются текст, дата, ссылки и номер поста; видео, изображения и файлы не скачиваются. Посты только с медиа учитываются отдельно. Повторный импорт не создаёт дубликаты; отредактированный пост обновляется. Отсутствие поста в следующем архиве не означает его удаление.
+
+The Telegram catalog is in `telegram-sources.json`. Posts retain their text, publication date, links and message ID. Media files are not downloaded; media-only posts are counted separately. Reimports are idempotent, edits update existing posts, and missing posts do not cause deletions. Each channel has its own source identity in VM. Progress shows the channel, page and collected post count; `run.log` and `report.json` include limits and errors even in quiet mode.
+
+Для запуска только новостей используйте `sh download-stools.sh --datasets news --mode updates --period 7d` (или `--mode full`). Telegram автоматически входит в этот набор. После импорта ZIP посты видны в VM → Трендовые уязвимости → Все собранные публикации; найденные CVE/GHSA проходят обычную классификацию, а не объявляются трендом по факту упоминания.
 
 ## Прокси / Proxy
 

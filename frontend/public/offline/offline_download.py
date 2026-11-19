@@ -34,7 +34,7 @@ TITLES = {
     "exploitdb": "ExploitDB",
     "msf": "Metasploit",
     "attack": "CVE → ATT&CK (CTID)",
-    "news": "RSS / Atom",
+    "news": "RSS / Atom / Telegram",
     "sigma": "SigmaHQ",
     "elastic": "Elastic Detection Rules",
 }

@@ -1,54 +1,16 @@
 """Read public previews only. A missing post in a page is never a retraction."""
 import random
-import re
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
-from bs4 import BeautifulSoup
+from .telegram_public import normalize_channel, parse_posts as parse_public_posts
 from .rss import identifiers
 from ..monitoring_contracts import CollectionBatch, CollectionWindow
 
 
-def normalize_channel(value):
-    if value.startswith(('https://','http://')):
-        parts = urlsplit(value)
-        if parts.hostname != 't.me' or parts.query or parts.fragment:
-            raise ValueError('public Telegram channel required')
-        value = parts.path.removeprefix('/s/').strip('/')
-    value = value.lstrip('@')
-    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{3,31}', value):
-        raise ValueError('public Telegram channel required')
-    return value.lower()
-
-
 def parse_posts(html, channel):
-    soup = BeautifulSoup(html, 'html.parser')
-    posts = soup.select('.tgme_widget_message[data-post]')
-    if not posts and not soup.select_one('.tgme_channel_history'):
-        raise ValueError('Telegram public preview unavailable or layout changed')
-    docs = []
-    for post in posts:
-        identity = post.get('data-post','').split('/')
-        if len(identity)!=2 or identity[0].lower()!=channel or not identity[1].isdigit():
-            continue
-        date_node = post.select_one('.tgme_widget_message_date time[datetime]')
-        date = None
-        if date_node:
-            try:
-                date = datetime.fromisoformat(date_node['datetime'].replace('Z','+00:00'))
-                date = date.astimezone(timezone.utc).isoformat() if date.tzinfo else None
-            except ValueError:
-                date = None
-        for nested in post.select('.tgme_widget_message_reply, script, style'):
-            nested.decompose()
-        body = post.select_one('.tgme_widget_message_text')
-        text = body.get_text(' ', strip=True) if body else ''
-        links = sorted({a['href'] for a in post.select('.tgme_widget_message_text a[href], .tgme_widget_message_forwarded_from[href]')
-                        if a['href'].startswith(('http://','https://'))})[:100]
-        docs.append({'external_id':identity[1], 'url':f'https://t.me/{channel}/{identity[1]}',
-            'title':text[:2000], 'text':text[:262144], 'published_at':date,
-            'date_basis':'published' if date else 'unknown', 'links':links,
-            'identifiers':identifiers(text,*links), 'full_text':True, 'truncated':len(text)>262144})
+    docs = parse_public_posts(html, channel)
+    for doc in docs:
+        doc['identifiers'] = identifiers(doc['text'], *doc['links'])
     return docs
 
 

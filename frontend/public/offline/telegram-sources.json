@@ -1,0 +1,116 @@
+[
+  {
+    "id": "feed-c7689cf62295ef76",
+    "name": "PT SWARM",
+    "kind": "telegram",
+    "url": "https://t.me/ptswarm"
+  },
+  {
+    "id": "feed-619dcce2c787c4c0",
+    "name": "BI.ZONE",
+    "kind": "telegram",
+    "url": "https://t.me/bizone_channel"
+  },
+  {
+    "id": "feed-88db17e591b2c960",
+    "name": "SecurityLab Telegram",
+    "kind": "telegram",
+    "url": "https://t.me/SecLabNews"
+  },
+  {
+    "id": "feed-9578b8dab5f7278b",
+    "name": "Dr.Web Telegram",
+    "kind": "telegram",
+    "url": "https://t.me/DrWeb_antivirus"
+  },
+  {
+    "id": "feed-bdfa0bea494fb6ce",
+    "name": "Kaspersky purple shift",
+    "kind": "telegram",
+    "url": "https://t.me/purpleshift"
+  },
+  {
+    "id": "feed-769af4b608a82bbc",
+    "name": "Telegram: Управление уязвимостями (avleonovrus)",
+    "kind": "telegram",
+    "url": "https://t.me/s/avleonovrus"
+  },
+  {
+    "id": "feed-9b2179178a780c23",
+    "name": "Telegram: True Secator",
+    "kind": "telegram",
+    "url": "https://t.me/s/true_secator"
+  },
+  {
+    "id": "feed-6c0faca5bff12ec2",
+    "name": "Telegram: Ralf Hacker Channel",
+    "kind": "telegram",
+    "url": "https://t.me/s/RalfHackerChannel"
+  },
+  {
+    "id": "feed-14283a531b673d44",
+    "name": "Telegram: Android Malware (androidMalware)",
+    "kind": "telegram",
+    "url": "https://t.me/s/androidMalware"
+  },
+  {
+    "id": "feed-ae87423f8ccf3383",
+    "name": "Telegram: The Hacker News",
+    "kind": "telegram",
+    "url": "https://t.me/s/thehackernews"
+  },
+  {
+    "id": "feed-68b6f0ddb9085c70",
+    "name": "Telegram: @WMXWAS",
+    "kind": "telegram",
+    "url": "https://t.me/wmxwas"
+  },
+  {
+    "id": "feed-4a91b858b6ef7620",
+    "name": "Telegram: @cyberok_news",
+    "kind": "telegram",
+    "url": "https://t.me/cyberok_news"
+  },
+  {
+    "id": "feed-8912ceec7a187a5c",
+    "name": "Telegram: @cyb3r53cr3t5",
+    "kind": "telegram",
+    "url": "https://t.me/cyb3r53cr3t5"
+  },
+  {
+    "id": "feed-b1a8e26c9c48674c",
+    "name": "Telegram: @intosecurity",
+    "kind": "telegram",
+    "url": "https://t.me/intosecurity"
+  },
+  {
+    "id": "feed-b345e7497f2509d5",
+    "name": "Telegram: @poxek",
+    "kind": "telegram",
+    "url": "https://t.me/poxek"
+  },
+  {
+    "id": "feed-6d92f29912b6ae43",
+    "name": "Telegram: @unsec",
+    "kind": "telegram",
+    "url": "https://t.me/unsec"
+  },
+  {
+    "id": "feed-96c745057f84e890",
+    "name": "Telegram: @cyberyozh_official",
+    "kind": "telegram",
+    "url": "https://t.me/cyberyozh_official"
+  },
+  {
+    "id": "feed-2da83bda6ff77915",
+    "name": "Telegram: @xor_journal",
+    "kind": "telegram",
+    "url": "https://t.me/xor_journal"
+  },
+  {
+    "id": "feed-f4a9eed3bc229157",
+    "name": "Telegram: @haccking",
+    "kind": "telegram",
+    "url": "https://t.me/haccking"
+  }
+]

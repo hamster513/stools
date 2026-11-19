@@ -194,3 +194,31 @@ def test_zip_filter_displays_archive_article_for_shared_cve(auth_client, db_sess
     assert row['last_event_at'].startswith('2026-11-01')
     detail = auth_client.get('/api/vm/trends/CVE-2026-12345?period=all').json()
     assert detail['evidence_total'] == 2
+
+
+def test_telegram_archive_keeps_channel_identity_links_and_edited_post(auth_client, db_session):
+    from api.modules.vm.trend_models import VmTrendSource
+    channels = ['WMXWAS', 'cyberok_news']
+    articles = [item(source_id=channel.lower(), external_id='42',
+                     title='Уязвимость CVE-2026-12345', url=f'https://t.me/{channel}/42',
+                     text='CVE-2026-12345 https://example.org/advisory', full_text=True)
+                for channel in channels]
+    sources = [{'id': channel.lower(), 'name': '@'+channel, 'kind': 'news',
+                'url': 'https://t.me/'+channel, 'status': 'ok', 'items': 1} for channel in channels]
+    data = bundle(articles, manifest_change={'sources': sources})
+    assert upload(auth_client, data).status_code == 200
+    publications = list(db_session.scalars(select(VmTrendPublication).limit(10)))
+    assert len(publications) == 2
+    assert {p.data['publisher_id'] for p in publications} == {'telegram:wmxwas', 'telegram:cyberok_news'}
+    assert all(p.data['origin_adapter'] == 'telegram' for p in publications)
+    assert all('https://example.org/advisory' in p.data['links'] for p in publications)
+    configs = list(db_session.scalars(select(VmTrendSource).limit(10)))
+    assert {s.data['telegram_channel'] for s in configs} == {'wmxwas', 'cyberok_news'}
+    assert all(s.data['telegram_mode'] == 'web' and not s.data['llm_allowed'] for s in configs)
+    assert listing(auth_client)['items'][0]['id'] == 'CVE-2026-12345'
+    assert upload(auth_client, data).json()['duplicate']
+    articles[0]['text'] = 'CVE-2026-12345 Edited publication'
+    assert upload(auth_client, bundle(articles, manifest_change={'sources': sources})).status_code == 200
+    assert db_session.scalar(select(func.count()).select_from(VmTrendPublication)) == 2
+    db_session.expire_all()
+    assert any('Edited' in p.data['text'] for p in db_session.scalars(select(VmTrendPublication).limit(10)))

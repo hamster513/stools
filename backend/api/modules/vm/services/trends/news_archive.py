@@ -2,6 +2,7 @@
 import datetime as dt
 import hashlib
 import json
+import re
 import uuid
 from urllib.parse import urlsplit
 
@@ -16,6 +17,17 @@ from .classify import classify_publication
 from .rules import extract_identifiers
 
 OFFLINE_COLLECTOR = 'offline-news-archives'
+
+
+def _source_identity(source):
+    parts = urlsplit(source['url'])
+    publisher = (parts.hostname or source['id']).lower().removeprefix('www.')
+    channel = parts.path.removeprefix('/s/').strip('/')
+    if (parts.netloc.lower() == 't.me' and not parts.query and not parts.fragment
+            and re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{3,31}', channel)):
+        return {'adapter': 'telegram', 'publisher_id': 'telegram:' + channel.lower(),
+                'telegram_mode': 'web', 'telegram_channel': channel.lower()}
+    return {'adapter': 'rss', 'publisher_id': publisher}
 
 
 def project_news(db: Session) -> dict:
@@ -59,10 +71,11 @@ def project_news(db: Session) -> dict:
                 manifests[row.import_id] = {s['id']: s for s in json.loads(imported.manifest_json)['sources']}
             source = manifests[row.import_id][row.source_id]
             source_id = 'archive-' + hashlib.sha256(row.source_id.encode()).hexdigest()[:32]
-            publisher = (urlsplit(source['url']).hostname or row.source_id).lower().removeprefix('www.')
+            identity = _source_identity(source)
+            publisher = identity['publisher_id']
             for generation in generations:
                 if (generation, source_id) not in sources:
-                    config = {'id': source_id, 'name': source['name'], 'url': source['url'], 'adapter': 'rss',
+                    config = {'id': source_id, 'name': source['name'], 'url': source['url'], **identity,
                               'publisher_id': publisher, 'language': '', 'region': '', 'llm_allowed': False,
                               'content_scope': 'security_news', 'offline_archive': True}
                     saved_source = db.get(VmTrendSource, (generation, source_id))
@@ -73,17 +86,23 @@ def project_news(db: Session) -> dict:
                     sources[generation, source_id] = config
                 external_id = 'archive-' + row.id
                 publication = existing.get((generation, external_id))
-                if publication and publication.data.get('archive_content_hash') == row.content_hash:
+                if (publication and publication.data.get('archive_content_hash') == row.content_hash
+                        and publication.data.get('origin_adapter') == identity['adapter']
+                        and publication.data.get('publisher_id') == publisher):
                     continue
                 if publication:
                     changed[generation].update(db.scalars(select(VmTrendEvidence.card_id).where(
                         VmTrendEvidence.publication_id == publication.id)))
                 value = {'title': row.title, 'text': row.text, 'url': row.url, 'source_id': source_id,
-                         'publisher_id': publisher, 'origin_adapter': 'rss', 'evidence_kind': 'publication',
+                         'publisher_id': publisher, 'origin_adapter': identity['adapter'], 'evidence_kind': 'publication',
                          'published_at': row.published_at.isoformat() if row.published_at else None,
                          'full_text': row.full_text, 'links': [row.url],
                          'identifiers': extract_identifiers(row.title + '\n' + row.text),
                          'archive_content_hash': row.content_hash, 'offline_archive': True}
+                if identity['adapter'] == 'telegram':
+                    value['links'] = list(dict.fromkeys([row.url] + [
+                        link for link in re.findall(r'https?://[^\s<>\"\']+', row.text)
+                        if len(link) <= 2048]))[:100]
                 value['classification'] = classify_publication(value, sources[generation, source_id]).model_dump()
                 # Deterministic within signed-32-bit storage, including full generation rebuilds.
                 revision = int(row.content_hash[:7], 16) + 1

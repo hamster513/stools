@@ -16,6 +16,7 @@ from pathlib import Path
 import ref_updates
 import ref_window
 from offline_http import Transport
+from offline_telegram import collect_news, TELEGRAM_PAGE_DELAY
 
 
 def intel_module():
@@ -256,16 +257,23 @@ def _period_rules(source, module, transport, cache, since, until, progress):
     return report, rows, extra
 
 
+def _telegram_news(*args, **kwargs):
+    return collect_news(*args, page_delay=TELEGRAM_PAGE_DELAY, **kwargs)
+
+
 def intel_archive(
-    name, output, transport, mode, period, now, cache, progress, *, module=None
+    name, output, transport, mode, period, now, cache, progress, *, module=None, lang="ru"
 ):
+    bundled_catalog = module is None
     module = module or intel_module()
     source_id = "sigmahq" if name == "sigma" else name
     sources = [
         source
         for source in module.DEFAULT_SOURCES
-        if (source["kind"] == "rss" if name == "news" else source["id"] == source_id)
+        if (source["kind"] in ("rss", "telegram") if name == "news" else source["id"] == source_id)
     ]
+    if name == "news" and bundled_catalog:
+        sources.extend(json.loads(Path(__file__).with_name("telegram-sources.json").read_text(encoding="utf-8")))
     if not sources:
         raise ValueError("No sources selected")
     since, until = (
@@ -273,6 +281,8 @@ def intel_archive(
     )
 
     def job(source):
+        if source["kind"] == "telegram":
+            return _telegram_news(source, transport, mode, since, until, progress, lang=lang)
         if source["kind"] == "rss":
             return _period_news(source, module, transport, mode, since, until)
         if mode == "updates":
@@ -324,7 +334,7 @@ def execute_dataset(name, config, run_dir, progress):
     output = run_dir / (name + "-" + config.mode + ".zip")
     if name in ("news", "sigma", "elastic"):
         return intel_archive(
-            name, output, transport, config.mode, config.period, now, cache, progress
+            name, output, transport, config.mode, config.period, now, cache, progress, lang=config.lang
         )
     if config.mode == "full":
         return full_reference(name, output, transport, now, progress, lang=config.lang)
