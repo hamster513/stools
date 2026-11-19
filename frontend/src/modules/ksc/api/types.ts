@@ -947,6 +947,7 @@ export interface Connection {
   port: number
   username: string
   password_set: boolean
+  totp_secret_set: boolean
   verify_tls: boolean
   internal: boolean
   domain: string
@@ -962,6 +963,8 @@ export interface ConnectionIn {
   port: number
   username: string
   password: string
+  totp_secret: string
+  clear_totp_secret: boolean
   verify_tls: boolean
   internal: boolean
   domain: string

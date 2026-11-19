@@ -5,7 +5,7 @@ import type { Connection, ConnectionIn } from '@/modules/ksc/api/types'
 import { CollectorConnectionsSection } from '@/platform/collector/ConnectionsSection'
 import { Field, FIELD } from '@/platform/collector/ui'
 
-const EMPTY: ConnectionIn = { title: '', host: '', port: 13299, username: '', password: '', verify_tls: true, internal: true, domain: '', skip_policy_contents: false }
+const EMPTY: ConnectionIn = { title: '', host: '', port: 13299, username: '', password: '', totp_secret: '', clear_totp_secret: false, verify_tls: true, internal: true, domain: '', skip_policy_contents: false }
 
 export function ConnectionsSection() {
   const list = useConnections()
@@ -21,11 +21,11 @@ export function ConnectionsSection() {
       remove={remove}
       useSaveConnection={useSaveConnection}
       empty={EMPTY}
-      toForm={(c) => ({ ...c, password: '' })}
+      toForm={(c) => ({ ...c, password: '', totp_secret: '', clear_totp_secret: false })}
       title="Подключения к KSC (онлайн-режим)"
-      about="Модуль читает KSC сам по Open API (HTTPS, порт 13299). Нужен сетевой доступ от сервера STools к KSC и учётная запись с правом чтения. Пароль хранится в базе и наружу не показывается."
+      about="Модуль читает KSC сам по Open API (HTTPS, порт 13299). Нужен сетевой доступ от сервера STools к KSC и учётная запись с правом чтения. Пароль и секрет TOTP хранятся зашифрованными и наружу не показываются."
       hostHeader="Сервер"
-      linked={(c) => !!c.server_id && <span className="ml-1 text-[10px] text-text-secondary">· сервер связан</span>}
+      linked={(c) => <>{!!c.server_id && <span className="ml-1 text-[10px] text-text-secondary">· сервер связан</span>}{c.totp_secret_set && <span className="ml-1 text-[10px] text-text-secondary">· TOTP настроен</span>}</>}
       address={(c) => <>{c.host}:{c.port}</>}
       account={(c) => (c.internal ? c.username : `${c.domain}\\${c.username}`)}
       fields={(f, patch, initial) => (
@@ -35,6 +35,13 @@ export function ConnectionsSection() {
           <Field label="Порт"><input className={FIELD} type="number" value={f.port} onChange={(e) => patch({ port: Number(e.target.value) })} /></Field>
           <Field label="Учётная запись"><input className={FIELD} value={f.username} onChange={(e) => patch({ username: e.target.value })} spellCheck={false} autoComplete="off" /></Field>
           <Field label="Пароль" hint={initial.id ? 'пусто — оставить прежний' : undefined}><input className={FIELD} type="password" value={f.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" /></Field>
+          <Field label="Секрет TOTP" hint={list.data?.find((c) => c.id === initial.id)?.totp_secret_set ? 'Секрет сохранён. Пусто — оставить прежний; для замены введите новый.' : 'Ключ Base32 из настройки второго фактора KSC, не шестизначный код. Необязательно.'}>
+            <input className={FIELD} type="password" value={f.totp_secret} disabled={f.clear_totp_secret} onChange={(e) => patch({ totp_secret: e.target.value })} autoComplete="new-password" spellCheck={false} maxLength={512} />
+          </Field>
+          <div className="flex flex-col gap-2 text-xs text-text-secondary">
+            <span>STools сам получает код при проверке подключения и сборе, в том числе по расписанию. Время STools и KSC должно быть синхронизировано.</span>
+            {!!initial.id && list.data?.find((c) => c.id === initial.id)?.totp_secret_set && <label className="flex items-center gap-2 text-text"><input type="checkbox" className="accent-primary" checked={f.clear_totp_secret} onChange={(e) => patch({ clear_totp_secret: e.target.checked, totp_secret: '' })} /> Удалить сохранённый секрет TOTP</label>}
+          </div>
           {!f.internal && <Field label="Домен"><input className={FIELD} value={f.domain} onChange={(e) => patch({ domain: e.target.value })} spellCheck={false} /></Field>}
           <div className="flex flex-col gap-2 pt-1">
             <label className="flex items-center gap-2 text-xs text-text"><input type="checkbox" className="accent-primary" checked={f.internal} onChange={(e) => patch({ internal: e.target.checked })} /> Внутренняя учётная запись KSC</label>

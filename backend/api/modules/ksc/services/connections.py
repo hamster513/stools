@@ -18,7 +18,7 @@ from api.hosts import (
     url_host,
 )
 from api.jobs import JobHandle
-from api.modules.ksc.core.client import KscClient, KscError
+from api.modules.ksc.core.client import MFA_MESSAGES, KscClient, KscError
 from api.modules.ksc.core.collector import collect
 from api.modules.ksc.core.config import KscConfig
 from api.modules.ksc.core.export import parse_export
@@ -27,7 +27,7 @@ from api.modules.ksc.services.snapshots import import_export
 
 
 def _client(conn: KscConnection) -> KscClient:
-    return KscClient(f"https://{url_host(conn.host)}:{conn.port}", conn.username, decrypt(conn.password), verify_tls=conn.verify_tls, internal=conn.internal, domain=conn.domain)
+    return KscClient(f"https://{url_host(conn.host)}:{conn.port}", conn.username, decrypt(conn.password), verify_tls=conn.verify_tls, internal=conn.internal, domain=conn.domain, totp_secret=decrypt(conn.totp_secret or ""))
 
 
 def public_error(exc: BaseException) -> str:
@@ -36,6 +36,8 @@ def public_error(exc: BaseException) -> str:
         return str(exc)
     if not isinstance(exc, KscError):
         return server_error()
+    if exc.kind in MFA_MESSAGES:
+        return MFA_MESSAGES[exc.kind]
     if exc.kind == "link":
         return TLS_FAILED if is_tls_error(exc) else NO_LINK
     if exc.kind == "auth":

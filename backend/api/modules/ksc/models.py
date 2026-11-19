@@ -32,6 +32,7 @@ class KscConnection(Base):
     port: Mapped[int] = mapped_column(Integer, default=13299)
     username: Mapped[str] = mapped_column(String(255), default="")
     password: Mapped[str] = mapped_column(Text, default="")
+    totp_secret: Mapped[str] = mapped_column(Text, default="", server_default="")
     verify_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     #: Внутренняя учётка KSC (internal="1") или доменная с именем домена.
     internal: Mapped[bool] = mapped_column(Boolean, default=True)
