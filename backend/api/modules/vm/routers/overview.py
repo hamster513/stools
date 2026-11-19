@@ -21,33 +21,53 @@ from api.modules.vm.services.query import (
     base_select,
     data_facets,
     status_conditions,
+    status_facets,
 )
 from api.modules.vm.services.settings import load_settings
-from api.modules.vm.services.stats import load_stats
+from api.modules.vm.services.stats import high_risk_stats, load_stats
 from api.platform.findings import service as finding_svc
+from api.platform.findings.core import OPEN
 
 router = APIRouter(prefix="/overview", tags=["vm"])
 
 
 @router.get("")
-def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
+def overview(hide_medium_low: bool = False, db: Session = Depends(get_db),
+             _user: AppUser = Depends(get_current_user)) -> dict[str, Any]:
     settings = load_settings(db)
-    hosts = int(db.execute(select(func.count()).select_from(VmHost)).scalar() or 0)
-    pairs_all = int(db.execute(select(func.count()).select_from(VmHostCve)).scalar() or 0)
-    cves = int(db.execute(select(func.count()).select_from(VmCve)).scalar() or 0)
-    # Распределение и топы — из кэша, обновляемого после каждого пересчёта.
+    levels = settings.weights.levels
+    counted_statuses = finding_svc.counted_statuses(db)
+    counted = StatusFilter(statuses=counted_statuses)
     stats = load_stats(db)
-    # Пары, распределение и «выше порога» — по учитываемым статусам (настройка платформы
-    # `counted`): принятый риск по умолчанию не считается. Топы — по всем парам, из кэша.
-    counted = VulnFilters(status=StatusFilter(statuses=finding_svc.counted_statuses(db)), levels=settings.weights.levels)
-    counted_facets = data_facets(db, counted, stats.get("facets"))
-    # Уровни — по порогам настроек на момент чтения: пороги двигают без пересчёта.
-    distribution = counted_facets["level"]
-    above = int(
-        db.execute(
-            base_select([func.count()], state=True).where(VmHostCve.risk >= settings.threshold, *status_conditions(counted.status))
-        ).scalar() or 0
-    )
+    if hide_medium_low:
+        scoped = stats.get("high_risk")
+        if scoped is None or scoped.get("minimum") != levels.high:
+            # Старый кэш используется до очередного пересчёта; выборку читаем из текущих пар.
+            scoped = high_risk_stats(db, levels.high)
+        hosts, pairs_all, cves = scoped["hosts"], scoped["pairs_all"], scoped["cves"]
+        no_epss, no_nvd, unmarked = scoped["cves_without_epss"], scoped["cves_without_nvd"], scoped["unmarked_zones"]
+        counted_pairs, critical, above, kev = db.execute(base_select([
+            func.count(), func.count().filter(VmHostCve.risk >= levels.critical),
+            func.count().filter(VmHostCve.risk >= settings.threshold), func.count().filter(VmCve.kev.is_(True)),
+        ], state=True).where(VmHostCve.risk >= levels.high, *status_conditions(counted))).one()
+        distribution = {"low": 0, "medium": 0, "high": counted_pairs - critical, "critical": critical}
+        # Фасет статуса считает все статусы, а «без исполнителя» — только открытые пары.
+        facets = status_facets(db, VulnFilters(min_risk=levels.high, status=StatusFilter(statuses=OPEN)), None)
+        findings = {"by_status": facets["status"], "unassigned": facets["assignee"]["none"], **facets["flags"]}
+    else:
+        scoped = stats
+        hosts = db.scalar(select(func.count()).select_from(VmHost))
+        pairs_all = db.scalar(select(func.count()).select_from(VmHostCve))
+        cves, no_epss, no_nvd = db.execute(select(
+            func.count(), func.count().filter(VmCve.epss.is_(None)), func.count().filter(VmCve.cvss_source == "none")
+        ).select_from(VmCve)).one()
+        unmarked = db.scalar(select(func.count()).select_from(VmZone).where(VmZone.marked.is_(False)))
+        counted_facets = data_facets(db, VulnFilters(status=counted, levels=levels), stats.get("facets"))
+        distribution = counted_facets["level"]
+        kev = counted_facets["kev"].get("yes", 0)
+        above = db.scalar(base_select([func.count()], state=True).where(
+            VmHostCve.risk >= settings.threshold, *status_conditions(counted)))
+        findings = finding_svc.summary(db, MODULE, SCOPE, keys_present=pairs_all, present_only=True)
 
     last_import = db.execute(select(VmImport).order_by(VmImport.id.desc())).scalars().first()
     states = {s.name: s for s in db.execute(select(VmRefState)).scalars()}
@@ -66,10 +86,6 @@ def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current
                 "stale": loaded is None or (now - loaded) > dt.timedelta(days=30),
             }
         )
-    unmarked = int(db.execute(select(func.count()).select_from(VmZone).where(VmZone.marked.is_(False))).scalar() or 0)
-    no_epss = int(db.execute(select(func.count()).select_from(VmCve).where(VmCve.epss.is_(None))).scalar() or 0)
-    no_nvd = int(db.execute(select(func.count()).select_from(VmCve).where(VmCve.cvss_source == "none")).scalar() or 0)
-
     return {
         "hosts": hosts,
         "pairs": sum(distribution.values()),
@@ -77,13 +93,13 @@ def overview(db: Session = Depends(get_db), _user: AppUser = Depends(get_current
         "cves": cves,
         "above_threshold": above,
         "threshold": settings.threshold,
+        "levels": levels.model_dump(),
+        "counted_statuses": sorted(counted_statuses),
         "distribution": distribution,
-        # Пары с CVE из каталога CISA KEV — по тем же учитываемым статусам.
-        "kev_pairs": counted_facets["kev"].get("yes", 0),
-        # Плитки ведут в список, а он показывает только пары текущих данных.
-        "findings": finding_svc.summary(db, MODULE, SCOPE, keys_present=pairs_all, present_only=True),
-        "top_cves": stats["top_cves"],
-        "top_hosts": stats["top_hosts"],
+        "kev_pairs": kev,
+        "findings": findings,
+        "top_cves": scoped["top_cves"],
+        "top_hosts": scoped["top_hosts"],
         "data": {
             "last_import": {
                 "finished_at": last_import.finished_at.isoformat(),

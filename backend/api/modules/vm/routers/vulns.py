@@ -58,6 +58,7 @@ def _filters(
     zone: QueryList = None,
     os: QueryList = None,
     level: QueryList = None,
+    min_risk: int | None = Query(None, ge=0, le=100),
     exploits: bool | None = None,
     msf: bool | None = None,
     kev: bool | None = None,
@@ -79,7 +80,7 @@ def _filters(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     # Пороги уровней — из настроек, один раз на запрос: `level` в фильтре и в строках по ним.
     return VulnFilters(q, host, cve, multi(criticality), multi(zone), multi(os), multi(level), exploits, msf, kev,
-                       multi(cvss_source), host_id, sf, load_settings(db).weights.levels)
+                       multi(cvss_source), host_id, sf, load_settings(db).weights.levels, min_risk=min_risk)
 
 
 def _with_names(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]]:

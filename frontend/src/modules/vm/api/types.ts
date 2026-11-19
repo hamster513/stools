@@ -102,6 +102,7 @@ export interface VulnsQuery {
   zone?: string[]
   os?: string[]
   level?: RiskLevel[]
+  min_risk?: number
   exploits?: boolean
   msf?: boolean
   kev?: boolean
@@ -185,11 +186,13 @@ export interface Overview {
   hosts: number
   /** Пары с учитываемым статусом (настройка платформы `counted`). */
   pairs: number
-  /** Все пары последнего импорта. */
+  /** Все статусы в выбранном диапазоне риска. */
   pairs_all: number
   cves: number
   above_threshold: number
   threshold: number
+  levels: Levels
+  counted_statuses: FindingStatus[]
   distribution: Record<RiskLevel, number>
   /** Пары с CVE из каталога CISA KEV, по учитываемым статусам. */
   kev_pairs: number

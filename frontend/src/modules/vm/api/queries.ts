@@ -165,8 +165,12 @@ export function useHost(hostId: number | undefined) {
   })
 }
 
-export function useOverview() {
-  return useQuery<Overview, ApiRequestError>({ ...LIST_QUERY_OPTIONS, queryKey: ['vm-overview'], queryFn: ({ signal }) => api.get('/api/vm/overview', { signal }) })
+export function useOverview(hideMediumLow = false) {
+  return useQuery<Overview, ApiRequestError>({
+    ...LIST_QUERY_OPTIONS,
+    queryKey: ['vm-overview', hideMediumLow],
+    queryFn: ({ signal }) => api.get(`/api/vm/overview${buildQuery({ hide_medium_low: hideMediumLow || undefined })}`, { signal }),
+  })
 }
 
 export function useZones() {

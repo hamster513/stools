@@ -6,7 +6,7 @@ import { ASSIGNEE_SPECIAL, STATUS_OPTIONS, statusForFlag, toggleStatus, toggleVa
 import type { FacetValue } from '@/platform/filters/useRememberedFacets'
 import { cn } from '@/lib/cn'
 
-export type VulnFilters = Pick<VulnsQuery, 'level' | 'criticality' | 'zone' | 'os' | 'exploits' | 'msf' | 'kev' | 'cvss_source'> & FindingFacetFilters
+export type VulnFilters = Pick<VulnsQuery, 'level' | 'min_risk' | 'criticality' | 'zone' | 'os' | 'exploits' | 'msf' | 'kev' | 'cvss_source'> & FindingFacetFilters
 
 const CRITICALITIES = ['Critical', 'High', 'Medium', 'Low', 'None', '']
 

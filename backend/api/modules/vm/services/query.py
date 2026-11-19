@@ -183,6 +183,7 @@ class VulnFilters:
     status: StatusFilter = field(default_factory=StatusFilter)
     #: Пороги уровней из настроек — для фильтра `level` и фасета уровней; не фильтр.
     levels: Levels = field(default_factory=lambda: Levels(**PRIORITY_LEVELS))
+    min_risk: int | None = None
 
     def data_empty(self) -> bool:
         """Нет фильтров по данным пары (статус и пороги не в счёт)."""
@@ -251,6 +252,8 @@ def conditions(f: VulnFilters, *, with_status: bool = True) -> list[ColumnElemen
     bounds = [VmHostCve.risk.between(*known[lvl]) for lvl in sorted(f.level or ()) if lvl in known]
     if bounds:
         conds.append(or_(*bounds))
+    if f.min_risk is not None:
+        conds.append(VmHostCve.risk >= f.min_risk)
     if f.exploits is not None:
         conds.append(VmCve.exploits_count > 0 if f.exploits else VmCve.exploits_count == 0)
     if f.msf is not None:

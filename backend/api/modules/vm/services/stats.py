@@ -10,21 +10,18 @@ import datetime as dt
 import json
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from api.db.models import AppSetting
-from api.modules.vm.models import VmCve, VmHost, VmHostCve
+from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmZone
 from api.modules.vm.services.query import VulnFilters, base_select, raw_facets
+from api.modules.vm.services.settings import load_settings
 
 STATS_KEY = "vm.stats"
 
 
-def compute_stats(db: Session) -> dict[str, Any]:
-    pairs = int(db.execute(select(func.count()).select_from(VmHostCve)).scalar() or 0)
-    # Фасеты без фильтров — самый частый запрос таблицы; считаются здесь же. Уровней в кэше
-    # нет, есть гистограмма балла: уровни выводятся при чтении по текущим порогам.
-    all_facets = raw_facets(db, VulnFilters()) if pairs else {}
+def _rankings(db: Session, *scope: ColumnElement[bool]) -> dict[str, Any]:
     top_cves = db.execute(
         select(
             VmHostCve.cve_id,
@@ -36,6 +33,7 @@ def compute_stats(db: Session) -> dict[str, Any]:
             VmCve.exploitdb_type,
         )
         .join(VmCve, VmCve.cve_id == VmHostCve.cve_id)
+        .where(*scope)
         .group_by(VmHostCve.cve_id, VmCve.cvss, VmCve.epss, VmCve.exploitdb_type)
         .order_by(func.sum(VmHostCve.risk).desc(), func.sum(VmHostCve.risk_raw).desc(), func.count().desc())
         .limit(10)
@@ -53,13 +51,12 @@ def compute_stats(db: Session) -> dict[str, Any]:
                 func.max(VmHostCve.risk).label("risk_max"),
             ]
         )
+        .where(*scope)
         .group_by(VmHost.id, VmHost.hostname, VmHost.ip, VmHost.zone, VmHost.criticality)
         .order_by(func.sum(VmHostCve.risk).desc())
         .limit(10)
     ).all()
     return {
-        "pairs": pairs,
-        "facets": all_facets,
         "top_cves": [
             {
                 "cve_id": r.cve_id,
@@ -85,6 +82,32 @@ def compute_stats(db: Session) -> dict[str, Any]:
             }
             for r in top_hosts
         ],
+    }
+
+
+def high_risk_stats(db: Session, minimum: int) -> dict[str, Any]:
+    """Показатели по всем статусам. Сначала отбираем пары, затем считаем хосты, CVE и топы."""
+    scope = VmHostCve.risk >= minimum
+    distinct_cves = func.count(VmHostCve.cve_id.distinct())
+    counts = db.execute(base_select([
+        func.count().label("pairs_all"),
+        func.count(VmHostCve.host_id.distinct()).label("hosts"),
+        distinct_cves.label("cves"),
+        distinct_cves.filter(VmCve.epss.is_(None)).label("cves_without_epss"),
+        distinct_cves.filter(VmCve.cvss_source == "none").label("cves_without_nvd"),
+        func.count(VmZone.name.distinct()).filter(VmZone.marked.is_(False)).label("unmarked_zones"),
+    ]).outerjoin(VmZone, VmZone.name == VmHost.zone).where(scope)).mappings().one()
+    return {"minimum": minimum, **counts, **_rankings(db, scope)}
+
+
+def compute_stats(db: Session) -> dict[str, Any]:
+    pairs = int(db.execute(select(func.count()).select_from(VmHostCve)).scalar() or 0)
+    return {
+        "pairs": pairs,
+        # Гистограмма всех баллов нужна списку при любых границах уровней.
+        "facets": raw_facets(db, VulnFilters()) if pairs else {},
+        **_rankings(db),
+        "high_risk": high_risk_stats(db, load_settings(db).weights.levels.high),
         "computed_at": dt.datetime.now(dt.UTC).isoformat(),
     }
 

@@ -31,7 +31,7 @@ from itertools import batched
 from typing import Any
 from urllib.parse import urlencode
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, insert, select, text
 from sqlalchemy.orm import Session
 
@@ -236,6 +236,7 @@ class BulkFilter(BaseModel):
     zone: Multi = None
     os: Multi = None
     level: Multi = None
+    min_risk: int | None = Field(default=None, ge=0, le=100)
     exploits: bool | None = None
     msf: bool | None = None
     kev: bool | None = None
@@ -253,7 +254,7 @@ def parse_filter(raw: dict[str, Any], *, login: str, levels: Levels) -> VulnFilt
     b = BulkFilter.model_validate(raw)
     sf = status_filter(b.status, b.assignee, b.overdue, b.risk_expiring, login=login)
     return VulnFilters(b.q, b.host, b.cve, multi(b.criticality), multi(b.zone), multi(b.os), multi(b.level),
-                       b.exploits, b.msf, b.kev, multi(b.cvss_source), b.host_id, sf, levels)
+                       b.exploits, b.msf, b.kev, multi(b.cvss_source), b.host_id, sf, levels, min_risk=b.min_risk)
 
 
 def keys_by_filter(db: Session, scope_id: int, raw: dict[str, Any]) -> Iterator[str]:

@@ -76,9 +76,11 @@ function ScannerVulnsPage() {
   const params = useSearchParams()
   const { navigate } = useRouter()
   const linked = splitKey(params.get('key'))
+  const minRisk = params.get('min_risk')
   // Адрес задаёт начальные фильтры: сюда ведут ссылки с обзора и из карточки.
   const [filters, setFilters] = useListState<VulnFilters>('vm-vulns:filters', () => ({
     level: listFrom<RiskLevel>(params, 'level', LEVELS),
+    min_risk: minRisk && /^\d{1,3}$/.test(minRisk) && Number(minRisk) <= 100 ? Number(minRisk) : undefined,
     // `-` в адресе — «не задано» (пустое значение фасета).
     zone: fromWire(listFrom(params, 'zone')),
     criticality: fromWire(listFrom(params, 'criticality')),
@@ -183,6 +185,7 @@ function ScannerVulnsPage() {
   // Чип на каждое значение; пустая строка — тоже значение фильтра («не задана», «без зоны»).
   const chips: FilterChip[] = findingFacetChips(filters, (next) => setFilters((prev) => ({ ...prev, ...next })), names)
   chips.push(...valueChips('Риск', filters.level, (l) => LEVEL_LABELS[l], (v) => toggle('level', v)))
+  if (filters.min_risk !== undefined) chips.push({ label: `Риск ≥ ${filters.min_risk}`, clear: () => toggle('min_risk', undefined) })
   chips.push(...valueChips('Критичность', filters.criticality, (c) => c || 'не задана', (v) => toggle('criticality', v)))
   chips.push(...valueChips('Зона', filters.zone, (z) => z || 'без зоны', (v) => toggle('zone', v)))
   if (filters.exploits) chips.push({ label: 'есть эксплойт в ExploitDB', clear: () => toggle('exploits', undefined) })

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +12,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from api.modules.vm.models import VmHost
+from api.db.models import AppSetting
+from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmImport, VmZone
+from api.modules.vm.services.stats import STATS_KEY
 from kbaudit.attack.reference import rows_from_xlsx
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -159,3 +163,78 @@ def test_legacy_levels_cannot_override_additive_policy(loaded: TestClient) -> No
 def test_empty_overview(auth_client: TestClient) -> None:
     ov = auth_client.get("/api/vm/overview").json()
     assert ov["pairs"] == 0 and ov["data"]["last_import"] is None and ov["top_cves"] == []
+
+
+def test_overview_hides_medium_low(auth_client: TestClient, db_session: Any) -> None:
+    alpha, beta, gamma = [VmHost(hostname=name, zone=name) for name in ("alpha", "beta", "gamma")]
+    kev, mixed, medium = [f"CVE-2026-100{i}" for i in (1, 2, 3)]
+    db_session.add_all([alpha, beta, gamma, VmCve(cve_id=kev, kev=True), VmCve(cve_id=medium),
+                        VmCve(cve_id=mixed, epss=0.5, cvss_source="nvd_v3"),
+                        VmImport(source="file", filename="sample.csv", hosts=3, pairs=6, cves=3),
+                        *(VmZone(name=h.zone, marked=h is beta) for h in (alpha, beta, gamma))])
+    db_session.flush()
+    for host, cve, risk in [(alpha, kev, 100), (beta, kev, 80), (beta, mixed, 85),
+                            (alpha, mixed, 79), (gamma, mixed, 39), (gamma, medium, 45)]:
+        db_session.add(VmHostCve(host_id=host.id, cve_id=cve, risk=risk, risk_raw=risk))
+    db_session.commit()
+    yesterday = (dt.date.today() - dt.timedelta(days=2)).isoformat()
+    for host, cve, change in [(beta, kev, {"status": "in_work", "due_date": yesterday}),
+                              (gamma, medium, {"status": "in_work", "due_date": yesterday}),
+                              (beta, mixed, {"status": "risk_accepted", "comment": "проверено"})]:
+        response = auth_client.put("/api/findings/state", json={"module": "vm", "scope_id": 0,
+                                   "key": f"{host.hostname}||{cve}", **change})
+        assert response.status_code == 200, response.text
+    assert auth_client.put("/api/vm/settings", json={"threshold": 90}).status_code == 200
+
+    all_risks = auth_client.get("/api/vm/overview").json()
+    assert auth_client.get("/api/vm/overview?hide_medium_low=false").json() == all_risks
+    assert (all_risks["hosts"], all_risks["cves"], all_risks["pairs"], all_risks["pairs_all"]) == (3, 3, 5, 6)
+    assert all_risks["top_hosts"][0]["hostname"] == "alpha"
+    url = "/api/vm/overview?hide_medium_low=true"
+    ov = auth_client.get(url).json()
+    assert (ov["hosts"], ov["cves"], ov["pairs"], ov["pairs_all"]) == (2, 2, 2, 3)
+    assert ov["distribution"] == {"low": 0, "medium": 0, "high": 1, "critical": 1}
+    assert (ov["above_threshold"], ov["kev_pairs"]) == (1, 2)
+    assert [(h["hostname"], h["pairs"], h["risk_sum"]) for h in ov["top_hosts"]] == [("beta", 2, 165), ("alpha", 1, 100)]
+    assert [(c["cve_id"], c["hosts"], c["risk_sum"]) for c in ov["top_cves"]] == [(kev, 2, 180), (mixed, 1, 85)]
+    counts = ov["findings"]
+    assert [counts["by_status"][s] for s in ("new", "in_work", "risk_accepted")] == [1, 1, 1]
+    assert (counts["overdue"], counts["unassigned"]) == (1, 2)
+    assert [ov["data"][k] for k in ("unmarked_zones", "cves_without_epss", "cves_without_nvd")] == [1, 1, 1]
+    assert ov["data"]["refs"] == all_risks["data"]["refs"]
+    assert ov["data"]["last_import"] == all_risks["data"]["last_import"]
+
+    # An existing deployment can serve a cache written before the filtered overview existed.
+    row = db_session.get(AppSetting, STATS_KEY)
+    old_cache = json.loads(row.value_json)
+    old_cache.pop("high_risk", None)
+    row.value_json = json.dumps(old_cache)
+    db_session.commit()
+    assert auth_client.get(url).json() == ov
+    assert auth_client.put("/api/settings/findings", json={"counted": {"risk_accepted": True}}).status_code == 200
+    assert auth_client.get(url).json()["pairs"] == 3
+    assert auth_client.put("/api/vm/settings", json={"threshold": 40}).status_code == 200
+    assert auth_client.get(url).json()["above_threshold"] == 3
+    assert auth_client.get("/api/vm/overview").json()["above_threshold"] == 5
+
+    query = {"level": ["high", "critical"], "min_risk": 90, "status": "all"}
+    assert auth_client.get("/api/vm/vulns", params=query).json()["total"] == 1
+    exported = auth_client.get("/api/vm/export", params=query)
+    assert exported.status_code == 200 and len(exported.content.decode("utf-8-sig").splitlines()) == 2
+    bulk = auth_client.post("/api/findings/bulk", json={"module": "vm", "scope_id": 0, "filter": query,
+                                                       "change": {"status": "in_work"}})
+    assert bulk.status_code == 202, bulk.text
+    assert auth_client.get(f"/api/vm/jobs/{bulk.json()['job_id']}").json()["processed"] == 1
+
+
+def test_overview_without_high_risk(auth_client: TestClient, db_session: Any) -> None:
+    host = VmHost(hostname="desk")
+    cve = VmCve(cve_id="CVE-2026-1234")
+    db_session.add_all([host, cve])
+    db_session.flush()
+    db_session.add(VmHostCve(host_id=host.id, cve_id=cve.cve_id, risk=79))
+    db_session.commit()
+    assert auth_client.get("/api/vm/overview").json()["pairs"] == 1
+    ov = auth_client.get("/api/vm/overview?hide_medium_low=true").json()
+    assert (ov["pairs_all"], ov["pairs"], ov["hosts"], ov["cves"], ov["kev_pairs"], ov["above_threshold"]) == (0,) * 6
+    assert ov["top_hosts"] == ov["top_cves"] == [] and not any(ov["distribution"].values())
