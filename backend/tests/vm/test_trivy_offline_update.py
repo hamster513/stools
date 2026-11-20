@@ -200,3 +200,125 @@ def test_downloader_falls_back_to_ghcr_and_rejects_wrong_bytes(tmp_path, monkeyp
     with pytest.raises(ValueError, match="SHA-256"):
         download_database(output, tmp_path / "other-cache", source, lambda _: None, "en")
     assert output.read_bytes() == old_bytes
+
+
+def trivy_card(client):
+    response = client.get("/api/vm/refs")
+    assert response.status_code == 200
+    return next(row for row in response.json() if row["name"] == "trivy")
+
+
+def test_trivy_card_reads_active_database_and_imports_one_zip(
+    auth_client, app_settings, tmp_path, monkeypatch,
+):
+    from api.modules.vm.services import trivy_scan, trivy_update
+
+    bundled = tmp_path / "bundled"
+    monkeypatch.setattr(trivy_scan, "_BUNDLED_CACHE", bundled)
+    monkeypatch.setattr(trivy_update, "validate_database", lambda cache: None)
+    assert trivy_card(auth_client)["loaded_at"] is None
+    (bundled / "db").mkdir(parents=True)
+    (bundled / "db/metadata.json").write_text('{"Version":2,"UpdatedAt":"2026-02-01T00:00:00Z"}')
+    (bundled / "db/trivy.db").write_bytes(b"bundled")
+    row = trivy_card(auth_client)
+    assert row["source"] == "bundled" and row["loaded_at"].startswith("2026-02-01")
+    assert row["records"] is None and row["update_available"]
+    data = envelope(tmp_path / "trivy-updates.zip", layer()).read_bytes()
+    url = "/api/vm/refs/trivy/upload"
+    files = [("files", ("db.zip", data, "application/zip"))]
+    assert auth_client.post(url, files=files * 2).status_code == 422
+    submitted = auth_client.post(url, files=files)
+    assert submitted.status_code == 202
+    job = auth_client.get(f"/api/vm/jobs/{submitted.json()['job_id']}").json()
+    assert job["status"] == "done", job
+    row = trivy_card(auth_client)
+    assert row["source"] == "bundle" and row["loaded_at"].startswith("2026-03-01")
+    assert not row["pending_rebuild"]
+    bad = auth_client.post(url, files={"files": ("wrong.zip", b"invalid", "application/zip")})
+    assert bad.status_code == 202
+    assert auth_client.get(f"/api/vm/jobs/{bad.json()['job_id']}").json()["status"] == "failed"
+    row = trivy_card(auth_client)
+    assert row["loaded_at"].startswith("2026-03-01") and row["last_error"]
+
+
+def test_trivy_network_modes_check_digest_and_use_verified_snapshots(auth_client, db_session, app_settings, tmp_path, monkeypatch):
+    import httpx
+
+    from api.modules.vm.routers import refs as router
+    from api.modules.vm.services import refs, trivy_update
+
+    blob = layer()
+    calls = []
+    def registry(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, content=upstream(blob) if request.url.path.endswith("/manifests/2") else blob)
+    monkeypatch.setattr(trivy_update.trivy_scan, "_BUNDLED_CACHE", tmp_path / "absent")
+    monkeypatch.setattr(trivy_update, "validate_database", lambda cache: None)
+    def from_test_registry(db, handle, name, weights, years, mode):
+        refs.run_ref_download(db, handle, name, weights, years, mode=mode,
+                              http_factory=lambda: httpx.Client(transport=httpx.MockTransport(registry)))
+    monkeypatch.setattr(router, "run_ref_download", from_test_registry)
+    def update(mode):
+        response = auth_client.post("/api/vm/refs/trivy/download", json={"mode": mode})
+        assert response.status_code == 202
+        job = auth_client.get(f"/api/vm/jobs/{response.json()['job_id']}").json()
+        assert job["status"] == "done", job
+
+    update("auto")
+    assert (trivy_update.trivy_scan.cache_path(app_settings.data_dir) / "db/trivy.db").read_bytes() == b"sample-database"
+    update("updates")
+    assert sum("/blobs/" in path for path in calls) == 1
+    update("full")
+    assert sum("/blobs/" in path for path in calls) == 2
+    from api.modules.vm.services.refs_view import ref_views
+    row = next(row for row in ref_views(db_session) if row.name == "trivy")
+    assert row.source == "network" and row.last_checked_at is not None
+
+
+def test_trivy_card_respects_vm_permissions(client_as):
+    client = client_as("auditor")
+    assert trivy_card(client)["name"] == "trivy"
+    base = "/api/vm/refs/trivy"
+    assert client.post(base + "/download", json={"mode": "auto"}).status_code == 403
+    assert client.post(base + "/upload", files={"files": ("db.zip", b"test")}).status_code == 403
+
+
+def test_verified_bundled_database_skips_second_layer_download(db_session, app_settings, tmp_path, monkeypatch):
+    import httpx
+
+    from api.modules.vm.services import trivy_reference, trivy_scan, trivy_update
+
+    blob = layer()
+    root = tmp_path / "bundled"
+    (root / "db").mkdir(parents=True)
+    (root / "db/trivy.db").write_bytes(b"sample-database")
+    (root / "db/metadata.json").write_text('{"Version":2,"UpdatedAt":"2026-03-01T00:00:00Z"}')
+    monkeypatch.setattr(trivy_scan, "_BUNDLED_CACHE", root)
+    monkeypatch.setattr(trivy_update, "validate_database", lambda cache: None)
+    requests = []
+    def registry(req):
+        requests.append(req.url.path)
+        return httpx.Response(200, content=upstream(blob) if req.url.path.endswith("/manifests/2") else blob)
+    from unittest.mock import Mock
+    handle = Mock()
+    handle.cancelled.return_value = False
+    for _ in range(2):
+        trivy_reference.download(db_session, handle, "auto", lambda: httpx.Client(transport=httpx.MockTransport(registry)))
+    assert sum("/blobs/" in path for path in requests) == 1
+    assert trivy_reference.active_database(app_settings.data_dir).source == "bundled"
+
+
+def test_trivy_card_only_conflicts_with_its_own_job(auth_client, db_session, app_settings, tmp_path, monkeypatch):
+    from api.modules.vm.services import trivy_scan, trivy_update
+    from api.modules.vm.services.jobs import start_job
+
+    monkeypatch.setattr(trivy_scan, "_BUNDLED_CACHE", tmp_path / "empty")
+    monkeypatch.setattr(trivy_update, "validate_database", lambda cache: None)
+    start_job(db_session, "recalculate", "test")
+    data = envelope(tmp_path / "update.zip", layer()).read_bytes()
+    response = auth_client.post("/api/vm/refs/trivy/upload", files={"files": ("trivy.zip", data)})
+    assert response.status_code == 202
+    assert auth_client.get(f"/api/vm/jobs/{response.json()['job_id']}").json()["status"] == "done"
+    job = start_job(db_session, "ref_trivy", "test")
+    assert trivy_card(auth_client)["active_job_id"] == job
+    assert auth_client.post("/api/vm/refs/trivy/download", json={"mode":"full"}).status_code == 409

@@ -16,7 +16,7 @@ from api.db.models import AppUser
 from api.deps import get_current_user
 from api.jobs import UPLOAD_INTERRUPTED
 from api.limits import VM_UPLOAD, check_upload_size
-from api.modules.vm.core.refs import REF_NAMES
+from api.modules.vm.core.refs import DOWNLOADABLE_REFS
 from api.modules.vm.routers.import_ import JobStarted
 from api.modules.vm.services.bundle import classify, run_bundle
 from api.modules.vm.services.jobs import (
@@ -42,14 +42,14 @@ class DownloadRequest(BaseModel):
 
 
 def _check_name(name: str) -> None:
-    if name not in REF_NAMES:
+    if name not in DOWNLOADABLE_REFS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="неизвестный справочник")
 
 
-def _reject_if_running(db: Session) -> None:
+def _reject_if_running(db: Session, name: str) -> None:
     # Архив грузит те же таблицы: справочник в одиночку посреди него перемешал бы два набора.
     lock_job_start(db)
-    running = active_job(db, BUNDLE_CONFLICTS)
+    running = active_job(db, ("ref_trivy",) if name == "trivy" else BUNDLE_CONFLICTS)
     if running is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"загрузка уже идёт (задача #{running.id})")
 
@@ -160,7 +160,7 @@ def download_ref(
 
 def start_download(db: Session, login: str, submit: Submit, *, name: str, years: list[int] | None = None, mode: str = "auto") -> int:
     _check_name(name)
-    _reject_if_running(db)
+    _reject_if_running(db, name)
     years = years or (nvd_years_default() if name == "nvd" else None)
     if name == "nvd" and years and any(y < 1999 or y > dt.datetime.now(dt.UTC).year for y in years):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="год вне диапазона фидов NVD")
@@ -183,7 +183,9 @@ async def upload_ref(
     user: AppUser = Depends(get_current_user),
 ) -> JobStarted:
     _check_name(name)
-    _reject_if_running(db)
+    _reject_if_running(db, name)
+    if name == "trivy" and len(files) != 1:
+        raise HTTPException(422, detail="Выберите один ZIP с базой Trivy")
     if not files:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="файлы не переданы")
     if name == "nvd" and any("modified" in (f.filename or "").lower() or "recent" in (f.filename or "").lower() for f in files):

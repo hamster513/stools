@@ -90,14 +90,15 @@ def nvd_years_default() -> list[int]:
 
 def download(
     url: str, to_path: Path, handle: JobHandle, http: httpx.Client, *, max_bytes: int | None = None,
-    validators: dict[str, str] | None = None,
+    validators: dict[str, str] | None = None, headers: dict[str, str] | None = None, timeout: int | None = None,
 ) -> int:
     """Скачать ленту в файл потоком. Больше `MAX_FEED_BYTES` — отказ: по заявленной длине сразу,
     без неё — на куске, который перешёл лимит (недокачанный файл удаляет вызывающий)."""
     limit = MAX_FEED_BYTES if max_bytes is None else max_bytes
     too_large = ValueError(f"{url}: лента больше лимита ({limit // (1024 * 1024)} МБ), загрузка прервана")
     size = 0
-    with http.stream("GET", url) as r:
+    options: dict[str, Any] = {"timeout": timeout} if timeout is not None else {}
+    with http.stream("GET", url, headers=headers, **options) as r:
         if r.status_code != 200:
             raise ValueError(f"{url}: HTTP {r.status_code}")
         if validators is not None:
@@ -106,7 +107,7 @@ def download(
         if total is not None and total > limit:
             raise too_large
         with to_path.open("wb") as out:
-            for chunk in r.iter_bytes():
+            for chunk in r.iter_bytes(chunk_size=min(limit + 1, 1024**2)):
                 size += len(chunk)
                 if size > limit:
                     raise too_large
@@ -377,6 +378,10 @@ def rebuild_after_ref(db: Session, handle: JobHandle, name: str, weights: Weight
 
 def run_ref_file(db: Session, handle: JobHandle, name: str, paths: list[Path], weights: Weights) -> None:
     try:
+        if name == "trivy":
+            from api.modules.vm.services import trivy_reference
+            trivy_reference.upload(db, handle, paths[0])
+            return
         for index, path in enumerate(paths):
             load_ref(db, handle, name, path, "file", detail=path.name, append=index > 0)
         from api.modules.vm.services.ref_updates import rebuild_pending
@@ -401,6 +406,10 @@ def run_ref_download(
 
     if mode not in {"auto", "updates", "full"}:
         raise ValueError("Invalid reference download mode")
+    if name == "trivy":
+        from api.modules.vm.services import trivy_reference
+        trivy_reference.download(db, handle, mode, http_factory)
+        return
     if mode != "full":
         state = db.get(VmRefSyncState, name)
         checkpoint = state.checkpoint if state else None

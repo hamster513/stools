@@ -31,7 +31,7 @@ MAX_DB = 4 * 1024**3
 MAX_METADATA = 4096
 
 
-def _updated(cache):
+def updated_at(cache: Path) -> dt.datetime:
     with (cache / "db/metadata.json").open("rb") as source:
         raw = source.read(MAX_METADATA + 1)
     try:
@@ -104,7 +104,7 @@ def _prune(root, active):
                 logging.getLogger(__name__).warning("Не удалось удалить прежний снимок Trivy", exc_info=True)
 
 
-def install(path: Path, data_dir: Path) -> dict:
+def install(path: Path, data_dir: Path, *, source: str = "bundle") -> dict:
     try:
         _preflight(path, max_entries=2, max_central_bytes=MAX_MANIFEST, max_archive_bytes=VM_UPLOAD)
     except ValueError as exc:
@@ -128,7 +128,7 @@ def install(path: Path, data_dir: Path) -> dict:
             if active == dest and (active / "db/trivy.db").is_file():
                 with archive.open(info) as blob, open(os.devnull, "wb") as sink:
                     copy_verified(blob, sink, digest, size)
-                return {"duplicate": True, "db_updated_at": _updated(active).isoformat()}
+                return {"duplicate": True, "db_updated_at": updated_at(active).isoformat()}
         # Clean up only our abandoned staging areas, while holding the cross-process installer lock.
         for abandoned in root.glob(".incoming-*"):
             if abandoned.is_dir() and not abandoned.is_symlink():
@@ -137,17 +137,17 @@ def install(path: Path, data_dir: Path) -> dict:
             work = Path(dirname)
             cache = work / "cache"
             cache.mkdir()
-            with archive.open(info) as source, (work / LAYER).open("xb") as blob:
-                copy_verified(source, blob, digest, size)
+            with archive.open(info) as compressed, (work / LAYER).open("xb") as blob:
+                copy_verified(compressed, blob, digest, size)
             try:
                 _unpack(work / LAYER, cache / "db")
             except (tarfile.TarError, gzip.BadGzipFile, zlib.error, EOFError) as exc:
                 raise ValueError("Повреждён сжатый архив базы Trivy") from exc
-            timestamp = _updated(cache)
+            timestamp = updated_at(cache)
             validate_database(cache)
             with trivy_scan.locked_cache(data_dir, exclusive=True) as active:
                 try:
-                    previous = _updated(active)
+                    previous = updated_at(active)
                 except (FileNotFoundError, ValueError):
                     previous = None
                 if previous is not None and timestamp < previous:
@@ -159,6 +159,8 @@ def install(path: Path, data_dir: Path) -> dict:
                             raise ValueError("Содержимое базы Trivy отличается при одинаковой дате снимка")
                     return {"duplicate": True, "db_updated_at": timestamp.isoformat()}
                 _prune(root, active)
+                if source == "network":
+                    (cache / "from-network").touch()
                 os.replace(cache, dest)
                 (work / "next").symlink_to(dest.name, target_is_directory=True)
                 os.replace(work / "next", root / "current")

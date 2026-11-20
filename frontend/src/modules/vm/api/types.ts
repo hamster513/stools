@@ -304,6 +304,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   ref_exploitdb: 'Справочник ExploitDB',
   ref_msf: 'Справочник Metasploit',
   ref_kev: 'Справочник KEV',
+  ref_trivy: 'База Trivy',
   ref_bundle: 'Архив справочников',
   recalculate: 'Пересчёт риска',
   bulk_status: 'Массовая смена статусов',
@@ -351,8 +352,9 @@ export interface RefState {
   title: string
   url: string
   loaded_at: string | null
-  source: 'network' | 'file' | 'bundle' | null
-  records: number
+  source: 'network' | 'file' | 'bundle' | 'bundled' | 'local' | null
+  records: number | null
+  last_error?: string | null
   detail: string
   stale: boolean
   active_job_id: number | null

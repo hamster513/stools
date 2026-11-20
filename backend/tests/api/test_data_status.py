@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,7 +16,7 @@ from api.modules import MODULE_ROUTERS
 from api.modules.ad.models import AdConnection, AdDomain, AdSnapshot
 from api.modules.assets.models import AssetDns, AssetRacktables
 from api.modules.ksc.models import KscConnection, KscServer, KscSnapshot
-from api.modules.vm.core.refs import REF_NAMES
+from api.modules.vm.core.refs import DOWNLOADABLE_REFS
 from api.modules.vm.models import VmRefState
 from api.modules.vm.services.refs_view import ref_views
 from api.platform import data_status
@@ -88,10 +89,12 @@ def _rows(db: Any, module: str) -> dict[str, DataItem]:
     return {i.key: i for i in collect(db) if i.module == module}
 
 
-def test_vm_refs_missing_until_loaded(db_session: Any) -> None:
+def test_vm_refs_missing_until_loaded(db_session: Any, tmp_path: Path, monkeypatch: Any) -> None:
+    from api.modules.vm.services import trivy_scan
+    monkeypatch.setattr(trivy_scan, "_BUNDLED_CACHE", tmp_path / "no-bundled-database")
     rows = _rows(db_session, "vm")
     refs = {k: v for k, v in rows.items() if k.startswith("ref:")}
-    assert sorted(refs) == sorted(f"ref:{n}" for n in REF_NAMES) and len(refs) == 6
+    assert sorted(refs) == sorted(f"ref:{n}" for n in DOWNLOADABLE_REFS)
     assert {r.state for r in refs.values()} == {"missing"}
     assert {r.anchor for r in refs.values()} == {"references"}
     assert rows["import"].state == "missing" and rows["import"].kind == "snapshot"
@@ -200,5 +203,5 @@ def test_toolbox_has_no_rows(db_session: Any) -> None:
 
 def test_refs_router_uses_shared_view(auth_client: TestClient, db_session: Any) -> None:
     body = auth_client.get("/api/vm/refs").json()
-    assert [r["name"] for r in body] == list(REF_NAMES)
+    assert [r["name"] for r in body] == list(DOWNLOADABLE_REFS)
     assert body == [json.loads(v.model_dump_json()) for v in ref_views(db_session)]

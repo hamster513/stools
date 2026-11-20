@@ -11,6 +11,7 @@ import { ArchiveBatchUpload } from './ArchiveBatchUpload'
 import { NewsArchiveSection } from './NewsArchiveSection'
 
 const ABOUT: Record<string, string> = {
+  trivy: 'База уязвимостей для проверки пакетов в SBOM хостов. После обновления STools перепроверяет хосты автоматически.',
   ghsa: 'GitHub Advisory Database: GHSA, связи с CVE, пакеты и диапазоны версий. Включает уязвимости без CVE; ZIP официального репозитория.',
   epss: 'Вероятность эксплуатации за 30 дней от FIRST; в скоринге даёт 2–30 баллов. Если EPSS нет — 8 баллов; эксплойт или KEV может дать больше.',
   nvd: 'Балл CVSS, метрики и описания CVE; фиды по годам, можно грузить частями.',
@@ -18,12 +19,14 @@ const ABOUT: Record<string, string> = {
   msf: 'Модули Metasploit: 24 балла, готовые good/great/excellent — 32. В блоке эксплуатации учитывается самый сильный сигнал.',
   kev: 'Каталог эксплуатируемых уязвимостей CISA: 40 баллов в блоке эксплуатации и итоговый приоритет не ниже High (80).',
 }
-const ACCEPT: Record<string, string> = { ghsa: '.zip', epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }
-const SOURCE: Record<string, string> = { network: 'сеть', file: 'файл', bundle: 'архив' }
+const ACCEPT: Record<string, string> = { trivy: '.zip,application/zip', ghsa: '.zip', epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }
+const SNAPSHOT_NOTE = 'Источник публикует снимок. При обновлении добавляются новые записи и меняются существующие. Записи вне снимка сохраняются. Полная загрузка заменяет справочник.'
+const SOURCE: Record<string, string> = { network: 'сеть', file: 'файл', bundle: 'архив', bundled: 'встроенная база', local: 'локальная база' }
 
 function RefCard({ r }: { r: RefState }) {
   // Аудитору остаётся состояние справочника: что загружено, когда и откуда.
-  const { admin } = useCan()
+  const { admin } = useCan('vm')
+  const trivy = r.name === 'trivy'
   const download = useDownloadRef()
   const upload = useUploadRef()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -47,19 +50,25 @@ function RefCard({ r }: { r: RefState }) {
   const errorText = error instanceof ApiRequestError ? error.message : error ? 'Не удалось запустить' : null
   const counts = r.last_counts
   const detail = /^(delta|snapshot): \+\d+, -\d+$/.test(r.detail) ? '' : r.detail
+  const source = r.partial_window ? 'обновление за период' : SOURCE[r.source ?? ''] ?? 'файл'
+  const date = r.loaded_at ? new Date(r.loaded_at) : null
+  const modeNote = trivy
+    ? (mode === 'full' ? 'Скачивает полный снимок из официального реестра Trivy и проверяет его перед установкой.' : 'При изменении версии в официальном реестре Trivy скачивается полный снимок.')
+    : r.update_capability === 'delta' ? 'Получаем новые и изменённые записи, сохраняя остальную базу.' : SNAPSHOT_NOTE
+
 
   return (
-    <div className="rounded border border-grid bg-app-bg p-3">
+    <div id={trivy ? 'trivy' : undefined} className="rounded border border-grid bg-app-bg p-3">
       <div className="mb-1 flex items-center justify-between">
         <span className="text-sm font-medium text-text">{r.title}</span>
         <span className={cn('text-[11px]', r.stale ? 'text-risk-medium' : 'text-text-secondary')}>
-          {r.loaded_at ? `${new Date(r.loaded_at).toLocaleDateString('ru-RU')} · ${r.partial_window ? 'обновление за период' : SOURCE[r.source ?? ''] ?? 'файл'}` : 'не загружен'}
-          {r.stale && r.loaded_at && ' · устарел'}
+          {date ? <>{trivy ? date.toLocaleString('ru-RU') : date.toLocaleDateString('ru-RU')} · {source}</> : trivy ? 'база недоступна' : 'не загружен'}
+          {r.stale && date && (trivy ? ' · устарела' : ' · устарел')}
         </span>
       </div>
       <p className="mb-2 text-[11px] text-text-secondary">{ABOUT[r.name]}</p>
       <div className="mb-2 font-mono text-[11px] tabular-nums text-text-secondary">
-        {r.loaded_at && <>Всего записей в базе: {r.records.toLocaleString('ru-RU')}{detail && ` · ${detail}`}</>}
+        {r.loaded_at && (r.records === null ? detail : <>Всего записей в базе: {r.records.toLocaleString('ru-RU')}{detail && ` · ${detail}`}</>)}
       </div>
       {r.partial_window && <p className="mb-2 text-[11px] text-risk-medium">
         Архив проверяет изменения за {new Date(r.partial_window.since).toLocaleString('ru-RU')} — {new Date(r.partial_window.until).toLocaleString('ru-RU')}.
@@ -87,7 +96,7 @@ function RefCard({ r }: { r: RefState }) {
           <option value="full">Полная загрузка</option>
         </select>
       </label>}
-      <p className="mb-2 text-[11px] text-text-secondary">{r.update_capability === 'delta' ? 'Получаем новые и изменённые записи, сохраняя остальную базу.' : 'Источник публикует снимок. При обновлении добавляются новые записи и меняются существующие. Записи вне снимка сохраняются. Полная загрузка заменяет справочник.'}</p>
+      <p className="mb-2 text-[11px] text-text-secondary">{modeNote}{trivy && ' Для загрузки с диска выберите trivy-full.zip или trivy-updates.zip.'}</p>
       {r.update_reason && <p className="mb-2 text-[11px] text-risk-medium">{r.update_reason}</p>}
       {admin && r.name === 'nvd' && fullDownload && (
         <label className="mb-2 block text-[11px] text-text-secondary">
@@ -104,11 +113,11 @@ function RefCard({ r }: { r: RefState }) {
             <Button onClick={() => inputRef.current?.click()} disabled={busy}>
               <Upload size={13} aria-hidden /> Загрузить полный файл
             </Button>
-            <input ref={inputRef} type="file" accept={ACCEPT[r.name]} multiple={r.name === 'nvd'} className="hidden" onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) upload.mutate({ name: r.name, files }); e.target.value = '' }} />
+            <input ref={inputRef} aria-label={'Полный файл справочника ' + r.title} type="file" accept={ACCEPT[r.name]} multiple={r.name === 'nvd'} className="hidden" onChange={(e) => { const files = Array.from(e.target.files ?? []); if (files.length) upload.mutate({ name: r.name, files }); e.target.value = '' }} />
           </>
         )}
         {r.active_job_id !== null && <span className="text-[11px] text-text-secondary">идёт задача #{r.active_job_id}</span>}
-        {errorText && <span className="text-[11px] text-kind-1">{errorText}</span>}
+        {(errorText || (!busy && r.last_error)) && <span role="alert" className="text-[11px] text-kind-1">{errorText || r.last_error}</span>}
       </div>
     </div>
   )

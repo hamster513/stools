@@ -9,10 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.modules.vm.core.refs import REF_NAMES
-from api.modules.vm.models import VmRefState
+from api.modules.vm.models import VmJob, VmRefState
 from api.modules.vm.services.jobs import active_job
 from api.modules.vm.services.refs import URLS
+from api.modules.vm.services.trivy_reference import active_database
 from api.modules.vm.sync_models import VmRefSyncState
+from api.settings import get_settings
 
 TITLES = {
     "epss": "EPSS",
@@ -22,6 +24,7 @@ TITLES = {
     "attack": "CVE → ATT&CK (CTID)",
     "kev": "CISA KEV",
     "ghsa": "GitHub Advisory Database",
+    "trivy": "Trivy",
 }
 
 
@@ -31,7 +34,8 @@ class RefView(BaseModel):
     url: str
     loaded_at: dt.datetime | None = None
     source: str | None = None
-    records: int
+    records: int | None
+    last_error: str | None = None
     detail: str
     #: Старше 30 дней — справочник устарел, обзор это подсвечивает.
     stale: bool
@@ -91,4 +95,18 @@ def ref_views(db: Session) -> list[RefView]:
                 active_job_id=running.id if running else None,
             )
         )
+    # Host scans use this active file even before the first user-initiated import.
+    database = active_database(get_settings().data_dir)
+    running = active_job(db, ["ref_trivy"])
+    last = db.scalar(select(VmJob).where(VmJob.kind == "ref_trivy").order_by(VmJob.id.desc()).limit(1))
+    sync = sync_states.get("trivy")
+    out.insert(0, RefView(
+        name="trivy", title=TITLES["trivy"], url="https://ghcr.io/aquasecurity/trivy-db",
+        loaded_at=database.updated if database else None, source=database.source if database else None,
+        records=None, detail=f"Формат базы v2 · {database.size / 1024**2:,.0f} МиБ".replace(",", " ") if database else "",
+        stale=database is None or now - database.updated > dt.timedelta(days=30),
+        update_available=True, active_job_id=running.id if running else None,
+        last_checked_at=sync.last_checked_at if sync else None, last_mode=sync.last_mode if sync else None,
+        last_error=last.error if last and last.status == "failed" else None,
+    ))
     return out

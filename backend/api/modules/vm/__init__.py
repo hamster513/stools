@@ -16,7 +16,7 @@ from api.modules.vm import sbom_models as sbom_models
 from api.modules.vm import ghsa_models as ghsa_models
 from api.modules.vm import models as models  # таблицы должны попасть в metadata
 from api.modules.vm import sync_models as sync_models
-from api.modules.vm.core.refs import REF_NAMES
+from api.modules.vm.core.refs import DOWNLOADABLE_REFS
 from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job
 from api.modules.vm.routers import (
@@ -78,7 +78,7 @@ scheduler.register_schedule_kind("vm", "import_vm", scheduled(import_.start_vm_i
 from api.modules.vm.services.trends.sync import start_trend_sync
 
 scheduler.register_schedule_kind("vm", "trends_pull", scheduled(start_trend_sync))
-for name in REF_NAMES:
+for name in DOWNLOADABLE_REFS:
     scheduler.register_schedule_kind("vm", f"ref_{name}", scheduled(partial(refs.start_download, name=name)))
 
 __all__ = ["router"]

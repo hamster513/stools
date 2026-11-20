@@ -50,7 +50,9 @@ def _harbor_row(db: Session) -> DataItem:
 def _ref_row(ref: RefView) -> DataItem:
     # Порог в 30 дней уже посчитан обзором (`RefView.stale`): второй раз его не считаем.
     state: State = "running" if ref.active_job_id else "missing" if ref.loaded_at is None else "stale" if ref.stale else "fresh"
-    detail = count_ru(ref.records, ("запись", "записи", "записей")) if ref.loaded_at else "не загружено"
+    detail = "не загружено"
+    if ref.loaded_at:
+        detail = ref.detail if ref.records is None else count_ru(ref.records, ("запись", "записи", "записей"))
     return DataItem("vm", f"ref:{ref.name}", ref.title, "reference", ref.loaded_at, state, ref.source, detail, "references")
 
 
