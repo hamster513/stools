@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from api.db.models import Base, _utcnow
@@ -67,6 +67,7 @@ class KscHost(Base):
     """Инвентарь снапшота: одна строка на хост KSC, для экрана хостов и карточек покрытия."""
 
     __tablename__ = "ksc_host"
+    __table_args__ = (Index("ix_ksc_host_snapshot_host", "snapshot_id", "host_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     snapshot_id: Mapped[int] = mapped_column(ForeignKey("ksc_snapshot.id", ondelete="CASCADE"), index=True)
