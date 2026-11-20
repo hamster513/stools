@@ -104,6 +104,13 @@ def equivalents(db: Session, identifier: str) -> set[str]:
     return _resolve(db, [identifier])[0][identifier]
 
 
+def canonical_finding_ids(db: Session, identifiers: Iterable[str]) -> dict[str, str]:
+    """Batch equivalent of canonical_finding_id for in-memory scanner reports."""
+    matches, _ = _resolve(db, sorted(set(identifiers)))
+    return {original: min(group, key=lambda vid: (0 if vid.startswith("CVE-") else 1 if is_ghsa(vid) else 2, vid))
+            for original, group in matches.items()}
+
+
 def public_advisories(db: Session, identifier: str) -> list[VmRefGhsa]:
     ids = equivalents(db, identifier)
     candidates = select(VmRefGhsa.ghsa_id).where(VmRefGhsa.ghsa_id.in_(ids)).union(

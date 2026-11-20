@@ -101,13 +101,14 @@ def _clear_stage(db: Session) -> None:
     db.commit()
 
 
-def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[tuple[str, str], HostRow], int]:
+def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[tuple[str, str], HostRow], int, set[str]]:
     """Хосты — в словарь, пары — в staging пакетами. Хосты без CVE
     пропускаются: у них нет риска, а обзор считает хосты с уязвимостями."""
     size = path.stat().st_size
     handle.stage("parsing", total=size, message=path.name)
     hosts: dict[tuple[str, str], HostRow] = {}
     pairs_buffer: list[tuple[str, str, str]] = []
+    empty_hosts: set[str] = set()
     written = 0
     rows_seen = 0
     fh, rows = _open_rows(path)
@@ -115,6 +116,8 @@ def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[
         for row in rows:
             rows_seen += 1
             if not row.cves:
+                if row.empty_cves_observed:
+                    empty_hosts.add(f"{row.hostname}|{row.ip}")
                 continue
             key = (row.hostname, row.ip)
             known = hosts.get(key)
@@ -138,11 +141,11 @@ def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[
     finally:
         fh.close()
     handle.tick(size, message=f"строк {rows_seen}, пар {written}")
-    return hosts, written
+    return hosts, written, empty_hosts
 
 
 def _replace_current(
-    db: Session, hosts: dict[tuple[str, str], HostRow], staged_pairs: int, handle: JobHandle,
+    db: Session, hosts: dict[tuple[str, str], HostRow], staged_pairs: int, handle: JobHandle, empty_hosts: set[str],
 ) -> tuple[ImportStats, list[str]]:
     """Хосты, новые CVE и пары заменяются атомарно. Шаги видны в отдельной транзакции."""
     def step(completed: int, message: str) -> None:
@@ -189,6 +192,12 @@ def _replace_current(
             .join_from(STAGE_PAIR, HOST_T, (HOST_T.c.hostname == STAGE_PAIR.c.hostname) & (HOST_T.c.ip == STAGE_PAIR.c.ip)),
         )
     )
+    from api.modules.vm.sbom_models import VmHostCoverage
+
+    covered = empty_hosts.union(f"{hostname}|{ip}" for hostname, ip in hosts)
+    observed_at = dt.datetime.now(dt.UTC)
+    db.execute(delete(VmHostCoverage))
+    bulk_insert(db, VmHostCoverage.__table__, ("source_key", "observed_at"), ((key, observed_at) for key in covered))
     step(5, "Очищаем промежуточные таблицы и фиксируем снимок")
     db.execute(delete(STAGE_PAIR))
     db.execute(delete(STAGE_HOST))
@@ -380,7 +389,7 @@ def run_import(
 ) -> ImportStats:
     temp: Path | None = None
     client: MpVmClient | None = None
-    docker_collected = False
+    inventory_collected = False
     sql_name = import_sql_name(handle.id)
 
     def label_transaction(_: Session, tx: SessionTransaction, conn: SqlConnection) -> None:
@@ -395,6 +404,11 @@ def run_import(
             temp = data_dir / "vm" / f"export-{handle.id}.csv"
             temp.parent.mkdir(parents=True, exist_ok=True)
             client = MpVmClient(conn, make_client(conn))
+            from api.modules.vm.services.host_packages import collect_packages
+
+            handle.stage("packages", message="Собираем установленные пакеты MaxPatrol для SBOM")
+            inventory_collected = collect_packages(db, client, conn, data_dir)
+            handle.stage("fetching", message=f"экспорт находок из {conn.host}")
             client.export_csv(
                 build_pdql(conn),
                 temp,
@@ -409,12 +423,13 @@ def run_import(
 
             handle.stage("docker", message="образы и контейнеры Docker")
             docker_collected = collect_inventory(db, client, conn, data_dir)
+            inventory_collected = inventory_collected or docker_collected
         handle.stage("preparing", message="Очищаем промежуточные таблицы перед разбором файла")
         _clear_stage(db)
-        hosts, staged_pairs = _parse_into_stage(db, handle, path)
+        hosts, staged_pairs, empty_hosts = _parse_into_stage(db, handle, path)
         if not hosts:
             raise ValueError("в выгрузке нет ни одного хоста с CVE — проверьте формат файла")
-        stats, new_cves = _replace_current(db, hosts, staged_pairs, handle)
+        stats, new_cves = _replace_current(db, hosts, staged_pairs, handle, empty_hosts)
         handle.stage("enriching", total=len(new_cves) or None, message=f"Обогащаем новые CVE ({_num(len(new_cves))})")
         rebuild_cves(db, settings.weights, new_cves, handle if new_cves else None)
         handle.stage("hosts", message=f"Обновляем значимость хостов ({_num(stats.hosts)})")
@@ -454,14 +469,14 @@ def run_import(
                 log.exception("локальные группы VM не получены")
                 handle.stage("groups", message=f"локальные группы не получены: {exc.__class__.__name__}")
         _notify_assets(db)
-        docker_collected = False
+        inventory_collected = False
         if client is None:
             handle.stage("done", message=f"Хостов {_num(stats.hosts)}, уникальных пар хост–CVE {_num(stats.pairs)}")
         return stats
     finally:
         if event.contains(db, "after_begin", label_transaction):
             event.remove(db, "after_begin", label_transaction)
-        if docker_collected:
+        if inventory_collected:
             # Inventory remains useful even if there are no vulnerable hosts.
             db.rollback()
             _notify_assets(db)

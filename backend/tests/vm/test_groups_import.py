@@ -133,18 +133,28 @@ def test_os_exclude_escapes_backslash_before_quote() -> None:
 
 
 class FakeVm:
-    """Три PDQL одного подключения: основной, группы Windows, группы Linux."""
+    """Выгрузки одного подключения для полного импорта MaxPatrol."""
 
     def __init__(self, fail: set[str] | None = None, bodies: dict[str, bytes] | None = None) -> None:
         self.fail = fail or set()
         self.pdql: list[str] = []
-        self.csv = {"main": (FIXTURES / "hosts.csv").read_bytes(), "win": WIN_CSV.encode(), "lin": LIN_CSV.encode(), **(bodies or {})}
+        self.csv = {
+            "main": (FIXTURES / "hosts.csv").read_bytes(),
+            "unix_packages": b"@UnixHost;UnixHost.OsName;UnixHost.Packages.Name;UnixHost.Packages.Version\n",
+            "software": b"@Host;Host.OsName;Host.Softs.Name;Host.Softs.Version;Host.Softs.Vendor\n",
+            "win": WIN_CSV.encode(), "lin": LIN_CSV.encode(), **(bodies or {}),
+        }
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/assets_grid"):
             pdql = json.loads(request.content)["pdql"]
             self.pdql.append(pdql)
-            token = "win" if pdql.startswith("select(WindowsHost") else "lin" if pdql.startswith("select(UnixHost") else "main"
+            if "UnixHost.Packages.Name" in pdql:
+                token = "unix_packages"
+            elif "Host.Softs.Name" in pdql:
+                token = "software"
+            else:
+                token = "win" if pdql.startswith("select(WindowsHost") else "lin" if pdql.startswith("select(UnixHost") else "main"
             return httpx.Response(200, json={"token": token})
         token = request.url.params["pdqlToken"]
         if token in self.fail:
@@ -203,8 +213,9 @@ def test_vm_import_writes_groups_of_both_families(db_session: Any, tmp_path: Pat
     fake = FakeVm()
     handle = _run_vm(db_session, tmp_path, monkeypatch, fake)
     assert _message(db_session, handle) == "локальные группы: Windows — строк 3, хостов 1; Linux — строк 3, хостов 1"
-    assert len(fake.pdql) == 5
-    assert fake.pdql[0].startswith("select(@Host") and fake.pdql[3].startswith("select(WindowsHost") and fake.pdql[4].startswith("select(UnixHost")
+    for fragment in ("UnixHost.Packages.Name", "Host.Softs.Name", "Host.@Vulners.CVEs",
+                     "<DockerEngine>.Images.", "<DockerEngine>.Containers.", "select(WindowsHost", "select(UnixHost"):
+        assert sum(fragment in query for query in fake.pdql) == 1, fragment
     assert _groups(db_session) == [
         ("linux", "srv02.corp.local", "adm", ""),
         ("linux", "srv02.corp.local", "wheel", "pcadmin"),

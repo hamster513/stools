@@ -1,5 +1,11 @@
 # Python 3.13 and the base manifest are shared by both target architectures.
 ARG PYTHON_IMAGE=python:3.13-alpine3.23@sha256:bf88c40985006a79ca25458159a4da1dffc457f9ae234e948b2d6df56ca5ebd2
+ARG TRIVY_IMAGE=aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+FROM ${TRIVY_IMAGE} AS trivy
+# Both target architectures use the same offline vulnerability database.
+FROM --platform=$BUILDPLATFORM ${TRIVY_IMAGE} AS trivy-db
+RUN trivy image --cache-dir /opt/trivy-cache --download-db-only --disable-telemetry --no-progress \
+    && chmod -R a+rX /opt/trivy-cache/db
 # Build and sign the SQLite backport against stable Alpine; no edge repositories.
 FROM ${PYTHON_IMAGE} AS sqlite-build
 RUN apk upgrade --no-cache && apk add --no-cache alpine-sdk readline-dev
@@ -37,6 +43,8 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/python -m pip uninstall -y pip
 
 FROM ${PYTHON_IMAGE} AS runtime
+COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
+COPY --from=trivy-db /opt/trivy-cache/db/ /opt/trivy-cache/db/
 COPY --from=sqlite-build /out/*.rsa.pub /etc/apk/keys/
 COPY --from=sqlite-build /out/sqlite-libs.apk /tmp/sqlite-libs.apk
 # Git is required by the GHSA incremental updater; keep HTTPS trust and native libs.

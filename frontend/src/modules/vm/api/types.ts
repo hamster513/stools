@@ -334,6 +334,7 @@ export const STAGE_LABELS: Record<string, string> = {
   status: 'смена статусов',
   groups: 'локальные группы',
   docker: 'образы и контейнеры Docker',
+  packages: 'установленные пакеты хостов',
   runtime: 'сопоставление образов с хостами',
   done: 'готово',
 }

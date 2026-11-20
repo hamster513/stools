@@ -22,6 +22,7 @@ from api.modules.assets.routers import (
     networks,
     overview,
     racktables,
+    sbom,
     settings,
     software,
     users,
@@ -39,6 +40,7 @@ from api.platform.findings.adapters import register_adapter
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 # zone_rules — до networks: иначе `/networks/{network_id}` перехватит `/networks/zone-rules`.
 for sub in (
+    sbom.router,
     software.router,
     logons.router,
     container_images.router,

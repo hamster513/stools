@@ -189,6 +189,34 @@ def unlock_login(
     typer.echo(f"удалено неудачных входов: {deleted}")
 
 
+@app.command("import-trivy-db")
+def import_trivy_db() -> None:
+    """Установить ZIP базы Trivy из стандартного ввода для автономной проверки SBOM."""
+    import sys
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    from api.limits import VM_UPLOAD
+    from api.modules.vm.services.trivy_update import install
+
+    data_dir = get_settings().data_dir
+    data_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(dir=data_dir, suffix=".zip") as upload:
+            while chunk := sys.stdin.buffer.read(1024**2):
+                if upload.tell() + len(chunk) > VM_UPLOAD:
+                    raise ValueError("ZIP базы Trivy превышает 500 МиБ")
+                upload.write(chunk)
+            upload.flush()
+            result = install(Path(upload.name), data_dir)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    status = "уже используется" if result["duplicate"] else "установлена"
+    typer.echo(f"База Trivy от {result['db_updated_at']} {status}")
+
+
 def main() -> None:
     app()
 

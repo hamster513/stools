@@ -3,6 +3,12 @@
 Распакуйте весь комплект. На macOS/Linux доступны `sh download-stools.sh`, `python3 offline_download.py` и прямой запуск `./offline_download.py`. Не передавайте `.py` в `sh`. Нужен Python 3.11+. Git нужен для обновлений GHSA и правил Sigma/Elastic. Установка зависимостей автоматически не выполняется.
 Unpack the entire kit. Python 3.11+ is required; Git is required for GHSA and rule updates. No dependencies are installed automatically.
 
+## Автономное обновление Trivy / Offline Trivy DB update
+
+На компьютере с интернетом выполните `sh download-stools.sh --datasets trivy --mode full`. Для PowerShell выполните `.\download-stools.ps1 -Datasets trivy -Mode Full`. Перенесите полученный `trivy-full.zip` и `update-trivy-db.sh` на Linux-сервер STools. Запустите `sh update-trivy-db.sh trivy-full.zip`. Если имя контейнера API отличается от `stools-api-1`, передайте его вторым аргументом. Этот же ZIP принимает кнопка **Загрузить архивы** в настройках справочников VM.
+
+On the connected machine select `trivy`. Transfer the resulting ZIP and `update-trivy-db.sh` to the offline STools server. Run `sh update-trivy-db.sh trivy-full.zip [API_CONTAINER]`, or upload the ZIP in **Settings → VM → References**. Both download modes package the complete official database. Unchanged data is reused from the download cache.
+
 ## Меню / Menu
 
 Linux:
@@ -32,7 +38,7 @@ sh download-stools.sh --datasets all --mode full --output ./transfer --lang en -
 .\download-stools.ps1 -Datasets all -Mode Full -Output D:\Transfer -Lang en -Quiet
 ```
 
-Данные / Datasets: `all`, `nvd`, `ghsa`, `epss`, `kev`, `exploitdb`, `msf`, `attack` (CVE→ATT&CK/CTID), `news` (RSS/Atom + Telegram), `sigma`, `elastic`.
+Данные / Datasets: `all`, `nvd`, `ghsa`, `epss`, `kev`, `exploitdb`, `msf`, `attack` (CVE→ATT&CK/CTID), `news` (RSS/Atom + Telegram), `sigma`, `elastic`, `trivy` (база уязвимостей SBOM).
 
 Периоды / Periods: `1d` — сутки/day; `7d` — неделя/week; `3m` — три календарных месяца/three calendar months. Интервал UTC `(начало, конец]`; более трёх месяцев недопустимо. В полном режиме период не применяется. Один запуск использует общее время окончания для всех выбранных данных.
 

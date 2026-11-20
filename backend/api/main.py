@@ -83,9 +83,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     from api.collector_routes import spawn
     from api.modules.vm.services.trends.analyze import resume_pending
     spawn(resume_pending)
+    from api.modules.vm.services import host_sbom_worker
+    stop_host_sbom = host_sbom_worker.start(get_sessionmaker(), get_settings().data_dir)
     try:
         yield
     finally:
+        stop_host_sbom()
         scheduler.stop()
 
 

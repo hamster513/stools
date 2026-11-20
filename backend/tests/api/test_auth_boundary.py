@@ -150,6 +150,7 @@ BUCKET: dict[tuple[str, str], str] = {
     ("PATCH", "/api/assets/assets/{asset_id}"): "write",
     ("POST", "/api/assets/assets/{asset_id}/merge"): "write",
     ("POST", "/api/assets/assets/{asset_id}/pin"): "write",
+    ("POST", "/api/assets/assets/{asset_id}/sbom/scan"): "write",
     ("POST", "/api/assets/dns"): "admin",
     ("DELETE", "/api/assets/dns/{dns_id}"): "admin",
     ("PUT", "/api/assets/dns/{dns_id}"): "admin",
@@ -359,6 +360,8 @@ def test_module_level_matrix(monkeypatch: pytest.MonkeyPatch, client_as: Any, ar
     mismatches = []
     for route, route_path, method in routes:
         expect_403 = rank(level) < rank(_expected(method, route_path))
+        if route_path in ("/api/assets/assets/{asset_id}/sbom/scan", "/api/assets/assets/{asset_id}/sbom/comparison"):
+            expect_403 = True  # Эта роль имеет права лишь в Assets, для находок нужен также VM read.
         got = client.request(method, _sample(route, route_path)).status_code
         if (got == 403) != expect_403:
             mismatches.append((method, route_path, "403" if expect_403 else "не 403", got))

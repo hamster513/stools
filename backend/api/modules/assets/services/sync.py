@@ -138,6 +138,7 @@ def _host_names(hostname: str) -> tuple[str, str, str]:
 def observations_from_vm(db: Session) -> Iterator[Observed]:
     from api.modules.vm.docker_models import VmDockerImage
     from api.modules.vm.models import VmHost, VmHostCve, VmImport
+    from api.modules.vm.services.host_packages import package_hosts
 
     seen_at = db.execute(select(func.max(VmImport.finished_at))).scalar() or utcnow()
     cves = dict(db.execute(select(VmHostCve.host_id, func.count()).group_by(VmHostCve.host_id)).tuples().all())
@@ -150,6 +151,14 @@ def observations_from_vm(db: Session) -> Iterator[Observed]:
             ips=[h.ip] if h.ip else [], os=h.os_name, seen_at=seen_at,
             extra={"zone": h.zone, "groups": h.groups, "cve_count": int(cves.get(h.id, 0))},
         )
+    for hostname, ip, os_name, collected_at in package_hosts(db):
+        if (hostname, ip) in known:
+            continue
+        known.add((hostname, ip))
+        name, fqdn, domain = _host_names(hostname)
+        yield Observed(source="vm", source_key=f"{hostname}|{ip}", name=name, fqdn=fqdn, domain=domain,
+                       ip=ip, ips=[ip] if ip else [], os=os_name, seen_at=collected_at,
+                       extra={"package_inventory": True})
     # Docker inventory includes servers without CVEs; they still belong in Assets.
     for image in db.scalars(select(VmDockerImage)):
         for host in image.details["hosts"]:

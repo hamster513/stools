@@ -37,6 +37,7 @@ class HostRow:
     criticality: str = ""
     zone: str = ""
     cves: list[str] = field(default_factory=list)
+    empty_cves_observed: bool = False
 
 
 def split_host(text: str) -> tuple[str, str]:
@@ -76,6 +77,7 @@ def _row_from_csv(row: dict[str, str]) -> HostRow | None:
         criticality=_norm_crit(row.get(COL_CRIT) or ""),
         zone=(row.get(COL_ZONE) or "").strip(),
         cves=split_cves(row.get(COL_CVES) or ""),
+        empty_cves_observed=not (row.get(COL_CVES) or "").strip(),
     )
 
 
@@ -128,6 +130,7 @@ def _row_from_json(item: dict[str, Any]) -> HostRow | None:
         criticality=_norm_crit(str(item.get("criticality") or "")),
         zone=str(item.get("zone") or "").strip(),
         cves=split_cves(str(item.get("cve") or "")),
+        empty_cves_observed="cve" in item and item["cve"] in (None, ""),
     )
 
 

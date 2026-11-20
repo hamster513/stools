@@ -16,7 +16,7 @@ from pathlib import Path
 import ref_updates
 import ref_window
 from offline_http import Transport
-from offline_telegram import collect_news, TELEGRAM_PAGE_DELAY
+from offline_telegram import TELEGRAM_PAGE_DELAY, collect_news
 
 
 def intel_module():
@@ -332,6 +332,10 @@ def execute_dataset(name, config, run_dir, progress):
     cache = config.output / ".stools-cache" / name
     transport = Transport(no_proxy=config.no_proxy, progress=progress, lang=config.lang)
     output = run_dir / (name + "-" + config.mode + ".zip")
+    if name == "trivy":
+        from offline_trivy import download_database
+
+        return download_database(output, cache, transport, progress, config.lang)
     if name in ("news", "sigma", "elastic"):
         return intel_archive(
             name, output, transport, config.mode, config.period, now, cache, progress, lang=config.lang

@@ -1,6 +1,7 @@
 import { SiemLogons } from './SiemLogons'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
+import { Download, Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
+import { HostSbomPanel } from './HostSbomPanel'
 import { SoftwareInventory } from './SoftwareInventory'
 import { DrawerTabs } from '@/platform/tabs/DrawerTabs'
 import { ApiRequestError } from '@/api/client'
@@ -471,6 +472,7 @@ function MergePicker({ a, onPick }: { a: AssetDetail; onPick: (other: { id: numb
 export function AssetDrawer({ assetId, onClose, onOpenAsset, beforeContainers }: { assetId: number | null; onClose: () => void; onOpenAsset: (id: number) => void; beforeContainers: (id: number) => void }) {
   const open = assetId !== null
   const { write } = useCan()
+  const { read: vmRead } = useCan('vm')
   const detail = useAsset(assetId)
   const merge = useMergeAssets(assetId ?? 0)
   const detach = useDetachObservation()
@@ -495,13 +497,20 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset, beforeContainers }:
                 <Monitor size={16} className="shrink-0 text-text-secondary" aria-hidden />
                 <span className="truncate text-sm text-text">{a ? title(a) : `хост #${assetId}`}</span>
               </div>
-              <button ref={closeRef} type="button" onClick={onClose} className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" aria-label="Свернуть (Esc)"><X size={16} aria-hidden /></button>
+              <div className="flex shrink-0 items-center gap-3">
+                {a && a.merged_into === null && <a href={`/api/assets/assets/${a.id}/sbom`} download
+                  className="inline-flex items-center gap-1.5 rounded border border-grid px-2 py-1 text-xs text-text hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-focus-ring">
+                  <Download size={14} aria-hidden /> Скачать SBOM</a>}
+                <button ref={closeRef} type="button" onClick={onClose} className="rounded p-1 text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" aria-label="Свернуть (Esc)"><X size={16} aria-hidden /></button>
+              </div>
             </div>
-            <DrawerTabs tabs={[{ key: 'overview', label: 'Обзор' }, { key: 'software', label: 'ПО и уязвимости' }]} current={tab} onSelect={setTab} label="Разделы хоста" />
+            <DrawerTabs tabs={[{ key: 'overview', label: 'Обзор' }, { key: 'software', label: 'ПО и уязвимости' },
+              ...(vmRead && a?.merged_into === null ? [{ key: 'sbom', label: 'SBOM и Trivy' }] : [])]} current={tab} onSelect={setTab} label="Разделы хоста" />
             <div className="flex-1 overflow-y-auto px-4 py-3 text-xs">
               {detail.isLoading && <div className="flex justify-center py-8"><Spinner /></div>}
               {detail.error && <p className="text-kind-1">{detail.error instanceof ApiRequestError ? detail.error.message : 'Не удалось загрузить хост'}</p>}
               {a && tab === 'software' && <SoftwareInventory key={a.id} assetId={a.id} />}
+              {a && tab === 'sbom' && vmRead && <HostSbomPanel key={a.id} assetId={a.id} />}
               {a && tab === 'overview' && (
                 <>
                   {a.merged_into !== null && (

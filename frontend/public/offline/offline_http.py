@@ -181,7 +181,13 @@ class Redirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         checked_url(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if old.scheme == "https" and new.scheme != "https":
+            raise ValueError("unsafe_redirect")
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and (old.scheme, old.netloc) != (new.scheme, new.netloc):
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 class Transport:
