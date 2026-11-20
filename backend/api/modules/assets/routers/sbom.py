@@ -44,10 +44,35 @@ def download(asset: Asset = Depends(host), db: Session = Depends(get_db)) -> Res
     )
 
 
+@router.get("/assets/{asset_id}/sbom/components")
+def components(
+    asset: Asset = Depends(host),
+    db: Session = Depends(get_db),
+    q: str = Query("", max_length=255),
+    limit: int = Query(10, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    document, _ = inventory(db, asset)
+    rows = document["components"]
+    term = q.strip().casefold()
+    matches = [
+        c for c in rows if not term or term in c["name"].casefold() or term in c.get("version", "").casefold()
+    ]
+    return {
+        "total": len(matches),
+        "identified": sum(bool(c.get("purl")) for c in rows),
+        "items": [
+            {"ref": c["bom-ref"], "name": c["name"], "version": c.get("version"),
+             "sources": [p["value"] for p in c["properties"] if p["name"] == "stools:source"]}
+            for c in matches[offset:offset + limit]
+        ],
+    }
+
+
 @router.get("/assets/{asset_id}/sbom/comparison", dependencies=[Depends(vm_reader)])
 def findings(
     asset: Asset = Depends(host),
-    group: Literal["all", "both", "trivy_only", "vm_only"] = "all",
+    group: Literal["all", "both", "trivy_only", "vm_only", "packages", "unlinked"] = "all",
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     settings: Settings = Depends(get_settings),

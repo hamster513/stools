@@ -1,6 +1,7 @@
 """Read-only comparison of Trivy's last success and the current MaxPatrol findings on the same asset."""
 
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
 
 from sqlalchemy import func, literal_column, select
@@ -45,11 +46,6 @@ def comparison(
     host_ids = db.scalars(
         select(VmHost.id).where((VmHost.hostname + literal_column("'|'") + VmHost.ip).in_(keys))
     ).all()
-    vm_ids = (
-        set(db.scalars(select(VmHostCve.cve_id).where(VmHostCve.host_id.in_(host_ids))))
-        if host_ids
-        else set()
-    )
     vm_at = db.scalar(
         select(func.max(VmHostCoverage.observed_at)).where(VmHostCoverage.source_key.in_(keys))
     )
@@ -57,9 +53,50 @@ def comparison(
     if vm_at is None and host_ids:
         vm_at = db.scalar(select(func.max(VmImport.finished_at)))
     findings = (scan.findings or []) if last_success else []
-    canonical = (
-        canonical_finding_ids(db, vm_ids | {row["vuln_id"] for row in findings}) if findings else {}
+    comparable = bool(
+        vm_available
+        and last_success
+        and scan.checked
+        and status in {"ready", "partial"}
+        and not any(s in {"stale", "error", "partial"} for s in sources.values())
     )
+    return {
+        "status": status,
+        "inventory": sources,
+        "components": components,
+        "inventory_revision": target,
+        "checked": scan.checked if last_success else None,
+        "scanned_components": scan.scanned_components if last_success else None,
+        "scan_at": scan.scan_at if last_success else None,
+        "db_version": scan.db_version if last_success else None,
+        "scanner_version": scan.scanner_version if last_success else None,
+        "error": error,
+        "vm_available": vm_available,
+        "vm_at": vm_at,
+        **_finding_page(db, host_ids, findings, comparable, group, limit, offset),
+    }
+
+
+def _finding_page(
+    db: Session, host_ids: Sequence[int], findings: list[dict], comparable: bool,
+    group: str, limit: int, offset: int,
+) -> dict:
+    vm_query = select(VmHostCve.cve_id).where(VmHostCve.host_id.in_(host_ids)).distinct()
+    if not findings:
+        # While Trivy is queued, the card only needs a count of the host's MaxPatrol findings.
+        total = db.scalar(select(func.count()).select_from(vm_query.subquery())) if host_ids else 0
+        kind = "vm_only" if comparable else "vm_uncompared"
+        include = group in {"all", "unlinked", kind}
+        ids = db.scalars(vm_query.order_by(VmHostCve.cve_id).offset(offset).limit(limit)) if include and total else ()
+        return {
+            "counts": {"both": 0, "trivy_only": 0, "vm_only": total} if comparable else None,
+            "unlinked_total": total,
+            "total": total if include else 0,
+            "items": [{"id": vid, "group": kind, "packages": []} for vid in ids],
+        }
+
+    vm_ids = set(db.scalars(vm_query)) if host_ids else set()
+    canonical = canonical_finding_ids(db, vm_ids | {row["vuln_id"] for row in findings})
     vm_ids = {canonical.get(vid, vid) for vid in vm_ids}
     packages = defaultdict(dict)
     for row in findings:
@@ -75,13 +112,6 @@ def comparison(
             for k in ("package", "installed_version", "fixed_version", "purl", "severity")
         }
     trivy_ids = set(packages)
-    comparable = bool(
-        vm_available
-        and last_success
-        and scan.checked
-        and status in {"ready", "partial"}
-        and not any(s in {"stale", "error", "partial"} for s in sources.values())
-    )
     counts = None
     sections = {"trivy_uncompared": trivy_ids, "vm_uncompared": vm_ids}
     if comparable:
@@ -91,28 +121,28 @@ def comparison(
             "vm_only": vm_ids - trivy_ids,
         }
         counts = {name: len(values) for name, values in sections.items()}
-    rows = [
-        (name, vid)
-        for name, ids in sections.items()
-        if group == "all" or group == name
-        for vid in sorted(ids)
-    ]
-    return {
-        "status": status,
-        "inventory": sources,
-        "components": components,
-        "checked": scan.checked if last_success else None,
-        "scanned_components": scan.scanned_components if last_success else None,
-        "scan_at": scan.scan_at if last_success else None,
-        "db_version": scan.db_version if last_success else None,
-        "scanner_version": scan.scanner_version if last_success else None,
-        "error": error,
-        "vm_available": vm_available,
-        "vm_at": vm_at,
-        "counts": counts,
-        "total": len(rows),
-        "items": [
-            {"id": vid, "group": name, "packages": list(packages[vid].values())}
-            for name, vid in rows[offset : offset + limit]
-        ],
-    }
+    unlinked = "vm_only" if comparable else "vm_uncompared"
+    unlinked_total = len(sections[unlinked])
+    if group == "packages":
+        visible = {key: ids for key, ids in sections.items() if key != unlinked}
+    elif group == "unlinked":
+        visible = {unlinked: sections[unlinked]}
+    elif group == "all":
+        visible = sections
+    else:
+        visible = {group: sections.get(group, set())}
+    total = sum(len(ids) for ids in visible.values())
+    items = []
+    for kind, ids in visible.items():
+        if offset >= len(ids):
+            offset -= len(ids)
+            continue
+        page = sorted(ids)[offset:offset + limit - len(items)]
+        items.extend(
+            {"id": vid, "group": kind, "packages": [] if kind == unlinked else list(packages[vid].values())}
+            for vid in page
+        )
+        if len(items) == limit:
+            break
+        offset = 0
+    return {"counts": counts, "unlinked_total": unlinked_total, "total": total, "items": items}

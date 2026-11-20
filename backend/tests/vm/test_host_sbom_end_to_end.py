@@ -186,6 +186,12 @@ def test_worker_scans_the_exact_download_and_compares_current_feeds(
         counts = result["counts"]
         assert counts["both"] == counts["vm_only"] == 1 and counts["trivy_only"] >= 1
         assert result["total"] == sum(counts.values())
+        linked = client.get(url + "/comparison", params={"group": "packages", "limit": 200}).json()
+        assert linked["total"] == counts["both"] + counts["trivy_only"]
+        assert all(item["packages"] for item in linked["items"])
+        assert linked["unlinked_total"] == counts["vm_only"]
+        unlinked = client.get(url + "/comparison", params={"group": "unlinked"}).json()
+        assert [(item["id"], item["packages"]) for item in unlinked["items"]] == [(VM_ONLY, [])]
         for offset, size in ((counts["trivy_only"] - 1, 1), (counts["trivy_only"], 0)):
             page = client.get(
                 url + "/comparison", params={"group": "trivy_only", "limit": 1, "offset": offset}
@@ -222,3 +228,36 @@ def test_worker_scans_the_exact_download_and_compares_current_feeds(
             }
         ),
     )
+
+
+def test_inventory_before_scan_and_unlinked_findings(db_session, client_as, monkeypatch):
+    client = client_as("admin")
+    import_inventories(client, monkeypatch)
+    asset_id = db_session.scalar(
+        select(AssetObservation.asset_id).where(AssetObservation.source == "vm").limit(1)
+    )
+    url = f"/api/assets/assets/{asset_id}/sbom"
+    monkeypatch.setattr(trivy_scan, "database_revision", lambda _: "test-database")
+    packages = client.get(url + "/components", params={"q": DISPLAY_APP.upper(), "limit": 1})
+    assert packages.status_code == 200
+    page = packages.json()
+    assert (page["total"], page["identified"]) == (1, 1)
+    name, version, sources = (page["items"][0][field] for field in ("name", "version", "sources"))
+    assert (name, version, sources) == (DISPLAY_APP, "9.2", ["ksc"])
+    downloaded = client.get(url).json()["components"]
+    remaining = client.get(url + "/components", params={"offset": 1}).json()
+    assert remaining["total"] == len(downloaded)
+    assert remaining["items"][0]["name"] == downloaded[1]["name"]
+
+    package_findings = client.get(url + "/comparison", params={"group": "packages"}).json()
+    assert package_findings["status"] == "pending" and package_findings["inventory_revision"]
+    assert package_findings["total"] == 0 and package_findings["items"] == []
+    assert package_findings["unlinked_total"] == 2 and package_findings["counts"] is None
+    raw = client.get(url + "/comparison", params={"group": "unlinked", "limit": 1, "offset": 1}).json()
+    assert raw["total"] == 2
+    assert [(row["id"], row["group"], row["packages"]) for row in raw["items"]] == [
+        (sorted([OVERLAP, VM_ONLY])[1], "vm_uncompared", [])
+    ]
+    assert client.get(url + "/comparison").json()["total"] == 2
+    assert client_as({"assets": "read"}).get(url + "/components").status_code == 200
+    assert client_as({"vm": "read"}).get(url + "/components").status_code == 403
