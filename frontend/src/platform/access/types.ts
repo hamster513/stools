@@ -8,10 +8,10 @@
 export type Level = 'deny' | 'read' | 'write' | 'admin'
 
 /** Область прав: модуль или платформа (общие настройки). */
-export type Area = 'attack' | 'siem' | 'vm' | 'ad' | 'ksc' | 'assets' | 'toolbox' | 'irp' | 'platform'
+export type Area = 'attack' | 'siem' | 'vm' | 'ad' | 'ksc' | 'assets' | 'toolbox' | 'radar' | 'irp' | 'platform'
 
 /** Области в порядке рейки, платформа последней. */
-export const AREAS: readonly Area[] = ['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', 'toolbox', 'irp', 'platform']
+export const AREAS: readonly Area[] = ['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', 'toolbox', 'radar', 'irp', 'platform']
 
 /** Уровни в модуле — словами человека. */
 export const LEVEL_TITLES: Record<Level, string> = {

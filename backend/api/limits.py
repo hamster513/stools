@@ -69,6 +69,8 @@ DEFAULT_LIMIT = 2 * MB
 #: (метод, путь ручки загрузки, лимит тела в байтах). Путь сравнивается целиком,
 #: `{name}` — любой непустой сегмент. Всё, чего здесь нет, — DEFAULT_LIMIT.
 BODY_LIMITS: list[tuple[str, str, int]] = [
+    ("POST", "/api/radar/nginx/preview", 17 * MB),
+    ("POST", "/api/radar/nginx/import", 17 * MB),
     ("POST", "/api/siem/snapshots", SIEM_UPLOAD),
     ("POST", "/api/siem/hunting/intel/import", TH_INTEL_UPLOAD),
     ("POST", "/api/vm/trends/news-archive", TH_INTEL_UPLOAD),

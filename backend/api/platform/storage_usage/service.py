@@ -12,7 +12,7 @@ from .models import StorageSample
 
 TITLES = {'ad': 'Active Directory', 'ksc': 'Антивирус / KSC', 'vm': 'Уязвимости / VM',
           'th': 'Threat Hunting', 'siem': 'SIEM', 'assets': 'Активы', 'attack': 'ATT&CK',
-          'toolbox': 'Toolbox', 'platform': 'Общие данные платформы',
+          'radar': 'Радар', 'toolbox': 'Toolbox', 'platform': 'Общие данные платформы',
           'database_system': 'Системное пространство PostgreSQL', 'collector': 'Коллектор новостей'}
 SIEM_TABLES = {'snapshot', 'snapshot_profile', 'rule', 'rule_dependency', 'rule_field', 'rule_filter_ref',
                'rule_msgid', 'rule_table_ref', 'table_list', 'clone_pair', 'divergence', 'finding',
@@ -26,7 +26,7 @@ def table_module(schema: str, name: str) -> str:
         return 'siem'
     if name in ('asset', 'network', 'network_zone_rule') or name.startswith('asset_'):
         return 'assets'
-    for prefix in ('ad', 'ksc', 'vm', 'th', 'attack', 'toolbox'):
+    for prefix in ('ad', 'ksc', 'vm', 'th', 'attack', 'toolbox', 'radar'):
         if name.startswith(prefix + '_'):
             return prefix
     return 'platform'

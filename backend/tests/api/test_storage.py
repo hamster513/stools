@@ -1,10 +1,12 @@
 import datetime as dt
 import os
-from sqlalchemy import select
+import time
+from sqlalchemy import func, select
 from api.platform.storage_usage import service
 from api.platform.storage_usage.files import measure_files
 from api.platform.storage_usage.models import StorageSample
 from api.platform.scheduler import tick
+from api.platform.sync_queue.worker import dispatch
 
 URL = '/api/settings/storage'
 
@@ -31,7 +33,7 @@ def test_module_assignment_and_pg_accounting(auth_client, monkeypatch):
     value = response.json()
     assert value['database_bytes'] > 0
     assert sum(m['data_bytes'] + m['index_bytes'] for m in value['modules']) == value['database_bytes']
-    for name, owner in [('ad_snapshot', 'ad'), ('ksc_host', 'ksc'), ('vm_trend_publication', 'vm'), ('th_intel_item', 'th'), ('snapshot', 'siem'), ('asset', 'assets'), ('app_user', 'platform')]:
+    for name, owner in [('ad_snapshot', 'ad'), ('ksc_host', 'ksc'), ('vm_trend_publication', 'vm'), ('th_intel_item', 'th'), ('snapshot', 'siem'), ('asset', 'assets'), ('radar_server', 'radar'), ('radar_snapshot', 'radar'), ('app_user', 'platform')]:
         assert service.table_module('public', name) == owner
     assert service.table_module('other', 'ad_snapshot') == 'platform'
     assert auth_client.post(URL + '/measure').status_code == 409
@@ -51,10 +53,17 @@ def test_schedule_exposed_runs_once_and_can_be_disabled(auth_client, db_session,
     response = auth_client.put('/api/settings/schedules/platform/storage/0', json={'interval_hours': 24, 'weekdays': [0, 1, 2, 3, 4, 5, 6], 'run_time': '03:00'})
     assert response.status_code == 200
     when = dt.datetime.fromisoformat(response.json()['next_run_at'])
-    tick(db_session, when)
-    assert len(list(db_session.scalars(select(StorageSample)))) == 1
-    tick(db_session, when)
-    assert len(list(db_session.scalars(select(StorageSample)))) == 1
+    assert len(tick(db_session, when)) == 1
+    # The common scheduler enqueues work; measurement happens in the queue worker.
+    assert db_session.scalar(select(func.count()).select_from(StorageSample)) == 0
+    dispatch(db_session)
+    deadline = time.monotonic() + 5
+    while db_session.scalar(select(func.count()).select_from(StorageSample)) == 0 and time.monotonic() < deadline:
+        db_session.rollback()
+        time.sleep(0.02)
+    assert db_session.scalar(select(func.count()).select_from(StorageSample)) == 1
+    assert tick(db_session, when) == []
+    assert db_session.scalar(select(func.count()).select_from(StorageSample)) == 1
     assert auth_client.delete('/api/settings/schedules/platform/storage/0').status_code == 204
 
 def test_history_real_points_and_incomplete(auth_client, db_session):

@@ -127,6 +127,8 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 #: `admin` — настройка модуля (подключения, источники, расписания, settings,
 #: справочники, зоны), `write` — работа с данными. Чтение (GET) — всегда `read`.
 BUCKET: dict[tuple[str, str], str] = {
+    ("POST", "/api/radar/nginx/preview"): "write",
+    ("POST", "/api/radar/nginx/import"): "write",
     ("DELETE", "/api/ad/ca-data/{ca_data_id}"): "write",
     ("POST", "/api/ad/connections"): "admin",
     ("DELETE", "/api/ad/connections/{connection_id}"): "admin",

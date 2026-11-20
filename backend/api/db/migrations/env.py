@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 import api.modules.ad.models
 import api.modules.assets.models
 import api.modules.attack.models
+import api.modules.radar.models
 import api.modules.vm.models  # таблицы модуля VM в metadata
 import api.platform.data_revision
 import api.platform.diagnostics.models

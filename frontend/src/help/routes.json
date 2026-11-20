@@ -92,5 +92,9 @@
   "/vm/images/:id",
   "/vm/jobs",
   "/vm/trends",
-  "/vm/vulns"
+  "/vm/vulns",
+  "/radar",
+  "/radar/scanfactory",
+  "/radar/nginx/:id",
+  "/settings/radar"
 ]

@@ -1,4 +1,4 @@
-import { Bug, Grid3x3, Network, Radar, Server, ShieldAlert, Users, Wrench, type LucideIcon } from 'lucide-react'
+import { Bug, Grid3x3, Radar, Server, ShieldAlert, Users, Wrench, type LucideIcon } from 'lucide-react'
 
 export type ModuleStatus = 'available' | 'planned'
 
@@ -83,13 +83,12 @@ export const MODULES: readonly ModuleSpec[] = [
     status: 'available',
   },
   {
-    id: 'fw',
-    code: 'FW',
-    title: 'Сетевой периметр',
-    description:
-      'Правила межсетевых экранов и открытые сервисы: лишние разрешения, мёртвые правила, доступ снаружи.',
-    icon: Network,
-    status: 'planned',
+    id: 'radar',
+    code: 'Радар',
+    title: 'Радар',
+    description: 'Конфигурации nginx и пути до приложений: виртуальные серверы, маршруты, backend и ограничения доступа.',
+    icon: Radar,
+    status: 'available',
   },
 ]
 

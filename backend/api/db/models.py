@@ -80,7 +80,7 @@ class SessionRow(Base):
 #: Уровни доступа по порядку включения: каждый следующий разрешает всё, что предыдущий.
 LEVELS = ("deny", "read", "write", "admin")
 #: Идентификаторы модулей — они же префиксы `/api/<id>/` (api/modules/__init__.py).
-MODULE_IDS = ("attack", "siem", "vm", "ad", "ksc", "assets", "toolbox")
+MODULE_IDS = ("attack", "siem", "vm", "ad", "ksc", "assets", "toolbox", "radar")
 #: Области, по которым роль задаёт уровень: модули и платформа (пользователи, настройки).
 AREAS = MODULE_IDS + ("irp", "platform")
 

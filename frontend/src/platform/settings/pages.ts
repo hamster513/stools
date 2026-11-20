@@ -8,6 +8,7 @@ import { SettingsPage as AdSettingsPage } from '@/modules/ad/pages/SettingsPage'
 import { SettingsPage as KscSettingsPage } from '@/modules/ksc/pages/SettingsPage'
 import { SettingsPage as AssetsSettingsPage } from '@/modules/assets/pages/SettingsPage'
 import { SettingsPage as ToolboxSettingsPage } from '@/modules/toolbox/pages/SettingsPage'
+import { RadarSettingsPage } from '@/modules/radar/SettingsPage'
 import { DiagnosticsPage } from './pages/DiagnosticsPage'
 import { StoragePage } from './pages/StoragePage'
 import { SchedulesPage } from './pages/SchedulesPage'
@@ -45,6 +46,7 @@ export const PAGES = new Map<string, { page: ComponentType; nested?: boolean; ne
   ['ad', { page: AdSettingsPage, need: ['ad', 'write'] }],
   ['ksc', { page: KscSettingsPage, need: ['ksc', 'write'] }],
   ['assets', { page: AssetsSettingsPage, need: ['assets', 'write'] }],
+  ['radar', { page: RadarSettingsPage, need: ['radar', 'write'] }],
   ['toolbox', { page: ToolboxSettingsPage, need: ['toolbox', 'write'] }],
 ])
 

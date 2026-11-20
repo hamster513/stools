@@ -22,10 +22,11 @@ import { VmModule } from '@/modules/vm/VmModule'
 import { AdModule } from '@/modules/ad/AdModule'
 import { KscModule } from '@/modules/ksc/KscModule'
 import { AssetsModule } from '@/modules/assets/AssetsModule'
+import { RadarModule } from '@/modules/radar/RadarModule'
 import { ToolboxModule } from '@/modules/toolbox/ToolboxModule'
 
 /** Модули, чьи настройки жили на /<модуль>/settings до переезда в общие настройки. */
-const MOVED_SETTINGS = new Set(['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', 'toolbox'])
+const MOVED_SETTINGS = new Set(['attack', 'siem', 'vm', 'ad', 'ksc', 'assets', 'toolbox', 'radar'])
 
 /**
  * Прежние адреса: /snapshots/…, /upload (до появления модулей), /siem/upload
@@ -37,6 +38,7 @@ function legacyPath(path: string, tail: string): string | null {
   if (['/settings/siem', '/settings/siem/', '/siem/settings'].includes(path) && tail.split('#')[1] === 'hunting') {
     return `/settings/siem-hunting${tail}`
   }
+  if (path === '/fw') return '/radar'
   if (path === '/toolbox/lookup') return '/search'
   if (path.startsWith('/snapshots/')) return `/siem${path}${tail}`
   if (path === '/upload' || path === '/siem/upload') return `/settings/siem${tail}`
@@ -145,6 +147,7 @@ function AuthorizedRoutes({ me }: { me: MeResponse }) {
   if (module.id === 'ad') return <AdModule />
   if (module.id === 'ksc') return <KscModule />
   if (module.id === 'assets') return <AssetsModule />
+  if (module.id === 'radar') return <RadarModule />
   if (module.id === 'toolbox') return <ToolboxModule />
 
   return (
