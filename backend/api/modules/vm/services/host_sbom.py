@@ -11,13 +11,20 @@ from sqlalchemy.orm import Session
 from api.modules.assets.models import Asset, AssetObservation
 from api.modules.ksc.models import KscSnapshot
 from api.modules.ksc.software_models import KscSoftware, KscSoftwareInventory
-from api.modules.vm.core.host_sbom import bom_bytes, make_bom
+from api.modules.vm.core.host_sbom import (
+    _host_distribution,
+    bom_bytes,
+    lookup_source,
+    make_bom,
+    native_candidate,
+)
+from api.modules.vm.core.software_identity import observed_os, windows_candidates
 from api.modules.vm.sbom_models import HostSbomScan, VmPackageFeed, VmPackageHost
 from api.modules.vm.services import trivy_scan
-from api.modules.vm.services.software import latest_snapshot_ids
+from api.modules.vm.services.software import indexed_products, latest_snapshot_ids
 
 
-def inventory(db: Session, asset: Asset) -> tuple[dict, dict[str, str]]:
+def inventory(db: Session, asset: Asset, data_dir: Path | None = None) -> tuple[dict, dict[str, str]]:
     observations = db.execute(
         select(AssetObservation.source, AssetObservation.source_key).where(
             AssetObservation.asset_id == asset.id,
@@ -38,15 +45,6 @@ def inventory(db: Session, asset: Asset) -> tuple[dict, dict[str, str]]:
         for row in host.packages
     ]
     status = {"maxpatrol": "available" if hosts else "missing", "ksc": "missing"}
-    os_name = next((h.os_name for h in hosts if h.os_name), asset.os)
-    if vm_keys:
-        kinds = ("software",) if "windows" in os_name.lower() else ("unix", "software")
-        if db.scalar(
-            select(VmPackageFeed.kind)
-            .where(VmPackageFeed.kind.in_(kinds), VmPackageFeed.error.is_not(None))
-            .limit(1)
-        ):
-            status["maxpatrol"] = "stale" if hosts else "error"
     source_filters = []
     for key in ksc_keys:
         server, sep, host = key.partition(":")
@@ -69,13 +67,21 @@ def inventory(db: Session, asset: Asset) -> tuple[dict, dict[str, str]]:
         status["ksc"] = "available" if len(completed) == len(ksc_keys) else "partial"
     elif any(i.status == "error" for i in inventories):
         status["ksc"] = "error"
-    if not os_name:
-        os_name = next((i.os for i in completed if i.os), "")
+    os_name = observed_os([*(h.os_name for h in hosts), asset.os, *(i.os for i in completed)])
+    if vm_keys:
+        kinds = ("software",) if "windows" in os_name.lower() else ("unix", "software")
+        if db.scalar(
+            select(VmPackageFeed.kind)
+            .where(VmPackageFeed.kind.in_(kinds), VmPackageFeed.error.is_not(None))
+            .limit(1)
+        ):
+            status["maxpatrol"] = "stale" if hosts else "error"
     if completed:
         rows = db.execute(
             select(
-                KscSoftware.name, KscSoftware.version, KscSoftware.publisher, KscSoftware.product_id
-            ).where(KscSoftware.inventory_id.in_([i.id for i in completed]))
+                KscSoftware.name, KscSoftware.version, KscSoftware.publisher, KscSoftware.product_id,
+                KscSoftwareInventory.os,
+            ).join(KscSoftwareInventory).where(KscSoftware.inventory_id.in_([i.id for i in completed]))
         )
         packages.extend(
             {
@@ -85,12 +91,25 @@ def inventory(db: Session, asset: Asset) -> tuple[dict, dict[str, str]]:
                 "source": "ksc",
                 "type": "generic",
                 "purl": pid if pid.startswith("pkg:") else "",
+                "product_id": pid,
+                "os_name": source_os,
             }
-            for name, version, publisher, pid in rows
+            for name, version, publisher, pid, source_os in rows
             if name.strip()
         )
     name = asset.fqdn or asset.name or asset.ip or str(asset.id)
-    document = make_bom(str(asset.id), name, os_name, packages)
+    keys = set()
+    for row in packages:
+        if row.get("type", "generic") == "generic":
+            trusted, candidates = windows_candidates(row, os_name)
+            if not trusted:
+                keys.update(candidates)
+    distro = _host_distribution(os_name, packages)
+    names = ()
+    if data_dir is not None and any(native_candidate(row, distro) for row in packages):
+        names = trivy_scan.advisory_names(data_dir, lookup_source(distro))
+    document = make_bom(str(asset.id), name, os_name, packages,
+                        known_products=indexed_products(db, keys), native_names=names)
     document["metadata"]["properties"].extend(
         {"name": "stools:inventory:" + source, "value": value} for source, value in status.items()
     )
@@ -115,7 +134,7 @@ WITH latest_ksc AS (
 ), rollup AS (
   SELECT asset_id, string_agg(signal, ',' ORDER BY signal) AS stamp, bool_or(is_vm) is_vm FROM signals GROUP BY asset_id
 )
-SELECT a.id, md5(jsonb_build_array(a.id, a.fqdn, a.name, a.ip, a.os, r.stamp, CAST(:rev AS text),
+SELECT a.id, md5(jsonb_build_array('package-identity-v1', a.id, a.fqdn, a.name, a.ip, a.os, r.stamp, CAST(:rev AS text),
        CASE WHEN r.is_vm THEN (SELECT jsonb_object_agg(kind,error IS NOT NULL) FROM vm_package_feed) END)::text) AS target,
        sc.target AS previous, sc.status AS previous_status, sc.force AS already_forced
   FROM asset a LEFT JOIN rollup r ON r.asset_id=a.id
@@ -188,7 +207,7 @@ def process_next(db: Session, data_dir: Path) -> bool:
         if asset is None or asset.merged_into is not None:
             db.rollback()
             return True
-        bom, coverage = inventory(db, asset)
+        bom, coverage = inventory(db, asset, data_dir)
         count = len(bom["components"])
         db.execute(
             update(HostSbomScan)

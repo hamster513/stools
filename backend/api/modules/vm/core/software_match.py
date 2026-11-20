@@ -5,36 +5,14 @@ an environment-only OR branch from turning another application's CVE into a find
 """
 import re
 
-_CORPORATE = re.compile(r'(?:[\s,]+(?:corporation|corp|incorporated|inc|llc|ltd|limited)\.?)+$', re.IGNORECASE)
-_ARCH = re.compile(r'\s*(?:\((?:x86|x64|32-bit|64-bit)\)|\b(?:x86|x64|32-bit|64-bit))$', re.IGNORECASE)
-_VENDOR_ALIASES = {'adobe_systems': 'adobe', 'mozilla_foundation': 'mozilla'}
-_PRODUCT_ALIASES = {
-    ('mozilla', 'mozilla_firefox'): 'firefox',
-    ('google', 'google_chrome'): 'chrome',
-    ('microsoft', 'microsoft_edge'): 'edge',
-}
+from .software_identity import os_family, product_key, token, windows_candidates, windows_product
+
 _BOUNDS = (
     ('versionStartIncluding', '>=', lambda x: x >= 0),
     ('versionStartExcluding', '>', lambda x: x > 0),
     ('versionEndIncluding', '<=', lambda x: x <= 0),
     ('versionEndExcluding', '<', lambda x: x < 0),
 )
-
-
-def _token(value):
-    return re.sub(r'[\s_]+', '_', str(value or '').strip().casefold())
-
-
-def product_key(publisher: str, name: str, version: str = '') -> tuple[str, str]:
-    """Exact normalized identity; deliberately no fuzzy product aliasing."""
-    vendor = _token(_CORPORATE.sub('', str(publisher or '').strip()))
-    vendor = _VENDOR_ALIASES.get(vendor, vendor)
-    product = _ARCH.sub('', str(name or '').strip()).strip()
-    if version:
-        product = re.sub(r'\s+(?:' + re.escape(str(version)) + r'|\(' +
-                         re.escape(str(version)) + r'\))$', '', product).strip()
-    product = _token(product)
-    return vendor, _PRODUCT_ALIASES.get((vendor, product), product)
 
 
 def _cpe(criteria):
@@ -76,8 +54,8 @@ def cpe_identity(criteria: str) -> tuple[str, str, str] | None:
     return fields[2], vendor, product
 
 
-def iter_products(configurations: list) -> set[tuple[str, str]]:
-    """Extract only explicit vulnerable application identities for candidate lookup."""
+def iter_products(configurations: list, *, vulnerable_only=True) -> set[tuple[str, str]]:
+    """Extract vulnerable products for the NVD index or all application prerequisites."""
     products = set()
 
     def visit(node):
@@ -85,7 +63,7 @@ def iter_products(configurations: list) -> set[tuple[str, str]]:
             return
         rows = node.get('cpeMatch', [])
         for row in rows if isinstance(rows, list) else []:
-            if isinstance(row, dict) and row.get('vulnerable') is True:
+            if isinstance(row, dict) and (not vulnerable_only or row.get('vulnerable') is True):
                 identity = cpe_identity(row.get('criteria'))
                 if identity and identity[0] == 'a':
                     products.add(identity[1:])
@@ -118,8 +96,10 @@ def _compare(left, right):
     return (a > b) - (a < b)
 
 
-def _version(item, fields, row, evidence):
+def _version(item, fields, row, evidence, os_name):
     installed = str(item.get('version') or '').strip()
+    if installed.casefold() in ('-', 'n/a', 'unknown', 'неизвестно'):
+        installed = ''
     checks, constraints = [], []
     required = fields[5]
     if required != '*':
@@ -134,7 +114,14 @@ def _version(item, fields, row, evidence):
             constraints.append(f'{symbol} {row[key]}')
     if not installed:
         checks.append(None)
-    if any(value != '*' for value in fields[6:]):
+    target_sw = fields[10]
+    platform, required_os = os_family(os_name), os_family(target_sw)
+    if target_sw != '*' and platform and required_os and platform != required_os:
+        evidence.append(f'Платформа CPE {target_sw} несовместима с ОС хоста {os_name}.')
+        return False
+    # A family alone cannot prove a release, build or target runtime.
+    platform_known = platform and target_sw in {'windows', 'linux', 'macos', 'android', 'ios'} and platform == required_os
+    if any(value != '*' for value in (*fields[6:10], *fields[11:])) or (target_sw != '*' and not platform_known):
         checks.append(None)
         evidence.append('CPE ограничивает обновление, редакцию, язык или платформу; '
                         'эти атрибуты не подтверждены инвентаризацией.')
@@ -143,12 +130,36 @@ def _version(item, fields, row, evidence):
     return _and(checks)
 
 
+def _item_keys(item, os_name):
+    if item.get('purl') or item.get('type') == 'library' or (item.get('bom-ref') and not item.get('cpe')):
+        return ()
+    if resolved := windows_product(item, os_name):
+        return resolved.keys
+    if (identity := cpe_identity(item.get('cpe'))) and identity[0] == 'a':
+        return (identity[1:],)
+    if os_family(os_name) == 'windows' and item.get('product_id'):
+        _, candidates = windows_candidates(item, os_name)
+        return candidates if len(candidates) == 1 else ()
+    key = product_key(item.get('publisher'), item.get('name'), item.get('version'))
+    return (key,) if all(key) else ()
+
+
+def inventory_index(inventory, os_name):
+    result = {}
+    for item in inventory:
+        if isinstance(item, dict):
+            for key in _item_keys(item, os_name):
+                result.setdefault(key, []).append(item)
+    return result
+
+
 def evaluate(software: dict, configurations: list, inventory: list[dict],
-             os_name: str = '') -> dict:
+             os_name: str = '', *, target_keys=None, environment=None) -> dict:
     """Return affected/not_affected/unknown without assuming inventory completeness."""
     evidence = []
-    target = product_key(software.get('publisher'), software.get('name'), software.get('version'))
-    inventory = [software] + [item for item in (inventory or []) if isinstance(item, dict)]
+    targets = _item_keys(software, os_name) if target_keys is None else target_keys
+    if environment is None:
+        environment = inventory_index([software, *(inventory or [])], os_name)
 
     def leaf(row):
         if not isinstance(row, dict):
@@ -158,24 +169,25 @@ def evaluate(software: dict, configurations: list, inventory: list[dict],
         if not identity or not fields:
             evidence.append('Некорректный CPE или нет точного поставщика и продукта.')
             return None, None, False
-        is_target = identity == ('a', *target)
+        is_target = identity[0] == 'a' and identity[1:] in targets
         vulnerable = row.get('vulnerable')
         if not isinstance(vulnerable, bool):
             return None, None, is_target
         own = is_target and vulnerable
         if own:
-            value = _version(software, fields, row, evidence)
+            value = _version(software, fields, row, evidence, os_name)
             return value, value, True
         if identity[0] == 'a':
-            candidates = [item for item in inventory if product_key(
-                item.get('publisher'), item.get('name'), item.get('version')) == identity[1:]]
+            candidates = environment.get(identity[1:], ())
         elif identity[0] == 'o':
             # Only explicit OS names establish identity. No guessed family/build mapping.
-            os_product = re.sub(r'^microsoft_', '', _token(os_name))
-            known_windows = {'windows_7', 'windows_8', 'windows_8.1', 'windows_10', 'windows_11'}
+            release = re.match(r'^(?:microsoft_)?(windows_(?:7|8(?:\.1)?|10|11|server_20\d\d))(?:_|$)', token(os_name))
+            if (release and identity[1] == 'microsoft' and identity[2] != release[1]
+                    and re.fullmatch(r'windows_(?:7|8(?:\.1)?|10|11|server_20\d\d)', identity[2])):
+                evidence.append(f'Условие окружения {identity[2]} не выполняется на {os_name}.')
+                return False, False, False
             candidates = ([{'name': os_name, 'version': '*'}]
-                          if identity[1:] == ('microsoft', os_product)
-                          and os_product in known_windows and fields[5] == '*'
+                          if release and identity[1:] == ('microsoft', release[1]) and fields[5] == '*'
                           and not any(key in row for key, _, _ in _BOUNDS) else [])
         else:
             candidates = []
@@ -183,7 +195,7 @@ def evaluate(software: dict, configurations: list, inventory: list[dict],
             evidence.append(f'Условие окружения {identity[1]}/{identity[2]} '
                             'не подтверждено; инвентаризация может быть неполной.')
             return None, False, False
-        return _or([_version(item, fields, row, evidence) for item in candidates]), False, False
+        return _or([_version(item, fields, row, evidence, os_name) for item in candidates]), False, False
 
     def node(value):
         if not isinstance(value, dict):
@@ -211,7 +223,7 @@ def evaluate(software: dict, configurations: list, inventory: list[dict],
             positive = None if seen else False
         return truth, positive, seen
 
-    if not isinstance(configurations, list) or not configurations or not all(target):
+    if not isinstance(configurations, list) or not configurations or not targets:
         result, seen = None, False
     else:
         roots = [node(value) for value in configurations]

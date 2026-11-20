@@ -1,5 +1,6 @@
 """Read-only comparison of Trivy's last success and the current MaxPatrol findings on the same asset."""
 
+import json
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
@@ -8,10 +9,40 @@ from sqlalchemy import func, literal_column, select
 from sqlalchemy.orm import Session
 
 from api.modules.assets.models import Asset, AssetObservation
-from api.modules.vm.models import VmHost, VmHostCve, VmImport
+from api.modules.vm.core.software_identity import windows_product
+from api.modules.vm.core.software_match import cpe_identity, evaluate, inventory_index
+from api.modules.vm.models import VmHost, VmHostCve, VmImport, VmRefNvd, VmRefState
 from api.modules.vm.sbom_models import HostSbomScan, VmHostCoverage
 from api.modules.vm.services import host_sbom, trivy_scan
 from api.modules.vm.services.ghsa_mapping import canonical_finding_ids
+from api.modules.vm.services.software import candidate_records, nvd_ready
+
+
+def component_nvd(db: Session, document: dict, ref: str, limit: int, offset: int) -> dict | None:
+    components = document["components"]
+    component = next((c for c in components if c["bom-ref"] == ref), None)
+    if component is None:
+        return None
+    result = {"ready": nvd_ready(db), "examined": 0, "affected": 0, "unknown": 0, "items": []}
+    identity = cpe_identity(component.get("cpe"))
+    if not identity or not component.get("version"):
+        return result
+    os_name = next(p["value"] for p in document["metadata"]["properties"] if p["name"] == "stools:os-name")
+    product = windows_product(component, os_name, {identity[1:]})
+    keys = product.keys if product else (identity[1:],)
+    environment = inventory_index(components, os_name)
+    records = candidate_records(keys).order_by(VmRefNvd.cve_id.desc()).execution_options(yield_per=100)
+    for cve_id, raw in db.execute(records):
+        result["examined"] += 1
+        match = evaluate(component, json.loads(raw), (), os_name, target_keys=keys, environment=environment)
+        state = match["state"]
+        if state == "not_affected":
+            continue
+        position = result["affected"] + result["unknown"]
+        result[state] += 1
+        if offset <= position < offset + limit:
+            result["items"].append({"cve_id": cve_id, **match})
+    return result
 
 
 def comparison(
@@ -23,7 +54,7 @@ def comparison(
     if scan and scan.prepared_target == target and scan.sources and scan.components is not None:
         components, sources = scan.components, scan.sources
     else:
-        bom, sources = host_sbom.inventory(db, asset)
+        bom, sources = host_sbom.inventory(db, asset, data_dir)
         components = len(bom["components"])
     last_success = scan is not None and scan.scan_at is not None
     status = scan.status if scan else "pending"
@@ -65,6 +96,7 @@ def comparison(
         "inventory": sources,
         "components": components,
         "inventory_revision": target,
+        "nvd_updated_at": db.scalar(select(VmRefState.loaded_at).where(VmRefState.name == "nvd")),
         "checked": scan.checked if last_success else None,
         "scanned_components": scan.scanned_components if last_success else None,
         "scan_at": scan.scan_at if last_success else None,

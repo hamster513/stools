@@ -9,6 +9,8 @@ from uuid import NAMESPACE_URL, uuid5
 
 from packageurl import PackageURL
 
+from .software_identity import os_family, windows_product
+
 
 def bom_bytes(document: dict) -> bytes:
     """The attachment, scanner input and saved digest use the same canonical JSON bytes."""
@@ -38,6 +40,35 @@ _UNKNOWN = {"", "-", "unknown", "n/a", "неизвестно"}
 _VAGUE_OS = _UNKNOWN | {"linux", "gnu/linux", "unix"}
 _PURL_QUALIFIERS = {"arch", "distro", "epoch", "modularitylabel", "type", "classifier"}
 UNASSESSED = "stools:unassessed-reason"
+
+# Only a distribution's own publisher is evidence for an otherwise generic
+# package. A matching npm/PyPI name in Trivy never identifies a desktop app.
+_DISTRIBUTORS = {
+    "debian": {"debian", "debian project", "the debian project"},
+    "ubuntu": {"ubuntu", "ubuntu developers", "canonical", "canonical ltd."},
+    "alpine": {"alpine linux", "alpine linux development team"},
+    "oracle": {"oracle", "oracle corporation"},
+    "sles": {"suse", "suse llc"},
+}
+
+
+def lookup_source(distro):
+    if not distro or distro[0] not in _DISTRIBUTORS:
+        return None
+    family, _, version = distro
+    label = {"oracle": "Oracle Linux", "sles": "SUSE Linux Enterprise"}.get(family, family)
+    width = 1 if family in {"debian", "oracle"} else 2
+    release = ".".join(version.split(".")[:width])
+    return f"{label} {release}"
+
+
+def native_candidate(row, distro):
+    if not distro or row.get("type", "generic") != "generic" or row.get("purl"):
+        return False
+    name, version = _text(row.get("name")), _text(row.get("version"))
+    return bool(version.casefold() not in _UNKNOWN and re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", name)
+                and _text(row.get("publisher")).casefold() in _DISTRIBUTORS.get(distro[0], ())
+                and _row_os_matches(_text(row.get("os_name")), distro))
 
 
 def _text(value):
@@ -131,7 +162,7 @@ def _source_properties(row, kind):
     return props
 
 
-def _package(row, distro):
+def _package(row, distro, os_name, known_products, native_names):
     original = _text(row.get("name"))
     source = _text(row.get("source"))
     if source not in {"maxpatrol", "ksc"}:
@@ -142,6 +173,12 @@ def _package(row, distro):
         version = ""
     arch = _text(row.get("arch"))
     raw_purl = _text(row.get("purl"))
+    windows = None
+    if kind == "generic":
+        if version:
+            windows = windows_product(row, os_name, known_products)
+        if native_candidate(row, distro) and (row.get("source_name") or original) in native_names:
+            kind = distro[1]
     reason = ""
     purl = None
     if raw_purl:
@@ -213,6 +250,11 @@ def _package(row, distro):
         component["version"] = version
     if publisher := _text(row.get("publisher")):
         component["publisher"] = publisher
+    if windows:
+        component["name"] = original
+        component["cpe"] = windows.cpe_for(version)
+        if windows.winget:
+            props.append(_prop("stools:winget-id", windows.winget))
     if arch:
         props.append(_prop("stools:arch", arch))
     if kind in _NATIVE | {"os"}:
@@ -238,7 +280,8 @@ def _package(row, distro):
     return component
 
 
-def make_bom(host_key: str, host_name: str, os_name: str, packages: Iterable[dict]) -> dict:
+def make_bom(host_key: str, host_name: str, os_name: str, packages: Iterable[dict], *,
+             known_products=(), native_names=()) -> dict:
     rows = list(packages)
     os_name = _text(os_name)
     distro = _host_distribution(os_name, rows)
@@ -247,7 +290,7 @@ def make_bom(host_key: str, host_name: str, os_name: str, packages: Iterable[dic
         root.update(type="operating-system", name=distro[0], version=distro[2])
     metadata = {"component": root, "properties": [_prop("stools:asset-id", host_key),
                 _prop("stools:host-name", host_name), _prop("stools:os-name", os_name)]}
-    candidates = [component for row in rows if (component := _package(row, distro))]
+    candidates = [component for row in rows if (component := _package(row, distro, os_name, known_products, native_names))]
     vendors = defaultdict(set)
     for c in candidates:
         if c.get("publisher"):
@@ -267,11 +310,15 @@ def make_bom(host_key: str, host_name: str, os_name: str, packages: Iterable[dic
         identity = c.get("purl") or props.get("stools:observed-purl")
         key = (identity, c.get("version", ""), props.get(UNASSESSED)) if identity else (
             kind, *name_version, arch, publisher, "" if name_version[1] else source)
-        if key not in indexed and kind == "generic" and name_version[1] and not identity:
+        if c.get("cpe") and not identity:
+            key = (*key, c["cpe"])
+        if key not in indexed and kind == "generic" and name_version[1] and not identity and not c.get("cpe"):
             matches = [k for k, vendor, cpu in by_name[name_version]
                        if (not vendor or not publisher or vendor == publisher)
                        and (vendor == publisher or len(vendors[name_version]) <= 1)
-                       and (not cpu or not arch or cpu == arch)]
+                       and (not cpu or not arch or cpu == arch)
+                       and not (os_family(os_name) == "windows" and
+                                (indexed[k].get("purl") or indexed[k].get("cpe")))]
             if len(matches) == 1:
                 key = matches[0]
         if key not in indexed:

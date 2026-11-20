@@ -11,7 +11,7 @@ from api.modules.assets.models import Asset
 from api.modules.vm.core.host_sbom import bom_bytes
 from api.modules.vm.sbom_models import HostSbomScan
 from api.modules.vm.services.host_sbom import inventory, refresh_queue
-from api.modules.vm.services.host_sbom_view import comparison
+from api.modules.vm.services.host_sbom_view import comparison, component_nvd
 from api.platform.services.access import allows
 from api.rbac import current_access
 from api.settings import Settings, get_settings
@@ -32,8 +32,9 @@ def vm_reader(access: dict = Depends(current_access)) -> None:
 
 
 @router.get("/assets/{asset_id}/sbom", response_class=Response)
-def download(asset: Asset = Depends(host), db: Session = Depends(get_db)) -> Response:
-    document, _ = inventory(db, asset)
+def download(asset: Asset = Depends(host), db: Session = Depends(get_db),
+             settings: Settings = Depends(get_settings)) -> Response:
+    document, _ = inventory(db, asset, settings.data_dir)
     return Response(
         bom_bytes(document),
         media_type="application/vnd.cyclonedx+json",
@@ -48,11 +49,12 @@ def download(asset: Asset = Depends(host), db: Session = Depends(get_db)) -> Res
 def components(
     asset: Asset = Depends(host),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
     q: str = Query("", max_length=255),
     limit: int = Query(10, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict:
-    document, _ = inventory(db, asset)
+    document, _ = inventory(db, asset, settings.data_dir)
     rows = document["components"]
     term = q.strip().casefold()
     matches = [
@@ -61,12 +63,27 @@ def components(
     return {
         "total": len(matches),
         "identified": sum(bool(c.get("purl")) for c in rows),
+        "nvd_identified": sum(bool(c.get("cpe")) for c in rows),
         "items": [
             {"ref": c["bom-ref"], "name": c["name"], "version": c.get("version"),
+             "purl": c.get("purl"), "cpe": c.get("cpe"), "publisher": c.get("publisher"),
+             "winget_id": next((p["value"] for p in c["properties"] if p["name"] == "stools:winget-id"), None),
              "sources": [p["value"] for p in c["properties"] if p["name"] == "stools:source"]}
             for c in matches[offset:offset + limit]
         ],
     }
+
+
+@router.get("/assets/{asset_id}/sbom/components/{ref}/nvd", dependencies=[Depends(vm_reader)])
+def software_findings(
+    ref: str, asset: Asset = Depends(host), settings: Settings = Depends(get_settings),
+    db: Session = Depends(get_db), limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0),
+) -> dict:
+    document, _ = inventory(db, asset, settings.data_dir)
+    result = component_nvd(db, document, ref, limit, offset)
+    if result is None:
+        raise HTTPException(404, "Компонент отсутствует в текущем SBOM хоста")
+    return result
 
 
 @router.get("/assets/{asset_id}/sbom/comparison", dependencies=[Depends(vm_reader)])

@@ -24,7 +24,7 @@ class ScanError(RuntimeError):
     """Safe to show in an asset status; scanner output can contain private inventory."""
 
 
-def _run_json(args, directory, timeout, limit):
+def _run_output(args, directory, timeout, limit):
     deadline = time.monotonic() + timeout
     env = {"HOME": str(directory), "TMPDIR": str(directory), "PATH": os.defpath,
            "TRIVY_DISABLE_TELEMETRY": "true"}
@@ -50,13 +50,18 @@ def _run_json(args, directory, timeout, limit):
             finally:
                 if proc.poll() is None:
                     proc.kill()
-        result = json.loads(data)
+        return data
     except subprocess.TimeoutExpired:
         raise ScanError("Превышено время проверки Trivy") from None
-    except (ValueError, UnicodeError):
-        raise ScanError("Некорректный отчёт Trivy") from None
     except OSError:
         raise ScanError("Не удалось запустить Trivy") from None
+
+
+def _run_json(args, directory, timeout, limit):
+    try:
+        result = json.loads(_run_output(args, directory, timeout, limit))
+    except (ValueError, UnicodeError):
+        raise ScanError("Некорректный отчёт Trivy") from None
     if not isinstance(result, dict):
         raise ScanError("Некорректный отчёт Trivy")
     return result
@@ -129,6 +134,28 @@ def database_revision(data_dir: Path) -> str:
             return _context(cache)[3]
     except ScanError:
         return ""
+
+
+@lru_cache(maxsize=12)
+def _advisory_names(binary, path, signature, source):
+    # Trivy DB v2 indexes advisories by source, then by package name.
+    with tempfile.TemporaryDirectory() as work:
+        raw = _run_output([binary, "keys", str(path), source], work, 8, 4 << 20)
+    return frozenset(bytes(raw).decode("utf-8").splitlines())
+
+
+def advisory_names(data_dir, source):
+    binary = shutil.which("bbolt")
+    if not source or not binary:
+        return frozenset()
+    try:
+        with locked_cache(data_dir) as cache:
+            path = cache / "db/trivy.db"
+            st = path.stat()
+            return _advisory_names(binary, path, (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns), source)
+    except (OSError, UnicodeError, ScanError):
+        # Explicit package-manager observations remain usable without inference.
+        return frozenset()
 
 
 def scan_bom(bom: dict, data_dir: Path) -> dict:

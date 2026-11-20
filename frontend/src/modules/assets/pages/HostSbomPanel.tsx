@@ -27,7 +27,7 @@ interface Result {
   scanned_components: number | null; scan_at: string | null; db_version: string | null; scanner_version: string | null
   error: string | null; vm_available: boolean; vm_at: string | null
   counts: { both: number; trivy_only: number; vm_only: number } | null; total: number
-  unlinked_total: number; inventory_revision: string | null
+  unlinked_total: number; inventory_revision: string | null; nvd_updated_at: string | null
   items: { id: string; group: 'both' | 'trivy_only' | 'trivy_uncompared'
     packages: { package: string; installed_version: string; fixed_version: string; severity: string }[] }[]
 }
@@ -66,8 +66,8 @@ export function HostSbomPanel({ assetId }: { assetId: number }) {
     {r.vm_at && <p className="text-text-secondary">Снимок находок MaxPatrol: {fmt(r.vm_at)}.</p>}
     {(r.error || scan.error) && <p role="alert" className="text-kind-1">{r.error || errorText(scan.error, 'Не удалось поставить проверку в очередь')}</p>}
     {!r.vm_available && <p className="text-risk-medium">Для этого хоста нет подтверждённого снимка находок MaxPatrol.</p>}
-    {!!r.scan_at && r.checked === 0 && <p className="text-risk-medium">Trivy не распознал ни одного пакета для проверки. Оценить уязвимости по этому SBOM пока невозможно.</p>}
-    {r.components > 0 && <SbomSoftware path={path} revision={r.inventory_revision} total={r.components} />}
+    {!!r.scan_at && r.checked === 0 && <p className="text-risk-medium">Trivy не распознал пакеты в последнем сканировании.</p>}
+    {r.components > 0 && <SbomSoftware path={path} revision={[r.inventory_revision, r.nvd_updated_at].join('|')} total={r.components} />}
     {(r.counts || r.items.length > 0) && <h3 className="border-t border-grid pt-3 font-medium text-text">Уязвимости с привязкой к ПО</h3>}
     {r.counts && <label className="block max-w-xs text-text-secondary">Сравнение находок
       <select className={FIELD + ' mt-1 w-full'} value={group} onChange={e => { setGroup(e.target.value as Group); setOffset(0) }}>
