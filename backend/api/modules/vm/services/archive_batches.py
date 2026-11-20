@@ -170,7 +170,7 @@ def process(db: Session, handle: JobHandle, batch_id: str, actor: str) -> None:
                         entry['warning'] = f'Источников с ошибками или ограничениями: {limited}'
                 else:
                     entry['kind'] = 'references'
-                    run_bundle(db, handle, path, weights, rebuild=False)
+                    run_bundle(db, handle, path, weights, rebuild=False, original_name=entry['name'])
                 entry['status'] = 'partial' if entry.get('warning') else 'done'
             except JobCancelled:
                 db.rollback()

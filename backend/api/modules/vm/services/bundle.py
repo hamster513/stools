@@ -198,17 +198,20 @@ def _rebuild_after_failure(db: Session, handle: JobHandle, touched: set[str], we
         log.exception("VM: пересборка после отказа файла архива %s не удалась", name)
 
 
-def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights, *, rebuild: bool = True) -> None:
+def run_bundle(
+    db: Session, handle: JobHandle, zip_path: Path, weights: Weights, *,
+    rebuild: bool = True, original_name: str = "",
+) -> None:
     into = Path(tempfile.mkdtemp(prefix="ref-bundle-", dir=zip_path.parent))
     try:
         from api.modules.vm.services.ref_updates import (
-            MANIFEST_NAME,
+            is_update_archive,
             preflight_bundle,
             run_update_bundle,
         )
         preflight_bundle(zip_path)
         with zipfile.ZipFile(zip_path) as archive:
-            is_update = MANIFEST_NAME in archive.namelist()
+            is_update = is_update_archive(archive, original_name or zip_path.name)
         if is_update:
             if rebuild:
                 run_update_bundle(db, handle, zip_path, weights)

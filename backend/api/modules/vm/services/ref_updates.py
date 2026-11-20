@@ -26,6 +26,15 @@ MANIFEST_NAME = "stools-reference-update.json"
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 
 
+def is_update_archive(archive: zipfile.ZipFile, filename: str) -> bool:
+    if MANIFEST_NAME in archive.namelist():
+        return True
+    name = PurePosixPath(filename.replace("\\", "/")).name.lower()
+    if name == "updates.zip" or name.endswith("-updates.zip"):
+        raise ValueError(f"В архиве обновлений отсутствует {MANIFEST_NAME}. Повторите сбор архива.")
+    return False
+
+
 def preflight_bundle(path: Path) -> None:
     from api.modules.vm.core.ref_updates import MAX_BUNDLE_BYTES, MAX_FILES
 
@@ -352,7 +361,7 @@ def _nvd(db: Session, handle: Any, files: list[Path]) -> int:
     return count
 
 
-def _ghsa(db: Session, handle: Any, entry: dict[str, Any], paths: dict[str, Path]) -> int:
+def _ghsa(db: Session, handle: Any, entry: dict[str, Any], paths: dict[str, Path]) -> tuple[int, int]:
     seen: set[str] = set()
     for item in entry["files"]:
         path = item["path"]
@@ -370,14 +379,17 @@ def _ghsa(db: Session, handle: Any, entry: dict[str, Any], paths: dict[str, Path
             db.execute(insert(VmRefGhsaPackage), [{"ghsa_id": record.ghsa_id, **package} for package in packages])
         if len(seen) % 1000 == 0:
             handle.tick(len(seen), message=f"GHSA: {len(seen)} updates")
+    deleted = 0
     for start in range(0, len(entry["deleted_ids"]), 1000):
-        db.execute(delete(VmRefGhsa).where(VmRefGhsa.ghsa_id.in_(entry["deleted_ids"][start:start + 1000])))
-    return len(seen)
+        stmt = delete(VmRefGhsa).where(VmRefGhsa.ghsa_id.in_(entry["deleted_ids"][start:start + 1000]))
+        deleted += db.connection().execute(stmt).rowcount
+    return len(seen), deleted
 
 
 def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bundle") -> set[str]:
     from api.modules.vm.core.ref_updates import MAX_BUNDLE_BYTES
     from api.modules.vm.services import refs
+    from api.modules.vm.services.ref_snapshots import merge_snapshot
 
     if path.stat().st_size > MAX_BUNDLE_BYTES:
         raise ValueError("Архив обновлений превышает лимит 500 МиБ")
@@ -421,27 +433,17 @@ def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bun
                 if state is None:
                     state = VmRefSyncState(name=name)
                     catalog.add(state)
-                count = 0
-                did_change = not replay and entry["mode"] != "unchanged" and bool(entry["files"] or entry["deleted_ids"])
-                if did_change:
+                counts = {"upserted": 0, "deleted": 0}
+                if not replay and entry["mode"] != "unchanged" and (entry["files"] or entry["deleted_ids"]):
                     files = [paths[item["path"]] for item in entry["files"]]
-                    if name == "nvd":
-                        count = _nvd(catalog, handle, files)
-                    elif name == "ghsa":
-                        count = _ghsa(catalog, handle, entry, paths)
-                    elif name == "attack":
-                        for index, file in enumerate(files):
-                            count += refs._load_attack(catalog, file, handle, replace=index == 0)
-                        if count == 0:
-                            raise ValueError("ATT&CK: в снимке нет поддерживаемых связей; исходные данные сохранены")
-                    else:
-                        loader = {"epss": refs._load_epss, "kev": refs._load_kev,
-                                  "exploitdb": refs._load_exploitdb, "msf": refs._load_msf}[name]
-                        count = loader(catalog, files[0], handle)
-                        if count == 0:
-                            raise ValueError(f"{name}: в снимке нет записей; исходные данные сохранены")
                     table = {"nvd": refs.NVD_T, "ghsa": VmRefGhsa.__table__, "epss": refs.EPSS_T,
                              "kev": refs.KEV_T, "exploitdb": refs.EXDB_T, "msf": refs.MSF_T, "attack": refs.ATTACK_T}[name]
+                    if name == "nvd":
+                        counts["upserted"] = _nvd(catalog, handle, files)
+                    elif name == "ghsa":
+                        counts["upserted"], counts["deleted"] = _ghsa(catalog, handle, entry, paths)
+                    else:
+                        counts = merge_snapshot(catalog, handle, name, files, table)
                     loaded = catalog.get(VmRefState, name)
                     if loaded is None:
                         loaded = VmRefState(name=name)
@@ -449,9 +451,13 @@ def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bun
                     loaded.loaded_at = dt.datetime.now(dt.UTC)
                     loaded.records = catalog.scalar(select(func.count()).select_from(table)) or 0
                     loaded.source = source
-                    loaded.detail = f"{entry['mode']}: +{count}, -{len(entry['deleted_ids'])}"
-                    state.pending_rebuild = True
-                    changed.add(name)
+                    if name == "nvd":
+                        loaded.detail = "годы: " + ", ".join(str(y) for y in sorted(refs._state_detail_years(catalog)))
+                    else:
+                        loaded.detail = ""
+                    if counts["upserted"] or counts["deleted"] or counts.get("links_changed"):
+                        state.pending_rebuild = True
+                        changed.add(name)
                 if windowed:
                     _record_period(state, entry, manifest, digest)
                 else:
@@ -474,8 +480,8 @@ def apply_update_bundle(db: Session, handle: Any, path: Path, source: str = "bun
                     if not state.partial_window and (name != "ghsa" or not replay or verified):
                         state.last_checked_at = dt.datetime.now(dt.UTC)
                 state.last_mode = "unchanged" if replay else entry["mode"]
-                state.last_counts = {"upserted": count, "deleted": len(entry["deleted_ids"]) if did_change else 0}
-                handle.tick(count, message=f"{name}: {state.last_mode}")
+                state.last_counts = counts
+                handle.tick(counts.get("received", counts["upserted"]), message=f"{name}: {state.last_mode}")
             _check_cancelled(handle)
     db.expire_all()
     return changed

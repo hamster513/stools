@@ -45,29 +45,39 @@ function RefCard({ r }: { r: RefState }) {
   }
   const error = download.error ?? upload.error
   const errorText = error instanceof ApiRequestError ? error.message : error ? 'Не удалось запустить' : null
+  const counts = r.last_counts
+  const detail = /^(delta|snapshot): \+\d+, -\d+$/.test(r.detail) ? '' : r.detail
 
   return (
     <div className="rounded border border-grid bg-app-bg p-3">
       <div className="mb-1 flex items-center justify-between">
         <span className="text-sm font-medium text-text">{r.title}</span>
         <span className={cn('text-[11px]', r.stale ? 'text-risk-medium' : 'text-text-secondary')}>
-          {r.loaded_at ? `${new Date(r.loaded_at).toLocaleDateString('ru-RU')} · ${r.partial_window ? 'частичное обновление' : SOURCE[r.source ?? ''] ?? 'файл'}` : 'не загружен'}
+          {r.loaded_at ? `${new Date(r.loaded_at).toLocaleDateString('ru-RU')} · ${r.partial_window ? 'обновление за период' : SOURCE[r.source ?? ''] ?? 'файл'}` : 'не загружен'}
           {r.stale && r.loaded_at && ' · устарел'}
         </span>
       </div>
       <p className="mb-2 text-[11px] text-text-secondary">{ABOUT[r.name]}</p>
       <div className="mb-2 font-mono text-[11px] tabular-nums text-text-secondary">
-        {r.records ? `${r.records.toLocaleString('ru-RU')} записей` : '—'}{r.detail && ` · ${r.detail}`}
+        {r.loaded_at && <>Всего записей в базе: {r.records.toLocaleString('ru-RU')}{detail && ` · ${detail}`}</>}
       </div>
       {r.partial_window && <p className="mb-2 text-[11px] text-risk-medium">
-        Изменения за {new Date(r.partial_window.since).toLocaleString('ru-RU')} — {new Date(r.partial_window.until).toLocaleString('ru-RU')}.
-        {' '}Полнота базы за остальные даты не подтверждена.
-        {!r.last_checked_at && ' Дата последней полной проверки неизвестна.'}
+        Архив проверяет изменения за {new Date(r.partial_window.since).toLocaleString('ru-RU')} — {new Date(r.partial_window.until).toLocaleString('ru-RU')}.
+        {' '}Записи вне этого обновления сохраняются.
+        {!r.checkpoint && ' Для источника пока нет подтверждённой исходной версии.'}
       </p>}
       {r.last_checked_at && <p className="mb-2 text-[11px] text-text-secondary">
         {r.partial_window ? 'Последняя полная проверка' : 'Проверено'}: {new Date(r.last_checked_at).toLocaleString('ru-RU')}
-        {r.last_mode === 'unchanged' ? <span className="ml-2 text-risk-low">Обновлений нет</span> : r.last_counts && <span> · Применено: {r.last_counts.upserted.toLocaleString('ru-RU')} · Удалено: {r.last_counts.deleted.toLocaleString('ru-RU')}</span>}
       </p>}
+      {r.last_mode === 'unchanged' ? <p className="mb-2 text-[11px] text-text-secondary">Обновлений нет</p> : counts && (
+        <p className="mb-2 text-[11px] text-text-secondary">
+          {counts.received !== undefined
+            ? <>Записей в снимке: {counts.received.toLocaleString('ru-RU')} · Добавлено или изменено: {counts.upserted.toLocaleString('ru-RU')}</>
+            : <>Обработано записей: {counts.upserted.toLocaleString('ru-RU')}</>}
+          {(counts.received !== undefined || r.last_mode !== 'snapshot') && <> · Удалено записей: {counts.deleted.toLocaleString('ru-RU')}</>}
+          {!!counts.links_changed && <> · Изменено связей с CVE: {counts.links_changed.toLocaleString('ru-RU')}</>}
+        </p>
+      )}
       {r.pending_rebuild && <p className="mb-2 text-[11px] text-risk-medium">Ожидается пересчёт риска по обновлённой базе.</p>}
       {admin && <label className="mb-2 block text-[11px] text-text-secondary">
         <span>Режим загрузки</span>
@@ -77,7 +87,7 @@ function RefCard({ r }: { r: RefState }) {
           <option value="full">Полная загрузка</option>
         </select>
       </label>}
-      <p className="mb-2 text-[11px] text-text-secondary">{r.update_capability === 'delta' ? 'Получаем новые и изменённые записи, сохраняя остальную базу.' : 'Проверяем версию источника. При изменении загружается новый снимок: источник не предоставляет отдельные записи обновлений.'}</p>
+      <p className="mb-2 text-[11px] text-text-secondary">{r.update_capability === 'delta' ? 'Получаем новые и изменённые записи, сохраняя остальную базу.' : 'Источник публикует снимок. При обновлении добавляются новые записи и меняются существующие. Записи вне снимка сохраняются. Полная загрузка заменяет справочник.'}</p>
       {r.update_reason && <p className="mb-2 text-[11px] text-risk-medium">{r.update_reason}</p>}
       {admin && r.name === 'nvd' && fullDownload && (
         <label className="mb-2 block text-[11px] text-text-secondary">

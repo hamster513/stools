@@ -361,7 +361,7 @@ export interface RefState {
   checkpoint: Record<string, unknown> | null
   last_checked_at: string | null
   last_mode: 'full' | 'delta' | 'snapshot' | 'unchanged' | null
-  last_counts: { upserted: number; deleted: number } | null
+  last_counts: { upserted: number; deleted: number; received?: number; links_changed?: number } | null
   pending_rebuild: boolean
   partial_window?: { since: string; until: string } | null
   last_period_imported_at?: string | null

@@ -66,15 +66,21 @@ def _reject_bundle_if_running(db: Session) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"идёт задача #{running.id}, загрузка архива после неё")
 
 
-def _has_known_refs(path: Path) -> bool:
+def _has_known_refs(path: Path, filename: str = "") -> bool:
+    from api.modules.vm.services.ref_updates import is_update_archive, preflight_bundle
+
     if not zipfile.is_zipfile(path):
         return False
     try:
-        from api.modules.vm.services.ref_updates import preflight_bundle
         preflight_bundle(path)
+    except ValueError:
+        return False
+    try:
         with zipfile.ZipFile(path) as zf:
-            return "stools-reference-update.json" in zf.namelist() or any(classify(info.filename) for info in zf.infolist() if not info.is_dir())
-    except (zipfile.BadZipFile, ValueError):
+            return is_update_archive(zf, filename or path.name) or any(
+                classify(info.filename) for info in zf.infolist() if not info.is_dir()
+            )
+    except zipfile.BadZipFile:
         return False
 
 
@@ -112,7 +118,11 @@ async def upload_bundle(
                 total += len(chunk)
                 check_upload_size(total, VM_UPLOAD)
         # Задача не заводится, если в архиве нечего грузить: ошибка видна сразу, а не в журнале задач.
-        if not _has_known_refs(target):
+        try:
+            known = _has_known_refs(target, file.filename or "")
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+        if not known:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=NO_KNOWN_REFS)
         lock_job_start(db)
         _reject_bundle_if_running(db)
@@ -122,7 +132,7 @@ async def upload_bundle(
         raise
 
     def work(session: Session, handle: JobHandle) -> None:
-        run_bundle(session, handle, target, load_settings(session).weights)
+        run_bundle(session, handle, target, load_settings(session).weights, original_name=file.filename or "")
 
     def guarded() -> None:
         # Задачу могли снять до старта потока: `work` тогда не вызывается, а архив остаётся.

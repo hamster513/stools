@@ -148,14 +148,14 @@ def _unique(items: Iterable[Any], key: Callable[[Any], str]) -> Iterable[Any]:
         yield item
 
 
-def _load_epss(db: Session, path: Path, handle: JobHandle) -> int:
-    db.execute(delete(EPSS_T))
+def _load_epss(db: Session, path: Path, handle: JobHandle, table: Table = EPSS_T) -> int:
+    db.execute(delete(table))
     n = 0
     with open_maybe_gzip(path) as raw:
         fh = limited(raw, MAX_FEED_BYTES)
         rows = ((r.cve_id, r.epss, r.percentile) for r in _unique(parse_epss(fh), lambda r: r.cve_id))
         for batch in _batched(rows):
-            n += bulk_insert(db, EPSS_T, ("cve_id", "epss", "percentile"), batch)
+            n += bulk_insert(db, table, ("cve_id", "epss", "percentile"), batch)
             handle.tick(n, message=f"записей {n}")
     return n
 
@@ -196,57 +196,61 @@ def _load_nvd(db: Session, path: Path, handle: JobHandle, *, delta: bool = False
     return n, years
 
 
-def _load_exploitdb(db: Session, path: Path, handle: JobHandle) -> int:
-    db.execute(delete(EXDB_CVE_T))
-    db.execute(delete(EXDB_T))
+def _load_exploitdb(
+    db: Session, path: Path, handle: JobHandle, table: Table = EXDB_T, link_table: Table = EXDB_CVE_T,
+) -> int:
+    db.execute(delete(link_table))
+    db.execute(delete(table))
     n = 0
     with open_maybe_gzip(path) as raw:
         fh = limited(raw, MAX_FEED_BYTES)
         # В files_exploits.csv встречаются повторы id (461 на осень 2026).
         for records in _batched_records(_unique(parse_exploitdb(fh), lambda r: str(r.exploit_id))):
             n += bulk_insert(
-                db, EXDB_T, ("exploit_id", "type", "verified", "published"),
+                db, table, ("exploit_id", "type", "verified", "published"),
                 [(r.exploit_id, r.type, r.verified, r.published) for r in records],
             )
             links = {(c, r.exploit_id) for r in records for c in r.cve_ids}
             if links:
-                bulk_insert(db, EXDB_CVE_T, ("cve_id", "exploit_id"), sorted(links))
+                bulk_insert(db, link_table, ("cve_id", "exploit_id"), sorted(links))
             handle.tick(n, message=f"эксплойтов {n}")
     return n
 
 
-def _load_msf(db: Session, path: Path, handle: JobHandle) -> int:
-    db.execute(delete(MSF_CVE_T))
-    db.execute(delete(MSF_T))
+def _load_msf(
+    db: Session, path: Path, handle: JobHandle, table: Table = MSF_T, link_table: Table = MSF_CVE_T,
+) -> int:
+    db.execute(delete(link_table))
+    db.execute(delete(table))
     n = 0
     with open_maybe_gzip(path) as raw:
         fh = limited(raw, MAX_FEED_BYTES)
         for records in _batched_records(_unique(parse_msf(fh), lambda r: r.fullname)):
-            n += bulk_insert(db, MSF_T, ("fullname", "name", "rank"), [(r.fullname, r.name, r.rank) for r in records])
+            n += bulk_insert(db, table, ("fullname", "name", "rank"), [(r.fullname, r.name, r.rank) for r in records])
             links = {(c, r.fullname) for r in records for c in r.cve_ids}
             if links:
-                bulk_insert(db, MSF_CVE_T, ("cve_id", "fullname"), sorted(links))
+                bulk_insert(db, link_table, ("cve_id", "fullname"), sorted(links))
             handle.tick(n, message=f"модулей {n}")
     return n
 
 
-def _load_kev(db: Session, path: Path, handle: JobHandle) -> int:
+def _load_kev(db: Session, path: Path, handle: JobHandle, table: Table = KEV_T) -> int:
     """Каталог разбирается до удаления старого: файл не того формата (HTML-страница
     прокси, чужой CSV) даёт ноль записей и не должен стереть действующий каталог."""
     with open_maybe_gzip(path) as raw:
         records = list(_unique(parse_kev(limited(raw, MAX_KEV_BYTES)), lambda r: r.cve_id))
     if not records:
         raise ValueError("в файле нет записей KEV")
-    db.execute(delete(KEV_T))
+    db.execute(delete(table))
     n = 0
     rows = ((r.cve_id, r.date_added, r.ransomware, r.vendor, r.product, r.name, r.due_date) for r in records)
     for batch in _batched(rows):
-        n += bulk_insert(db, KEV_T, ("cve_id", "date_added", "ransomware", "vendor", "product", "name", "due_date"), batch)
+        n += bulk_insert(db, table, ("cve_id", "date_added", "ransomware", "vendor", "product", "name", "due_date"), batch)
         handle.tick(n, message=f"записей {n}")
     return n
 
 
-def _load_attack(db: Session, path: Path, handle: JobHandle, replace: bool) -> int:
+def _load_attack(db: Session, path: Path, handle: JobHandle, replace: bool, table: Table = ATTACK_T) -> int:
     """Размётка CTID: техники вне действующего бандла отбрасываются.
 
     Иначе в матрице появились бы ячейки, которых на экране нет: CTID
@@ -255,10 +259,10 @@ def _load_attack(db: Session, path: Path, handle: JobHandle, replace: bool) -> i
     parser = parse_ctid_json if path.suffix.lower() == ".json" else parse_ctid_csv
     known = set(current_bundle(db).by_id())
     if replace:
-        db.execute(delete(ATTACK_T))
+        db.execute(delete(table))
         seen: set[tuple[str, str]] = set()
     else:
-        seen = {(c, t) for c, t in db.execute(select(ATTACK_T.c.cve_id, ATTACK_T.c.technique_id))}
+        seen = {(c, t) for c, t in db.execute(select(table.c.cve_id, table.c.technique_id))}
     rows: list[tuple[Any, ...]] = []
     dropped = 0
     with open_maybe_gzip(path) as raw:
@@ -272,7 +276,7 @@ def _load_attack(db: Session, path: Path, handle: JobHandle, replace: bool) -> i
             rows.append((cve, technique, kind))
     n = 0
     for batch in _batched(rows):
-        n += bulk_insert(db, ATTACK_T, ("cve_id", "technique_id", "mapping_type"), batch)
+        n += bulk_insert(db, table, ("cve_id", "technique_id", "mapping_type"), batch)
         handle.tick(n, total=len(rows), message=f"связей {n}")
     if dropped:
         # Сообщение сменой стадии, а не тиком: счётчик оно обнуляет, зато
