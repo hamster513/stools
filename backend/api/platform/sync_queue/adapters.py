@@ -103,7 +103,12 @@ def start_task(db: Session, task: Task, actor: str, options: dict[str, Any]) -> 
         collector_routes.spawn(lambda: run_job(SyncJob, platform_job_id, work))
         return JobRef(SyncJob.__tablename__, platform_job_id)
 
-    if task.key == "vm/trends_pull/0" and options:
+    if task.key == "vm/archive_import/0":
+        from api.modules.vm.services.archive_batches import start
+        job_id = start(db, actor, options["batch_id"], collector_routes.spawn)
+        if job_id is None:
+            return None
+    elif task.key == "vm/trends_pull/0" and options:
         from fastapi import HTTPException
 
         from api.modules.vm.services.trends.sync import start_trend_sync

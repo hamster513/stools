@@ -18,12 +18,26 @@ server {
     # HSTS ставит nginx: до Caddy доходит HTTP, сам он https не видит.
     add_header Strict-Transport-Security "max-age=31536000" always;
 
-    # Самая крупная загрузка STools — 500 МБ (выгрузка VM), с запасом.
+    # Обычные загрузки — до 500 МиБ; для пачки VM ниже задан отдельный предел.
     client_max_body_size 600m;
     # Большие файлы идут в STools потоком, а не копятся на диске nginx.
     proxy_request_buffering off;
     proxy_read_timeout 600s;
     proxy_send_timeout 600s;
+
+    # 2 ГиБ архивов плюс multipart; API проверяет VM admin до чтения тела.
+    location = /api/vm/refs/batches {
+        client_max_body_size 2049m;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        # Схема https — по ней STools проверяет Origin запросов на запись.
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Заменяем, а не дописываем: подставленный клиентом X-Forwarded-For
+        # не должен доехать до STools (адрес клиента — журнал и порог входов).
+        proxy_set_header X-Forwarded-For $remote_addr;
+    }
 
     location / {
         proxy_pass http://127.0.0.1:8080;

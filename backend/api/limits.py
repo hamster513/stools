@@ -27,8 +27,8 @@ ASGI-обёртка снаружи всего приложения, и тело 
 с живой сессией: cookie из настроек находит по хешу строку сессии со сроком
 в будущем (`api.deps.find_session`, один поиск по первичному ключу). Иначе
 401 до чтения хотя бы байта тела: FastAPI разбирает multipart (со спулом на
-диск) раньше `require_access`. Роль здесь не проверяется — это по-прежнему
-делает `require_access`; здесь только наличие входа.
+диск) раньше `require_access`. Для обычных загрузок роль проверяет
+`require_access`; пачки VM дополнительно требуют VM admin до чтения большого тела.
 
 Ручки загрузки дополнительно проверяют размер файла после чтения
 (`check_upload_size`) — на случай, если карта ручек разойдётся с роутерами.
@@ -51,6 +51,7 @@ MB = 1024 * 1024
 
 SIEM_UPLOAD = 300 * MB
 VM_UPLOAD = 500 * MB
+VM_ARCHIVE_BATCH_UPLOAD = 2049 * MB  # 2 GiB files + bounded multipart framing
 AD_UPLOAD = 200 * MB
 KSC_UPLOAD = 200 * MB
 TOOLBOX_UPLOAD = 200 * MB
@@ -73,6 +74,7 @@ BODY_LIMITS: list[tuple[str, str, int]] = [
     ("POST", "/api/vm/trends/news-archive", TH_INTEL_UPLOAD),
     ("POST", "/api/vm/import/file", VM_UPLOAD),
     ("POST", "/api/vm/refs/{name}/upload", VM_UPLOAD),
+    ("POST", "/api/vm/refs/batches", VM_ARCHIVE_BATCH_UPLOAD),
     ("POST", "/api/ad/snapshots/file", AD_UPLOAD),
     ("POST", "/api/ksc/snapshots/file", KSC_UPLOAD),
     ("POST", "/api/toolbox/scrub/jobs", TOOLBOX_UPLOAD),
@@ -109,6 +111,19 @@ def session_refusal(token: str | None) -> str | None:
         if session_expired(row):
             return "сессия истекла"
     return None
+
+
+def batch_upload_allowed(token: str | None) -> bool:
+    """The larger batch body is spooled only for an active VM administrator."""
+    from api.db.models import AppUser
+    from api.platform.services.access import access_for, allows
+
+    if not token:
+        return False
+    with get_sessionmaker()() as db:
+        row = find_session(db, token)
+        user = db.get(AppUser, row.user_id) if row is not None and not session_expired(row) else None
+        return bool(user and user.is_active and allows(access_for(db, user.id), "vm", "admin"))
 
 
 def _detail(limit: int) -> str:
@@ -170,6 +185,10 @@ class BodyLimitMiddleware:
             refusal = await run_in_threadpool(session_refusal, token)
             if refusal is not None:
                 await JSONResponse({"detail": refusal}, status_code=status.HTTP_401_UNAUTHORIZED)(scope, receive, send)
+                return
+
+            if scope["path"] == "/api/vm/refs/batches" and not await run_in_threadpool(batch_upload_allowed, token):
+                await JSONResponse({"detail": "Нужны права администратора VM"}, status_code=403)(scope, receive, send)
                 return
 
         received = 0

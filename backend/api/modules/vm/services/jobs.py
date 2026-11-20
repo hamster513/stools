@@ -24,7 +24,7 @@ REF_KINDS = tuple(f"ref_{name}" for name in REF_NAMES)
 #: Задачи, которые заменяют или пересчитывают пары: массовая смена статусов с ними одновременно не идёт.
 #: Архив справочников — тоже: в конце он пересчитывает риск всех пар. Синхронизация образов
 #: из Harbor пополняет витрину CVE и пересчитывает риск пар образов.
-DATA_KINDS = (*IMPORT_KINDS, "recalculate", "ref_bundle", "harbor_sync", *REF_KINDS)
+DATA_KINDS = (*IMPORT_KINDS, "recalculate", "ref_bundle", "archive_import", "harbor_sync", *REF_KINDS)
 
 
 def import_sql_name(job_id: int) -> str:

@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react'
 import { Download, Upload } from 'lucide-react'
 import { ApiRequestError } from '@/api/client'
-import { useDownloadRef, useRefs, useUploadBundle, useUploadRef } from '@/modules/vm/api/queries'
+import { useDownloadRef, useRefs, useUploadRef } from '@/modules/vm/api/queries'
 import type { RefDownloadMode, RefState } from '@/modules/vm/api/types'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { cn } from '@/lib/cn'
 import { Section } from '@/platform/collector/ui'
+import { ArchiveBatchUpload } from './ArchiveBatchUpload'
+import { NewsArchiveSection } from './NewsArchiveSection'
 
 const ABOUT: Record<string, string> = {
   ghsa: 'GitHub Advisory Database: GHSA, связи с CVE, пакеты и диапазоны версий. Включает уязвимости без CVE; ZIP официального репозитория.',
@@ -17,7 +19,6 @@ const ABOUT: Record<string, string> = {
   kev: 'Каталог эксплуатируемых уязвимостей CISA: 40 баллов в блоке эксплуатации и итоговый приоритет не ниже High (80).',
 }
 const ACCEPT: Record<string, string> = { ghsa: '.zip', epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }
-const LINK = 'text-text underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
 const SOURCE: Record<string, string> = { network: 'сеть', file: 'файл', bundle: 'архив' }
 
 function RefCard({ r }: { r: RefState }) {
@@ -103,61 +104,19 @@ function RefCard({ r }: { r: RefState }) {
   )
 }
 
-function BundleUpload({ refs }: { refs: RefState[] }) {
-  // Полные снимки и пакеты обновлений загружаются через одну точку входа.
-  const { admin } = useCan()
-  const upload = useUploadBundle()
-  const inputRef = useRef<HTMLInputElement>(null)
-  // Задача архива занимает все справочники сразу: у каждой карточки один и тот же номер.
-  // Так она и отличается от задачи одной карточки, без отдельного запроса списка задач.
-  const ids = new Set(refs.map((r) => r.active_job_id))
-  const bundleJob = refs.length > 1 && ids.size === 1 ? refs[0].active_job_id : null
-  const busy = refs.some((r) => r.active_job_id !== null) || upload.isPending
-  const error = upload.error
-  const errorText = error instanceof ApiRequestError ? error.message : error ? 'Не удалось запустить' : null
-
-  return (
-    <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-      <div className="w-full space-y-2">
-        <p>Для закрытого контура: <a className={LINK} href="/offline/stools-download-kit.zip" download>Единый загрузчик — Linux и PowerShell</a></p>
-        <details><summary className="cursor-pointer">Полная выгрузка и обновления за период</summary>
-          <ol className="mt-2 list-inside list-decimal space-y-1">
-            <li>Распакуйте комплект на компьютере с интернетом. Нужен Python 3.11+, для обновлений GHSA и правил — Git.</li>
-            <li>Запустите без параметров для меню: выберите данные, полный режим или изменения за день, неделю либо три календарных месяца.</li>
-            <li>Самостоятельно проверьте давность баз в STools: скрипт выгрузит ровно выбранный период.</li>
-            <li>Архивы справочников загрузите здесь, архивы новостей и правил — в блоке «Архив новостей».</li>
-          </ol>
-          <p className="mt-2">Linux:</p><code className="mt-1 block break-all rounded bg-app-bg p-2">sh download-stools.sh --datasets nvd,ghsa --mode updates --period 7d --lang ru --quiet</code>
-          <p className="mt-2">PowerShell:</p><code className="mt-1 block break-all rounded bg-app-bg p-2">.\download-stools.ps1 -Datasets nvd,ghsa -Mode Updates -Period 7d -Lang ru -Quiet</code>
-          <p className="mt-2">Файл состояния STools не нужен. Частичный импорт не подтверждает актуальность всей базы. Прокси используется из системы; язык меню — русский или английский.</p>
-        </details>
-      </div>
-      {admin && (
-        <>
-          <Button onClick={() => inputRef.current?.click()} loading={upload.isPending} disabled={busy}>
-            <Upload size={13} aria-hidden /> Загрузить архив
-          </Button>
-          <input ref={inputRef} type="file" accept=".zip" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) upload.mutate(file); e.target.value = '' }} />
-        </>
-      )}
-      {bundleJob !== null && <span className="text-[11px]">идёт задача #{bundleJob}</span>}
-      {errorText && <span className="text-[11px] text-kind-1">{errorText}</span>}
-    </div>
-  )
-}
-
 export function ReferencesSection() {
   const refs = useRefs()
   return (
     <Section
       id="references"
       title="Справочники"
-      about="Скачиваются из сети или загружаются файлами — по одному или все сразу архивом. В автоматическом режиме загружаются обновления, а пустая база — целиком. По расписанию используется тот же режим. После изменений риск пересчитывается; если обновлений нет, данные сохраняются."
+      about="Скачиваются из сети или загружаются файлами — по одному или пачкой архивов. В автоматическом режиме загружаются обновления, а пустая база — целиком. По расписанию используется тот же режим. После изменений риск пересчитывается; если обновлений нет, данные сохраняются."
     >
-      <BundleUpload refs={refs.data ?? []} />
+      <ArchiveBatchUpload />
       <div className="grid gap-3 md:grid-cols-2">
         {(refs.data ?? []).map((r) => <RefCard key={r.name} r={r} />)}
       </div>
+      <div className="mt-4"><NewsArchiveSection /></div>
     </Section>
   )
 }

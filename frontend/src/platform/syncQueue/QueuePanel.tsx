@@ -48,7 +48,7 @@ export function QueuePanel({ tasks }: { tasks: QueueTask[] }) {
         {canManage && <div className="mt-3 flex gap-2">
           {active(run.status) && <Button variant="ghost" disabled={run.cancel_requested || action.isPending}
             onClick={() => action.mutate({ id: run.id, kind: 'cancel' })}>{run.cancel_requested ? 'Отмена запрошена' : 'Отменить ожидающие'}</Button>}
-          {['partial', 'failed', 'cancelled'].includes(run.status) && <Button variant="ghost" disabled={action.isPending}
+          {['partial', 'failed', 'cancelled'].includes(run.status) && !run.steps.some(step => step.kind === 'archive_import') && <Button variant="ghost" disabled={action.isPending}
             onClick={() => action.mutate({ id: run.id, kind: 'retry' })}>Повторить незавершённые</Button>}
         </div>}
       </details>

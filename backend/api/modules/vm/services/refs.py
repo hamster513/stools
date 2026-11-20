@@ -283,7 +283,8 @@ def _load_attack(db: Session, path: Path, handle: JobHandle, replace: bool) -> i
 
 
 def load_ref(
-    db: Session, handle: JobHandle, name: str, path: Path, source: str, detail: str = "", append: bool = False
+    db: Session, handle: JobHandle, name: str, path: Path, source: str, detail: str = "", append: bool = False,
+    *, rebuild_software: bool = True
 ) -> int:
     """Publish full rows and their trusted source checkpoint atomically."""
     if name == "nvd" and re.search(r"(?:modified|recent)", path.name + " " + detail, re.IGNORECASE):
@@ -295,13 +296,14 @@ def load_ref(
     if name == "attack":
         current_bundle(db)  # Built-in seeding may commit; keep it outside the catalog transaction.
     with Session(db.get_bind()) as catalog, catalog.begin():
-        count = _load_ref(catalog, handle, name, path, source, detail, append)
+        count = _load_ref(catalog, handle, name, path, source, detail, append, rebuild_software=rebuild_software)
     db.expire_all()
     return count
 
 
 def _load_ref(
-    db: Session, handle: JobHandle, name: str, path: Path, source: str, detail: str = "", append: bool = False
+    db: Session, handle: JobHandle, name: str, path: Path, source: str, detail: str = "", append: bool = False,
+    *, rebuild_software: bool = True
 ) -> int:
     if name not in REF_NAMES:
         raise ValueError(f"неизвестный справочник: {name}")
@@ -339,7 +341,7 @@ def _load_ref(
     state.source = source
     state.records = n
     state.detail = detail
-    if name == "nvd":
+    if name == "nvd" and rebuild_software:
         from api.modules.vm.services.software import rebuild_ksc
 
         handle.report_progress(0, 0, "проверка версий ПО KSC", stage="enriching")

@@ -374,3 +374,11 @@ def test_large_reference_upload_remains_bounded_and_requires_session(path):
     assert status == 413 and seen == {'receive':0,'app':0}
     status, _, seen = _call([(b'content-length',str(400*MB).encode())],[b'x'],path=path)
     assert status == 401 and seen == {'receive':0,'app':0}
+
+
+def test_archive_batch_requires_vm_admin_before_reading_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    from api import limits
+    monkeypatch.setattr(limits, "session_refusal", lambda token: None)
+    monkeypatch.setattr(limits, "batch_upload_allowed", lambda token: False, raising=False)
+    status, _, seen = _call([], [b"untrusted-upload"], path="/api/vm/refs/batches")
+    assert status == 403 and seen == {"receive": 0, "app": 0}

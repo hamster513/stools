@@ -80,6 +80,12 @@ def save_dependencies(db: Session, key: str, dependencies: list[dict[str, Any]],
 
 def validate_options(task: Task, options: dict[str, Any] | None) -> dict[str, Any]:
     options = dict(options or {})
+    if task.key == "vm/archive_import/0":
+        import re
+        batch_id = options.get("batch_id")
+        if set(options) != {"batch_id"} or not isinstance(batch_id, str) or not re.fullmatch(r"[a-f0-9]{32}", batch_id):
+            raise HTTPException(422, "Некорректный идентификатор пачки архивов")
+        return options
     if task.module == "vm" and task.kind.startswith("ref_"):
         from api.modules.vm.routers.refs import DownloadRequest
         try:
@@ -109,6 +115,8 @@ def enqueue(db: Session, roots: list[dict[str, Any]], *, actor: str, user_id: in
     requests: dict[str, dict[str, Any]] = {}
     for root in roots:
         task = resolve(db, root["key"])
+        if task.key == "vm/archive_import/0" and origin != "upload":
+            raise HTTPException(422, "Загрузите архивы через Справочники VM; повторный запуск требует загрузки файлов")
         if access is not None:
             authorized(task, access)
         opts = validate_options(task, root.get("options"))

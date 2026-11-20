@@ -198,7 +198,7 @@ def _rebuild_after_failure(db: Session, handle: JobHandle, touched: set[str], we
         log.exception("VM: пересборка после отказа файла архива %s не удалась", name)
 
 
-def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights) -> None:
+def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights, *, rebuild: bool = True) -> None:
     into = Path(tempfile.mkdtemp(prefix="ref-bundle-", dir=zip_path.parent))
     try:
         from api.modules.vm.services.ref_updates import (
@@ -210,25 +210,34 @@ def run_bundle(db: Session, handle: JobHandle, zip_path: Path, weights: Weights)
         with zipfile.ZipFile(zip_path) as archive:
             is_update = MANIFEST_NAME in archive.namelist()
         if is_update:
-            run_update_bundle(db, handle, zip_path, weights)
+            if rebuild:
+                run_update_bundle(db, handle, zip_path, weights)
+            else:
+                from api.modules.vm.services.ref_updates import apply_update_bundle
+                apply_update_bundle(db, handle, zip_path)
             return
         handle.stage("extracting")
         files, skipped = extract(zip_path, into, handle)
+        if not files:
+            raise ValueError("в архиве нет известных справочников")
         loaded: set[str] = set()
         for ref, path in files:
             try:
                 # Второй файл CTID дописывается к первому, а не заменяет его.
                 append = ref == "attack" and "attack" in loaded
-                refs_service.load_ref(db, handle, ref, path, "bundle", detail=path.name, append=append)
+                options = {} if rebuild else {"rebuild_software": False}
+                refs_service.load_ref(db, handle, ref, path, "bundle", detail=path.name, append=append, **options)
             except JobCancelled:
                 raise
             except Exception as exc:  # любой отказ файла называет файл
                 db.rollback()
-                _rebuild_after_failure(db, handle, loaded | {ref}, weights, path.name)
+                if rebuild:
+                    _rebuild_after_failure(db, handle, loaded | {ref}, weights, path.name)
                 raise ValueError(f"{path.name}: {_reason(exc)}") from exc
             loaded.add(ref)
         from api.modules.vm.services.ref_updates import rebuild_pending
-        rebuild_pending(db, handle, weights, loaded)
+        if rebuild:
+            rebuild_pending(db, handle, weights, loaded)
         summary = f"загружено файлов: {len(files)}"
         if skipped:
             summary += "; пропущено: " + ", ".join(skipped)

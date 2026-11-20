@@ -64,7 +64,7 @@ def ref_views(db: Session) -> list[RefView]:
         if fresh is not None and fresh.tzinfo is None:
             fresh = fresh.replace(tzinfo=dt.UTC)
         # Архив грузит все справочники сразу: его задача видна на каждой карточке.
-        running = active_job(db, [f"ref_{name}", "ref_bundle"])
+        running = active_job(db, [f"ref_{name}", "ref_bundle", "archive_import"])
         loaded = s.loaded_at if s else None
         if loaded is not None and loaded.tzinfo is None:
             loaded = loaded.replace(tzinfo=dt.UTC)

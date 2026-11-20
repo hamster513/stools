@@ -246,6 +246,8 @@ class QueueWorker:
                     if time.monotonic() >= next_maintenance:
                         next_maintenance = time.monotonic() + 60
                         ensure_queued(db)
+                        from api.modules.vm.services.archive_batches import cleanup
+                        cleanup(db)
                     dispatch(db)
             except Exception:
                 log.exception("Не удалось обработать очередь синхронизаций")

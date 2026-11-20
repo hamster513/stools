@@ -31,7 +31,7 @@ import type {
 export const VULNS_PAGE_SIZE = 200
 export const IMAGES_PAGE_SIZE = 200
 
-function invalidateData(qc: ReturnType<typeof useQueryClient>) {
+export function invalidateData(qc: ReturnType<typeof useQueryClient>) {
   // Импорт и массовая смена меняют и статусы пар: устаревают карточки состояний.
   // Синхронизация Harbor, пересчёт и справочники меняют образы, их находки и риск.
   for (const key of [
@@ -256,22 +256,6 @@ export function useUploadRef() {
       return api.postForm(`/api/vm/refs/${name}/upload`, form)
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['vm-refs'] }),
-  })
-}
-
-/** Архив справочников от скрипта download-references: одна задача на все ленты. */
-export function useUploadBundle() {
-  const qc = useQueryClient()
-  return useMutation<{ job_id: number }, ApiRequestError, File>({
-    mutationFn: (file) => {
-      const form = new FormData()
-      form.append('file', file)
-      return api.postForm('/api/vm/refs/bundle/upload', form)
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['vm-refs'] })
-      qc.invalidateQueries({ queryKey: ['vm-jobs'] })
-    },
   })
 }
 

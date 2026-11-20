@@ -19,6 +19,7 @@ from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.findings_adapter import ADAPTER as FINDINGS_ADAPTER
 from api.modules.vm.findings_adapter import keys_by_filter, start_bulk_job
 from api.modules.vm.routers import (
+    archive_batches,
     cve,
     harbor,
     images,
@@ -51,6 +52,7 @@ for sub in (
     zones.router,
     jobs.router,
     import_.router,
+    archive_batches.router,
     refs.router,
     recalc.router,
     vulns.router,

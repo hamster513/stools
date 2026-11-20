@@ -66,11 +66,23 @@
 		}
 	}
 
-	# API проксируется как есть, префикс сохраняется.
-	# Потолок тела — наибольший из лимитов API (500 МБ у VM) с запасом
-	# на multipart; точные лимиты по путям держит сам API (api/limits.py).
+	# Пачка VM: 2 ГиБ файлов плюс multipart. Остальные пути сохраняют прежний предел.
+	@vmArchiveBatch {
+		method POST
+		path /api/vm/refs/batches
+	}
+	@otherApiBody {
+		not {
+			method POST
+			path /api/vm/refs/batches
+		}
+	}
+	# API проксируется как есть. Точные лимиты и права держит API (api/limits.py).
 	handle /api/* {
-		request_body {
+		request_body @vmArchiveBatch {
+			max_size 2049MiB
+		}
+		request_body @otherApiBody {
 			max_size 600MB
 		}
 		# Адрес клиента — только тот, кто подключился к Caddy: присланный

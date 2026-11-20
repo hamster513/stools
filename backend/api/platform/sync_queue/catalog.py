@@ -21,14 +21,14 @@ class Task:
 
     @property
     def level(self) -> Literal["admin", "write"]:
-        if self.module in ("platform", "attack") or (self.module == "vm" and self.kind.startswith("ref_")):
+        if self.module in ("platform", "attack") or (self.module == "vm" and (self.kind.startswith("ref_") or self.kind == "archive_import")):
             return "admin"
         return "write"
 
     @property
     def dependency_allowed(self) -> bool:
         # Cleanup produces no reusable source; downloading ATT&CK still requires confirmation.
-        return (self.module, self.kind) not in {("platform", "storage_cleanup"), ("attack", "download")}
+        return (self.module, self.kind) not in {("platform", "storage_cleanup"), ("attack", "download"), ("vm", "archive_import")}
 
 
 def targets(db: Session) -> list[Task]:
@@ -39,6 +39,9 @@ def targets(db: Session) -> list[Task]:
 
 
 def resolve(db: Session, key: str) -> Task:
+    # Uploaded files can be queued, but cannot be scheduled or used as a reusable source.
+    if key == "vm/archive_import/0":
+        return Task("vm", "archive_import", 0, "Импорт пачки архивов VM")
     for task in targets(db):
         if task.key == key:
             return task
