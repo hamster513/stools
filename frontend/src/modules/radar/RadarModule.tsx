@@ -6,6 +6,7 @@ import { FIELD } from '@/components/ui/Field'
 import { useRouter } from '@/lib/router'
 import { useCan } from '@/lib/can'
 import { dateText, useServers } from './api'
+import { NettracePage } from './NettracePage'
 import { SnapshotPage } from './SnapshotPage'
 
 function ServersPage() {
@@ -33,7 +34,7 @@ export function RadarModule() {
   const match = /^\/radar\/nginx\/(\d+)$/.exec(path)
   return <AppShell><div className="h-full min-h-0 overflow-auto p-4 md:p-6"><div className="mx-auto max-w-7xl space-y-5">
     <div className="flex flex-wrap items-center justify-between gap-3"><h1 className="flex items-center gap-2 text-xl font-semibold"><Radar className="text-primary" />Радар</h1>{write && <Button onClick={() => navigate('/settings/radar')}><Settings size={16} />Настройки и импорт</Button>}</div>
-    {!match && <div className="flex gap-2"><Button variant={path !== '/radar/scanfactory' ? 'primary' : 'secondary'} onClick={() => navigate('/radar')}>Nginx</Button><Button variant={path === '/radar/scanfactory' ? 'primary' : 'secondary'} onClick={() => navigate('/radar/scanfactory')}>ScanFactory</Button></div>}
-    {match ? <SnapshotPage key={match[1]} id={Number(match[1])} /> : path === '/radar/scanfactory' ? <p className="rounded border border-border p-4 text-sm text-text-secondary">ScanFactory пока не подключён. Внешние наблюдения отсутствуют; доступность импортированных сервисов из интернета не подтверждена.</p> : <ServersPage />}
+    {!match && <div className="flex gap-2"><Button variant={path === '/radar' ? 'primary' : 'secondary'} onClick={() => navigate('/radar')}>Nginx</Button><Button variant={path.startsWith('/radar/nettrace') ? 'primary' : 'secondary'} onClick={() => navigate('/radar/nettrace')}>NetTrace</Button><Button variant={path === '/radar/scanfactory' ? 'primary' : 'secondary'} onClick={() => navigate('/radar/scanfactory')}>ScanFactory</Button></div>}
+    {match ? <SnapshotPage key={match[1]} id={Number(match[1])} /> : path.startsWith('/radar/nettrace') ? <NettracePage /> : path === '/radar/scanfactory' ? <p className="rounded border border-border p-4 text-sm text-text-secondary">ScanFactory пока не подключён. Внешние наблюдения отсутствуют; доступность импортированных сервисов из интернета не подтверждена.</p> : <ServersPage />}
   </div></div></AppShell>
 }

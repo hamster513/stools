@@ -24,6 +24,8 @@ class Target:
 
 
 def _sources(db: Session, module: str) -> list[Target]:
+    if module == "radar":
+        return [Target("nettrace_sync", 0, "Синхронизация NetTrace")]
     if module == "platform":
         return [Target("storage", 0, "Замер объёма хранилища"), Target("storage_cleanup", 0, "Очистка хранилища"),
                 Target("assets_read_refresh", 0, "Обновление индекса активов")]
@@ -58,7 +60,7 @@ def _sources(db: Session, module: str) -> list[Target]:
 
 @router.get("")
 def list_schedules(db: Session = Depends(get_db), access: Access = Depends(current_access)):
-    modules = [m for m in ("ad", "ksc", "vm", "assets", "siem", "attack", "platform") if allows(access, m, "read")]
+    modules = [m for m in ("ad", "ksc", "vm", "assets", "siem", "attack", "radar", "platform") if allows(access, m, "read")]
     schedules = {(s.module, s.kind, s.target_id): s for s in db.scalars(
         select(PlatformSchedule).where(PlatformSchedule.module.in_(modules)))}
     items = []

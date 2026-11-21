@@ -34,6 +34,8 @@ MODULE_ADMIN_WRITES: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in 
     rf"(POST|PUT|DELETE) /api/(ad|ksc)/connections(/{_ID}(/test|/schedule)?)?",
     r"PUT /api/(ad|ksc|vm|siem|assets|toolbox)/settings",
     r"POST /api/vm/settings/test-vm",
+    r"PUT /api/radar/nettrace/settings",
+    r"POST /api/radar/nettrace/test",
     r"PUT /api/vm/harbor",
     r"POST /api/vm/harbor/test",
     r"(PUT|POST) /api/vm/trends/settings(/test)?",
@@ -77,12 +79,12 @@ def needed(method: str, path: str) -> tuple[str, str] | None:
             return parts[2], "read"
         line = f"{method} {path}"
         return parts[2], "admin" if any(p.fullmatch(line) for p in MODULE_ADMIN_WRITES) else "write"
-    sync = re.fullmatch(r"/api/settings/schedules/(ad|ksc|assets|vm|siem|attack)/[a-z_]+/[0-9]+", path)
+    sync = re.fullmatch(r"/api/settings/schedules/(ad|ksc|assets|vm|siem|attack|radar)/[a-z_]+/[0-9]+", path)
     if sync:
         return sync[1], "read" if read else "admin"
     if path == "/api/settings/sync-tasks" or re.fullmatch(r"/api/settings/sync-runs(?:/[0-9]+(?:/(?:cancel|retry))?)?", path):
         return None  # The queue checks every target and dependency itself.
-    if re.fullmatch(r"/api/settings/schedules/(?:ad|ksc|assets|vm|siem|attack|platform)/[a-z_]+/[0-9]+/dependencies", path):
+    if re.fullmatch(r"/api/settings/schedules/(?:ad|ksc|assets|vm|siem|attack|radar|platform)/[a-z_]+/[0-9]+/dependencies", path):
         return None  # Per-target administrator and dependency permissions in the handler.
     if path.startswith("/api/settings/attack"):
         # Состояние базы ATT&CK показывают страницы всех модулей; меняет его администратор модуля ATT&CK.

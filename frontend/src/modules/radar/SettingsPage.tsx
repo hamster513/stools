@@ -4,6 +4,7 @@ import { Upload } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useCan } from '@/lib/can'
 import { useRouter } from '@/lib/router'
+import { NettraceSettings } from './NettraceSettings'
 import { sendFiles, type Preview, type Snapshot } from './api'
 
 export function RadarSettingsPage() {
@@ -51,6 +52,7 @@ export function RadarSettingsPage() {
       </div>}
       {save.data && <div role="status" className="space-y-2 text-sm"><p>Сохранено: {save.data.items.filter(i => !i.unchanged).length}. Без изменений: {save.data.items.filter(i => i.unchanged).length}.</p><Button onClick={() => navigate('/radar')}>Открыть серверы nginx</Button></div>}
     </section>
-    <section className="space-y-2 rounded border border-border p-4 text-sm"><h2 className="font-semibold">ScanFactory и NetTrace</h2><p className="text-text-secondary">Источники пока не подключены. Внешние наблюдения и сетевые пути не участвуют в оценке доступности.</p></section>
+    <NettraceSettings />
+    <section className="space-y-2 rounded border border-border p-4 text-sm"><h2 className="font-semibold">ScanFactory</h2><p className="text-text-secondary">Источник пока не подключён. Внешние наблюдения отсутствуют.</p></section>
   </div>
 }

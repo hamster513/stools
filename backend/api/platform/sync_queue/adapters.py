@@ -51,7 +51,7 @@ def task_model(task: Task) -> type[Any]:
     from api.modules.siem.logons.models import SiemLogonJob
     from api.modules.vm.models import VmJob
     return {"ad": AdJob, "ksc": KscJob, "vm": VmJob, "assets": AssetJob, "attack": AttackJob,
-            "siem": SiemLogonJob if task.kind == "logons" else Job, "platform": SyncJob}[task.module]
+            "siem": SiemLogonJob if task.kind == "logons" else Job, "platform": SyncJob, "radar": SyncJob}[task.module]
 
 
 def job_state(db: Session, ref: JobRef) -> JobState:
@@ -80,6 +80,19 @@ def start_task(db: Session, task: Task, actor: str, options: dict[str, Any]) -> 
         source = db.get(AssetDns, task.target_id) if task.kind == "dns" else db.get(AssetRacktables, task.target_id)
         if source is None or not source.enabled:
             raise SourceUnavailable("Источник отключён или удалён; проверьте настройки подключения")
+
+    if task.module == "radar":
+        from api.modules.radar.nettrace_service import config, evaluate, synchronize
+        config(db)
+        radar_job_id = start_job(db, SyncJob, task.kind, actor)
+        def radar_work(session: Session, handle: JobHandle) -> None:
+            result = synchronize(session, handle) if task.kind == "nettrace_sync" else evaluate(session, task.target_id, handle)
+            row = session.get(SyncJob, handle.id)
+            assert row is not None
+            row.result = jsonable_encoder(result)
+            session.commit()
+        collector_routes.spawn(lambda: run_job(SyncJob, radar_job_id, radar_work))
+        return JobRef(SyncJob.__tablename__, radar_job_id)
 
     if task.module == "platform":
         platform_job_id = start_job(db, SyncJob, task.kind, actor)
@@ -203,6 +216,11 @@ def observations(db: Session, tasks: list[Task]) -> dict[str, dt.datetime | None
     for key, failed_at in incomplete:
         if failed_at is not None and stamps.get(key) is not None and stamps[key] <= failed_at:
             stamps[key] = None
+    for task in tasks:
+        if task.module == "radar":
+            from api.modules.radar.models import NettraceConfig
+            row = db.get(NettraceConfig, 1)
+            stamps[task.key] = row.synced_at if row and row.enabled and row.latest_snapshot_id and task.kind == "nettrace_sync" else None
     return stamps
 
 

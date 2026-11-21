@@ -28,13 +28,13 @@ class Task:
     @property
     def dependency_allowed(self) -> bool:
         # Cleanup produces no reusable source; downloading ATT&CK still requires confirmation.
-        return (self.module, self.kind) not in {("platform", "storage_cleanup"), ("attack", "download"), ("vm", "archive_import")}
+        return (self.module, self.kind) not in {("platform", "storage_cleanup"), ("attack", "download"), ("vm", "archive_import"), ("radar", "nettrace_path")}
 
 
 def targets(db: Session) -> list[Task]:
     from api.platform.routers.schedules import _sources
     return [Task(module, target.kind, target.id, target.title)
-            for module in ("ad", "ksc", "vm", "assets", "siem", "attack", "platform")
+            for module in ("ad", "ksc", "vm", "assets", "siem", "attack", "radar", "platform")
             for target in _sources(db, module)]
 
 
@@ -42,6 +42,12 @@ def resolve(db: Session, key: str) -> Task:
     # Uploaded files can be queued, but cannot be scheduled or used as a reusable source.
     if key == "vm/archive_import/0":
         return Task("vm", "archive_import", 0, "Импорт пачки архивов VM")
+    if key.startswith("radar/nettrace_path/"):
+        from api.modules.radar.models import NettraceEvaluation
+        raw = key.removeprefix("radar/nettrace_path/")
+        if raw.isdigit() and len(raw) < 10 and db.get(NettraceEvaluation, int(raw)) is not None:
+            return Task("radar", "nettrace_path", int(raw), "Расчёт сетевого участка NetTrace")
+        raise HTTPException(404, "Расчёт NetTrace не найден")
     for task in targets(db):
         if task.key == key:
             return task
@@ -56,7 +62,8 @@ def authorized(task: Task, access: Access, *, configure: bool = False, options: 
 
 
 def is_queueable(module: str, kind: str) -> bool:
-    return ((module in ("ad", "ksc") and kind == "collect")
+    return ((module == "radar" and kind == "nettrace_sync")
+            or (module in ("ad", "ksc") and kind == "collect")
             or (module == "assets" and kind in ("sync", "dns", "rt"))
             or (module == "vm" and (kind in ("import_vm", "harbor", "trends_pull") or kind.startswith("ref_")))
             or (module == "siem" and kind in ("kb_collect", "logons"))

@@ -127,6 +127,10 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 #: `admin` — настройка модуля (подключения, источники, расписания, settings,
 #: справочники, зоны), `write` — работа с данными. Чтение (GET) — всегда `read`.
 BUCKET: dict[tuple[str, str], str] = {
+    ("PUT", "/api/radar/nettrace/settings"): "admin",
+    ("POST", "/api/radar/nettrace/test"): "admin",
+    ("POST", "/api/radar/nettrace/sync"): "write",
+    ("POST", "/api/radar/nettrace/evaluations"): "write",
     ("POST", "/api/vm/refs/batches"): "admin",
     ("POST", "/api/radar/nginx/preview"): "write",
     ("POST", "/api/radar/nginx/import"): "write",
@@ -296,6 +300,7 @@ BUCKET.update({
 
 
 INNER: dict[tuple[str, str], str] = {
+    ("GET", "/api/radar/nettrace/settings"): "admin",
     ("GET", "/api/toolbox/settings"): "admin",
     ("GET", "/api/toolbox/aliases"): "write",
     ("GET", "/api/toolbox/aliases/export"): "write",

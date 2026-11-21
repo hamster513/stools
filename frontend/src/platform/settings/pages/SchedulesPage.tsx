@@ -12,7 +12,7 @@ import { QueuePanel } from '@/platform/syncQueue/QueuePanel'
 import type { QueueRun, QueueTask, TaskRequest } from '@/platform/syncQueue/types'
 import { scheduleText } from '../scheduleText'
 
-const MODULES = { platform: 'Платформа', ad: 'Active Directory', ksc: 'Антивирус', assets: 'Активы', vm: 'Уязвимости', siem: 'SIEM', attack: 'ATT&CK' }
+const MODULES = { radar: 'Радар', platform: 'Платформа', ad: 'Active Directory', ksc: 'Антивирус', assets: 'Активы', vm: 'Уязвимости', siem: 'SIEM', attack: 'ATT&CK' }
 const CONNECTIONS = [
   { module: 'ad', kind: 'collect', title: 'Active Directory', anchor: 'connections' },
   { module: 'ksc', kind: 'collect', title: 'Антивирус (KSC)', anchor: 'connections' },
