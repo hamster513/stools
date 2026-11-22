@@ -15,6 +15,7 @@ from api.modules.vm.models import VmHost, VmHostCve, VmImport, VmRefNvd, VmRefSt
 from api.modules.vm.sbom_models import HostSbomScan, VmHostCoverage
 from api.modules.vm.services import host_sbom, trivy_scan
 from api.modules.vm.services.ghsa_mapping import canonical_finding_ids
+from api.modules.vm.services.host_packages import package_warnings
 from api.modules.vm.services.software import candidate_records, nvd_ready
 
 
@@ -94,6 +95,10 @@ def comparison(
     return {
         "status": status,
         "inventory": sources,
+        "inventory_warnings": (
+            package_warnings(db, windows="windows" in (asset.os or "").lower())
+            if sources["maxpatrol"] in {"error", "stale"} else []
+        ),
         "components": components,
         "inventory_revision": target,
         "nvd_updated_at": db.scalar(select(VmRefState.loaded_at).where(VmRefState.name == "nvd")),

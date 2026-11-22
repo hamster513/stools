@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.modules.vm.core.mpvm import (
@@ -23,6 +24,7 @@ from api.modules.vm.sbom_models import VmPackageFeed, VmPackageHost
 log = logging.getLogger(__name__)
 # Host.Softs describes installed applications. UnixHost.Packages is the native package inventory.
 FEEDS = {"unix": ("UnixHost", "Packages"), "software": ("Host", "Softs")}
+FEED_LABELS = {"unix": "Пакеты Linux", "software": "Установленные приложения"}
 
 
 def package_pdql(conn: ConnectionLike, kind: str, extended: bool = False) -> str:
@@ -138,10 +140,11 @@ def _save(
         if state is None:
             state = VmPackageFeed(kind=kind)
             db.add(state)
+        # _publish executes SQL and may flush the pending feed before staging any rows.
+        state.checked_at, state.error = when, error
         if path is not None:
             _publish(db, path, kind, when)
             state.collected_at = when
-        state.checked_at, state.error = when, error
 
 
 def collect_packages(db: Session, client: MpVmClient, conn: ConnectionLike, data_dir: Path) -> bool:
@@ -176,17 +179,34 @@ def collect_packages(db: Session, client: MpVmClient, conn: ConnectionLike, data
                 _save(db.get_bind(), kind, now, path)
                 complete = True
             except Exception as exc:  # noqa: BLE001 - isolate rejected family exports from the CVE import.
-                message = (
-                    f"MaxPatrol: HTTP {exc.status}"
-                    if isinstance(exc, MpVmError) and exc.status
-                    else "CSV пакетов отклонён"
-                    if isinstance(exc, ValueError)
-                    else type(exc).__name__
-                )
+                message = _package_error(exc)
                 _save(db.get_bind(), kind, now, None, message)
                 log.warning("Инвентаризация пакетов MaxPatrol (%s): %s", kind, message)
     db.expire_all()
     return complete
+
+
+def _package_error(exc: Exception) -> str:
+    if isinstance(exc, IntegrityError) and (diag := getattr(exc.orig, "diag", None)):
+        # DETAIL may contain an entire inventory row. Expose only schema identifiers.
+        location = ".".join(filter(None, (diag.table_name, diag.column_name or diag.constraint_name)))
+        return f"PostgreSQL {diag.sqlstate} ({location})" if location else f"PostgreSQL {diag.sqlstate}"
+    if isinstance(exc, MpVmError) and exc.status:
+        return f"MaxPatrol: HTTP {exc.status}"
+    if isinstance(exc, ValueError):
+        return "CSV пакетов отклонён"
+    return type(exc).__name__
+
+
+def package_warnings(db: Session, *, windows: bool = False) -> list[str]:
+    kinds = ("software",) if windows else tuple(FEEDS)
+    query = select(VmPackageFeed.kind, VmPackageFeed.error).where(
+        VmPackageFeed.kind.in_(kinds), VmPackageFeed.error.is_not(None)
+    ).order_by(VmPackageFeed.kind.desc())
+    by_reason: dict[str, list[str]] = {}
+    for kind, reason in db.execute(query):
+        by_reason.setdefault(reason, []).append(FEED_LABELS[kind])
+    return [f"{' / '.join(labels)} — {reason}" for reason, labels in by_reason.items()]
 
 
 def package_hosts(db: Session):

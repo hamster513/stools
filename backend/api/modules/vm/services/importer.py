@@ -390,6 +390,7 @@ def run_import(
     temp: Path | None = None
     client: MpVmClient | None = None
     inventory_collected = False
+    inventory_warnings: list[str] = []
     sql_name = import_sql_name(handle.id)
 
     def label_transaction(_: Session, tx: SessionTransaction, conn: SqlConnection) -> None:
@@ -404,10 +405,11 @@ def run_import(
             temp = data_dir / "vm" / f"export-{handle.id}.csv"
             temp.parent.mkdir(parents=True, exist_ok=True)
             client = MpVmClient(conn, make_client(conn))
-            from api.modules.vm.services.host_packages import collect_packages
+            from api.modules.vm.services.host_packages import collect_packages, package_warnings
 
             handle.stage("packages", message="Собираем установленные пакеты MaxPatrol для SBOM")
             inventory_collected = collect_packages(db, client, conn, data_dir)
+            inventory_warnings = package_warnings(db)
             handle.stage("fetching", message=f"экспорт находок из {conn.host}")
             client.export_csv(
                 build_pdql(conn),
@@ -459,15 +461,15 @@ def run_import(
             handle.stage("groups", message="локальные группы")
             try:
                 _snap, message = import_groups(db, client, conn, data_dir)
-                handle.stage("groups", message=message)
             except GroupsImportError as exc:
                 db.rollback()
                 log.warning("%s", exc)
-                handle.stage("groups", message=str(exc))
+                message = str(exc)
             except Exception as exc:
                 db.rollback()
                 log.exception("локальные группы VM не получены")
-                handle.stage("groups", message=f"локальные группы не получены: {exc.__class__.__name__}")
+                message = f"локальные группы не получены: {exc.__class__.__name__}"
+            handle.stage("groups", message=". ".join([*inventory_warnings, message]))
         _notify_assets(db)
         inventory_collected = False
         if client is None:

@@ -24,6 +24,7 @@ const sourceStates: Record<string, string> = {
 }
 interface Result {
   status: string; inventory: { maxpatrol: string; ksc: string }; components: number; checked: number | null
+  inventory_warnings?: string[]
   scanned_components: number | null; scan_at: string | null; db_version: string | null; scanner_version: string | null
   error: string | null; vm_available: boolean; vm_at: string | null
   counts: { both: number; trivy_only: number; vm_only: number } | null; total: number
@@ -61,6 +62,7 @@ export function HostSbomPanel({ assetId }: { assetId: number }) {
       {write && <Button disabled={waiting || !r.components || r.status === 'blocked'} loading={scan.isPending} onClick={() => scan.mutate()}>Проверить в Trivy</Button>}
     </div>
     <p className="text-text-secondary">Инвентаризация ПО · MaxPatrol: {sourceStates[r.inventory.maxpatrol]}. KSC: {sourceStates[r.inventory.ksc]}.</p>
+    {r.inventory_warnings?.map(warning => <p key={warning} className="text-risk-medium">{warning}</p>)}
     {r.scan_at && <p className="text-text-secondary">Последняя успешная проверка: {fmt(r.scan_at)}. Проверено компонентов: {r.checked} из {r.scanned_components}.
       {r.scanner_version && ` Trivy ${r.scanner_version}.`} {r.db_version && `База: ${r.db_version}.`}</p>}
     {r.vm_at && <p className="text-text-secondary">Снимок находок MaxPatrol: {fmt(r.vm_at)}.</p>}

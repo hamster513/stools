@@ -229,6 +229,40 @@ def test_vm_import_writes_groups_of_both_families(db_session: Any, tmp_path: Pat
     assert list((tmp_path / "vm").iterdir()) == []  # временные файлы удалены
 
 
+def test_completed_import_reports_package_failure_alongside_groups(db_session, tmp_path, monkeypatch):
+    from sqlalchemy import insert
+
+    from api.modules.assets.models import Asset, AssetObservation
+    from api.modules.vm.sbom_models import VmPackageFeed
+    from api.modules.vm.services import host_packages
+    from api.modules.vm.services.host_sbom_view import comparison
+
+    publish = host_packages._publish
+
+    def fail_unix(db, path, kind, now):
+        if kind == "unix":
+            db.execute(insert(VmPackageFeed).values(kind="private-marker", checked_at=None))
+        return publish(db, path, kind, now)
+
+    monkeypatch.setattr(host_packages, "_publish", fail_unix)
+    handle = _run_vm(db_session, tmp_path, monkeypatch, FakeVm())
+    detail = db_session.get(VmPackageFeed, "unix").error
+    assert "23502" in detail and "vm_package_feed.checked_at" in detail
+    assert "private-marker" not in detail
+    message = _message(db_session, handle)
+    assert "Пакеты Linux" in message and detail in message and "локальные группы" in message
+    assert db_session.scalars(select(VmHostCve)).first() is not None
+    asset = Asset(name="example", os="CentOS Linux 7")
+    db_session.add(asset)
+    db_session.flush()
+    db_session.add(AssetObservation(asset_id=asset.id, source="vm", source_key="test|192.0.2.1",
+                                    seen_at=dt.datetime.now(dt.UTC)))
+    db_session.flush()
+    report = comparison(db_session, asset, tmp_path, "packages", 10, 0)
+    assert report["inventory"]["maxpatrol"] == "error"
+    assert report["inventory_warnings"] == [f"Пакеты Linux — {detail}"]
+
+
 def test_linux_export_failure_keeps_previous_linux_rows(db_session: Any, tmp_path: Path, monkeypatch: Any) -> None:
     when = _seed_previous(db_session)
     handle = _run_vm(db_session, tmp_path, monkeypatch, FakeVm(fail={"lin"}))
@@ -345,6 +379,7 @@ def test_limited_export_is_partial_snapshot(db_session: Any, tmp_path: Path, mon
     (snap,) = db_session.execute(select(VmGroupImport)).scalars().all()
     assert (snap.windows_ok, snap.linux_ok) == (False, False)
     assert _message(db_session, handle) == (
+        "Пакеты Linux / Установленные приложения — Для полного снимка пакетов нужен лимит записей 0. "
         "локальные группы: Windows — строк 3, хостов 1 (лимит 5 — снимок неполный, пропавшие не определяются); "
         "Linux — строк 3, хостов 1 (лимит 5 — снимок неполный, пропавшие не определяются)"
     )

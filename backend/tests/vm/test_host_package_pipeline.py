@@ -19,7 +19,7 @@ class PackageExport:
                 "@UnixHost;UnixHost.OsName;UnixHost.Packages.Name;UnixHost.Packages.Version\n"
                 "box (10.0.0.2);Debian GNU/Linux 12;openssl;3.0.11-1~deb12u1\n"
                 "box (10.0.0.2);Debian GNU/Linux 12;openssl;3.0.11-1~deb12u1\n"
-                "other (10.0.0.3);Debian GNU/Linux 12;curl;7.1\n",
+                "other (10.0.0.3);CentOS Linux 7;perl-constant;0:1.33-440.el7\n",
                 encoding="utf-8",
             )
         else:
@@ -56,6 +56,38 @@ def test_packages_collected_without_cve_and_incomplete_family_keeps_previous(db_
     assert db_session.get(VmPackageFeed, "software").error
     assert not collect_packages(db_session, client, conn.model_copy(update={"limit": 1}), tmp_path)
     assert db_session.get(VmPackageHost, ("unix", box.source_key))
+
+
+def test_first_package_snapshots_survive_autoflush_and_reach_sbom(db_session, tmp_path, monkeypatch):
+    from api.modules.vm.sbom_models import VmPackageFeed
+    from api.modules.vm.services import host_packages
+    from api.modules.vm.services.host_sbom import inventory
+
+    publish = host_packages._publish
+
+    def publish_with_autoflush(db, path, kind, now):
+        # SQLAlchemy 2.1 flushes before raw SQL too. Exercise that boundary on 2.0.
+        db.flush()
+        return publish(db, path, kind, now)
+
+    monkeypatch.setattr(host_packages, "_publish", publish_with_autoflush)
+    conn = Connection(host="unit.test", api_token="test", limit=0)
+    assert host_packages.collect_packages(db_session, PackageExport(), conn, tmp_path)
+    for kind in ("unix", "software"):
+        feed = db_session.get(VmPackageFeed, kind)
+        assert feed.error is None and feed.checked_at == feed.collected_at
+    asset = Asset(name="other")
+    db_session.add(asset)
+    db_session.flush()
+    db_session.add(AssetObservation(asset_id=asset.id, source="vm", source_key="other|10.0.0.3",
+                                    seen_at=dt.datetime.now(dt.UTC)))
+    db_session.flush()
+    bom, coverage = inventory(db_session, asset)
+    assert coverage["maxpatrol"] == "available"
+    component, = bom["components"]
+    assert component["name"] == "perl-constant"
+    assert component["version"] == "0:1.33-440.el7"
+    assert component["purl"] == "pkg:rpm/centos/perl-constant@1.33-440.el7?distro=centos-7&epoch=0"
 
 
 def test_host_download_and_three_way_comparison(db_session, client_as, tmp_path, monkeypatch):
