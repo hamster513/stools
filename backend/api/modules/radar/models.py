@@ -82,3 +82,10 @@ class NettraceEvaluation(Base):
     consistent: Mapped[bool] = mapped_column(default=False)
     warnings: Mapped[list[str]] = mapped_column(JSONType, default=list)
     cache_source_id: Mapped[int | None] = mapped_column(nullable=True)
+
+
+class RadarAddressBinding(Base):
+    __tablename__ = 'radar_address_binding'
+    server_id: Mapped[int] = mapped_column(ForeignKey('radar_server.id', ondelete='CASCADE'), primary_key=True)
+    addresses: Mapped[list[str]] = mapped_column(JSONType, default=list)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

@@ -127,6 +127,7 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 #: `admin` — настройка модуля (подключения, источники, расписания, settings,
 #: справочники, зоны), `write` — работа с данными. Чтение (GET) — всегда `read`.
 BUCKET: dict[tuple[str, str], str] = {
+    ("PUT", "/api/radar/nginx/servers/{server_id}/addresses"): "write",
     ("PUT", "/api/radar/nettrace/settings"): "admin",
     ("POST", "/api/radar/nettrace/test"): "admin",
     ("POST", "/api/radar/nettrace/sync"): "write",

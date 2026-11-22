@@ -3,6 +3,7 @@ import { ArrowRight, FileCode2, Server } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
 import { useRouter } from '@/lib/router'
+import { ServerAddresses } from './ServerAddresses'
 import { ACTION, dateText, useHistory, useSnapshot, type Directive, type Route } from './api'
 
 function Settings({ items }: { items: Directive[] }) {
@@ -51,6 +52,7 @@ export function SnapshotPage({ id }: { id: number }) {
     <p className="rounded border border-border p-3 text-sm text-text-secondary">Показаны настройки из выгрузки. Наличие маршрута в конфигурации не подтверждает доступность из интернета или возможность эксплуатации уязвимости.</p>
     {!!doc.warnings.length && <details className="rounded border border-border p-3 text-sm"><summary className="cursor-pointer">Ограничения разбора: {doc.warnings.length}</summary><ul className="mt-2 list-disc space-y-1 pl-5">{doc.warnings.map(w => <li key={w}>{w}</li>)}</ul></details>}
     <div className="flex flex-wrap gap-2">{[['routes', 'Маршруты'], ['settings', 'Настройки'], ['graph', 'Связи'], ['sources', 'Источники'], ['history', 'История']].map(([key, title]) => <Button key={key} aria-pressed={tab === key} variant={tab === key ? 'primary' : 'secondary'} onClick={() => { setTab(key); setSearch('') }}>{title}</Button>)}</div>
+    <ServerAddresses serverId={data.server_id} />
     {['routes', 'settings', 'graph'].includes(tab) && <label className="block text-sm">Виртуальный сервер<select className={`${FIELD} mt-1 w-full`} aria-label="Виртуальный сервер" value={siteIndex} onChange={e => { setSiteIndex(Number(e.target.value)); setRouteIndex(0) }}>{doc.servers.map((s, i) => <option key={i} value={i}>{s.names.join(', ') || 'Без server_name'} — {s.listen.join(', ') || 'listen не задан явно'} ({i + 1})</option>)}</select></label>}
     {['routes', 'settings', 'sources'].includes(tab) && <input className={`${FIELD} w-full`} aria-label="Поиск в снимке" placeholder="Поиск по маршрутам, настройкам и источникам" value={search} onChange={e => setSearch(e.target.value)} />}
     {tab === 'routes' && site?.routes.filter(r => `${r.match} ${r.destination} ${r.targets.map(t => t.host).join(' ')}`.toLowerCase().includes(needle)).map((r, i) => <details key={i} className="rounded border border-border p-3 text-sm">

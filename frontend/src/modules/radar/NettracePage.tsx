@@ -4,7 +4,7 @@ import { api } from '@/api/client'
 import { Button } from '@/components/ui/Button'
 import { FIELD } from '@/components/ui/Field'
 import { useCan } from '@/lib/can'
-import { useRouter } from '@/lib/router'
+import { useRouter, useSearchParams } from '@/lib/router'
 import { dateText } from './api'
 import { NETTRACE, active, display, object, objects, statuses, verdicts, nettraceSync, type Device, type Evaluation, type Inventory, type PathRequest } from './nettraceApi'
 
@@ -27,10 +27,11 @@ function DeviceDetail({ device }: { device: Device }) {
 }
 function PathForm({ entry, configured, onCreated }: { entry: Device | null; configured: boolean; onCreated: (id: number) => void }) {
   const qc = useQueryClient()
+  const params = useSearchParams()
   const [source, setSource] = useState('')
-  const [destination, setDestination] = useState('')
-  const [port, setPort] = useState('443')
-  const [protocol, setProtocol] = useState<'tcp' | 'udp'>('tcp')
+  const [destination, setDestination] = useState(params.get('destination') ?? '')
+  const [port, setPort] = useState(params.get('port') ?? '443')
+  const [protocol, setProtocol] = useState<'tcp' | 'udp'>(params.get('protocol') === 'udp' ? 'udp' : 'tcp')
   const [deviceId, setDeviceId] = useState(entry?.device_id ?? '')
   const [iface, setIface] = useState('')
   const query = useQuery({ queryKey: ['radar', 'nettrace', 'device', entry?.id], queryFn: () => api.get<Record<string, unknown>>(`${NETTRACE}/devices/${entry!.id}`), enabled: !!entry })
@@ -88,7 +89,7 @@ function EvaluationDetail({ id }: { id: number }) {
 
 export function NettracePage() {
   const { write } = useCan('radar')
-  const { path, navigate } = useRouter()
+  const { path, search: prefill, navigate } = useRouter()
   const [search, setSearch] = useState('')
   const [offset, setOffset] = useState(0)
   const [historyOffset, setHistoryOffset] = useState(0)
@@ -99,7 +100,7 @@ export function NettracePage() {
   const history = useQuery({ queryKey: ['radar', 'nettrace', 'evaluations', historyOffset], queryFn: () => api.get<{ items: Evaluation[]; total: number }>(`${NETTRACE}/evaluations?offset=${historyOffset}`), refetchInterval: q => q.state.data?.items.some(item => active(item.status)) ? 2500 : 10000 })
   const sync = useMutation({ mutationFn: nettraceSync })
   return <div className="space-y-4">
-    <p className="text-sm text-text-secondary">NetTrace рассчитывает путь через свои firewall с учётом правил, маршрутов и NAT. Конфигурации nginx отображаются отдельно; автоматическое соединение участков до приложения пока не выполняется.</p>
+    <p className="text-sm text-text-secondary">NetTrace рассчитывает путь через свои firewall с учётом правил, маршрутов и NAT. Связи NAT с nginx и backend-сервисами доступны на вкладке «Пути к приложениям».</p>
     <div className="flex flex-wrap items-center gap-3">{write && <Button disabled={!inventory.data?.configured || sync.isPending} loading={sync.isPending} onClick={() => sync.mutate()}>Синхронизировать NetTrace</Button>}<Button onClick={() => navigate('/settings/schedules')}>Расписание и очередь</Button>{sync.data && <span role="status" className="text-sm">В очереди: №{sync.data.run_id}</span>}</div>
     {sync.error && <p role="alert">{sync.error.message}</p>}
     {inventory.error && <p role="alert">{inventory.error.message}</p>}
@@ -113,7 +114,7 @@ export function NettracePage() {
       {inventory.data.total > 50 && <div className="flex gap-3"><Button disabled={!offset} onClick={() => setOffset(offset - 50)}>Назад</Button><span>Страница {offset / 50 + 1}</span><Button disabled={offset + 50 >= inventory.data.total} onClick={() => setOffset(offset + 50)}>Далее</Button></div>}
     </section>}
     {selected && <div className="space-y-2"><Button onClick={() => setSelected(null)}>Закрыть устройство</Button><DeviceDetail key={selected.id} device={selected} /></div>}
-    {write && <PathForm key={`entry-${entry?.id ?? 'auto'}`}  entry={entry} configured={!!inventory.data?.configured} onCreated={id => { setHistoryOffset(0); navigate(`/radar/nettrace/${id}`) }} />}
+    {write && <PathForm key={`entry-${entry?.id ?? 'auto'}-${prefill}`}  entry={entry} configured={!!inventory.data?.configured} onCreated={id => { setHistoryOffset(0); navigate(`/radar/nettrace/${id}`) }} />}
     {match && <EvaluationDetail key={`evaluation-${match[1]}`} id={Number(match[1])} />}
     <section className="space-y-3"><h2 className="font-semibold">История расчётов</h2>{history.error && <p role="alert">{history.error.message}</p>}{history.isPending && <p role="status">Загрузка истории…</p>}{history.data && <><p className="text-sm text-text-secondary">Всего: {history.data.total}. Результаты сохранены в STools вместе с запросом и снимками; повторить расчёт на историческом снимке NetTrace нельзя.</p><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{['Время', 'Участок', 'Статус / результат'].map(label => <th key={label} className="p-2">{label}</th>)}</tr></thead><tbody>{history.data.items.map(item => <tr key={item.id} className="border-t border-border"><td className="whitespace-nowrap p-2"><button className="text-primary underline" onClick={() => navigate(`/radar/nettrace/${item.id}`)}>{dateText(item.created_at)} · №{item.id}</button></td><td className="p-2">{item.request.source.address} → {item.request.destination.address}:{item.request.destination.port} {item.request.protocol}</td><td className="p-2">{item.status === 'done' ? verdicts[item.verdict] ?? item.verdict : statuses[item.status] ?? item.status}{item.connection_changed && <p className="text-xs text-text-secondary">Предыдущее подключение</p>}</td></tr>)}</tbody></table></div>{history.data.total > 20 && <div className="flex gap-3"><Button disabled={!historyOffset} onClick={() => setHistoryOffset(historyOffset - 20)}>Назад</Button><span>{historyOffset / 20 + 1}</span><Button disabled={historyOffset + 20 >= history.data.total} onClick={() => setHistoryOffset(historyOffset + 20)}>Далее</Button></div>}</>}</section>
   </div>
