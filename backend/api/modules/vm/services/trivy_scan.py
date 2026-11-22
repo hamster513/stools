@@ -13,7 +13,10 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
-from api.modules.vm.core.host_sbom import bom_bytes
+from api.modules.vm.core.host_sbom import UNASSESSED, bom_bytes
+from api.modules.vm.core.vendor_oval import package_inventory
+from api.modules.vm.core.vendor_profiles import observed_arch, scan_document, upstream_profile
+from api.modules.vm.services import vendor_bulletins
 
 _BUNDLED_CACHE = Path("/opt/trivy-cache")
 _SCAN_TIMEOUT = 120
@@ -158,14 +161,63 @@ def advisory_names(data_dir, source):
         return frozenset()
 
 
+def _profile(bom):
+    root = bom.get("metadata", {}).get("component", {})
+    return upstream_profile(root.get("name", ""), root.get("version", "")) if root.get("type") == "operating-system" else None
+
+
+def with_bulletin_revision(revision: str, data_dir: Path) -> str:
+    if not revision:
+        return ""
+    return f"{revision} · OVAL {vendor_bulletins.vendor_revision(data_dir) or '—'}"
+
+
+def expected_revision(bom: dict, revision: str, data_dir: Path) -> str:
+    return with_bulletin_revision(revision, data_dir) if _profile(bom) else revision
+
+
 def scan_bom(bom: dict, data_dir: Path) -> dict:
+    profile = _profile(bom)
+    if not profile:
+        with locked_cache(data_dir) as cache:
+            return scan_cached(bom, cache)
+    projected, native = scan_document(bom, profile)
+    bulletin_revision = vendor_bulletins.vendor_revision(data_dir)
     with locked_cache(data_dir) as cache:
-        return scan_cached(bom, cache)
+        result = scan_cached(projected, cache, retain_refs=True)
+    index = vendor_bulletins.load_index(data_dir, profile.feed)
+    inventory = package_inventory(native.values())
+    os_version = bom["metadata"]["component"]["version"]
+    arch = observed_arch(bom)
+    confirmed, candidates = set(), set()
+    for row in result["findings"]:
+        pkg = native.get(row.pop("bom_ref"))
+        if not pkg:
+            continue
+        vid = row["vuln_id"]
+        proof = index.match(vid, pkg, inventory, os_version=os_version, host_arch=arch) if index else None
+        row.update(package=pkg["name"], purl=pkg["purl"], installed_version=pkg["version"],
+                   profile=profile.label, upstream_fixed_version=row["fixed_version"], fixed_version="")
+        if proof:
+            row.update(assessment="vendor_confirmed", bulletin=proof["bulletin"], bulletin_url=proof["bulletin_url"],
+                       definition_id=proof["definition_id"], fixed_version=proof["fixed_version"])
+            confirmed.add(vid)
+        else:
+            row["assessment"] = "candidate"
+            candidates.add(vid)
+    result["db_version"] += f" · OVAL {bulletin_revision or '—'}"
+    result["vendor_summary"] = {
+        "profile": profile.label, "feed": profile.feed, "available": index is not None,
+        "has_bulletins": bool(index and index.has_bulletins),
+        "confirmed": len(confirmed), "candidates": len(candidates),
+    }
+    return result
 
 
-def scan_cached(bom: dict, cache: Path) -> dict:
+def scan_cached(bom: dict, cache: Path, *, retain_refs: bool = False) -> dict:
     binary, cache, scanner_version, revision = _context(cache)
-    eligible = {c["bom-ref"]: c["purl"] for c in bom["components"] if c.get("purl")}
+    eligible = {c["bom-ref"]: c["purl"] for c in bom["components"]
+                if c.get("purl") and not any(p["name"] == UNASSESSED for p in c.get("properties", ()))}
     with tempfile.TemporaryDirectory() as directory:
         sbom = Path(directory) / "inventory.cdx.json"
         sbom.write_bytes(bom_bytes(bom))
@@ -196,6 +248,8 @@ def scan_cached(bom: dict, cache: Path) -> dict:
                                  "fixed_version": hit.get("FixedVersion", ""),
                                  "severity": hit.get("Severity", "UNKNOWN").lower(),
                                  "purl": eligible[ref]})
+                if retain_refs:
+                    findings[-1]["bom_ref"] = ref
     except (AttributeError, KeyError, TypeError, ValueError):
         raise ScanError("Некорректный отчёт пакетов Trivy") from None
     return {"checked": len(checked), "findings": findings, "db_version": revision,

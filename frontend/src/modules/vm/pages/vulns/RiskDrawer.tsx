@@ -78,6 +78,7 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                   <SectionTitle>CVE</SectionTitle>
                   <p className="mb-2 leading-relaxed text-text">{d.cve.description ?? <span className="text-text-secondary">описания нет — CVE отсутствует в загруженном NVD</span>}</p>
                   <dl className="mb-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-text-secondary">
+                    {item.sbom_asset_id != null && <><dt>Подтверждение</dt><dd className="text-text">Бюллетень производителя для установленного пакета SBOM</dd></>}
                     <dt>CVSS</dt><dd className="font-mono text-text">{d.cve.cvss ?? '—'} <span className="text-[10px] text-text-secondary">{CVSS_SOURCE_LABELS[d.cve.cvss_source]}</span></dd>
                     <dt>EPSS</dt><dd className="font-mono text-text">{d.cve.epss === null ? '—' : `${d.cve.epss.toFixed(4)} (перцентиль ${((d.cve.epss_percentile ?? 0) * 100).toFixed(0)})`}</dd>
                     {d.cve.kev && (
@@ -126,7 +127,9 @@ export function RiskDrawer({ item, onClose, onChanged }: Props) {
                   <div className="flex flex-wrap gap-3 text-[11px]">
                     <Link to={`/vm/vulns?host_id=${d.host.id}`} onNavigate={onClose} className="text-text underline">все уязвимости хоста</Link>
                     <Link to={`/vm/vulns?cve=${d.cve.cve_id}`} onNavigate={onClose} className="text-text underline">все хосты с этой CVE</Link>
-                    <AssetLink source="vm" hostKey={`${d.host.hostname}|${d.host.ip}`} onNavigate={onClose} />
+                    {item.sbom_asset_id != null
+                      ? <Link to={`/assets/list?asset=${item.sbom_asset_id}`} onNavigate={onClose} className="text-text underline">в Assets</Link>
+                      : <AssetLink source="vm" hostKey={`${d.host.hostname}|${d.host.ip}`} onNavigate={onClose} />}
                   </div>
                 </>
               )}

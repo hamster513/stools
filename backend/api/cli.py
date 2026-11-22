@@ -191,14 +191,17 @@ def unlock_login(
 
 @app.command("import-trivy-db")
 def import_trivy_db() -> None:
-    """Установить ZIP базы Trivy из стандартного ввода для автономной проверки SBOM."""
+    """Установить ZIP Trivy или OVAL из стандартного ввода для автономной проверки SBOM."""
     import sys
     import tempfile
     import zipfile
     from pathlib import Path
 
     from api.limits import VM_UPLOAD
-    from api.modules.vm.services.trivy_update import install
+    from api.modules.vm.core.ghsa import _preflight
+    from api.modules.vm.core.trivy_db_archive import MAX_MANIFEST
+    from api.modules.vm.core.vendor_oval_archive import FEEDS, MANIFEST
+    from api.modules.vm.services import trivy_update, vendor_bulletins
 
     data_dir = get_settings().data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -206,15 +209,19 @@ def import_trivy_db() -> None:
         with tempfile.NamedTemporaryFile(dir=data_dir, suffix=".zip") as upload:
             while chunk := sys.stdin.buffer.read(1024**2):
                 if upload.tell() + len(chunk) > VM_UPLOAD:
-                    raise ValueError("ZIP базы Trivy превышает 500 МиБ")
+                    raise ValueError("ZIP базы SBOM превышает 500 МиБ")
                 upload.write(chunk)
             upload.flush()
-            result = install(Path(upload.name), data_dir)
+            path = Path(upload.name)
+            _preflight(path, max_entries=len(FEEDS) + 1, max_central_bytes=MAX_MANIFEST, max_archive_bytes=VM_UPLOAD)
+            with zipfile.ZipFile(path) as archive:
+                oval = MANIFEST in archive.namelist()
+            result = (vendor_bulletins if oval else trivy_update).install(path, data_dir)
     except (OSError, ValueError, zipfile.BadZipFile) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     status = "уже используется" if result["duplicate"] else "установлена"
-    typer.echo(f"База Trivy от {result['db_updated_at']} {status}")
+    typer.echo(f"База {'OVAL' if oval else 'Trivy'} от {result['db_updated_at']} {status}")
 
 
 def main() -> None:

@@ -20,7 +20,7 @@ from api.modules.vm.core.host_sbom import (
 )
 from api.modules.vm.core.software_identity import observed_os, windows_candidates
 from api.modules.vm.sbom_models import HostSbomScan, VmPackageFeed, VmPackageHost
-from api.modules.vm.services import trivy_scan
+from api.modules.vm.services import sbom_risk, trivy_scan
 from api.modules.vm.services.software import indexed_products, latest_snapshot_ids
 
 
@@ -67,7 +67,8 @@ def inventory(db: Session, asset: Asset, data_dir: Path | None = None) -> tuple[
         status["ksc"] = "available" if len(completed) == len(ksc_keys) else "partial"
     elif any(i.status == "error" for i in inventories):
         status["ksc"] = "error"
-    os_name = observed_os([*(h.os_name for h in hosts), asset.os, *(i.os for i in completed)])
+    os_hints = [*(h.os_name for h in hosts), asset.os, *(i.os for i in completed)]
+    os_name = observed_os(os_hints)
     if vm_keys:
         kinds = ("software",) if "windows" in os_name.lower() else ("unix", "software")
         if db.scalar(
@@ -104,12 +105,12 @@ def inventory(db: Session, asset: Asset, data_dir: Path | None = None) -> tuple[
             trusted, candidates = windows_candidates(row, os_name)
             if not trusted:
                 keys.update(candidates)
-    distro = _host_distribution(os_name, packages)
+    distro = _host_distribution(os_name, packages, os_hints)
     names = ()
     if data_dir is not None and any(native_candidate(row, distro) for row in packages):
         names = trivy_scan.advisory_names(data_dir, lookup_source(distro))
     document = make_bom(str(asset.id), name, os_name, packages,
-                        known_products=indexed_products(db, keys), native_names=names)
+                        known_products=indexed_products(db, keys), native_names=names, os_hints=os_hints)
     document["metadata"]["properties"].extend(
         {"name": "stools:inventory:" + source, "value": value} for source, value in status.items()
     )
@@ -134,7 +135,7 @@ WITH latest_ksc AS (
 ), rollup AS (
   SELECT asset_id, string_agg(signal, ',' ORDER BY signal) AS stamp, bool_or(is_vm) is_vm FROM signals GROUP BY asset_id
 )
-SELECT a.id, md5(jsonb_build_array('package-identity-v1', a.id, a.fqdn, a.name, a.ip, a.os, r.stamp, CAST(:rev AS text),
+SELECT a.id, md5(jsonb_build_array('package-identity-v3', a.id, a.fqdn, a.name, a.ip, a.os, r.stamp, CAST(:rev AS text),
        CASE WHEN r.is_vm THEN (SELECT jsonb_object_agg(kind,error IS NOT NULL) FROM vm_package_feed) END)::text) AS target,
        sc.target AS previous, sc.status AS previous_status, sc.force AS already_forced
   FROM asset a LEFT JOIN rollup r ON r.asset_id=a.id
@@ -150,7 +151,7 @@ def current_target(db: Session, asset_id: int, revision: str) -> str | None:
 
 
 def refresh_queue(db: Session, data_dir: Path, asset_id: int = 0, *, force: bool = False) -> None:
-    rev = trivy_scan.database_revision(data_dir)
+    rev = trivy_scan.with_bulletin_revision(trivy_scan.database_revision(data_dir), data_dir)
     db.execute(
         text(
             """
@@ -218,8 +219,10 @@ def process_next(db: Session, data_dir: Path) -> bool:
         digest = hashlib.sha256(bom_bytes(bom)).hexdigest()
         incomplete = any(s in {"stale", "partial", "error"} for s in coverage.values())
         if not count:
-            values = {"status": "empty" if "available" in coverage.values() else "no_inventory"}
-        elif not force and digest == previous_digest and revision == previous_revision:
+            values = {"status": "empty" if "available" in coverage.values() else "no_inventory",
+                      "digest": None, "db_version": None, "scanner_version": None, "checked": None,
+                      "scanned_components": None, "findings": [], "vendor_summary": None, "scan_at": None}
+        elif not force and digest == previous_digest and trivy_scan.expected_revision(bom, revision, data_dir) == previous_revision:
             values = {"status": "partial" if incomplete or previous_checked != count else "ready"}
         else:
             result = trivy_scan.scan_bom(bom, data_dir)
@@ -230,13 +233,26 @@ def process_next(db: Session, data_dir: Path) -> bool:
                 "checked": result["checked"],
                 "scanned_components": count,
                 "findings": result["findings"],
+                "vendor_summary": result.get("vendor_summary"),
                 "scan_at": dt.datetime.now(dt.UTC),
                 "status": "partial" if incomplete or result["checked"] != count else "ready",
             }
         # Source links/snapshots can change during the subprocess, even before the next sweep.
-        current = current_target(db, asset_id, trivy_scan.database_revision(data_dir))
+        sbom_risk.lock_inventory_links(db, asset_id)
+        active_revision = trivy_scan.with_bulletin_revision(trivy_scan.database_revision(data_dir), data_dir)
+        current = current_target(db, asset_id, active_revision)
         if current is not None and current != target:
             values = {"status": "pending", "target": current, "attempts": 0}
+        accepted = db.scalar(
+            update(HostSbomScan).where(HostSbomScan.asset_id == asset_id, HostSbomScan.claim == claim)
+            .values(force=False, claim=None, error=None, **values).returning(HostSbomScan.asset_id)
+        )
+        if accepted is not None and current is not None and values["status"] != "pending":
+            findings = values.get("findings")
+            if findings is None:
+                findings = scan.findings or []
+            sbom_risk.publish_confirmed(db, asset_id, findings)
+        db.commit()
     except Exception as exc:  # noqa: BLE001 - isolate a failed asset and release its durable claim.
         db.rollback()
         # Only controlled messages from the scanner are suitable to expose in a host card.
@@ -245,15 +261,10 @@ def process_next(db: Session, data_dir: Path) -> bool:
             if isinstance(exc, trivy_scan.ScanError)
             else "Проверка SBOM завершилась ошибкой (" + type(exc).__name__ + ")"
         )
-        values = {
-            "status": "error",
-            "error": message,
-            "requested_at": now + dt.timedelta(minutes=5 * attempts),
-        }
-    db.execute(
-        update(HostSbomScan)
-        .where(HostSbomScan.asset_id == asset_id, HostSbomScan.claim == claim)
-        .values(force=False, claim=None, **{"error": None, **values})
-    )
-    db.commit()
+        db.execute(
+            update(HostSbomScan).where(HostSbomScan.asset_id == asset_id, HostSbomScan.claim == claim)
+            .values(status="error", error=message, requested_at=now + dt.timedelta(minutes=5 * attempts),
+                    force=False, claim=None)
+        )
+        db.commit()
     return True

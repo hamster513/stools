@@ -47,7 +47,7 @@ def active_database(data_dir: Path) -> Database | None:
         return None
 
 
-class _Transport:
+class ReferenceTransport:
     def __init__(self, client: httpx.Client, handle: JobHandle, work: Path) -> None:
         self.client = client
         self.handle = handle
@@ -59,7 +59,7 @@ class _Transport:
         try:
             download(url, target, self.handle, self.client, max_bytes=limit, headers=headers, timeout=timeout)
         except httpx.HTTPError:
-            raise OSError("Не удалось подключиться к реестру Trivy") from None
+            raise OSError("Не удалось подключиться к источнику справочника") from None
 
     def fetch(self, url: str, limit: int, timeout: int) -> bytes:
         path = self.work / "registry-token"
@@ -104,7 +104,7 @@ def download(db: Session, handle: JobHandle, mode: str, http_factory: Callable[[
         work = Path(directory)
         archive = work / "trivy.zip"
         with http_factory() if http_factory else httpx.Client(follow_redirects=True) as client:
-            downloaded = download_database(archive, work / "cache", _Transport(client, handle, work),
+            downloaded = download_database(archive, work / "cache", ReferenceTransport(client, handle, work),
                                            lambda msg: handle.tick(0, message=msg), "ru", active_digest=digest)
         if handle.cancelled():
             raise JobCancelled()

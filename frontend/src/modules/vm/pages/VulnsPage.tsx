@@ -62,7 +62,7 @@ export function VulnsPage() {
   return <div className="flex h-full min-h-0 flex-col">
     <nav aria-label="Источник уязвимостей" className="flex shrink-0 items-center gap-2 border-b border-grid bg-surface px-4 py-1">
       <span className="text-xs text-text-secondary">Источник</span>
-      <Link to={ksc ? `/vm/vulns${scannerSearch.current}` : `/vm/vulns${search}`} aria-current={!ksc ? 'page' : undefined} className={`${sourceClass} ${!ksc ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover'}`}>MaxPatrol VM</Link>
+      <Link to={ksc ? `/vm/vulns${scannerSearch.current}` : `/vm/vulns${search}`} aria-current={!ksc ? 'page' : undefined} className={`${sourceClass} ${!ksc ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover'}`}>MaxPatrol VM и SBOM</Link>
       <Link to="/vm/vulns?source=ksc" aria-current={ksc ? 'page' : undefined} className={`${sourceClass} ${ksc ? 'bg-row-selected text-text' : 'text-text-secondary hover:bg-row-hover'}`}>KSC · установленное ПО</Link>
     </nav>
     <div className="min-h-0 flex-1">
@@ -97,6 +97,7 @@ function ScannerVulnsPage() {
   }), params.size === 0)
   const cveParam = params.get('cve') ?? linked?.cve ?? undefined
   const hostIdParam = params.get('host_id') ? Number(params.get('host_id')) : undefined
+  const assetIdParam = params.get('asset_id') ? Number(params.get('asset_id')) : undefined
   const [sort, setSort] = useListState<VulnSort>('vm-vulns:sort', () => {
     const s = params.get('sort') as VulnSort | null
     return s && SORTS.includes(s) ? s : 'risk_desc'
@@ -125,9 +126,9 @@ function ScannerVulnsPage() {
     const { status, assignee, overdue, risk_expiring, ...data } = filters
     return {
       ...data, status, assignee, overdue: overdue || undefined, risk_expiring: risk_expiring || undefined,
-      q: q || undefined, cve: cveParam, host_id: hostIdParam,
+      q: q || undefined, cve: cveParam, host_id: hostIdParam, asset_id: assetIdParam,
     }
-  }, [filters, q, cveParam, hostIdParam])
+  }, [filters, q, cveParam, hostIdParam, assetIdParam])
   // В адрес списка и выгрузки «не задано» уходит маркером `-`; массовая смена получает listFilter как есть — JSON-список с ''.
   const queryArgs = useMemo(() => ({
     ...listFilter, criticality: toWire(listFilter.criticality), zone: toWire(listFilter.zone), os: toWire(listFilter.os), sort,
@@ -163,7 +164,7 @@ function ScannerVulnsPage() {
   function clearAll() {
     setFilters({})
     setSearchInput('')
-    if (cveParam || hostIdParam || linked) navigate('/vm/vulns', { replace: true })
+    if (cveParam || hostIdParam || assetIdParam || linked) navigate('/vm/vulns', { replace: true })
   }
   function check(i: number, shift: boolean) {
     const on = !checked.has(items[i].key)
@@ -211,7 +212,7 @@ function ScannerVulnsPage() {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [items.length, selected, openKey])
 
-  const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== '' || !!cveParam || hostIdParam !== undefined
+  const hasFilters = Object.values(filters).some((v) => v !== undefined) || q !== '' || !!cveParam || hostIdParam !== undefined || assetIdParam !== undefined
   const running = job.data?.status === 'running' ? job.data : null
   const errorMessage = query.error instanceof ApiRequestError ? query.error.message : query.isError ? 'Не удалось загрузить уязвимости' : null
 
@@ -233,7 +234,15 @@ function ScannerVulnsPage() {
             <button type="button" onClick={() => navigate('/vm/vulns')} aria-label="Снять фильтр по хосту" className="text-text-secondary hover:text-text"><X size={11} aria-hidden /></button>
           </span>
         )}
-        {host.data && <AssetLink source="vm" hostKey={`${host.data.host.hostname}|${host.data.host.ip}`} className="text-xs" />}
+        {assetIdParam !== undefined && (
+          <span className="inline-flex items-center gap-1 rounded border border-grid px-2 py-0.5 text-xs text-text">
+            <Link to={`/assets/list?asset=${assetIdParam}`}>Актив #{assetIdParam}</Link>
+            <button type="button" onClick={() => navigate('/vm/vulns')} aria-label="Снять фильтр по активу" className="text-text-secondary hover:text-text"><X size={11} aria-hidden /></button>
+          </span>
+        )}
+        {host.data && (host.data.host.id < 0
+          ? <Link to={`/assets/list?asset=${-host.data.host.id}`} className="text-xs underline">в Assets</Link>
+          : <AssetLink source="vm" hostKey={`${host.data.host.hostname}|${host.data.host.ip}`} className="text-xs" />)}
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
           <input

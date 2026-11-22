@@ -10,7 +10,9 @@ from api.modules.ksc.software_models import KscSoftware, KscSoftwareInventory
 from api.modules.vm.core.priority import AssetContext, priority_score
 from api.modules.vm.core.risk import CveInputs, level
 from api.modules.vm.core.weights import CRITICALITIES
-from api.modules.vm.models import VmHost, VmHostCve, VmImage, VmImageCve
+from api.modules.vm.models import VmImage, VmImageCve
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
 from api.modules.vm.software_models import VmKscCve
 
 from .ghsa_mapping import equivalents

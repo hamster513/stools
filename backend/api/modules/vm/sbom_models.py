@@ -2,7 +2,7 @@
 
 import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -59,4 +59,14 @@ class HostSbomScan(Base):
     checked: Mapped[int | None] = mapped_column(Integer)
     scanned_components: Mapped[int | None] = mapped_column(Integer)
     findings: Mapped[list[dict] | None] = mapped_column(JSONB)
+    vendor_summary: Mapped[dict | None] = mapped_column(JSONB)
     error: Mapped[str | None] = mapped_column(Text)
+
+
+class VmSbomConfirmedCve(Base):
+    __tablename__ = "vm_sbom_confirmed_cve"
+
+    asset_id: Mapped[int] = mapped_column(ForeignKey("asset.id", ondelete="CASCADE"), primary_key=True)
+    cve_id: Mapped[str] = mapped_column(ForeignKey("vm_cve.cve_id"), primary_key=True, index=True)
+    risk_raw: Mapped[float] = mapped_column(Float, default=0.0)
+    risk: Mapped[int] = mapped_column(Integer, default=0)

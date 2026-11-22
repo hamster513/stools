@@ -23,10 +23,14 @@ def token(value):
     return re.sub(r'[\s_]+', '_', str(value or '').strip().casefold())
 
 
+def publisher_key(publisher: str) -> str:
+    vendor = token(_CORPORATE.sub('', str(publisher or '').strip()))
+    return _VENDOR_ALIASES.get(vendor, vendor)
+
+
 def product_key(publisher: str, name: str, version: str = '') -> tuple[str, str]:
     """Legacy exact normalization, including for already indexed CPEs."""
-    vendor = token(_CORPORATE.sub('', str(publisher or '').strip()))
-    vendor = _VENDOR_ALIASES.get(vendor, vendor)
+    vendor = publisher_key(publisher)
     product = _ARCH.sub('', str(name or '').strip()).strip()
     if version:
         product = re.sub(r'\s+(?:' + re.escape(str(version)) + r'|\(' +
@@ -39,7 +43,7 @@ def os_family(name):
     name = token(name).replace('_', ' ')
     if re.match(r'^(?:microsoft )?windows\b', name):
         return 'windows'
-    if re.search(r'\b(linux|debian|ubuntu|centos|fedora|sles|redhat|rhel|alpine)\b', name):
+    if re.search(r'\b(linux|debian|ubuntu|centos|fedora|sles|redhat|rhel|alpine|red ?os|ред ос)\b', name):
         return 'linux'
     if name in ('mac', 'os x', 'mac os x') or name.startswith(('macos', 'mac os ')):
         return 'macos'

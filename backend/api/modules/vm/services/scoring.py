@@ -27,10 +27,12 @@ from sqlalchemy import (
     func,
     null,
     select,
+    text,
     tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
@@ -55,6 +57,8 @@ from api.modules.vm.models import (
     VmRefState,
     VmZone,
 )
+from api.modules.vm.risk_models import sbom_risk_hosts
+from api.modules.vm.sbom_models import VmSbomConfirmedCve
 from api.modules.vm.services.ghsa_mapping import canonical_finding_id, is_ghsa, reference_metrics
 from api.modules.vm.services.jobs import (
     DATA_KINDS,
@@ -84,34 +88,45 @@ def _chunks(items: Sequence[str], size: int = BATCH) -> Iterable[Sequence[str]]:
         yield items[i : i + size]
 
 
-def ensure_cves(db: Session, cve_ids: Iterable[str]) -> list[str]:
+def ensure_cves(db: Session, cve_ids: Iterable[str], *, commit: bool = True) -> list[str]:
     """Завести пустые строки `vm_cve` для новых идентификаторов; вернуть их."""
     wanted = sorted(set(cve_ids))
     new: list[str] = []
     for chunk in _chunks(wanted):
-        existing = set(db.execute(select(VmCve.cve_id).where(VmCve.cve_id.in_(chunk))).scalars())
-        fresh = [c for c in chunk if c not in existing]
-        if fresh:
-            db.execute(CVE_T.insert(), [{"cve_id": c} for c in fresh])
-            new.extend(fresh)
-    db.commit()
+        existing = set(db.scalars(select(VmCve.cve_id).where(VmCve.cve_id.in_(chunk))))
+        fresh = [cve for cve in chunk if cve not in existing]
+        if not fresh:
+            continue
+        stmt = pg_insert(CVE_T).on_conflict_do_nothing(index_elements=[CVE_T.c.cve_id]).returning(CVE_T.c.cve_id)
+        new.extend(db.scalars(stmt, [{"cve_id": c} for c in fresh]))
+    if commit:
+        db.commit()
     return new
+
+
+def lock_cve_membership(db: Session) -> None:
+    """A shared CVE can change owners across a scan result and a replacement import."""
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext('vm_cve_membership'))"))
 
 
 def drop_orphan_cves(db: Session) -> int:
     """CVE, у которых не осталось ни одной пары — ни с хостом, ни с образом, — витрине не нужны."""
     on_hosts = select(VmHostCve.cve_id).distinct()
     on_images = select(VmImageCve.cve_id).distinct()
+    on_assets = select(VmSbomConfirmedCve.cve_id).distinct()
+    lock_cve_membership(db)
     result = typing_cast(
         CursorResult[Any],
-        db.execute(delete(CVE_T).where(CVE_T.c.cve_id.not_in(on_hosts), CVE_T.c.cve_id.not_in(on_images))),
+        db.execute(delete(CVE_T).where(CVE_T.c.cve_id.not_in(on_hosts), CVE_T.c.cve_id.not_in(on_images),
+                                      CVE_T.c.cve_id.not_in(on_assets))),
     )
     db.commit()
     return int(result.rowcount or 0)
 
 
 def rebuild_cves(
-    db: Session, weights: Weights, cve_ids: Sequence[str] | None = None, handle: JobHandle | None = None
+    db: Session, weights: Weights, cve_ids: Sequence[str] | None = None, handle: JobHandle | None = None,
+    *, commit: bool = True,
 ) -> int:
     """Собрать поля `vm_cve` из справочников и посчитать члены CVE: `likelihood`,
     `cvss10`, `av_class` (тяжесть без reach — reach зависит ещё и от хоста).
@@ -231,7 +246,8 @@ def rebuild_cves(
             )
         if params:
             db.execute(stmt, params)
-            db.commit()
+            if commit:
+                db.commit()
         done += len(chunk)
         if handle is not None:
             handle.tick(done, total=len(ids))
@@ -271,23 +287,37 @@ def rebuild_hosts_value(db: Session, weights: Weights, handle: JobHandle | None 
     return len(rows)
 
 
-def rescore_pairs(db: Session, weights: Weights) -> int:
-    """Additive priority in one UPDATE; marked zones supply known context only."""
+def _rescore_host_pairs(db, pairs, hosts, host_key, pair_key, asset_id=None):
+    """Use identical scoring for imported pairs and vendor-confirmed asset pairs."""
     zones = VmZone.__table__
-    context = select(
-        HOST_T.c.id, HOST_T.c.criticality,
+    host_context = select(
+        host_key.label("id"), hosts.c.criticality,
         case((zones.c.marked.is_(True), zones.c.internet_access), else_=null()).label("internet"),
         case((zones.c.marked.is_(True), zones.c.confidential_data), else_=null()).label("confidential"),
-    ).select_from(HOST_T.outerjoin(zones, zones.c.name == HOST_T.c.zone)).cte("host_priority_context")
+    ).select_from(hosts.outerjoin(zones, zones.c.name == hosts.c.zone))
+    if asset_id is not None:
+        host_context = host_context.where(host_key == asset_id)
+    context = host_context.cte("host_priority_context")
     raw = priority_raw(CVE_T.c, criticality=context.c.criticality,
                        internet=context.c.internet, confidential=context.c.confidential)
     risk = _clamped(raw)
     db.execute(
-        update(PAIR_T)
-        .where(context.c.id == PAIR_T.c.host_id, CVE_T.c.cve_id == PAIR_T.c.cve_id)
-        .where(PAIR_T.c.risk_raw.is_distinct_from(raw) | PAIR_T.c.risk.is_distinct_from(risk))
+        update(pairs)
+        .where(context.c.id == pair_key, CVE_T.c.cve_id == pairs.c.cve_id)
+        .where(pairs.c.risk_raw.is_distinct_from(raw) | pairs.c.risk.is_distinct_from(risk))
         .values(risk_raw=raw, risk=risk)
     )
+
+
+def rescore_sbom_pairs(db: Session, asset_id: int | None = None) -> None:
+    pairs = VmSbomConfirmedCve.__table__
+    _rescore_host_pairs(db, pairs, sbom_risk_hosts, sbom_risk_hosts.c.asset_id, pairs.c.asset_id, asset_id)
+
+
+def rescore_pairs(db: Session, weights: Weights) -> int:
+    """Additive priority in SQL; marked zones supply known context only."""
+    _rescore_host_pairs(db, PAIR_T, HOST_T, HOST_T.c.id, PAIR_T.c.host_id)
+    rescore_sbom_pairs(db)
     db.commit()
     # Обзор читает кэш: пересчёт — единственное, что меняет риск.
     from api.modules.vm.services.stats import refresh_stats
@@ -471,6 +501,7 @@ def ensure_rescored(db: Session) -> int | None:
     from api.modules.vm.services.settings import load_settings
 
     if (db.execute(select(VmHostCve.host_id).limit(1)).first() is None
+            and db.execute(select(VmSbomConfirmedCve.asset_id).limit(1)).first() is None
             and db.execute(select(VmImageCve.image_id).limit(1)).first() is None):
         return None
     if read_formula_version(db) >= FORMULA_VERSION:

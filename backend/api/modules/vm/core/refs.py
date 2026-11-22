@@ -23,7 +23,7 @@ from api.modules.vm.core.sources import CVE_RE
 
 REF_NAMES = ("epss", "nvd", "exploitdb", "msf", "attack", "kev", "ghsa")
 # Trivy updates the scanner database on disk, outside the scoring catalogs.
-DOWNLOADABLE_REFS = ("trivy", *REF_NAMES)
+DOWNLOADABLE_REFS = ("trivy", "oval", *REF_NAMES)
 
 
 def open_maybe_gzip(path: Path) -> IO[bytes]:

@@ -44,6 +44,8 @@ from api.modules.vm.services.bulk import bulk_insert
 from api.modules.vm.services.jobs import JobHandle, import_sql_name
 from api.modules.vm.services.scoring import (
     drop_orphan_cves,
+    ensure_cves,
+    lock_cve_membership,
     rebuild_cves,
     rebuild_hosts_value,
     rescore_image_pairs,
@@ -159,6 +161,7 @@ def _replace_current(
         [(h.hostname, h.ip, h.os_name, h.groups, h.criticality, h.zone) for h in hosts.values()],
     )
     step(1, "Ищем новые CVE в выгрузке")
+    lock_cve_membership(db)
     new_cves = list(
         db.execute(
             select(STAGE_PAIR.c.cve_id).distinct().where(STAGE_PAIR.c.cve_id.not_in(select(CVE_T.c.cve_id)))
@@ -182,7 +185,8 @@ def _replace_current(
         )
     )
     if new_cves:
-        db.execute(insert(CVE_T), [{"cve_id": c} for c in new_cves])
+        # A concurrent vendor scan can introduce the same CVE while this snapshot is staged.
+        new_cves = ensure_cves(db, new_cves, commit=False)
     step(4, f"Записываем уникальные пары хост–CVE из {_num(staged_pairs)} исходных записей")
     db.execute(
         insert(PAIR_T).from_select(

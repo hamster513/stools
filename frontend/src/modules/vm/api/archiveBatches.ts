@@ -3,7 +3,7 @@ import { api, type ApiRequestError } from '@/api/client'
 import { QUEUE_ACCEPTED } from '@/platform/syncQueue/client'
 
 export interface ArchiveFile {
-  name: string; size: number; status: string; kind?: 'references' | 'news' | 'trivy'; db_updated_at?: string
+  name: string; size: number; status: string; kind?: 'references' | 'news' | 'trivy' | 'oval'; db_updated_at?: string
   error?: string; warning?: string; added?: number; updated?: number; duplicate?: boolean
 }
 export interface ArchiveBatch {

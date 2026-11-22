@@ -17,8 +17,6 @@ from api.modules.vm.core.priority import AssetContext, priority_score
 from api.modules.vm.core.refs import REF_NAMES
 from api.modules.vm.models import (
     VmCve,
-    VmHost,
-    VmHostCve,
     VmRefExploitdb,
     VmRefExploitdbCve,
     VmRefMsf,
@@ -26,6 +24,8 @@ from api.modules.vm.models import (
     VmRefState,
     VmZone,
 )
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
 from api.modules.vm.services.query import (
     ROW_COLUMNS,
     SORTS,
@@ -64,6 +64,7 @@ def _filters(
     kev: bool | None = None,
     cvss_source: QueryList = None,
     host_id: int | None = None,
+    asset_id: int | None = None,
     status_: QueryStatus = None,
     assignee: QueryList = None,
     overdue: bool = False,
@@ -80,7 +81,8 @@ def _filters(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     # Пороги уровней — из настроек, один раз на запрос: `level` в фильтре и в строках по ним.
     return VulnFilters(q, host, cve, multi(criticality), multi(zone), multi(os), multi(level), exploits, msf, kev,
-                       multi(cvss_source), host_id, sf, load_settings(db).weights.levels, min_risk=min_risk)
+                       multi(cvss_source), host_id, sf, load_settings(db).weights.levels,
+                       min_risk=min_risk, asset_id=asset_id)
 
 
 def _with_names(db: Session, items: list[dict[str, Any]]) -> list[dict[str, Any]]:

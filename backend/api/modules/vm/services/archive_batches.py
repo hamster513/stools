@@ -135,7 +135,8 @@ class _FinishingHandle(JobHandle):
 def process(db: Session, handle: JobHandle, batch_id: str, actor: str) -> None:
     from api.modules.siem.hunting.intel import MAX_ZIP, import_bundle
     from api.modules.vm.core.trivy_db_archive import MANIFEST as TRIVY_MANIFEST
-    from api.modules.vm.services import trivy_update
+    from api.modules.vm.core.vendor_oval_archive import MANIFEST as OVAL_MANIFEST
+    from api.modules.vm.services import trivy_update, vendor_bulletins
     from api.modules.vm.services.bundle import run_bundle
     from api.modules.vm.services.ref_updates import preflight_bundle, rebuild_pending
     from api.modules.vm.services.settings import load_settings
@@ -164,6 +165,9 @@ def process(db: Session, handle: JobHandle, batch_id: str, actor: str) -> None:
                 if TRIVY_MANIFEST in members:
                     entry['kind'] = 'trivy'
                     entry.update(trivy_update.install(path, get_settings().data_dir))
+                elif OVAL_MANIFEST in members:
+                    entry['kind'] = 'oval'
+                    entry.update(vendor_bulletins.install(path, get_settings().data_dir))
                 elif members == {'manifest.json', 'items.jsonl'}:
                     if path.stat().st_size > MAX_ZIP:
                         raise ValueError('Архив новостей или правил превышает 64 МиБ')

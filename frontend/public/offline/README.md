@@ -9,6 +9,12 @@ Unpack the entire kit. Python 3.11+ is required; Git is required for GHSA and ru
 
 On the connected machine select `trivy`. Transfer the resulting ZIP and `update-trivy-db.sh` to the offline STools server. Run `sh update-trivy-db.sh trivy-full.zip [API_CONTAINER]`, or upload the ZIP in **Settings → VM → References**. Both download modes package the complete official database. Unchanged data is reused from the download cache.
 
+## Бюллетени РЕД ОС и Astra Linux / Vendor OVAL advisories
+
+На компьютере с интернетом выполните `sh download-stools.sh --datasets oval --mode full` или `.\download-stools.ps1 -Datasets oval -Mode Full`. В STools откройте **Настройки → VM → Справочники** и загрузите `oval-full.zip` в карточке **Бюллетени РЕД ОС и Astra Linux** или кнопкой **Загрузить архивы**. На сервере можно также выполнить `sh update-trivy-db.sh oval-full.zip [API_CONTAINER]`. Чтобы выгрузить обе базы для SBOM за один запуск, выберите `--datasets trivy,oval`.
+
+The OVAL dataset contains seven vendor feeds covering RED OS 7.3 and 8, Astra Linux 1.7 and 1.8 for x86-64, 4.7 and 4.8 for ARM, and 3.8 for s390x. Both modes transfer a complete snapshot. The downloader checks Astra's published SHA-256 and retrieves RED XML directly over HTTPS. The server verifies each profile, digest and release date before activating the package index. [RED OS](https://redos.red-soft.ru/base/update/changelogs-redos/changelog-8-cert/) · [Astra Linux](https://dl.astralinux.ru/astra/oval/oval_meta.json)
+
 ## Меню / Menu
 
 Linux:
@@ -38,7 +44,7 @@ sh download-stools.sh --datasets all --mode full --output ./transfer --lang en -
 .\download-stools.ps1 -Datasets all -Mode Full -Output D:\Transfer -Lang en -Quiet
 ```
 
-Данные / Datasets: `all`, `nvd`, `ghsa`, `epss`, `kev`, `exploitdb`, `msf`, `attack` (CVE→ATT&CK/CTID), `news` (RSS/Atom + Telegram), `sigma`, `elastic`, `trivy` (база уязвимостей SBOM).
+Данные / Datasets: `all`, `nvd`, `ghsa`, `epss`, `kev`, `exploitdb`, `msf`, `attack` (CVE→ATT&CK/CTID), `news` (RSS/Atom + Telegram), `sigma`, `elastic`, `trivy` (база Trivy для SBOM), `oval` (бюллетени РЕД ОС и Astra Linux).
 
 Периоды / Periods: `1d` — сутки/day; `7d` — неделя/week; `3m` — три календарных месяца/three calendar months. Интервал UTC `(начало, конец]`; более трёх месяцев недопустимо. В полном режиме период не применяется. Один запуск использует общее время окончания для всех выбранных данных.
 

@@ -9,14 +9,69 @@ from sqlalchemy import func, literal_column, select
 from sqlalchemy.orm import Session
 
 from api.modules.assets.models import Asset, AssetObservation
-from api.modules.vm.core.software_identity import windows_product
+from api.modules.vm.core.host_sbom import UNASSESSED
+from api.modules.vm.core.software_identity import os_family, windows_product
 from api.modules.vm.core.software_match import cpe_identity, evaluate, inventory_index
+from api.modules.vm.core.vendor_profiles import upstream_profile
 from api.modules.vm.models import VmHost, VmHostCve, VmImport, VmRefNvd, VmRefState
 from api.modules.vm.sbom_models import HostSbomScan, VmHostCoverage
 from api.modules.vm.services import host_sbom, trivy_scan
 from api.modules.vm.services.ghsa_mapping import canonical_finding_ids
 from api.modules.vm.services.host_packages import package_warnings
 from api.modules.vm.services.software import candidate_records, nvd_ready
+
+_VERSION_SOURCES = {"stools:ksc-version": "ksc", "stools:maxpatrol-version": "maxpatrol"}
+
+
+def component_page(document: dict, q: str, limit: int, offset: int, by_name: bool) -> dict:
+    rows = document["components"]
+    term = q.strip().casefold()
+    groups = defaultdict(list)
+    for c in rows:
+        groups[c["name"].casefold()].append(c)
+
+    def matches(c):
+        return (term in c["name"].casefold() or term in c.get("version", "").casefold()
+                or any(p["name"] in _VERSION_SOURCES
+                       and term in p["value"].casefold() for p in c["properties"]))
+
+    def describe(c):
+        props = {p["name"]: p["value"] for p in c["properties"]}
+        return {"ref": c["bom-ref"], "name": c["name"], "version": c.get("version"),
+                "purl": c.get("purl"), "cpe": c.get("cpe"), "publisher": c.get("publisher"),
+                "arch": props.get("stools:arch"), "group": c.get("group"), "package_type": props.get("stools:package-type"),
+                "reason": props.get(UNASSESSED), "winget_id": props.get("stools:winget-id"),
+                "reported_versions": [{"source": _VERSION_SOURCES[p["name"]], "version": p["value"]}
+                                      for p in c["properties"] if p["name"] in _VERSION_SOURCES],
+                "sources": [p["value"] for p in c["properties"] if p["name"] == "stools:source"]}
+
+    page = slice(offset, offset + limit)
+    if by_name:
+        matched = [group for group in groups.values() if not term or any(matches(c) for c in group)]
+        items = [{"name": group[0]["name"], "variants": [describe(c) for c in group]} for group in matched[page]]
+    else:
+        matched = [c for c in rows if not term or matches(c)]
+        items = [describe(c) for c in matched[page]]
+
+    metadata = document["metadata"]
+    root = metadata["component"]
+    observed = next((p["value"] for p in metadata["properties"] if p["name"] == "stools:os-name"), "")
+    note = None
+    profile = upstream_profile(root["name"], root["version"]) if root["type"] == "operating-system" else None
+    if root["type"] == "operating-system" and root["name"] in {"redos", "astra"}:
+        label = "РЕД ОС" if root["name"] == "redos" else "Astra Linux"
+        note = f"{label} {root['version']}. "
+        note += (f"Системные пакеты проверяются по базе {profile.label}. В риск хоста входят CVE, "
+                 "подтверждённые бюллетенем производителя.") if profile else "Для этого выпуска профиль поиска кандидатов не определён."
+    elif os_family(observed) == "windows":
+        note = ("Trivy проверяет пакеты поддерживаемых экосистем. Установленные Windows-программы "
+                "с идентификатором CPE можно проверить по NVD.")
+    elif any(p["value"] == "missing-or-incompatible-distribution" for c in rows
+             for p in c["properties"] if p["name"] == UNASSESSED):
+        note = "Для проверки системных пакетов нужны согласованные данные о названии и версии дистрибутива."
+    return {"total": len(matched), "total_names": len(groups), "identified": sum(bool(c.get("purl")) for c in rows),
+            "nvd_identified": sum(bool(c.get("cpe")) for c in rows), "coverage_note": note,
+            "candidate_profile": profile.label if profile else None, "items": items}
 
 
 def component_nvd(db: Session, document: dict, ref: str, limit: int, offset: int) -> dict | None:
@@ -51,7 +106,7 @@ def comparison(
 ) -> dict:
     scan = db.get(HostSbomScan, asset.id)
     revision = trivy_scan.database_revision(data_dir)
-    target = host_sbom.current_target(db, asset.id, revision)
+    target = host_sbom.current_target(db, asset.id, trivy_scan.with_bulletin_revision(revision, data_dir))
     if scan and scan.prepared_target == target and scan.sources and scan.components is not None:
         components, sources = scan.components, scan.sources
     else:
@@ -92,6 +147,16 @@ def comparison(
         and status in {"ready", "partial"}
         and not any(s in {"stale", "error", "partial"} for s in sources.values())
     )
+    trusted = [row for row in findings if row.get("assessment") != "candidate"]
+    page = _finding_page(db, host_ids, trusted, comparable, group, limit, offset)
+    if group in {"candidates", "vendor_confirmed"}:
+        assessment = "candidate" if group == "candidates" else group
+        by_id = defaultdict(list)
+        for row in findings:
+            if row.get("assessment") == assessment:
+                by_id[row["vuln_id"]].append(row)
+        page.update(total=len(by_id), items=[{"id": vid, "group": assessment, "packages": by_id[vid]}
+                    for vid in sorted(by_id)[offset:offset + limit]])
     return {
         "status": status,
         "inventory": sources,
@@ -107,10 +172,11 @@ def comparison(
         "scan_at": scan.scan_at if last_success else None,
         "db_version": scan.db_version if last_success else None,
         "scanner_version": scan.scanner_version if last_success else None,
+        "vendor_summary": scan.vendor_summary if last_success else None,
         "error": error,
         "vm_available": vm_available,
         "vm_at": vm_at,
-        **_finding_page(db, host_ids, findings, comparable, group, limit, offset),
+        **page,
     }
 
 
@@ -146,7 +212,8 @@ def _finding_page(
         )
         packages[canonical[vid]][key] = {
             k: row.get(k)
-            for k in ("package", "installed_version", "fixed_version", "purl", "severity")
+            for k in ("package", "installed_version", "fixed_version", "purl", "severity", "assessment",
+                      "profile", "bulletin", "bulletin_url", "upstream_fixed_version") if k in row
         }
     trivy_ids = set(packages)
     counts = None

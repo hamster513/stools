@@ -12,6 +12,7 @@ import { NewsArchiveSection } from './NewsArchiveSection'
 
 const ABOUT: Record<string, string> = {
   trivy: 'База уязвимостей для проверки пакетов в SBOM хостов. После обновления STools перепроверяет хосты автоматически.',
+  oval: 'Официальные OVAL-бюллетени РЕД ОС и Astra Linux для проверки пакетов хоста с учётом выпуска ОС.',
   ghsa: 'GitHub Advisory Database: GHSA, связи с CVE, пакеты и диапазоны версий. Включает уязвимости без CVE; ZIP официального репозитория.',
   epss: 'Вероятность эксплуатации за 30 дней от FIRST; в скоринге даёт 2–30 баллов. Если EPSS нет — 8 баллов; эксплойт или KEV может дать больше.',
   nvd: 'Балл CVSS, метрики и описания CVE; фиды по годам, можно грузить частями.',
@@ -19,7 +20,7 @@ const ABOUT: Record<string, string> = {
   msf: 'Модули Metasploit: 24 балла, готовые good/great/excellent — 32. В блоке эксплуатации учитывается самый сильный сигнал.',
   kev: 'Каталог эксплуатируемых уязвимостей CISA: 40 баллов в блоке эксплуатации и итоговый приоритет не ниже High (80).',
 }
-const ACCEPT: Record<string, string> = { trivy: '.zip,application/zip', ghsa: '.zip', epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }
+const ACCEPT: Record<string, string> = { trivy: '.zip,application/zip', oval: '.zip,application/zip', ghsa: '.zip', epss: '.csv,.gz', nvd: '.json,.gz', exploitdb: '.csv', msf: '.json', kev: '.json,.csv' }
 const SNAPSHOT_NOTE = 'Источник публикует снимок. При обновлении добавляются новые записи и меняются существующие. Записи вне снимка сохраняются. Полная загрузка заменяет справочник.'
 const SOURCE: Record<string, string> = { network: 'сеть', file: 'файл', bundle: 'архив', bundled: 'встроенная база', local: 'локальная база' }
 
@@ -54,6 +55,7 @@ function RefCard({ r }: { r: RefState }) {
   const date = r.loaded_at ? new Date(r.loaded_at) : null
   const modeNote = trivy
     ? (mode === 'full' ? 'Скачивает полный снимок из официального реестра Trivy и проверяет его перед установкой.' : 'При изменении версии в официальном реестре Trivy скачивается полный снимок.')
+    : r.name === 'oval' ? 'Для автономного обновления выберите oval-full.zip или oval-updates.zip из комплекта выгрузки.'
     : r.update_capability === 'delta' ? 'Получаем новые и изменённые записи, сохраняя остальную базу.' : SNAPSHOT_NOTE
 
 

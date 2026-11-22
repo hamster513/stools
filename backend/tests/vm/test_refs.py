@@ -119,13 +119,14 @@ def test_refs_show_running_job(auth_client: TestClient, db_session: Any) -> None
 
     single = start_job(db_session, "ref_epss", "tester")
     shown = ids()
-    assert shown["epss"] == single and [v for k, v in shown.items() if k != "epss"] == [None] * 7
+    assert shown["epss"] == single and all(v is None for k, v in shown.items() if k != "epss")
     db_session.get(VmJob, single).status = "done"
     db_session.commit()
 
     bundle = start_job(db_session, "ref_bundle", "tester")
     shown = ids()
     assert shown.pop("trivy") is None  # The scoring bundle does not contain scanner databases.
+    assert shown.pop("oval") is None
     assert len(shown) == 7 and set(shown.values()) == {bundle}
 
 

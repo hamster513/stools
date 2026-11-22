@@ -9,11 +9,11 @@ from uuid import NAMESPACE_URL, uuid5
 
 from packageurl import PackageURL
 
-from .software_identity import os_family, windows_product
+from .software_identity import os_family, publisher_key, windows_product
 
 
 def bom_bytes(document: dict) -> bytes:
-    """The attachment, scanner input and saved digest use the same canonical JSON bytes."""
+    """Canonical serialization for the downloadable inventory and its saved digest."""
     return json.dumps(document, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
 
 # A native package-manager record is identifiable only with an observed distribution.
@@ -22,6 +22,8 @@ _DISTROS = (
     ("ubuntu", "deb", r"ubuntu(?: linux)?"),
     ("alpine", "apk", r"alpine(?: linux)?"),
     ("redhat", "rpm", r"(?:red hat enterprise linux(?: server| workstation)?|rhel|redhat)"),
+    ("redos", "rpm", r"(?:red ?os|ред ос)"),
+    ("astra", "deb", r"astra(?: ?linux)?(?: (?:special edition|common edition|se|ce))?"),
     ("rocky", "rpm", r"rocky(?: linux)?"),
     ("alma", "rpm", r"alma(?:linux| linux)?"),
     ("oracle", "rpm", r"oracle linux(?: server)?"),
@@ -34,6 +36,7 @@ _DISTROS = (
     ("cbl-mariner", "rpm", r"cbl-mariner"),
 )
 _NATIVE = {"apk", "deb", "rpm"}
+_RELEASE_PACKAGES = {"redos-release": ("redos", "rpm"), "astra-version": ("astra", "deb")}
 _LANG = {"pypi", "npm", "maven", "gem", "cargo", "golang", "nuget", "composer",
          "hex", "pub", "swift", "cocoapods", "conda", "conan"}
 _UNKNOWN = {"", "-", "unknown", "n/a", "неизвестно"}
@@ -75,10 +78,19 @@ def _text(value):
     return value.strip() if isinstance(value, str) else ""
 
 
+def observed_architecture(os_labels):
+    aliases = {"amd64": "x86_64", "x86-64": "x86_64", "arm64": "aarch64"}
+    values = {aliases.get(match, match) for label in os_labels for match in re.findall(
+        r"(?<![a-z0-9])(x86[_-]64|amd64|aarch64|arm64|s390x|i[3-6]86)(?![a-z0-9])", _text(label).lower())}
+    return next(iter(values)) if len(values) == 1 else ""
+
+
 @lru_cache(maxsize=256)
 def _distribution(name):
+    # Older Astra os-release files put the edition and release inside parentheses.
+    name = re.sub(r"^(astra linux) \((?:smolensk|orel) ([\d.]+)\)", r"\1 \2", name, flags=re.IGNORECASE)
     for family, kind, pattern in _DISTROS:
-        match = re.match(rf"(?:linux )?{pattern}(?: release)?[ -]+v?(\d+(?:\.\d+)*)\b",
+        match = re.match(rf"(?:linux )?{pattern}(?: release)?[ -]+v?(\d+(?:\.\d+)*)(?=$|[\s_(),.-])",
                          name, re.IGNORECASE)
         if match:
             return family, kind, match[1]
@@ -94,19 +106,30 @@ def _purl_distribution(purl):
     return _distribution(release)
 
 
-def _host_distribution(os_name, rows):
-    if distro := _distribution(os_name):
-        return distro
+def _host_distribution(os_name, rows, os_hints=()):
+    explicit = _distribution(os_name)
+    if explicit and explicit[0] not in {"astra", "redos"}:
+        return explicit
     vague = os_name.casefold() in _VAGUE_OS
-    family = next((f for f, _, pattern in _DISTROS if re.fullmatch(pattern, os_name, re.IGNORECASE)), "")
+    family = explicit[0] if explicit else next((f for f, _, pattern in _DISTROS if re.fullmatch(pattern, os_name, re.IGNORECASE)), "")
     if not vague and not family:
         return None
-    observed = set()
+    observed = {distro for hint in os_hints if (distro := _distribution(_text(hint)))}
+    if explicit:
+        observed.add(explicit)
     for row in rows:
         if row.get("source") not in {"ksc", "maxpatrol"}:
             continue
-        if distro := _distribution(_text(row.get("os_name"))):
+        row_os = _text(row.get("os_name"))
+        if distro := _distribution(row_os):
             observed.add(distro)
+        # Distribution release packages carry the OS version. An .el7 build tag does not.
+        marker = _RELEASE_PACKAGES.get(row.get("name"))
+        if marker and (family == marker[0] or (vague and row.get("source") == "maxpatrol"
+                                              and row.get("type") in {"os", marker[1]})):
+            release = re.fullmatch(r"(?:\d+:)?(\d+(?:\.\d+)*)(?:[-+][\w.+~]+)?", _text(row.get("version")))
+            if release and _row_os_matches(row_os, (*marker, release[1])):
+                observed.add((*marker, release[1]))
         if raw := _text(row.get("purl")):
             try:
                 from_url = _purl_distribution(PackageURL.from_string(raw))
@@ -114,9 +137,9 @@ def _host_distribution(os_name, rows):
                 continue
             if from_url:
                 observed.add(from_url)
-    if len(observed) == 1:
-        distro = observed.pop()
-        if vague or distro[0] == family:
+    if observed:
+        distro = max(observed, key=lambda obs: len(obs[2]))
+        if (vague or distro[0] == family) and all(_compatible(distro, other) for other in observed):
             return distro
     return None
 
@@ -237,6 +260,10 @@ def _package(row, distro, os_name, known_products, native_names):
             if qualifiers.get("epoch", epoch) != epoch:
                 reason = "conflicting-epoch"
             qualifiers["epoch"] = epoch
+    elif kind == "os":
+        reason = "missing-or-incompatible-distribution"
+    elif kind == "generic" and distro and not _row_os_matches(_text(row.get("os_name")), distro):
+        reason = "distribution-mismatch"
     elif kind not in _LANG:
         reason = reason or "unsupported-ecosystem"
     if not version:
@@ -277,24 +304,33 @@ def _package(row, distro, os_name, known_products, native_names):
         if purl:
             props.append(_prop("stools:observed-purl", purl.to_string()))
         props.append(_prop(UNASSESSED, reason))
+    elif kind in _NATIVE and distro and distro[0] in {"redos", "astra"}:
+        # Valid native identity; upstream candidates need an independent vendor bulletin.
+        props.append(_prop(UNASSESSED, "unsupported-distribution"))
     return component
 
 
 def make_bom(host_key: str, host_name: str, os_name: str, packages: Iterable[dict], *,
-             known_products=(), native_names=()) -> dict:
+             known_products=(), native_names=(), os_hints=()) -> dict:
     rows = list(packages)
     os_name = _text(os_name)
-    distro = _host_distribution(os_name, rows)
+    distro = _host_distribution(os_name, rows, os_hints)
     root = {"type": "platform", "name": host_name or host_key, "bom-ref": _ref("host", host_key)}
     if distro:
         root.update(type="operating-system", name=distro[0], version=distro[2])
     metadata = {"component": root, "properties": [_prop("stools:asset-id", host_key),
                 _prop("stools:host-name", host_name), _prop("stools:os-name", os_name)]}
+    if distro and distro[0] in {"redos", "astra"}:
+        arch = observed_architecture((os_name, *os_hints))
+        if arch:
+            metadata["properties"].append(_prop("stools:host-arch", arch))
     candidates = [component for row in rows if (component := _package(row, distro, os_name, known_products, native_names))]
+    windows = os_family(os_name) == "windows"
+    vendor_key = publisher_key if windows else str.casefold
     vendors = defaultdict(set)
     for c in candidates:
         if c.get("publisher"):
-            vendors[(c["name"].casefold(), c.get("version", ""))].add(c["publisher"].casefold())
+            vendors[(c["name"].casefold(), c.get("version", ""))].add(vendor_key(c["publisher"]))
     # Insert precise observations first so an ancillary display name can match at most one identity.
     candidates.sort(key=lambda c: (not c.get("purl"), not c.get("purl") and not c.get("publisher"),
                                    c["properties"][0]["value"] != "maxpatrol", json.dumps(c, sort_keys=True)))
@@ -306,27 +342,38 @@ def make_bom(host_key: str, host_name: str, os_name: str, packages: Iterable[dic
         name = f"{group}/{c['name']}" if group else c["name"]
         name_version = (name.casefold(), c.get("version", ""))
         kind, source, arch = props["stools:package-type"], props["stools:source"], props.get("stools:arch", "")
-        publisher = c.get("publisher", "").casefold()
+        publisher = vendor_key(c.get("publisher", ""))
         identity = c.get("purl") or props.get("stools:observed-purl")
         key = (identity, c.get("version", ""), props.get(UNASSESSED)) if identity else (
             kind, *name_version, arch, publisher, "" if name_version[1] else source)
         if c.get("cpe") and not identity:
             key = (*key, c["cpe"])
-        if key not in indexed and kind == "generic" and name_version[1] and not identity and not c.get("cpe"):
+        if (key not in indexed and kind == "generic" and name_version[1] and not identity and not c.get("cpe")
+                and props.get(UNASSESSED) == "unsupported-ecosystem"):
             matches = [k for k, vendor, cpu in by_name[name_version]
                        if (not vendor or not publisher or vendor == publisher)
                        and (vendor == publisher or len(vendors[name_version]) <= 1)
                        and (not cpu or not arch or cpu == arch)
-                       and not (os_family(os_name) == "windows" and
-                                (indexed[k].get("purl") or indexed[k].get("cpe")))]
+                       and not (windows and (indexed[k].get("purl") or indexed[k].get("cpe")))]
             if len(matches) == 1:
                 key = matches[0]
         if key not in indexed:
             indexed[key] = c
             c["bom-ref"] = _ref("package", *key)
             by_name[name_version].append((key, publisher, arch))
+            if source == "maxpatrol" and kind in _NATIVE and c.get("purl"):
+                # GUI inventories often omit the package manager's epoch and release.
+                full = name_version[1]
+                evr = re.sub(r"^\d+:", "", full)
+                upstream = evr.rpartition("-")[0] if kind != "apk" else re.sub(r"-r\d+$", "", evr)
+                for alias in {evr, upstream} - {"", full}:
+                    by_name[(name_version[0], alias)].append((key, publisher, arch))
         else:
             existing = indexed[key]
+            if c.get("version") and c["version"] != existing.get("version"):
+                version_prop = _prop(f"stools:{source}-version", c["version"])
+                if version_prop not in existing["properties"]:
+                    existing["properties"].append(version_prop)
             if c.get("publisher"):
                 existing.setdefault("publisher", c["publisher"])
             present = {p["name"] for p in existing["properties"]}

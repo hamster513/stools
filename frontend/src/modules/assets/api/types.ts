@@ -225,6 +225,7 @@ export interface AssetLinks {
   ksc_server_id: number | null
   vm_host_id: number | null
   vm_cve_count: number | null
+  vm_max_risk: number | null
 }
 
 export interface AssetDetail extends AssetItem {

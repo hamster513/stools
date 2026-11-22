@@ -34,7 +34,9 @@ from api.modules.attack.layers import (
     LayerResult,
     parent_of,
 )
-from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmRefAttack, VmZone
+from api.modules.vm.models import VmCve, VmRefAttack, VmZone
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
 from api.modules.vm.services.query import (
     MODULE,
     SCOPE,
@@ -44,6 +46,7 @@ from api.modules.vm.services.query import (
     status_conditions,
 )
 from api.modules.vm.services.settings import load_settings
+from api.modules.vm.services.stats import lock_cache_row
 from api.platform.findings import service as finding_svc
 from api.platform.findings.models import FindingEvent, FindingState
 
@@ -225,11 +228,8 @@ def compute(db: Session) -> dict[str, Any]:
 
 
 def refresh(db: Session) -> dict[str, Any]:
+    row = lock_cache_row(db, CACHE_KEY)
     data = compute(db)
-    row = db.get(AppSetting, CACHE_KEY)
-    if row is None:
-        row = AppSetting(key=CACHE_KEY)
-        db.add(row)
     row.value_json = json.dumps(data, ensure_ascii=False)
     row.updated_at = dt.datetime.now(dt.UTC)
     db.commit()

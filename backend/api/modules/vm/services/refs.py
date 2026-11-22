@@ -382,6 +382,10 @@ def run_ref_file(db: Session, handle: JobHandle, name: str, paths: list[Path], w
             from api.modules.vm.services import trivy_reference
             trivy_reference.upload(db, handle, paths[0])
             return
+        if name == "oval":
+            from api.modules.vm.services import vendor_bulletins
+            vendor_bulletins.upload(db, handle, paths[0])
+            return
         for index, path in enumerate(paths):
             load_ref(db, handle, name, path, "file", detail=path.name, append=index > 0)
         from api.modules.vm.services.ref_updates import rebuild_pending
@@ -409,6 +413,10 @@ def run_ref_download(
     if name == "trivy":
         from api.modules.vm.services import trivy_reference
         trivy_reference.download(db, handle, mode, http_factory)
+        return
+    if name == "oval":
+        from api.modules.vm.services import vendor_bulletins
+        vendor_bulletins.download(db, handle, http_factory)
         return
     if mode != "full":
         state = db.get(VmRefSyncState, name)

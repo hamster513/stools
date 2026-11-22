@@ -93,6 +93,7 @@ export function VulnsTable({ rememberKey, items, selectedIndex, sort, onSort, on
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary">{item.ip}</div>
               <div className="flex min-w-0 items-center gap-1.5 px-2">
                 <span className="min-w-0 truncate font-mono text-text">{item.cve_id}</span>
+                {item.sbom_asset_id != null && <span className="text-[10px] text-text-secondary" title="Подтверждено бюллетенем производителя">SBOM</span>}
                 {trends.data?.[item.cve_id] && <TrendBadge id={item.cve_id} reason={trends.data[item.cve_id].reason} />}
                 {/* Колонки KEV нет (спека §5): признак — бейдж у CVE, вымогатели — в подсказке; при узкой колонке обрезается номер, а не бейдж. */}
                 {item.kev && <span className="shrink-0 text-[10px] font-semibold text-risk-critical" title={item.kev_ransomware ? 'CISA KEV · ransomware' : 'CISA KEV'}>KEV</span>}

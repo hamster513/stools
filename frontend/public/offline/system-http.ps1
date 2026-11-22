@@ -217,6 +217,9 @@ try {
                     if ($uri.Scheme -eq 'https' -and $next.Scheme -ne 'https') {
                         Stop-Transport 'unsafe_redirect'
                     }
+                    if ($uri.Host -in @('dl.astralinux.ru', 'redos.red-soft.ru') -and $uri.Authority -ne $next.Authority) {
+                        Stop-Transport 'unsafe_redirect'
+                    }
                     if ($next.GetLeftPart([UriPartial]::Authority) -ne $uri.GetLeftPart([UriPartial]::Authority)) {
                         # Treat custom API-key headers as sensitive too when an origin changes.
                         $forward = @{}

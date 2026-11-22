@@ -275,7 +275,9 @@ function LinksBlock({ a, beforeContainers }: { a: AssetDetail; beforeContainers:
         )}
         {links.vm_host_id !== null && (
           <li>
-            <Link to={`/vm/vulns?host_id=${links.vm_host_id}`} className="text-text hover:text-primary">VM: CVE на хосте — {links.vm_cve_count ?? 0}</Link>
+            <Link to={`/vm/vulns?asset_id=${a.id}&status=all`} className="text-text hover:text-primary">
+              CVE на хосте — {links.vm_cve_count ?? 0}{links.vm_max_risk != null && ` · максимальный риск ${links.vm_max_risk}/100`}
+            </Link>
           </li>
         )}
         <li><Link to={`/assets/container-images?view=hosts&asset_id=${a.id}`} className="text-primary hover:underline" onClickCapture={(e) => {

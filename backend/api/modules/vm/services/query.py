@@ -38,7 +38,10 @@ from sqlalchemy.sql import ColumnElement, Subquery
 from api.modules.vm.core.priority import LEVELS as PRIORITY_LEVELS
 from api.modules.vm.core.risk import level as risk_level
 from api.modules.vm.core.weights import Levels
-from api.modules.vm.models import VmCve, VmFindingStateRef, VmHost, VmHostCve
+from api.modules.vm.models import VmCve, VmFindingStateRef
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
+from api.modules.vm.risk_models import asset_risk_host_ids
 from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
 from api.platform.findings.core import OPEN, STATUS_TITLES, STATUSES, is_overdue
@@ -122,7 +125,7 @@ def host_key(hostname: Any, ip: Any) -> ColumnElement[str]:
 
 def state_on() -> ColumnElement[bool]:
     """Условие присоединения строк состояния к парам; в запросе должны быть `VmHost` и `VmHostCve`."""
-    return and_(host_key(ST.c.hostname, ST.c.ip) == host_key(VmHost.hostname, VmHost.ip), ST.c.cve_id == VmHostCve.cve_id)
+    return and_(host_key(ST.c.hostname, ST.c.ip) == host_key(VmHost.state_hostname, VmHost.ip), ST.c.cve_id == VmHostCve.cve_id)
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,7 @@ class VulnFilters:
     #: Пороги уровней из настроек — для фильтра `level` и фасета уровней; не фильтр.
     levels: Levels = field(default_factory=lambda: Levels(**PRIORITY_LEVELS))
     min_risk: int | None = None
+    asset_id: int | None = None
 
     def data_empty(self) -> bool:
         """Нет фильтров по данным пары (статус и пороги не в счёт)."""
@@ -235,7 +239,8 @@ def conditions(f: VulnFilters, *, with_status: bool = True) -> list[ColumnElemen
         # миллионам пар; CVE — по префиксу, чтобы работал индекс. OR по двум
         # индексированным колонкам пар Postgres собирает через BitmapOr.
         needle = f"%{f.q.strip()}%"
-        hosts = select(VmHost.id).where(or_(VmHost.hostname.ilike(needle), VmHost.ip.ilike(needle)))
+        hosts = select(VmHost.id).where(or_(VmHost.hostname.ilike(needle), VmHost.ip.ilike(needle),
+                                            VmHost.state_hostname == f.q.strip()))
         conds.append(or_(VmHostCve.host_id.in_(hosts), VmHostCve.cve_id.like(f"{f.q.strip().upper()}%")))
     if f.host:
         conds.append(or_(VmHost.hostname.ilike(f"%{f.host}%"), VmHost.ip.ilike(f"%{f.host}%")))
@@ -264,6 +269,8 @@ def conditions(f: VulnFilters, *, with_status: bool = True) -> list[ColumnElemen
         conds.append(one_of(VmCve.cvss_source, f.cvss_source))
     if f.host_id is not None:
         conds.append(VmHostCve.host_id == f.host_id)
+    if f.asset_id is not None:
+        conds.append(VmHostCve.host_id.in_(asset_risk_host_ids([f.asset_id])))
     return conds
 
 
@@ -282,7 +289,9 @@ def base_select(columns: list[Any], *, state: bool = False) -> Select[Any]:
 
 ROW_COLUMNS = [
     VmHostCve.host_id,
+    VmHostCve.sbom_asset_id,
     VmHost.hostname,
+    VmHost.state_hostname,
     VmHost.ip,
     VmHost.os_name,
     VmHost.criticality,
@@ -314,8 +323,9 @@ STATE_COLUMNS = [
 def row_to_item(row: Any, levels: Levels) -> dict[str, Any]:
     risk = int(row.risk)
     return {
-        "key": pair_key(row.hostname, row.ip, row.cve_id),
+        "key": pair_key(row.state_hostname, row.ip, row.cve_id),
         "host_id": row.host_id,
+        "sbom_asset_id": row.sbom_asset_id,
         "hostname": row.hostname,
         "ip": row.ip,
         "os_name": row.os_name,
@@ -535,7 +545,7 @@ def iter_keys(db: Session, f: VulnFilters, chunk: int) -> Iterator[str]:
     статусов), и пары, ушедшие из фильтра после смены, не сдвигают следующие."""
     conds = conditions(f)
     state = not f.status.is_noop()
-    cols = [VmHostCve.host_id, VmHostCve.cve_id, VmHost.hostname, VmHost.ip]
+    cols = [VmHostCve.host_id, VmHostCve.cve_id, VmHost.state_hostname.label("hostname"), VmHost.ip]
     last: tuple[int, str] | None = None
     while True:
         stmt = base_select(cols, state=state).where(*conds)

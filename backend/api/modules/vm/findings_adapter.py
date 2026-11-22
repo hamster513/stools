@@ -37,7 +37,10 @@ from sqlalchemy.orm import Session
 
 from api.db.models import AppUser
 from api.modules.vm.core.weights import Levels
-from api.modules.vm.models import VmFindingStateRef, VmHost, VmHostCve, VmImport
+from api.modules.vm.models import VmFindingStateRef, VmImport
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
+from api.modules.vm.sbom_models import VmSbomConfirmedCve
 from api.modules.vm.services.jobs import (
     DATA_KINDS,
     JobHandle,
@@ -95,10 +98,10 @@ def split_key(key: str) -> tuple[str, str, str] | None:
 
 #: Пары по ключам: ключи разобраны в Python и уходят массивами, сопоставление — в базе.
 _LOOKUP = text("""
-    SELECT h.hostname, h.ip, p.cve_id, p.risk
+    SELECT h.hostname, h.state_hostname, h.ip, p.cve_id, p.risk
     FROM unnest(CAST(:hostnames AS text[]), CAST(:ips AS text[]), CAST(:cves AS text[])) AS k(hostname, ip, cve_id)
-    JOIN vm_host h ON h.hostname = k.hostname AND h.ip = k.ip
-    JOIN vm_host_cve p ON p.host_id = h.id AND p.cve_id = k.cve_id
+    JOIN vm_risk_host h ON h.state_hostname = k.hostname AND h.ip = k.ip
+    JOIN vm_risk_host_cve p ON p.host_id = h.id AND p.cve_id = k.cve_id
 """)
 
 #: Подсказки для строк состояния VM, заведённых в обход адаптера (тот же разбор, что `split_key`).
@@ -129,7 +132,8 @@ class VmFindingAdapter:
         return scope_id == SCOPE
 
     def _has_data(self, db: Session, scope_id: int) -> bool:
-        return scope_id == SCOPE and db.scalar(select(VmImport.id).limit(1)) is not None
+        return scope_id == SCOPE and (db.scalar(select(VmImport.id).limit(1)) is not None
+                                     or db.scalar(select(VmSbomConfirmedCve.asset_id).limit(1)) is not None)
 
     def current(self, db: Session, scope_id: int) -> Iterable[CurrentFinding] | None:
         """Пары последнего импорта; импорта не было — данных нет (None). Severity — уровень риска
@@ -142,13 +146,13 @@ class VmFindingAdapter:
     def _stream(self, db: Session) -> Iterator[CurrentFinding]:
         """Только четыре колонки и кусками: объекты ORM не нужны."""
         rows = db.execute(
-            select(VmHost.hostname, VmHost.ip, VmHostCve.cve_id, VmHostCve.risk)
+            select(VmHost.hostname, VmHost.state_hostname, VmHost.ip, VmHostCve.cve_id, VmHostCve.risk)
             .join(VmHost, VmHost.id == VmHostCve.host_id)
             .execution_options(yield_per=_STREAM)
         )
         levels = load_settings(db).weights.levels
-        for hostname, ip, cve_id, risk in rows:
-            yield CurrentFinding(key=pair_key(hostname, ip, cve_id), title=title_of(hostname, cve_id),
+        for hostname, state_hostname, ip, cve_id, risk in rows:
+            yield CurrentFinding(key=pair_key(state_hostname, ip, cve_id), title=title_of(hostname, cve_id),
                                  severity=level_of(int(risk), levels))
 
     def _lookup(self, db: Session, keys: Sequence[str]) -> list[Any]:
@@ -167,13 +171,13 @@ class VmFindingAdapter:
         """Какие из ключей — пары текущих данных; ответ — запросом, пары в память не читаются."""
         if not self._has_data(db, scope_id):
             return None
-        return {pair_key(r.hostname, r.ip, r.cve_id) for r in self._lookup(db, keys)}
+        return {pair_key(r.state_hostname, r.ip, r.cve_id) for r in self._lookup(db, keys)}
 
     def describe(self, db: Session, scope_id: int, keys: Sequence[str]) -> dict[str, CurrentFinding]:
         found = {}
         levels = load_settings(db).weights.levels
         for r in self._lookup(db, keys):
-            key = pair_key(r.hostname, r.ip, r.cve_id)
+            key = pair_key(r.state_hostname, r.ip, r.cve_id)
             found[key] = CurrentFinding(key=key, title=title_of(r.hostname, r.cve_id), severity=level_of(int(r.risk), levels))
         return found
 
@@ -242,6 +246,7 @@ class BulkFilter(BaseModel):
     kev: bool | None = None
     cvss_source: Multi = None
     host_id: int | None = None
+    asset_id: int | None = None
     status: Multi = None
     assignee: Multi = None
     overdue: bool | None = None
@@ -254,7 +259,8 @@ def parse_filter(raw: dict[str, Any], *, login: str, levels: Levels) -> VulnFilt
     b = BulkFilter.model_validate(raw)
     sf = status_filter(b.status, b.assignee, b.overdue, b.risk_expiring, login=login)
     return VulnFilters(b.q, b.host, b.cve, multi(b.criticality), multi(b.zone), multi(b.os), multi(b.level),
-                       b.exploits, b.msf, b.kev, multi(b.cvss_source), b.host_id, sf, levels, min_risk=b.min_risk)
+                       b.exploits, b.msf, b.kev, multi(b.cvss_source), b.host_id, sf, levels,
+                       min_risk=b.min_risk, asset_id=b.asset_id)
 
 
 def keys_by_filter(db: Session, scope_id: int, raw: dict[str, Any]) -> Iterator[str]:

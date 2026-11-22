@@ -54,6 +54,64 @@ def test_dedup_respects_ecosystem_version_architecture_and_publisher():
     assert len(bom["components"]) == len(records)
 
 
+def test_redos_uses_release_package_and_keeps_both_sources_for_the_native_build():
+    rows = [observed("redos-release", "0:7.3.7-2.el7", "os", os_name="red os"),
+            observed("redos-release", "7.3.7", source="ksc", os_name="Linux"),
+            observed("acl", "0:2.4.0-1.el7", "os", os_name="red os"),
+            observed("ACL", "2.4.0", source="ksc", os_name="Linux")]
+    doc = make_bom("1", "host", "red os", rows)
+    assert doc == make_bom("1", "host", "red os", reversed(rows))
+    root = doc["metadata"]["component"]
+    assert (root["type"], root["name"], root["version"]) == ("operating-system", "redos", "7.3.7")
+    acl, release = doc["components"]
+    assert acl["version"] == "0:2.4.0-1.el7"
+    assert acl["purl"] == "pkg:rpm/redos/acl@2.4.0-1.el7?distro=redos-7.3.7&epoch=0"
+    assert props(acl, "stools:unassessed-reason") == ["unsupported-distribution"]
+    assert props(acl, "stools:ksc-version") == ["2.4.0"]
+    assert props(acl, "stools:source") == props(release, "stools:source") == ["ksc", "maxpatrol"]
+
+
+def test_short_inventory_version_does_not_choose_between_two_native_builds():
+    rows = [observed("kernel", version, "os") for version in ("0:6.1-1.el7", "0:6.1-2.el7")]
+    rows.append(observed("kernel", "6.1", source="ksc"))
+    doc = make_bom("1", "host", "CentOS 7", rows)
+    assert len(doc["components"]) == 3
+    assert all(len(props(c, "stools:source")) == 1 for c in doc["components"])
+    doc = make_bom("1", "host", "Linux", rows)
+    assert all(not c.get("purl") for c in doc["components"])
+    assert any("missing-or-incompatible-distribution" in props(c, "stools:unassessed-reason") for c in doc["components"])
+
+
+def test_windows_same_publisher_alias_and_version_merge_but_parallel_versions_survive():
+    rows = [observed("google chrome", "1.0", publisher="Google"),
+            observed("Google Chrome", "1.0", source="ksc", publisher="Google LLC"),
+            observed("Google Chrome", "2.0", source="ksc", publisher="Google LLC")]
+    cs = make_bom("1", "host", "Windows 10", rows)["components"]
+    assert len(cs) == 2
+    one = next(c for c in cs if c["version"] == "1.0")
+    assert one["cpe"] and props(one, "stools:source") == ["ksc", "maxpatrol"]
+
+
+def test_component_pages_group_before_search_and_pagination_and_keep_each_build():
+    from api.modules.vm.services.host_sbom_view import component_page
+
+    rows = [observed("ACL", "0:2.4.0-1.el7", "os"), observed("acl", "2.4.0", source="ksc"),
+            observed("Kernel", "0:5.15-1.el7", "os"), observed("kernel", "0:6.1-2.el7", "os")]
+    doc = make_bom("1", "host", "РЕД ОС 7.3.7", rows)
+    page = component_page(doc, "", limit=1, offset=1, by_name=True)
+    assert (page["total"], page["total_names"], page["identified"]) == (2, 2, 3)
+    assert "РЕД ОС 7.3.7" in page["coverage_note"]
+    group, = page["items"]
+    assert group["name"].casefold() == "kernel"
+    assert {v["version"] for v in group["variants"]} == {"0:5.15-1.el7", "0:6.1-2.el7"}
+    assert all(v["reason"] == "unsupported-distribution" for v in group["variants"])
+    match = component_page(doc, "5.15", limit=1, offset=0, by_name=True)
+    assert match["total"] == 1 and match["items"] == [group]
+    assert component_page(doc, "", limit=5, offset=0, by_name=False)["total"] == 3
+    acl = component_page(doc, "acl", limit=1, offset=0, by_name=True)["items"][0]["variants"][0]
+    assert acl["reported_versions"] == [{"source": "ksc", "version": "2.4.0"}]
+
+
 @pytest.mark.parametrize(("os_name", "kind", "expected"), [
     ("Red Hat Enterprise Linux Server release 8.10", "os", "pkg:rpm/redhat/"),
     ("Alpine Linux v3.20.2", "os", "pkg:apk/alpine/"),
@@ -183,6 +241,23 @@ def test_failed_incomplete_oversized_and_timed_out_reports_are_errors(tmp_path, 
 
 @pytest.mark.skipif(not os.environ.get("STOOLS_TEST_TRIVY_DATA"),
                     reason="requires a provisioned official Trivy cache and binary")
+@pytest.mark.parametrize("with_library", [False, True])
+def test_offline_redos_keeps_real_purl_and_scans_supported_language_packages(with_library):
+    rows = [observed("acl", "0:2.4.0-1.el7", "os")]
+    if with_library:
+        rows.append(observed("lodash", "4.17.20", "npm"))
+    doc = make_bom("lab", "lab", "RED OS 7.3.7", rows)
+    result = scan_bom(doc, Path(os.environ["STOOLS_TEST_TRIVY_DATA"]))
+    assert result["checked"] == 1 + int(with_library)
+    assert result["vendor_summary"]["profile"] == "RHEL 7"
+    assert "/redos/" in doc["components"][0]["purl"]
+    assert any(hit["package"] == "lodash" for hit in result["findings"]) == with_library
+    assert all("/redos/" in hit["purl"] and hit["assessment"] in {"candidate", "vendor_confirmed"}
+               for hit in result["findings"] if hit["package"] == "acl")
+
+
+@pytest.mark.skipif(not os.environ.get("STOOLS_TEST_TRIVY_DATA"),
+                    reason="requires a provisioned official Trivy cache and binary")
 def test_offline_real_trivy_detects_known_advisory_and_counts_covered_packages():
     data_dir = Path(os.environ["STOOLS_TEST_TRIVY_DATA"])
     bom = make_bom("lab-id", "synthetic-host", "Debian GNU/Linux 12 (bookworm)", [
@@ -202,6 +277,23 @@ def test_offline_real_trivy_detects_known_advisory_and_counts_covered_packages()
     assert result["db_version"] == database_revision(data_dir) and result["scanner_version"]
     empty = make_bom("lab-id", "synthetic-host", "Windows 11", [observed("Private Agent", "1")])
     assert scan_bom(empty, data_dir)["checked"] == 0
+
+
+@pytest.mark.skipif(not os.environ.get("STOOLS_TEST_TRIVY_DATA"), reason="requires a provisioned Trivy database")
+def test_astra_debian_candidate_is_confirmed_with_the_manufacturers_fix(monkeypatch):
+    from api.modules.vm.services import vendor_bulletins
+
+    seed = Path(__file__).resolve().parents[2] / "docker/vendor-oval/catalog.oval"
+    monkeypatch.setattr(vendor_bulletins, "_BUNDLED", seed)
+    version = "3.0.11-1~deb12u1"
+    doc = make_bom("test", "test", "Astra Linux Special Edition 1.8", [
+        observed("libssl3", version, "os", arch="amd64", source_name="openssl", source_version=version)])
+    scan = scan_bom(doc, Path(os.environ["STOOLS_TEST_TRIVY_DATA"]))
+    assert scan["checked"] == 1 and scan["vendor_summary"]["profile"] == "Debian 12"
+    proof = next(row for row in scan["findings"] if row["vuln_id"] == "CVE-2024-6119")
+    assert proof["assessment"] == "vendor_confirmed" and "SE18" in proof["bulletin"]
+    assert proof["installed_version"] == version and "/astra/" in proof["purl"]
+    assert proof["fixed_version"] and proof["fixed_version"] != proof["upstream_fixed_version"]
 
 
 @pytest.mark.skipif(not os.environ.get("STOOLS_TEST_TRIVY_DATA"),

@@ -4,7 +4,9 @@ from typing import Any
 from sqlalchemy import Text, and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
-from api.modules.vm.models import VmHost, VmHostCve, VmImage, VmImageCve, VmImport
+from api.modules.vm.models import VmImage, VmImageCve, VmImport
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
 from api.modules.vm.trend_models import (
     VmTrendCard,
     VmTrendEnrichment,
@@ -238,7 +240,7 @@ def candidates(db: Session, evidence: Any) -> Any:
 def matches(db: Session, card_id: Any, limit: Any=100, offset: Any=0) -> Any:
     host_query = select(VmHost, VmHostCve.risk, func.coalesce(FindingState.status, "new")).join(VmHostCve).outerjoin(
         FindingState, and_(FindingState.module == "vm", FindingState.scope_id == 0,
-                          FindingState.key == func.concat(VmHost.hostname, "|", VmHost.ip, "|", VmHostCve.cve_id)))
+                          FindingState.key == func.concat(VmHost.state_hostname, "|", VmHost.ip, "|", VmHostCve.cve_id)))
     host_query = host_query.where(VmHostCve.cve_id == card_id, visible_match(VmHostCve.cve_id, VmHostCve.host_id, "host"))
     host_total = db.scalar(select(func.count()).select_from(host_query.subquery()))
     host_rows = db.execute(host_query.order_by(case((FindingState.status.in_(["risk_accepted", "resolved", "false_positive"]), 1), else_=0),

@@ -26,6 +26,7 @@ DATASETS = (
     "sigma",
     "elastic",
     "trivy",
+    "oval",
 )
 TITLES = {
     "nvd": "CVE / NVD",
@@ -39,6 +40,7 @@ TITLES = {
     "sigma": "SigmaHQ",
     "elastic": "Elastic Detection Rules",
     "trivy": "Trivy Vulnerability DB (SBOM)",
+    "oval": "РЕД ОС / Astra Linux OVAL (SBOM)",
 }
 MESSAGES = {
     "ru": {
@@ -234,7 +236,7 @@ def run(config: Config, execute: Callable) -> int:
         "warnings": [],
         "datasets": {},
     }
-    if config.mode == "updates" and config.datasets != ("trivy",):
+    if config.mode == "updates" and set(config.datasets) - {"trivy", "oval"}:
         report["warnings"].append(m["warning"])
     if "news" in config.datasets:
         report["warnings"].append(m["news_limit"])
@@ -246,6 +248,9 @@ def run(config: Config, execute: Callable) -> int:
     if "trivy" in config.datasets:
         report["warnings"].append("База Trivy переносится целым снимком независимо от периода."
                                   if config.lang == "ru" else "Trivy DB is a full snapshot for any period.")
+    if "oval" in config.datasets:
+        report["warnings"].append("Бюллетени OVAL переносятся целым снимком."
+                                  if config.lang == "ru" else "OVAL advisories are transferred as a full snapshot.")
     lock = threading.Lock()
     with (run_dir / "run.log").open("w", encoding="utf-8") as log:
 

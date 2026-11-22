@@ -248,6 +248,9 @@ def test_inventory_before_scan_and_unlinked_findings(db_session, client_as, monk
     remaining = client.get(url + "/components", params={"offset": 1}).json()
     assert remaining["total"] == len(downloaded)
     assert remaining["items"][0]["name"] == downloaded[1]["name"]
+    grouped = client.get(url + "/components", params={"by_name": True, "q": DISPLAY_APP.upper()}).json()
+    assert grouped["total"] == 1 and grouped["total_names"] == len(downloaded)
+    assert grouped["items"] == [{"name": name, "variants": page["items"]}]
 
     package_findings = client.get(url + "/comparison", params={"group": "packages"}).json()
     assert package_findings["status"] == "pending" and package_findings["inventory_revision"]
@@ -261,3 +264,50 @@ def test_inventory_before_scan_and_unlinked_findings(db_session, client_as, monk
     assert client.get(url + "/comparison").json()["total"] == 2
     assert client_as({"assets": "read"}).get(url + "/components").status_code == 200
     assert client_as({"vm": "read"}).get(url + "/components").status_code == 403
+
+
+def test_vendor_candidate_remains_separate_from_independent_vm_and_confirmed_sbom_risk(
+    db_session, client_as, app_settings, monkeypatch,
+):
+    from api.modules.vm.core.host_sbom import make_bom
+    from api.modules.vm.sbom_models import VmSbomConfirmedCve
+    from api.modules.vm.services import host_sbom
+
+    client = client_as("admin")
+    import_inventories(client, monkeypatch)
+    asset_id = db_session.scalar(select(AssetObservation.asset_id).where(AssetObservation.source == "vm").limit(1))
+    doc = make_bom("asset", "test", "RED OS 7.3", [
+        {"name": "openssl", "version": "1:1.1-8", "type": "os", "source": "maxpatrol"}])
+    monkeypatch.setattr(host_sbom, "inventory", lambda *_: (doc, {"maxpatrol": "available", "ksc": "missing"}))
+    monkeypatch.setattr(trivy_scan, "database_revision", lambda _: "trivy-1")
+    feed = ["1"]
+    monkeypatch.setattr(trivy_scan.vendor_bulletins, "vendor_revision", lambda _: feed[0])
+    def result(*args):
+        def finding(vid, confirmed):
+            common = {"package": "openssl", "vuln_id": vid, "installed_version": "1:1.1-8", "profile": "RHEL 7",
+                          "purl": doc["components"][0]["purl"], "fixed_version": "", "severity": "high"}
+            if confirmed:
+                return dict(common, assessment="vendor_confirmed", bulletin="ROS-2024-1", fixed_version="1:1.1-9")
+            return dict(common, assessment="candidate", upstream_fixed_version="1:1.2-1")
+        return {"checked": 1, "findings": [finding(OVERLAP, False), finding(TRIVY_ONLY, feed[0] == "1")],
+                    "scanner_version": "test", "db_version": trivy_scan.expected_revision(doc, "trivy-1", app_settings.data_dir),
+                    "vendor_summary": {"profile": "RHEL 7", "feed": "redos-7.3", "available": True,
+                                        "candidates": 1 if feed[0] == "1" else 2, "confirmed": int(feed[0] == "1")}}
+    monkeypatch.setattr(trivy_scan, "scan_bom", result)
+    url = f"/api/assets/assets/{asset_id}/sbom/comparison"
+    def scan():
+        host_sbom.refresh_queue(db_session, app_settings.data_dir, asset_id)
+        assert host_sbom.process_next(db_session, app_settings.data_dir)
+    def ids(group):
+        response = client.get(url, params={"group": group})
+        assert response.status_code == 200
+        return {item["id"] for item in response.json()["items"]}
+    def risk_ids():
+        return set(db_session.scalars(select(VmSbomConfirmedCve.cve_id).where(VmSbomConfirmedCve.asset_id == asset_id)))
+    scan()
+    assert (ids("candidates"), ids("vendor_confirmed"), ids("both"), risk_ids()) == (
+        {OVERLAP}, {TRIVY_ONLY}, set(), {TRIVY_ONLY})
+    assert OVERLAP in ids("unlinked")
+    feed[0] = "2"
+    scan()
+    assert ids("candidates") == {OVERLAP, TRIVY_ONLY} and not ids("vendor_confirmed") and not risk_ids()

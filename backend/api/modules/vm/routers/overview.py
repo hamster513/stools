@@ -12,7 +12,9 @@ from api.db.base import get_db
 from api.db.models import AppUser
 from api.deps import get_current_user
 from api.modules.vm.core.refs import REF_NAMES
-from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmImport, VmRefState, VmZone
+from api.modules.vm.models import VmCve, VmImport, VmRefState, VmZone
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
 from api.modules.vm.services.query import (
     MODULE,
     SCOPE,

@@ -28,6 +28,7 @@ export const CVSS_SOURCE_LABELS: Record<CvssSource, string> = {
 }
 
 export interface VulnItem {
+  sbom_asset_id?: number | null
   /** Ключ пары в статусах находок: `hostname|ip|cve`. */
   key: string
   host_id: number
@@ -108,6 +109,7 @@ export interface VulnsQuery {
   kev?: boolean
   cvss_source?: CvssSource[]
   host_id?: number
+  asset_id?: number
   /** Коды (ключ повторяется) или `all`; не задан — открытые. */
   status?: string[] | 'all'
   /** `me`, `none` или логин; несколько — «ИЛИ». */
@@ -305,6 +307,7 @@ export const JOB_KIND_LABELS: Record<string, string> = {
   ref_msf: 'Справочник Metasploit',
   ref_kev: 'Справочник KEV',
   ref_trivy: 'База Trivy',
+  ref_oval: 'Бюллетени РЕД ОС и Astra Linux',
   ref_bundle: 'Архив справочников',
   recalculate: 'Пересчёт риска',
   bulk_status: 'Массовая смена статусов',

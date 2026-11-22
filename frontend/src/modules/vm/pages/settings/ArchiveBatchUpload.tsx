@@ -43,19 +43,19 @@ export function ArchiveBatchUpload() {
   }
   return <div className="mb-4 space-y-3 text-xs">
     <p><a className="inline-flex items-center gap-1 text-primary hover:underline" href="/offline/stools-download-kit.zip" download><Download size={14} />Единый загрузчик — Linux и PowerShell</a></p>
-    <p>Выберите ZIP со справочниками, базой Trivy для проверки SBOM, новостями или правилами. Сервер обработает архивы по очереди.</p>
+    <p>Выберите ZIP со справочниками, базой Trivy, бюллетенями OVAL, новостями или правилами. Сервер обработает архивы по очереди.</p>
     <details>
       <summary className="cursor-pointer text-text-secondary">Как подготовить архивы</summary>
       <div className="mt-2 space-y-2 text-text-secondary">
         <p>Распакуйте комплект на компьютере с интернетом. Нужен Python 3.11+, для обновлений GHSA и правил — Git. Запуск без параметров открывает меню: полный сбор или обновления за день, неделю либо три календарных месяца.</p>
-        <code className="block overflow-x-auto rounded bg-app-bg p-2">sh download-stools.sh --datasets nvd,ghsa,news,trivy --mode updates --period 7d --lang ru --quiet</code>
-        <code className="block overflow-x-auto rounded bg-app-bg p-2">.\download-stools.ps1 -Datasets nvd,ghsa,news,trivy -Mode Updates -Period 7d -Lang ru -Quiet</code>
-        <p>База Trivy всегда переносится целиком. После смены базы STools автоматически перепроверяет SBOM хостов.</p>
+        <code className="block overflow-x-auto rounded bg-app-bg p-2">sh download-stools.sh --datasets nvd,ghsa,news,trivy,oval --mode updates --period 7d --lang ru --quiet</code>
+        <code className="block overflow-x-auto rounded bg-app-bg p-2">.\download-stools.ps1 -Datasets nvd,ghsa,news,trivy,oval -Mode Updates -Period 7d -Lang ru -Quiet</code>
+        <p>Для проверки SBOM выберите наборы trivy и oval. После обновления баз STools перепроверяет хосты автоматически.</p>
         <p>Проверьте давность справочников: импорт периода не подтверждает полноту всей базы. Файлы report.json и журналы переносить в STools не нужно.</p>
       </div>
     </details>
     {admin && <div className="flex flex-wrap items-center gap-3">
-      <input ref={input} type="file" multiple accept=".zip,application/zip" className="hidden" aria-label="Архивы справочников, Trivy, новостей и правил" onChange={event => { select(event.target.files); event.target.value = '' }} />
+      <input ref={input} type="file" multiple accept=".zip,application/zip" className="hidden" aria-label="Архивы справочников, Trivy, OVAL, новостей и правил" onChange={event => { select(event.target.files); event.target.value = '' }} />
       <Button loading={upload.isPending} onClick={() => input.current?.click()}><Upload size={14} />Загрузить архивы</Button>
       <span className="text-text-secondary">До 64 ZIP и 2 ГиБ на пачку. Справочник — до 500 МиБ, новости и правила — до 64 МиБ на ZIP.</span>
     </div>}
@@ -75,7 +75,8 @@ export function ArchiveBatchUpload() {
               {file.error && <p className="mt-1 text-kind-1">{file.error}</p>}
               {file.warning && <p className="mt-1 text-risk-medium">{file.warning}</p>}
               {file.kind === 'trivy' && file.db_updated_at && <p className="mt-1 text-text-secondary">База Trivy от {new Date(file.db_updated_at).toLocaleString('ru-RU')}</p>}
-              {file.duplicate ? <p className="mt-1 text-text-secondary">{file.kind === 'trivy' ? 'Эта версия базы уже используется' : 'Архив уже был импортирован'}</p> : file.added !== undefined && <p className="mt-1 text-text-secondary">Материалов добавлено: {file.added}; обновлено: {file.updated ?? 0}</p>}
+              {file.kind === 'oval' && file.db_updated_at && <p className="mt-1 text-text-secondary">Бюллетени OVAL до {new Date(file.db_updated_at).toLocaleDateString('ru-RU')}</p>}
+              {file.duplicate ? <p className="mt-1 text-text-secondary">{file.kind === 'trivy' ? 'Эта версия базы уже используется' : file.kind === 'oval' ? 'В архиве нет более новых бюллетеней' : 'Архив уже был импортирован'}</p> : file.added !== undefined && <p className="mt-1 text-text-secondary">Материалов добавлено: {file.added}; обновлено: {file.updated ?? 0}</p>}
             </li>)}
           </ol>
           {batch.rebuild && STAGE[batch.rebuild] && <p>Пересчёт уязвимостей: {STAGE[batch.rebuild]}</p>}

@@ -184,6 +184,8 @@ class Redirects(urllib.request.HTTPRedirectHandler):
         old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
         if old.scheme == "https" and new.scheme != "https":
             raise ValueError("unsafe_redirect")
+        if old.hostname in {"dl.astralinux.ru", "redos.red-soft.ru"} and old.netloc != new.netloc:
+            raise ValueError("unsafe_redirect")
         redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
         if redirected is not None and (old.scheme, old.netloc) != (new.scheme, new.netloc):
             redirected.remove_header("Authorization")

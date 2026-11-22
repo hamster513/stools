@@ -25,6 +25,7 @@ TITLES = {
     "kev": "CISA KEV",
     "ghsa": "GitHub Advisory Database",
     "trivy": "Trivy",
+    "oval": "Бюллетени РЕД ОС и Astra Linux",
 }
 
 
@@ -105,6 +106,23 @@ def ref_views(db: Session) -> list[RefView]:
         loaded_at=database.updated if database else None, source=database.source if database else None,
         records=None, detail=f"Формат базы v2 · {database.size / 1024**2:,.0f} МиБ".replace(",", " ") if database else "",
         stale=database is None or now - database.updated > dt.timedelta(days=30),
+        update_available=True, active_job_id=running.id if running else None,
+        last_checked_at=sync.last_checked_at if sync else None, last_mode=sync.last_mode if sync else None,
+        last_error=last.error if last and last.status == "failed" else None,
+    ))
+    from api.modules.vm.core.vendor_oval_archive import ASTRA_META
+    from api.modules.vm.services.vendor_bulletins import catalog_status, vendor_revision
+
+    data_dir = get_settings().data_dir
+    oval = catalog_status(data_dir) or {"loaded_at": None, "source": None, "detail": ""}
+    sync = sync_states.get("oval")
+    if sync and sync.checkpoint and sync.checkpoint.get("revision") == vendor_revision(data_dir):
+        oval["source"] = sync.checkpoint["source"]
+    running = active_job(db, ["ref_oval"])
+    last = db.scalar(select(VmJob).where(VmJob.kind == "ref_oval").order_by(VmJob.id.desc()).limit(1))
+    out.insert(1, RefView(
+        name="oval", title=TITLES["oval"], url=ASTRA_META, records=None, **oval,
+        stale=oval["loaded_at"] is None or now - oval["loaded_at"] > dt.timedelta(days=30),
         update_available=True, active_job_id=running.id if running else None,
         last_checked_at=sync.last_checked_at if sync else None, last_mode=sync.last_mode if sync else None,
         last_error=last.error if last and last.status == "failed" else None,

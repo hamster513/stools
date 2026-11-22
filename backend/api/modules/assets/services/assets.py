@@ -861,15 +861,15 @@ def _computer_names(ad: AssetObservation, domains: Iterable[str]) -> set[str]:
     return {n for n in names if n}
 
 
-def _links(db: Session, rows: list[AssetObservation]) -> dict[str, Any]:
+def _links(db: Session, asset_id: int, rows: list[AssetObservation]) -> dict[str, Any]:
     """«Где засветился»: находки AD по компьютеру, хост антивируса, хост VM."""
     from api.modules.ad.models import AdDomain, AdFinding
     from api.modules.ad.services.snapshots import latest_snapshot as latest_ad_snapshot
-    from api.modules.vm.models import VmHost
+    from api.modules.vm.risk_models import RiskHostCve, asset_risk_host_ids, sbom_risk_hosts
 
     links: dict[str, Any] = {
         "ad_finding_count": None, "ad_domain_id": None, "ad_query": None,
-        "ksc_host_id": None, "ksc_server_id": None, "vm_host_id": None, "vm_cve_count": None,
+        "ksc_host_id": None, "ksc_server_id": None, "vm_host_id": None, "vm_cve_count": None, "vm_max_risk": None,
     }
     live_first = sorted(rows, key=lambda r: (r.gone_at is not None, -r.seen_at.timestamp()))
     ad = next((r for r in live_first if r.source == "ad"), None)
@@ -894,10 +894,14 @@ def _links(db: Session, rows: list[AssetObservation]) -> dict[str, Any]:
         # Ключ KSC — «server_id:host_id».
         links["ksc_host_id"] = ksc.source_key.partition(":")[2] or ksc.source_key
         links["ksc_server_id"] = ksc.extra.get("server_id")
-    vm = next((r for r in live_first if r.source == "vm"), None)
-    if vm is not None:
-        hostname, _, ip = vm.source_key.rpartition("|")
-        links["vm_host_id"] = db.execute(select(VmHost.id).where(VmHost.hostname == hostname, VmHost.ip == ip)).scalar()
+    host_ids = asset_risk_host_ids([asset_id]).subquery()
+    primary = select(sbom_risk_hosts.c.id).where(sbom_risk_hosts.c.asset_id == asset_id).scalar_subquery()
+    primary_id, count, risk = db.execute(select(
+        func.coalesce(primary, func.min(host_ids.c.id)), func.count(func.distinct(RiskHostCve.cve_id)),
+        func.max(RiskHostCve.risk)).select_from(host_ids).outerjoin(RiskHostCve, RiskHostCve.host_id == host_ids.c.id)).one()
+    if primary_id is not None:
+        links.update(vm_host_id=primary_id, vm_cve_count=count, vm_max_risk=risk)
+    elif vm := next((r for r in live_first if r.source == "vm" and r.gone_at is None), None):
         links["vm_cve_count"] = vm.extra.get("cve_count")
     return links
 
@@ -942,7 +946,7 @@ def asset_detail(db: Session, asset_id: int, now: dt.datetime | None = None) -> 
              "counted": t.status in counted}
             for t in tracked
         ],
-        "links": _links(db, rows),
+        "links": _links(db, asset.id, rows),
         **host_users(db, asset.id, rows),
     }
 

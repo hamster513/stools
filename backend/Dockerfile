@@ -55,6 +55,7 @@ FROM ${PYTHON_IMAGE} AS runtime
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 COPY --from=trivy-lookup /bbolt /usr/local/bin/bbolt
 COPY --from=trivy-db /opt/trivy-cache/db/ /opt/trivy-cache/db/
+COPY --chmod=444 docker/vendor-oval/catalog.oval /opt/vendor-oval/catalog.oval
 COPY --from=sqlite-build /out/*.rsa.pub /etc/apk/keys/
 COPY --from=sqlite-build /out/sqlite-libs.apk /tmp/sqlite-libs.apk
 # Git is required by the GHSA incremental updater; keep HTTPS trust and native libs.
@@ -69,7 +70,7 @@ COPY --from=build /opt/venv /opt/venv
 COPY docker-sitecustomize.py /opt/venv/lib/python3.13/site-packages/sitecustomize.py
 COPY --from=build /app /app
 # Source archives may have restrictive modes; the runtime user must read the app.
-RUN chmod -R a+rX /app
+RUN chmod -R a+rX /app && chmod 0755 /opt/vendor-oval
 COPY --from=build /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENV PATH="/opt/venv/bin:$PATH"
 # A clean scanner report alone must not hide outdated embedded libraries.
@@ -89,6 +90,7 @@ EXPOSE 8000
 # на диск (кроме /data) ему незачем, поэтому переключаемся до него, а не
 # после: raw uvicorn под root между ними в принципе не запускается.
 USER stools
+RUN python -c 'from pathlib import Path; from api.modules.vm.services.vendor_bulletins import load_index; assert load_index(Path("/data"), "redos-7.3").has_bulletins'
 
 # Миграции применяются до старта приложения: иначе сервис поднимается
 # с чистыми логами и падает на первом запросе к пустой базе.

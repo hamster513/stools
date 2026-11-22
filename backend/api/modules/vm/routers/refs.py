@@ -49,7 +49,7 @@ def _check_name(name: str) -> None:
 def _reject_if_running(db: Session, name: str) -> None:
     # Архив грузит те же таблицы: справочник в одиночку посреди него перемешал бы два набора.
     lock_job_start(db)
-    running = active_job(db, ("ref_trivy",) if name == "trivy" else BUNDLE_CONFLICTS)
+    running = active_job(db, (f"ref_{name}",) if name in {"trivy", "oval"} else BUNDLE_CONFLICTS)
     if running is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"загрузка уже идёт (задача #{running.id})")
 
@@ -184,8 +184,8 @@ async def upload_ref(
 ) -> JobStarted:
     _check_name(name)
     _reject_if_running(db, name)
-    if name == "trivy" and len(files) != 1:
-        raise HTTPException(422, detail="Выберите один ZIP с базой Trivy")
+    if name in {"trivy", "oval"} and len(files) != 1:
+        raise HTTPException(422, detail="Выберите один ZIP с базой " + ("Trivy" if name == "trivy" else "OVAL"))
     if not files:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="файлы не переданы")
     if name == "nvd" and any("modified" in (f.filename or "").lower() or "recent" in (f.filename or "").lower() for f in files):

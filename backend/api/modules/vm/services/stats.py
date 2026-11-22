@@ -11,10 +11,13 @@ import json
 from typing import Any
 
 from sqlalchemy import ColumnElement, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from api.db.models import AppSetting
-from api.modules.vm.models import VmCve, VmHost, VmHostCve, VmZone
+from api.modules.vm.models import VmCve, VmZone
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
 from api.modules.vm.services.query import VulnFilters, base_select, raw_facets
 from api.modules.vm.services.settings import load_settings
 
@@ -112,12 +115,16 @@ def compute_stats(db: Session) -> dict[str, Any]:
     }
 
 
+def lock_cache_row(db: Session, key: str) -> AppSetting:
+    """Serialize a refresh with SBOM publications that invalidate this snapshot."""
+    db.execute(pg_insert(AppSetting).values(key=key).on_conflict_do_nothing(index_elements=[AppSetting.key]))
+    return db.scalars(select(AppSetting).where(AppSetting.key == key).with_for_update()
+                      .execution_options(populate_existing=True)).one()
+
+
 def refresh_stats(db: Session) -> dict[str, Any]:
+    row = lock_cache_row(db, STATS_KEY)
     stats = compute_stats(db)
-    row = db.get(AppSetting, STATS_KEY)
-    if row is None:
-        row = AppSetting(key=STATS_KEY)
-        db.add(row)
     row.value_json = json.dumps(stats, ensure_ascii=False)
     row.updated_at = dt.datetime.now(dt.UTC)
     db.commit()

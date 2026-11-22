@@ -336,6 +336,10 @@ def execute_dataset(name, config, run_dir, progress):
         from offline_trivy import download_database
 
         return download_database(output, cache, transport, progress, config.lang)
+    if name == "oval":
+        from vendor_oval_archive import download_archive
+
+        return download_archive(output, cache, transport, progress)
     if name in ("news", "sigma", "elastic"):
         return intel_archive(
             name, output, transport, config.mode, config.period, now, cache, progress, lang=config.lang

@@ -10,7 +10,11 @@ from api.modules.ad.models import AdDomain
 from api.modules.assets.models import Asset, AssetGroup, AssetObservation, AssetUser, AssetUserHost
 from api.modules.toolbox.services.lookup import lookup
 from api.modules.toolbox.services.lookup_types import facts, identity, ip_list_contains, parse_query
-from api.modules.vm.models import VmHost, VmHostCve, VmImport
+from api.modules.vm.models import VmImport
+from api.modules.vm.risk_models import RiskHost as VmHost
+from api.modules.vm.risk_models import RiskHostCve as VmHostCve
+from api.modules.vm.risk_models import asset_risk_host_ids
+from api.modules.vm.sbom_models import HostSbomScan
 from api.platform.services.access import allows
 
 from . import ksc_groups, policies, relations
@@ -101,7 +105,7 @@ def vulnerabilities(db, obj, access):
     section = Section(
         id="vulnerabilities",
         title="Уязвимости",
-        note="Находки последнего сохранённого импорта VM, включая находки с решениями аналитика. Отсутствие записей не означает отсутствие уязвимостей.",
+        note="Находки MaxPatrol и CVE, подтверждённые бюллетенем производителя для пакетов SBOM, включая находки с решениями аналитика.",
     )
     if not allows(access, "vm", "read"):
         section.note = "Нет доступа к VM."
@@ -119,17 +123,11 @@ def vulnerabilities(db, obj, access):
         )
         section.note = "Уязвимости связанных хостов, не самой учётной записи. " + section.note
     # Keep the complete scope in SQL; limiting it would hide high-risk hosts from both totals and ranking.
-    # VM source_key is hostname|IP, matching the indexed key in vm_host rather than a shared IP.
-    keys = select(AssetObservation.source_key).where(
-        AssetObservation.asset_id.in_(host_ids),
-        AssetObservation.source == "vm",
-        AssetObservation.gone_at.is_(None),
-        AssetObservation.source_key.contains("|"),
-    )
-    if db.execute(keys.limit(1)).first() is None:
+    risk_hosts = asset_risk_host_ids(host_ids)
+    if db.execute(risk_hosts.limit(1)).first() is None:
         section.note += " Нет подтверждённой связи с инвентарём VM."
         return section
-    condition = (VmHost.hostname + "|" + VmHost.ip).in_(keys)
+    condition = VmHost.id.in_(risk_hosts)
     total, unique, risk = db.execute(
         select(func.count(), func.count(func.distinct(VmHostCve.cve_id)), func.max(VmHostCve.risk))
         .select_from(VmHost)
@@ -141,8 +139,9 @@ def vulnerabilities(db, obj, access):
         + section.note
     )
     pairs = db.execute(
-        select(VmHost, VmHostCve)
+        select(VmHost, VmHostCve, HostSbomScan.scan_at)
         .join(VmHostCve)
+        .outerjoin(HostSbomScan, HostSbomScan.asset_id == VmHostCve.sbom_asset_id)
         .where(condition)
         .order_by(VmHostCve.risk.desc(), VmHost.id, VmHostCve.cve_id)
         .limit(101)
@@ -159,12 +158,12 @@ def vulnerabilities(db, obj, access):
                 id=f"{h.id}:{v.cve_id}",
                 title=v.cve_id,
                 href="/vm/vulns?" + urlencode({"host_id": h.id, "cve": v.cve_id, "status": "all"}),
-                source="VM",
-                observed_at=imported,
+                source="SBOM" if v.sbom_asset_id is not None else "VM",
+                observed_at=scan_at if v.sbom_asset_id is not None else imported,
                 reason=h.hostname or h.ip,
                 facts=facts(Риск=v.risk),
             )
-            for h, v in pairs
+            for h, v, scan_at in pairs
         ],
     )
 
