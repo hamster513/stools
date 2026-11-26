@@ -1,0 +1,16 @@
+{
+  "format": "stools-db-anonymize/1",
+  "case_sensitive": false,
+  "replacements": [
+    {"from": "corp.example", "to": "lab.example"},
+    {"from": "DC=corp,DC=example", "to": "DC=lab,DC=example"},
+    {"from": "EXAMPLECORP", "to": "LABDOMAIN"},
+    {"from": "alice", "to": "person-0001"},
+    {"from": "Alice Example", "to": "User 0001"},
+    {"from": "workstation-017", "to": "host-0017"}
+  ],
+  "networks": [
+    {"from": "10.10.0.0/16", "to": "10.200.0.0/16"},
+    {"from": "fd12:3456::/32", "to": "fd99:abcd::/32"}
+  ]
+}
