@@ -42,7 +42,7 @@ from tests.export_check import check_export, csv_rows
 
 ADMIN01 = rec("CORP\\admin01", sid=csid(1103))
 ALL_HOSTS = [*HOSTS, ("WS03", "10.10.0.23"), ("WS04", "10.10.0.24")]
-COLUMNS = ["Учётка", "Имя", "UPN", "Домен", "Локальная", "Состояние", "Привилегированная", "Источники",
+COLUMNS = ["Учётка", "Имя", "UPN", "Почта", "Руководитель", "Домен", "Локальная", "Состояние", "Привилегированная", "Источники",
            "В системе", "Хостов", "Виден", "Расхождения"]
 
 
@@ -127,7 +127,7 @@ def test_list_items_and_shape(analyst: TestClient, state: Session) -> None:
     body = listed(analyst)
     assert body["total"] == 7 and sams(body) == ALL
     u1 = next(i for i in body["items"] if i["sam"] == "user01")
-    assert set(u1) == {"id", "sam", "upn", "display_name", "domain", "local", "enabled", "privileged", "sources",
+    assert set(u1) == {"id", "sam", "upn", "mail", "manager", "display_name", "domain", "local", "enabled", "privileged", "sources",
                        "hosts_active", "hosts_total", "last_seen", "codes"}
     assert (u1["upn"], u1["display_name"], u1["domain"], u1["local"], u1["enabled"], u1["privileged"]) == (
         "user01@corp.local", "Пользователь 01", "corp.local", False, True, False)
@@ -265,8 +265,8 @@ def test_export(analyst: TestClient, client_as: Callable[[str], TestClient]) -> 
     assert len(rows) == body["total"] + 1
     assert [r[0] for r in rows[1:]] == [i["sam"] for i in body["items"]]
     u2 = next(r for r in rows[1:] if r[0] == "user02")
-    assert (u2[3], u2[4], u2[5], u2[6]) == ("corp.local", "нет", "отключена", "нет")
-    assert set(u2[7].split(", ")) == {"AD", "KSC"} and u2[11] == "сеанс отключённой учётки"
+    assert (u2[5], u2[6], u2[7], u2[8]) == ("corp.local", "нет", "отключена", "нет")
+    assert set(u2[9].split(", ")) == {"AD", "KSC"} and u2[13] == "сеанс отключённой учётки"
     assert len(csv_rows(analyst, "/api/assets/users/export", privileged="yes")) == 3
     assert client_as("auditor").get("/api/assets/users/export").status_code == 200
     assert analyst.get("/api/assets/users/export", params={"format": "pdf"}).status_code == 422

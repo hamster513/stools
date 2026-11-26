@@ -50,7 +50,7 @@ CODE_TITLES = {
 STATE_TITLES = {True: "включена", False: "отключена", None: "неизвестно"}
 
 EXPORT_COLUMNS = [
-    Column("sam", "Учётка"), Column("display_name", "Имя"), Column("upn", "UPN"), Column("domain", "Домен"),
+    Column("sam", "Учётка"), Column("display_name", "Имя"), Column("upn", "UPN"), Column("mail", "Почта"), Column("manager", "Руководитель"), Column("domain", "Домен"),
     Column("local", "Локальная"), Column("state", "Состояние"), Column("privileged", "Привилегированная"),
     Column("sources", "Источники"), Column("hosts_active", "В системе"), Column("hosts_total", "Хостов"),
     Column("last_seen", "Виден"), Column("codes", "Расхождения"),
@@ -123,7 +123,9 @@ def export_users(
     """Пользователи под фильтрами списка, в его порядке; колонки — как в таблице."""
     items, _total, _facets = list_users(db, **filters, limit=EXPORT_ALL, offset=0)
     rows = [
-        {"sam": u["sam"], "display_name": u["display_name"], "upn": u["upn"], "domain": u["domain"],
+        {"sam": u["sam"], "display_name": u["display_name"], "upn": u["upn"], "mail": u["mail"],
+         "manager": (u["manager"]["name"] if u["manager"]["name"] == u["manager"]["dn"] else f'{u["manager"]["name"]} ({u["manager"]["dn"]})') if u["manager"] else "",
+         "domain": u["domain"],
          "local": "да" if u["local"] else "нет", "state": STATE_TITLES[u["enabled"]], "privileged": "да" if u["privileged"] else "нет",
          "sources": ", ".join(SOURCE_TITLES.get(s["source"], s["source"]) for s in u["sources"]),
          "hosts_active": u["hosts_active"], "hosts_total": u["hosts_total"],

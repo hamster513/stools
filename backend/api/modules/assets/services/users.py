@@ -176,12 +176,15 @@ def users_from_ad(db: Session, data_dir: Path, cache: AdExportCache | None = Non
                 continue
             refs = acc.groups.get(o.sid, [])
             last = filetime_to_datetime(o.lastLogonTimestamp)
+            manager = idx.get(o.manager) if o.manager else None
             out.seen.append(UserSeen(
                 source="ad", source_key=_cut(o.sid, KEY_LEN), seen_at=snap.collected_at, sid=_cut(o.sid), sam=_cut(o.sam),
                 upn=_cut(getattr(o, "userPrincipalName", None)), display_name=_cut(getattr(o, "displayName", None)),
                 domain=_cut(dns), enabled=o.enabled,
                 privileged=o.rid == RID_ADMINISTRATOR or any(g["sid"] in privileged for g in refs),
                 data={
+                    "mail": o.mail or "", "manager": o.manager or "",
+                    "manager_name": _cut(manager.displayName or manager.name or manager.sam) if manager else "",
                     "dn": o.dn, "uac": o.uac, "pwd_never_expires": bool((o.uac or 0) & UAC_DONT_EXPIRE_PASSWORD),
                     "last_logon": last.isoformat() if last else None, "admin_count": o.adminCount, "domain_id": domain.id,
                 },

@@ -87,7 +87,7 @@ Import-Module ActiveDirectory
 
 $FormatVersion = "stools-ad/1"
 $CaFormatVersion = "stools-ad-ca/1"
-$CollectorVersion = "2.5"
+$CollectorVersion = "2.6"
 # Критичные объекты: группы домена (Domain Admins, Cert Publishers, Schema Admins, Enterprise Admins,
 # Group Policy Creator Owners, Key Admins, Enterprise Key Admins, Allowed RODC Password Replication Group),
 # встроенные (Administrators, Account, Server, Print, Backup Operators, Replicator), DnsAdmins по имени.
@@ -815,6 +815,8 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
       scriptPath = $(if ($o.scriptPath) { [string]$o.scriptPath } else { $null })
       userPrincipalName = $(if ($o.userPrincipalName) { [string]$o.userPrincipalName } else { $null })
       displayName = $(if ($o.displayName) { [string]$o.displayName } else { $null })
+      mail = $(if ($o.mail) { [string]$o.mail } else { $null })
+      manager = $(if ($o.manager) { [string]$o.manager } else { $null })
     }
     if ($class -eq "user" -and $unixDns.Contains([string]$o.DistinguishedName)) { $rec["hasUnixPassword"] = $true }
     if ($class -eq "computer") {
@@ -849,7 +851,7 @@ function Collect-Ad([bool]$noComputerAcl, [bool]$noSysvol) {
   $unixDns = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
   $unix = Read-AdSection "Unix-пароли не проверены" @{ LDAPFilter = "(&(objectCategory=person)(objectClass=user)(|(userPassword=*)(unixUserPassword=*)))"; Properties = @("sAMAccountName") }
   foreach ($u in $unix) { [void]$unixDns.Add([string]$u.DistinguishedName) }
-  $userProps = @("sAMAccountName","Name","objectSid","userAccountControl","lastLogonTimestamp","pwdLastSet","servicePrincipalName","msDS-AllowedToDelegateTo","msDS-SupportedEncryptionTypes","adminCount","altSecurityIdentities","primaryGroupID","sIDHistory","whenCreated","scriptPath","userPrincipalName","displayName")
+  $userProps = @("sAMAccountName","Name","objectSid","userAccountControl","lastLogonTimestamp","pwdLastSet","servicePrincipalName","msDS-AllowedToDelegateTo","msDS-SupportedEncryptionTypes","adminCount","altSecurityIdentities","primaryGroupID","sIDHistory","whenCreated","scriptPath","userPrincipalName","displayName","mail","manager")
   Get-ADObject @ad -LDAPFilter "(&(objectCategory=person)(objectClass=user))" -Properties $userProps | ForEach-Object { Add-Account $_ "user" $false }
   Write-Step ("  пользователей: {0}, с Unix-паролем: {1}" -f ($objects.Count - $n0), $unixDns.Count)
 

@@ -166,7 +166,7 @@ def test_script_keeps_bom_version_and_module_requirement() -> None:
     raw = SCRIPT.read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")
     text = raw.decode("utf-8-sig")
-    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.5"' in text
+    assert "#requires -Modules ActiveDirectory" in text and '$CollectorVersion = "2.6"' in text
 
 
 def _image_present() -> bool:
@@ -1033,7 +1033,7 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     raw = _gz_json(ad_file)
     assert next(o for o in raw["objects"] if o["class"] == "trustedDomain")["trustAttributes"] == 8
     assert list(export.sysvol) == [GPO_DN]
-    assert export.collector.notes == [] and export.collector.version == "2.5"
+    assert export.collector.notes == [] and export.collector.version == "2.6"
     # Сертификаты ЦС: одно значение (byte[]) у ЦС выдачи, список у NTAuth и хранилищ.
     assert ca.cACertificate == [STUB_CERT]
     [ntauth] = [o for o in by_class["pkiContainer"] if o.dn.startswith("CN=NTAuthCertificates,")]
@@ -1094,7 +1094,7 @@ def test_script_writes_both_files_the_models_read(tmp_path: Path, web_server: in
     assert site.name == "Default-First-Site-Name" and subnet.name == "10.0.0.0/24" and subnet.site == site.dn
 
     data = parse_ca_data(_gz_json(ca_file))
-    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.5"
+    assert data.sections == ["ca", "dc", "web"] and data.domain.sid == export.domain.sid and data.collector.version == "2.6"
     [authority] = data.cas
     assert authority.name == "CORP-CA" and authority.os_build == "10.0 (17763)" and authority.error and authority.edit_flags is None
     [dc] = data.dcs
@@ -1256,3 +1256,11 @@ def test_script_sections_without_mode_collects_ca_data(tmp_path: Path, web_serve
     console, out = _run_collector(tmp_path / "all", web_server, ("-Sections", "dc", "-SkipComputerAcl"), timeout=120)
     assert "Выбор" not in console, console
     assert len(list(out.glob("ad-CORP-*.json.gz"))) == 1 and len(list(out.glob("adca-CORP-*.json.gz"))) == 1, console
+
+
+def test_script_collects_mail_and_manager():
+    text = SCRIPT.read_text(encoding="utf-8-sig")
+    props = next(line for line in text.splitlines() if line.strip().startswith("$userProps ="))
+    for field in ("mail", "manager"):
+        assert f'"{field}"' in props
+        assert f"{field} = $(if ($o.{field})" in text

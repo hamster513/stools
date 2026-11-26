@@ -98,7 +98,7 @@ def test_collector_reads_upn_and_display_name() -> None:
         return fake.search(base, flt, attrs, scope)
 
     raw = LdapCollector(search, fake.root_dse()).collect()
-    assert raw["collector"]["version"] == "1.4"
+    assert raw["collector"]["version"] == "1.5"
     for attrs in asked.values():
         assert {"userPrincipalName", "displayName"} <= set(attrs)
     assert len(asked) == 2
@@ -173,7 +173,7 @@ def test_collector_reads_ca_certificates() -> None:
     root, sub, weak = _with_ca_stores(fake)
     raw = LdapCollector(fake.search, fake.root_dse(), smb_reader=fake.smb).collect()
     by_dn = {o["dn"]: o for o in raw["objects"]}
-    assert raw["collector"]["version"] == "1.4" and not [n for n in raw["collector"]["notes"] if "сертификаты ЦС" in n]
+    assert raw["collector"]["version"] == "1.5" and not [n for n in raw["collector"]["notes"] if "сертификаты ЦС" in n]
     assert by_dn[f"CN=CORP-CA,CN=Enrollment Services,{PKI}"]["cACertificate"] == [CA_CERT]
     assert by_dn[f"CN=NTAuthCertificates,{PKI}"]["cACertificate"] == [sub] and "cACertificate" not in by_dn[PKI]
     stores = {o["cn"]: (o["store"], o["cACertificate"]) for o in raw["objects"] if o["class"] == "certificationAuthority"}
@@ -378,7 +378,7 @@ def test_collector_reads_gpo_files_with_whitelist_and_redaction() -> None:
     assert data["acl"] is None and any("Registry.pol" in n for n in data["notes"])
     assert "secret" not in json.dumps(out) and "P@ssw0rd" not in json.dumps(out) and "TEST_ONLY_NOT_A_REAL_PASSWORD" not in json.dumps(out)
     root = next(o for o in out["objects"] if o["class"] == "domainDNS")
-    assert "gpLink" in root and out["collector"]["version"] == "1.4"
+    assert "gpLink" in root and out["collector"]["version"] == "1.5"
     # Блок доходит до модели: у GPO без файлов — пустая запись, а не «не прочитано».
     export = load_export(json.dumps(out).encode())
     assert export.gpo is not None and export.gpo[DDP_DN].registry[0].scope == "machine" and export.gpo[DDCP_DN].registry == []
@@ -500,7 +500,7 @@ def test_last_backup_from_metadata() -> None:
 def test_collector_reads_hygiene_data() -> None:
     out = collect_with(FakeLdap())             # существующий помощник теста сборщика
     d = out["domain"]
-    assert out["collector"]["version"] == "1.4"
+    assert out["collector"]["version"] == "1.5"
     assert d["min_pwd_length"] == 12 and d["recycle_bin"] is True and d["sysvol_replication"] == "dfsr" and d["backup_read"] is True
     assert out["guids"]["schema_classes"] == {"msDS-DelegatedManagedServiceAccount": ""}
     by_class: dict[str, list[dict[str, Any]]] = {}
@@ -702,3 +702,19 @@ def test_chain_filter_escapes_the_group_dn() -> None:
     from api.modules.ad.core.ldap_collector import filter_value
 
     assert filter_value("CN=a\\, b (x)*,DC=c") == "CN=a\\5c, b \\28x\\29\\2a,DC=c"
+
+
+def test_collector_reads_mail_and_manager():
+    fake = FakeLdap()
+    users = {o.get("sam"): o for o in fake.objects}
+    users["helpdesk"].update(mail="helpdesk@example.test", manager=users["admin1"]["dn"])
+    requested = []
+    def search(base, flt, attrs, scope):
+        if flt == "(&(objectCategory=person)(objectClass=user))":
+            requested.extend(attrs)
+        return fake.search(base, flt, attrs, scope)
+    raw = LdapCollector(search, fake.root_dse()).collect()
+    assert {"mail", "manager"} <= set(requested)
+    export = load_export(json.dumps(raw).encode())
+    user = next(o for o in export.objects if o.sam == "helpdesk")
+    assert user.mail == "helpdesk@example.test" and user.manager == users["admin1"]["dn"]

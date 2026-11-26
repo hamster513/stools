@@ -557,6 +557,8 @@ export interface UserSourceBadge {
 }
 
 export interface UserItem {
+  mail: string
+  manager: { dn: string; name: string; user_id: number | null } | null
   id: number
   sam: string
   upn: string

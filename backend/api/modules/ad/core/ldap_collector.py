@@ -47,7 +47,7 @@ SmbLister = Callable[[str], list[str] | None]
 USER_ATTRS = [
     "sAMAccountName", "name", "objectSid", "userAccountControl", "lastLogonTimestamp", "pwdLastSet",
     "servicePrincipalName", "msDS-AllowedToDelegateTo", "msDS-SupportedEncryptionTypes", "adminCount",
-    "altSecurityIdentities", "primaryGroupID", "sIDHistory", "whenCreated", "scriptPath", "userPrincipalName", "displayName",
+    "altSecurityIdentities", "primaryGroupID", "sIDHistory", "whenCreated", "scriptPath", "userPrincipalName", "displayName", "mail", "manager",
 ]
 #: DNS-имя и ОС компьютера — по ним Assets сопоставляет его с хостами других источников.
 #: nTSecurityDescriptor последним: без ACL компьютеров список берётся без него.
@@ -471,7 +471,7 @@ class LdapCollector:
         return {
             "format": FORMAT,
             "collected_at": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "collector": {"kind": "ldap", "version": "1.4", "host": self.host, "account": self.account, "notes": self.notes, "critical_acl": True},
+            "collector": {"kind": "ldap", "version": "1.5", "host": self.host, "account": self.account, "notes": self.notes, "critical_acl": True},
             "domain": domain,
             "guids": {"extended_rights": ext, "schema_attributes": schema_attrs, "schema_classes": schema_classes},
             "objects": objects,
@@ -814,6 +814,8 @@ class LdapCollector:
             "scriptPath": _first(a.get("scriptPath")) or None,
             "userPrincipalName": _first(a.get("userPrincipalName")) or None,
             "displayName": _first(a.get("displayName")) or None,
+            "mail": _first(a.get("mail")) or None,
+            "manager": _first(a.get("manager")) or None,
         }
         if cls == "computer":
             for attr, field in LAPS_EXPIRY.items():

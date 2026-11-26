@@ -149,6 +149,8 @@ class AdObject(BaseModel):
     #: У учёток — с LDAP 1.4 / PowerShell 2.5 (None — не задан или не собран); у GPO и шаблонов — их имя.
     displayName: str | None = None
     userPrincipalName: str | None = None
+    mail: str | None = None
+    manager: str | None = None
     gpcFileSysPath: str | None = None
     pKIExtendedKeyUsage: StrList = Field(default_factory=list)
     enrollment_flag: int | None = Field(default=None, alias="msPKI-Enrollment-Flag")

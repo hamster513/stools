@@ -50,6 +50,8 @@ const USER_COLUMNS: ColumnDef[] = [
   { key: 'sam', label: 'Учётка', width: 176 },
   { key: 'name', label: 'Имя', width: 200, flex: true },
   { key: 'upn', label: 'UPN', width: 200 },
+  { key: 'mail', label: 'Почта', width: 220 },
+  { key: 'manager', label: 'Руководитель', width: 200 },
   { key: 'domain', label: 'Домен', width: 120 },
   { key: 'local', label: 'Локальная', width: 96 },
   { key: 'state', label: 'Состояние', width: 104 },
@@ -194,6 +196,8 @@ function UsersTable({ items, selectedIndex, onSelectIndex, onOpen, onReachEnd }:
               <div className="min-w-0 truncate px-2 font-mono text-text" title={u.sam}>{u.sam || `пользователь #${u.id}`}</div>
               <div className="min-w-0 truncate px-2 text-text" title={u.display_name}>{u.display_name || '—'}</div>
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary" title={u.upn}>{u.upn || '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={u.mail}>{u.mail || '—'}</div>
+              <div className="min-w-0 truncate px-2 text-text-secondary" title={u.manager?.dn}>{u.manager?.name || '—'}</div>
               <div className="min-w-0 truncate px-2 font-mono text-text-secondary" title={u.domain}>{u.domain || '—'}</div>
               <div className="min-w-0 truncate px-2 text-text-secondary">{u.local ? 'да' : 'нет'}</div>
               <div className={cn('min-w-0 truncate px-2', STATE_TEXT[state])}>{USER_STATE_LABELS[state]}</div>
@@ -312,7 +316,7 @@ export function UsersPage() {
         <ExportButton href={exportHref('/api/assets/users/export', queryArgs)} total={first?.total} disabled={query.isLoading} />
         <div className="relative max-w-sm flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-text-secondary" aria-hidden />
-          <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} maxLength={200} placeholder="Учётка, имя, UPN, SID… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
+          <input ref={searchRef} value={searchInput} onChange={(e) => setSearchInput(e.target.value)} maxLength={200} placeholder="Учётка, имя, UPN, SID, почта, руководитель… (/)" className="w-full rounded border border-border bg-app-bg py-1.5 pr-3 pl-8 text-xs text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring" />
         </div>
         {hasFilters && <button type="button" onClick={clearAll} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-text-secondary hover:bg-row-hover hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"><FilterX size={13} aria-hidden /> Сбросить</button>}
         <div className="font-mono text-xs tabular-nums text-text-secondary">{query.data ? (items.length < total ? `${items.length} из ${total}` : total) : '…'}</div>

@@ -101,7 +101,7 @@ function Identity({ u }: { u: UserDetail }) {
 }
 
 /** Флаги учётки из живого наблюдения AD (поля выгрузки на момент сбора). */
-function AdFlags({ u }: { u: UserDetail }) {
+function AdFlags({ u, onOpenUser }: { u: UserDetail; onOpenUser: (id: number) => void }) {
   const ad = latestAd(u, true)
   if (!ad) return null
   const d = ad.data
@@ -109,6 +109,12 @@ function AdFlags({ u }: { u: UserDetail }) {
     <>
       <SectionTitle>По AD</SectionTitle>
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <dt className="text-text-secondary">Почта</dt><dd className="break-all text-text">{u.mail || '—'}</dd>
+        <dt className="text-text-secondary">Руководитель</dt>
+        <dd className="break-words text-text">{u.manager ? <>
+          {u.manager.user_id !== null ? <button type="button" className="text-primary underline" onClick={() => { if (u.manager?.user_id != null) onOpenUser(u.manager.user_id) }}>{u.manager.name}</button> : u.manager.name}
+          {u.manager.name !== u.manager.dn && <div className="mt-0.5 break-all font-mono text-text-secondary">{u.manager.dn}</div>}
+        </> : '—'}</dd>
         <dt className="text-text-secondary">Пароль не истекает</dt><dd className={d.pwd_never_expires ? 'text-risk-medium' : 'text-text'}>{d.pwd_never_expires ? 'да' : 'нет'}</dd>
         <dt className="text-text-secondary">Последний вход</dt><dd className="text-text">{typeof d.last_logon === 'string' ? day(d.last_logon) : 'нет (lastLogonTimestamp пуст)'}</dd>
         <dt className="text-text-secondary">adminCount</dt><dd className="font-mono text-text">{d.admin_count != null ? String(d.admin_count) : '—'}</dd>
@@ -313,7 +319,7 @@ export function UserDrawer({ userId, onClose, onOpenUser }: { userId: number | n
                   <Devices u={u} />
                   <SiemLogons key={u.id} userId={u.id} />
                   <Groups u={u} />
-                  <AdFlags u={u} />
+                  <AdFlags u={u} onOpenUser={onOpenUser} />
                   <SectionTitle>Ручные поля</SectionTitle>
                   <ManualFields key={`${u.id}:${u.updated_at}`} u={u} write={write && u.merged_into === null} />
                 </>

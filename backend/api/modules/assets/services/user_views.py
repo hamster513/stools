@@ -24,7 +24,8 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import Integer, any_, exists, func, literal, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from api.modules.assets.core.groups import normalize_sid
@@ -155,14 +156,49 @@ def _matches(chosen: frozenset[str] | None, values: set[str], *, any_code: bool 
     return bool(chosen & values)
 
 
+def _ad_contacts(db: Session, user_ids: Collection[int]) -> dict[int, dict[str, Any]]:
+    """Current AD contacts in two batched reads; never infer a manager from a name."""
+    result: dict[int, dict[str, Any]] = {uid: {"mail": "", "manager": None} for uid in user_ids}
+    if not user_ids:
+        return result
+    o = AssetUserObservation
+    for uid, mail, dn, name in db.execute(
+        select(o.user_id, o.data["mail"].as_string(), o.data["manager"].as_string(), o.data["manager_name"].as_string())
+        .where(o.user_id == any_(literal(list(user_ids), ARRAY(Integer))), o.source == "ad", o.gone_at.is_(None))
+        .distinct(o.user_id).order_by(o.user_id, o.seen_at.desc(), o.id.desc())
+    ):
+        result[uid] = {"mail": mail or "", "manager": {"dn": dn, "name": name or dn, "user_id": None} if dn else None}
+    managers = {v["manager"]["dn"].lower() for v in result.values() if v["manager"]}
+    if not managers:
+        return result
+    found: dict[str, dict[int, str]] = defaultdict(dict)
+    for dn, uid, display, sam in db.execute(
+        select(o.data["dn"].as_string(), AssetUser.id, AssetUser.display_name, AssetUser.sam)
+        .join(AssetUser, AssetUser.id == o.user_id)
+        .where(o.source == "ad", o.gone_at.is_(None), AssetUser.merged_into.is_(None),
+               key_in(func.lower(o.data["dn"].as_string()), frozenset(managers)))
+    ):
+        found[dn.lower()][uid] = display or sam or dn
+    for contacts in result.values():
+        manager = contacts["manager"]
+        matches = found.get(manager["dn"].lower(), {}) if manager else {}
+        if len(matches) == 1:
+            manager["user_id"], manager["name"] = next(iter(matches.items()))
+    return result
+
+
 def _user_conditions(q: str | None, host_id: frozenset[int] | None) -> list[Any]:
     """Отбор в базе: живые (не слитые), подстрока `q` без учёта регистра (`%` и `_` — буквально),
     связь с активами `host_id` (и пропавшая)."""
     conds: list[Any] = [AssetUser.merged_into.is_(None)]
     needle = (q or "").strip().lower()
     if needle:
+        o = AssetUserObservation
+        contacts = exists().where(o.user_id == AssetUser.id, o.source == "ad", o.gone_at.is_(None),
+                                  or_(*(o.data[field].as_string().icontains(needle, autoescape=True)
+                                        for field in ("mail", "manager", "manager_name"))))
         conds.append(or_(*(col.icontains(needle, autoescape=True)
-                           for col in (AssetUser.sam, AssetUser.upn, AssetUser.display_name, AssetUser.sid))))
+                           for col in (AssetUser.sam, AssetUser.upn, AssetUser.display_name, AssetUser.sid)), contacts))
     if host_id is not None:
         conds.append(exists().where(AssetUserHost.user_id == AssetUser.id, AssetUserHost.asset_id.in_(sorted(host_id))))
     return conds
@@ -185,7 +221,7 @@ def list_users(
     now: dt.datetime | None = None,
 ) -> tuple[list[dict[str, Any]], int, dict[str, Any]]:
     """items, total, facets. Слитые (`merged_into`) не показываются. `q` — подстрока sam, UPN,
-    отображаемого имени или SID без учёта регистра; `host_id` — пользователи со связью с этими активами
+    отображаемого имени, SID или контактов AD без учёта регистра; `host_id` — пользователи со связью с этими активами
     (и пропавшей тоже — как блок «Пользователи» карточки хоста); `code` — коды или `any`; `ad_keys` — SID
     из состава ячейки сводки AD (`services.ad_cells`).
     `q` и `host_id` отбирает база; наблюдения и связи читаются только у отобранных (подзапросом),
@@ -264,6 +300,9 @@ def list_users(
             "enabled": enabled, "privileged": is_privileged, "sources": _sources(aggs.get(uid, []), now, stale_days),
             "hosts_active": hosts_active, "hosts_total": hosts_total, "last_seen": _iso(last_seen), "codes": codes,
         })
+    contacts = _ad_contacts(db, [u["id"] for u in page])
+    for item in page:
+        item.update(contacts[item["id"]])
     return page, len(picked), facets
 
 
@@ -320,6 +359,7 @@ def user_detail(db: Session, user_id: int, now: dt.datetime | None = None) -> di
             live_rows = [r.seen_at for r in mine if r.gone_at is None]
             aggs.append((src, bool(live_rows), max(live_rows) if live_rows else None, max(r.seen_at for r in mine)))
     return {
+        **_ad_contacts(db, [user.id])[user.id],
         "id": user.id, "sid": user.sid, "name_key": user.name_key, "sam": user.sam, "upn": user.upn,
         "display_name": user.display_name, "domain": user.domain, "local": user.local, "enabled": user.enabled,
         "privileged": user.privileged, "first_seen": _iso(user.first_seen), "last_seen": _iso(user.last_seen),
