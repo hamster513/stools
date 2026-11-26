@@ -1,4 +1,5 @@
 """Installed software from KSC in the canonical asset card."""
+import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -50,21 +51,36 @@ def get_assessment(
                          limit=limit, software_offset=software_offset, vuln_offset=vuln_offset)
 
 
+def _version_filter(version_op: Literal['gt', 'lt'] | None = Query(None),
+                    version_value: str | None = Query(None, max_length=512)) -> dict:
+    if version_op is None and version_value is None:
+        return {}
+    if version_op is None or version_value is None:
+        raise HTTPException(422, 'Укажите условие и версию для сравнения')
+    value = version_value.strip()
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)*', value):
+        raise HTTPException(422, 'Версия для сравнения должна содержать числа через точку, например 2.10.0')
+    return {'version_op': version_op, 'version_value': value}
+
+
 @router.get("/software/products")
 def get_products(q: str = Query("", max_length=255), limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
-                 db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict:
-    return software_catalog.products(db, q, limit, offset)
+                 db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+                 version_filter: dict = Depends(_version_filter)) -> dict:
+    return software_catalog.products(db, q, limit, offset, **version_filter)
 
 
 @router.get("/software/versions")
 def get_versions(vendor_key: str = Query("", max_length=512), product_key: str = Query(min_length=1, max_length=512),
                  limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
-                 db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict:
-    return software_catalog.versions(db, vendor_key, product_key, limit, offset)
+                 db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+                 version_filter: dict = Depends(_version_filter)) -> dict:
+    return software_catalog.versions(db, vendor_key, product_key, limit, offset, **version_filter)
 
 
 @router.get("/software/hosts")
 def get_hosts(vendor_key: str = Query("", max_length=512), product_key: str = Query(min_length=1, max_length=512),
               version: str | None = Query(None, max_length=512), limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
-              db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user)) -> dict:
-    return software_catalog.hosts(db, vendor_key, product_key, version, limit, offset)
+              db: Session = Depends(get_db), _user: AppUser = Depends(get_current_user),
+              version_filter: dict = Depends(_version_filter)) -> dict:
+    return software_catalog.hosts(db, vendor_key, product_key, version, limit, offset, **version_filter)

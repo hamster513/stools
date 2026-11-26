@@ -1,5 +1,6 @@
 """Product → versions → hosts, from current KSC inventories (no fuzzy merging)."""
-from sqlalchemy import String, and_, case, cast, func, literal, or_, select, tuple_
+from sqlalchemy import Numeric, String, and_, case, cast, func, literal, or_, select, tuple_
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from api.modules.assets.models import Asset, AssetObservation
@@ -30,7 +31,22 @@ def _page(db, query, limit, offset):
     return {'total': total, 'items': [dict(row) for row in db.execute(query.limit(limit).offset(offset)).mappings()]}
 
 
-def products(db: Session, q: str, limit: int, offset: int) -> dict:
+def _version_key(value):
+    # Guard the cast inside CASE: SQL may reorder independent WHERE predicates.
+    # Numeric arrays compare components, with trailing zero components removed.
+    return case((and_(func.length(value) <= 512, value.op('~')(r'^[0-9]+(\.[0-9]+)*$')),
+                 cast(func.string_to_array(func.regexp_replace(value, r'(\.0+)+$', ''), '.'), ARRAY(Numeric))))
+
+
+def _version_range(query, version, version_op, version_value):
+    if version_op is None:
+        return query
+    left, right = _version_key(version), _version_key(literal(version_value))
+    return query.where(left > right if version_op == 'gt' else left < right)
+
+
+def products(db: Session, q: str, limit: int, offset: int, *, version_op: str | None = None,
+             version_value: str | None = None) -> dict:
     rows = _rows(); c = rows.c
     query = select(c.vendor_key, c.product_key, func.min(c.publisher).label('publisher'),
                    func.count(func.distinct(c.version)).label('version_count'),
@@ -39,6 +55,7 @@ def products(db: Session, q: str, limit: int, offset: int) -> dict:
         keys = select(c.vendor_key, c.product_key).where(or_(*(col.icontains(q.strip(), autoescape=True)
             for col in (c.name, c.publisher, c.version, c.product_key))))
         query = query.where(tuple_(c.vendor_key, c.product_key).in_(keys))
+    query = _version_range(query, c.version, version_op, version_value)
     result = _page(db, query.order_by(c.product_key, c.vendor_key), limit, offset)
     for item in result['items']:
         item['name'] = 'Без названия' if item['product_key'].startswith('@unnamed:') else item['product_key'].replace('_', ' ')
@@ -47,14 +64,16 @@ def products(db: Session, q: str, limit: int, offset: int) -> dict:
     return result
 
 
-def versions(db: Session, vendor_key: str, product_key: str, limit: int, offset: int) -> dict:
+def versions(db: Session, vendor_key: str, product_key: str, limit: int, offset: int, *,
+             version_op: str | None = None, version_value: str | None = None) -> dict:
     c = _rows().c
     query = select(c.version, func.count(func.distinct(c.host_key)).label('host_count')).where(
         c.vendor_key == vendor_key, c.product_key == product_key).group_by(c.version).order_by(c.version)
-    return _page(db, query, limit, offset)
+    return _page(db, _version_range(query, c.version, version_op, version_value), limit, offset)
 
 
-def hosts(db: Session, vendor_key: str, product_key: str, version: str | None, limit: int, offset: int) -> dict:
+def hosts(db: Session, vendor_key: str, product_key: str, version: str | None, limit: int, offset: int, *,
+          version_op: str | None = None, version_value: str | None = None) -> dict:
     c = _rows().c
     query = select(c.host_key, func.min(c.asset_id).label('asset_id'), func.min(c.host_name).label('name'),
                    func.array_agg(func.distinct(c.version)).label('versions'),
@@ -63,6 +82,7 @@ def hosts(db: Session, vendor_key: str, product_key: str, version: str | None, l
         c.vendor_key == vendor_key, c.product_key == product_key)
     if version is not None:
         query = query.where(c.version == version)
+    query = _version_range(query, c.version, version_op, version_value)
     result = _page(db, query.group_by(c.host_key).order_by(func.min(c.host_name), c.host_key), limit, offset)
     for item in result['items']:
         item['versions'].sort()

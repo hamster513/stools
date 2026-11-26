@@ -14,7 +14,7 @@ interface Host { host_key: string; asset_id: number | null; name: string; versio
 export const productName = (key: string) => key.startsWith('@unnamed:') ? 'Без названия' : key.replaceAll('_', ' ')
 const versionName = (version: string) => version || 'Версия не указана'
 
-export function SoftwareProductDrawer({ vendorKey, productKey, onClose }: { vendorKey: string; productKey: string; onClose: () => void }) {
+export function SoftwareProductDrawer({ vendorKey, productKey, versionFilter, onClose }: { vendorKey: string; productKey: string; versionFilter: { version_op?: string; version_value?: string }; onClose: () => void }) {
   const av = useCan('ksc')
   const [version, setVersion] = useState<string | null>(null)
   const [versionsOffset, setVersionsOffset] = useState(0)
@@ -29,14 +29,15 @@ export function SoftwareProductDrawer({ vendorKey, productKey, onClose }: { vend
     document.addEventListener('keydown', escape)
     return () => { document.removeEventListener('keydown', escape); if (previous instanceof HTMLElement && previous.isConnected) previous.focus() }
   }, [])
-  const keys = { vendor_key: vendorKey, product_key: productKey }
+  const keys = { vendor_key: vendorKey, product_key: productKey, ...versionFilter }
+  const allVersions = versionFilter.version_op ? 'Все подходящие версии' : 'Все версии'
   const versions = useQuery<{ items: Version[]; total: number }>({
-    queryKey: ['assets-software-versions', vendorKey, productKey, versionsOffset],
+    queryKey: ['assets-software-versions', vendorKey, productKey, versionFilter, versionsOffset],
     queryFn: () => api.get(`/api/assets/software/versions${buildQuery({ ...keys, limit: PAGE_SIZE, offset: versionsOffset })}`),
     placeholderData: keepPreviousData,
   })
   const hosts = useQuery<{ items: Host[]; total: number }>({
-    queryKey: ['assets-software-hosts', vendorKey, productKey, version, hostsOffset],
+    queryKey: ['assets-software-hosts', vendorKey, productKey, versionFilter, version, hostsOffset],
     // Empty version is a real group. buildQuery omits empty strings, so append it explicitly.
     queryFn: () => api.get(`/api/assets/software/hosts${buildQuery({ ...keys, limit: PAGE_SIZE, offset: hostsOffset })}${version === null ? '' : `&version=${encodeURIComponent(version)}`}`),
     placeholderData: keepPreviousData,
@@ -50,22 +51,23 @@ export function SoftwareProductDrawer({ vendorKey, productKey, onClose }: { vend
         <Button ref={closeRef} aria-label="Закрыть ПО" variant="ghost" onClick={onClose}><X size={16} aria-hidden /></Button>
       </header>
       <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4 text-xs">
+        {versionFilter.version_op && <p className="break-all text-text-secondary">Показаны только версии {versionFilter.version_op === 'gt' ? 'выше' : 'ниже'} {versionFilter.version_value} и хосты с этими версиями.</p>}
         <section aria-label="Версии ПО" className="space-y-2">
           <h3 className="font-semibold">Версии{versions.data ? ` · ${versions.data.total}` : ''}</h3>
-          <Button variant={version === null ? 'primary' : 'secondary'} aria-pressed={version === null} onClick={() => selectVersion(null)}>Все версии</Button>
+          <Button variant={version === null ? 'primary' : 'secondary'} aria-pressed={version === null} onClick={() => selectVersion(null)}>{allVersions}</Button>
           {versions.isError ? <ErrorState message={errorText(versions.error, 'Не удалось загрузить версии') ?? 'Не удалось загрузить версии'} onRetry={() => versions.refetch()} /> : !versions.data ? <Spinner /> : <>
             {versions.isFetching && <p role="status">Обновление версий…</p>}
             <div className="max-h-52 overflow-auto rounded border border-grid">
               {versions.data.items.map((item) => <button key={item.version} type="button" aria-pressed={version === item.version} onClick={() => selectVersion(item.version)} className={`flex w-full items-center justify-between gap-3 border-b border-grid p-2 text-left hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring ${version === item.version ? 'bg-row-selected' : ''}`}>
                 <span className="break-all font-mono">{versionName(item.version)}</span><span className="shrink-0 text-text-secondary">Хостов: {item.host_count}</span>
               </button>)}
-              {versions.data.total === 0 && <p className="p-3 text-text-secondary">В актуальных инвентарях этот продукт больше не найден.</p>}
+              {versions.data.total === 0 && <p className="p-3 text-text-secondary">{versionFilter.version_op ? 'В актуальных инвентарях нет версий, подходящих под фильтр.' : 'В актуальных инвентарях этот продукт больше не найден.'}</p>}
             </div>
             <SoftwarePager label="Страницы версий" offset={versionsOffset} total={versions.data.total} busy={versions.isFetching} onChange={setVersionsOffset} />
           </>}
         </section>
         <section aria-label="Хосты с ПО" className="space-y-2">
-          <h3 className="font-semibold">Хосты · {version === null ? 'Все версии' : versionName(version)}</h3>
+          <h3 className="font-semibold">Хосты · {version === null ? allVersions : versionName(version)}</h3>
           <p className="text-text-secondary">Один хост показан один раз. Для нескольких источников KSC версии объединены; дата — последний сбор среди этих источников.</p>
           {hosts.isError ? <ErrorState message={errorText(hosts.error, 'Не удалось загрузить хосты') ?? 'Не удалось загрузить хосты'} onRetry={() => hosts.refetch()} /> : !hosts.data ? <Spinner /> : <>
             {hosts.isFetching && <p role="status">Обновление хостов…</p>}
