@@ -1,6 +1,6 @@
 import { SiemLogons } from './SiemLogons'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Download, Monitor, Pin, PinOff, Trash2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { Download, Monitor, Pin, PinOff, Trash2, X, Merge } from 'lucide-react'
 import { HostSbomPanel } from './HostSbomPanel'
 import { SoftwareInventory } from './SoftwareInventory'
 import { DrawerTabs } from '@/platform/tabs/DrawerTabs'
@@ -64,12 +64,13 @@ export function SectionTitle({ children }: { children: ReactNode }) {
   return <div className="mt-4 mb-1 text-[11px] font-semibold tracking-wide text-text-secondary uppercase">{children}</div>
 }
 
-function Confirm({ label, text, action, danger, pending, onConfirm, onCancel }: { label: string; text: string; action: string; danger?: boolean; pending: boolean; onConfirm: () => void; onCancel: () => void }) {
+function Confirm({ label, text, action, danger, pending, error, onConfirm, onCancel }: { label: string; text: string; action: string; danger?: boolean; pending: boolean; error?: string; onConfirm: () => void; onCancel: () => void }) {
   return (
     <div role="dialog" aria-label={label} className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div className="w-full max-w-md rounded border border-grid bg-surface p-4">
         <div className="mb-2 text-sm font-semibold text-text">{label}</div>
         <p className="mb-4 text-xs text-text-secondary">{text}</p>
+        {error && <p role="alert" className="mb-3 text-xs text-kind-1">{error}</p>}
         <div className="flex justify-end gap-2">
           <Button onClick={onCancel}>Отмена</Button>
           <Button variant={danger ? 'danger' : 'primary'} loading={pending} onClick={onConfirm}>{action}</Button>
@@ -444,22 +445,23 @@ function NetworkPicker({ value, onChange }: { value: string; onChange: (v: strin
 }
 
 /** Поиск второго хоста для объединения: наблюдения найденного переедут в этот. */
-function MergePicker({ a, onPick }: { a: AssetDetail; onPick: (other: { id: number; label: string }) => void }) {
+function MergePicker({ a, onPick, inputRef }: { a: AssetDetail; inputRef: RefObject<HTMLInputElement | null>; onPick: (other: { id: number; label: string }) => void }) {
   const [input, setInput] = useState('')
   const q = useDebouncedValue(input.trim(), 250)
   const found = useAssets({ q: q || undefined })
   const items = (found.data?.pages[0]?.items ?? []).filter((i) => i.id !== a.id).slice(0, 8)
   return (
     <div className="flex flex-col gap-1">
-      <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Имя, FQDN или IP второго хоста" aria-label="Поиск хоста для объединения" className={cn(FIELD, 'text-xs')} />
+      <input ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} placeholder="Имя, FQDN или IP второй записи" aria-label="Поиск хоста для объединения" className={cn(FIELD, 'text-xs')} />
       {q && (
         <ul className="flex flex-col">
           {found.isLoading && <li className="text-text-secondary">поиск…</li>}
-          {!found.isLoading && items.length === 0 && <li className="text-text-secondary">не найдено</li>}
+          {found.error && <li role="alert" className="text-kind-1">{found.error.message}</li>}
+          {!found.isLoading && !found.error && items.length === 0 && <li className="text-text-secondary">не найдено</li>}
           {items.map((i) => (
             <li key={i.id}>
               <button type="button" onClick={() => onPick({ id: i.id, label: title(i) })} className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring">
-                <span className="truncate text-text">{title(i)}</span>
+                <span className="min-w-0"><span className="block truncate text-text">{title(i)}</span><span className="block truncate text-text-secondary">{[i.fqdn, i.sources.map((s) => SOURCE_LABELS[s.source]).join(', ')].filter(Boolean).join(' · ')}</span></span>
                 <span className="shrink-0 font-mono text-text-secondary">{i.ip || i.fqdn}</span>
               </button>
             </li>
@@ -485,6 +487,15 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset, beforeContainers }:
   const [deleting, setDeleting] = useState(false)
   const [tab, setTab] = useState('overview')
   const closeRef = useRef<HTMLButtonElement>(null)
+  const mergeInputRef = useRef<HTMLInputElement>(null)
+  const [mergeRequested, setMergeRequested] = useState(false)
+  useEffect(() => {
+    if (mergeRequested && tab === 'overview') {
+      mergeInputRef.current?.scrollIntoView({ block: 'center' })
+      mergeInputRef.current?.focus({ preventScroll: true })
+      setMergeRequested(false)
+    }
+  }, [mergeRequested, tab])
   useEffect(() => { if (open) closeRef.current?.focus(); setMergeWith(null); setDetaching(null); setDeleting(false); setTab('overview') }, [open, assetId])
   const a = detail.data
   const err = merge.error ?? detach.error ?? remove.error
@@ -501,6 +512,7 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset, beforeContainers }:
                 <span className="truncate text-sm text-text">{a ? title(a) : `хост #${assetId}`}</span>
               </div>
               <div className="flex shrink-0 items-center gap-3">
+                {a && write && a.merged_into === null && <Button onClick={() => { setTab('overview'); setMergeRequested(true) }}><Merge size={14} aria-hidden /> Объединить</Button>}
                 {a && a.merged_into === null && <a href={`/api/assets/assets/${a.id}/sbom`} download
                   className="inline-flex items-center gap-1.5 rounded border border-grid px-2 py-1 text-xs text-text hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-focus-ring">
                   <Download size={14} aria-hidden /> Скачать SBOM</a>}
@@ -537,8 +549,9 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset, beforeContainers }:
 
                   {write && a.merged_into === null && (
                     <>
-                      <SectionTitle>Объединить с другим хостом</SectionTitle>
-                      <MergePicker a={a} onPick={setMergeWith} />
+                      <SectionTitle>Объединить записи хоста</SectionTitle>
+                      <p className="mb-2 text-text-secondary">Выберите вторую запись того же хоста. Данные источников объединятся; имя, FQDN и домен из AD имеют приоритет. Закреплённые поля сохраняются.</p>
+                      <MergePicker a={a} onPick={(other) => { merge.reset(); setMergeWith(other) }} inputRef={mergeInputRef} />
                       <SectionTitle>Удалить хост</SectionTitle>
                       <Button variant="ghost" className="text-risk-high" onClick={() => setDeleting(true)}><Trash2 size={13} aria-hidden /> Удалить хост</Button>
                     </>
@@ -553,9 +566,10 @@ export function AssetDrawer({ assetId, onClose, onOpenAsset, beforeContainers }:
       {a && mergeWith && (
         <Confirm
           label={`Объединить «${mergeWith.label}» с «${title(a)}»?`}
-          text={`Наблюдения «${mergeWith.label}» переедут в этот хост, теги объединятся, заметка допишется; «${mergeWith.label}» исчезнет из списка.`}
+          text={`Данные источников, адреса, пользователи и группы «${mergeWith.label}» объединятся с этой записью. Теги и заметки сохранятся. Имя, FQDN и домен берутся из AD, если не закреплены вручную. Вторая запись исчезнет из списка; объединение сохранится при синхронизации.`}
           action="Объединить"
           pending={merge.isPending}
+          error={merge.error?.message}
           onCancel={() => setMergeWith(null)}
           onConfirm={() => merge.mutate(mergeWith.id, { onSuccess: () => setMergeWith(null) })}
         />

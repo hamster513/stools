@@ -254,6 +254,7 @@ def canonical(observations: list[Observed], pinned: dict[str, bool], current: di
     Если живых наблюдений нет совсем, карточка держит последнее известное, а не пустеет."""
     live = [o for o in observations if o.gone_at is None] or list(observations)
     fresh_first = sorted(live, key=_freshness, reverse=True)
+    identity_first = sorted(live, key=lambda o: (o.source == "ad", *_freshness(o)), reverse=True)
     card: dict[str, Any] = {}
     for name in FIELDS:
         if pinned.get(name):
@@ -263,7 +264,8 @@ def canonical(observations: list[Observed], pinned: dict[str, bool], current: di
             ips = [a for a in (normalize_ip(o.ip) for o in fresh_first) if a]
             card[name] = next((a for a in ips if not _is_global(a)), ips[0] if ips else "")
         else:
-            card[name] = next((getattr(o, name) for o in fresh_first if getattr(o, name)), "")
+            order = identity_first if name in ("name", "fqdn", "domain") else fresh_first
+            card[name] = next((getattr(o, name) for o in order if getattr(o, name)), "")
     all_seen = [o.seen_at for o in observations if o.seen_at]
     live_seen = [o.seen_at for o in live if o.seen_at]
     card["first_seen"] = min(all_seen) if all_seen else None

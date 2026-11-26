@@ -30,6 +30,7 @@ from api.modules.assets.core.matching import (
     tokens,
 )
 from api.modules.assets.models import Asset, AssetObservation, AssetSettings, AssetZone, Network
+from api.modules.assets.services.host_merge import move_host_relations
 from api.modules.assets.services.networks import PLACEMENTS, NetworkList, network_for_ip
 from api.platform.filters import Values, is_all, matches, multi
 from api.platform.findings import service as finding_svc
@@ -326,7 +327,13 @@ def merge_assets(db: Session, into_id: int, other_id: int, actor: str) -> Asset:
     into.criticality = into.criticality or other.criticality
     if other.network_manual and not into.network_manual:
         into.network_id, into.network_manual = other.network_id, True
-    into.pinned = {**(other.pinned or {}), **(into.pinned or {})}
+    pins = dict(into.pinned or {})
+    for field in FIELDS:
+        if (other.pinned or {}).get(field) and not pins.get(field):
+            setattr(into, field, getattr(other, field))
+            pins[field] = True
+    into.pinned = pins
+    move_host_relations(db, other.id, into.id)
     other.merged_into = into.id
     # Цепочка объединений сводится к одному активу: ссылки на второго ведут к первому.
     for earlier in db.execute(select(Asset).where(Asset.merged_into == other.id)).scalars():
