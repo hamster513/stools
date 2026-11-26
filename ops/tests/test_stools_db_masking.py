@@ -89,6 +89,84 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(r.text("10.10.1.7:389"), "10.200.1.7:389")
         self.assertEqual(r.text("10.10.1.7/32:443"), "10.200.1.7/32:443")
 
+    def test_error_locates_nested_network_collision_without_disclosing_cell(self):
+        r = rules(
+            networks=[
+                {"from": "fd10::/32", "to": "fd20::/32"},
+                {"from": "192.0.2.0/24", "to": "198.51.100.0/24"},
+            ]
+        )
+        data = {
+            "secret-hostname": {
+                "hosts": [{"url": "https://admin:secret-pass@198.51.100.27:443/"}]
+            }
+        }
+        with self.assertRaises(mask.MaskError) as caught:
+            r.json(json.dumps(data))
+        safe = str(caught.exception)
+        self.assertIn("networks[1].to", safe)
+        self.assertIn("$[#1].hosts[0].url", safe)
+        self.assertNotIn("198.51.100.", safe)
+        self.assertNotIn("192.0.2.", safe)
+        local = caught.exception.render(show_ips=True)
+        for expected in ("198.51.100.27", "198.51.100.0/24", "192.0.2.0/24"):
+            self.assertIn(expected, local)
+        for private in ("secret-hostname", "admin", "secret-pass", "https://"):
+            self.assertNotIn(private, local)
+
+    def test_interval_errors_identify_which_side_of_which_rule(self):
+        r = rules(networks=[{"from": "fd12:3456::/32", "to": "fd99:abcd::/32"}])
+        for ip, side in (("fd12:3456::/31", "from"), ("fd99:abcd::a/128", "to")):
+            with self.subTest(ip=ip), self.assertRaises(mask.MaskError) as caught:
+                r.text(ip)
+            self.assertIn(f"networks[0].{side}", str(caught.exception))
+            self.assertNotIn("fd", str(caught.exception))
+            self.assertIn(ip, caught.exception.render(show_ips=True))
+
+    def test_alias_collision_refers_to_original_config_order(self):
+        r = rules(
+            case_sensitive=False,
+            replacements=[
+                {"from": "short", "to": "first-alias"},
+                {"from": "much-longer-word", "to": "second-alias"},
+            ],
+        )
+        with self.assertRaises(mask.MaskError) as caught:
+            r.text("contains FIRST-ALIAS")
+        self.assertIn("replacements[0].to", str(caught.exception))
+        self.assertNotIn("alias", caught.exception.render(show_ips=True).lower())
+
+    def test_sql_subscript_and_packed_ksc_address_in_error_path(self):
+        # The second array element has PostgreSQL subscript -1, with a nested typed KSC IP.
+        import base64
+        import ipaddress
+
+        packed = base64.b64encode(ipaddress.ip_address("10.200.1.7").packed).decode(
+            "ascii"
+        )
+        data = {
+            "dims": "[-2:-1]",
+            "values": [None, {"octets": {"type": "binary", "value": packed}}],
+        }
+        with self.assertRaises(mask.MaskError) as caught:
+            rules().array(json.dumps(data), "jsonb")
+        self.assertIn("$[-1].octets.value", str(caught.exception))
+        self.assertNotIn(packed, caught.exception.render(show_ips=True))
+        self.assertIn("10.200.1.7", caught.exception.render(show_ips=True))
+
+    def test_config_conflict_names_both_entries_without_showing_values(self):
+        with self.assertRaises(mask.MaskError) as caught:
+            rules(
+                replacements=[
+                    {"from": "login-a", "to": "hidden"},
+                    {"from": "login-b", "to": "hidden"},
+                ]
+            )
+        message = caught.exception.render(show_ips=True)
+        for field in ("replacements[0].to", "replacements[1].to"):
+            self.assertIn(field, message)
+        self.assertNotIn("hidden", message)
+
     def test_ipv6(self):
         r = rules(networks=[{"from": "fd12:3456::/32", "to": "fd99:abcd::/32"}])
         self.assertEqual(r.text("[fd12:3456::7]:443"), "[fd99:abcd::7]:443")

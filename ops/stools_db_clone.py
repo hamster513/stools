@@ -265,7 +265,13 @@ class Values:
             and name == "sha256"
             and row.get("original_encrypted")
         ):
-            self.encrypted_original(row["original_encrypted"])
+            try:
+                self.encrypted_original(row["original_encrypted"])
+            except MaskError as error:
+                error.context.append(
+                    'Исходное поле для контрольной суммы — "original_encrypted".'
+                )
+                raise
             return self.originals[row["original_encrypted"]][1]
         if name == "original_encrypted":
             return self.encrypted_original(value)
@@ -394,16 +400,25 @@ def copy_table(pg, table, values):
                     or len(flags) != len(columns)
                     or set(flags) - {"0", "1"}
                 ):
-                    raise MaskError("Некорректная строка транспортного COPY.")
+                    raise MaskError(f"Некорректная строка COPY {count + 1}.")
                 raw = [
                     None if flag == "1" else value for flag, value in zip(flags, cells)
                 ]
                 row = dict(zip((c["name"] for c in columns), raw))
                 values.originals.clear()
-                transformed = [
-                    values.cell(table["name"], col, value, row)
-                    for col, value in zip(columns, raw)
-                ]
+                transformed = []
+                for col, value in zip(columns, raw):
+                    try:
+                        transformed.append(values.cell(table["name"], col, value, row))
+                    except MaskError as error:
+                        position = f"Столбец {identifier(col['name'])}, строка COPY {count + 1}"
+                        if row.get("id") is not None and any(
+                            c["name"] == "id" and c["type"] in ("int2", "int4", "int8")
+                            for c in columns
+                        ):
+                            position += f", id={int(row['id'])}"
+                        error.context.append(position + ".")
+                        raise
                 writer.stdin.write(
                     ("\t".join(copy_text(v) for v in transformed) + "\n").encode(
                         "utf-8"
@@ -455,10 +470,14 @@ def schema_section(pg, section, work, rules):
     if path.stat().st_size > 128 * 1024**2:
         raise MaskError("SQL-схема больше 128 МиБ; требуется отдельная проверка.")
     sql = path.read_text(encoding="utf-8")
-    if rules.text(sql) != sql:
-        raise MaskError(
-            "Конфиг затрагивает SQL-схему или её значения по умолчанию; автоматическое изменение структуры запрещено."
-        )
+    try:
+        if rules.text(sql) != sql:
+            raise MaskError(
+                "Конфиг затрагивает SQL-схему или её значения по умолчанию; автоматическое изменение структуры запрещено."
+            )
+    except MaskError as error:
+        error.context.append(f"Проверка SQL-схемы PostgreSQL ({section}).")
+        raise
     with path.open("rb") as source:
         pg.run(
             "psql",
@@ -480,10 +499,15 @@ def clone(pg, rules, work, source_secret=None):
     schema_section(pg, "pre-data", work, rules)
     values = Values(rules, source_secret)
     for number, table in enumerate(tables, 1):
-        print(f"Обезличивание: таблица {number}/{len(tables)}", flush=True)
-        copied = copy_table(pg, table, values) if before[qualified(table)] else 0
-        if copied != before[qualified(table)]:
-            raise MaskError("Количество перенесённых строк не совпало с исходным.")
+        name = qualified(table)
+        print(f"Обезличивание: таблица {number}/{len(tables)} {name}", flush=True)
+        try:
+            copied = copy_table(pg, table, values) if before[name] else 0
+            if copied != before[name]:
+                raise MaskError("Количество перенесённых строк не совпало с исходным.")
+        except MaskError as error:
+            error.context.append(f"Таблица {name} ({number}/{len(tables)}).")
+            raise
     if not rules.changed_values:
         raise MaskError(
             "Ни одно исходное значение из конфига не найдено: выдавать эту копию как обезличенную нельзя."

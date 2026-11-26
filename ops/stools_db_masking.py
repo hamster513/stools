@@ -12,7 +12,29 @@ from xml.parsers.expat import ExpatError
 
 
 class MaskError(Exception):
-    """Messages intentionally exclude original values and replacements."""
+    """Default messages are safe to log. Only parsed IPs have opt-in details."""
+
+    def __init__(self, message, *, ip_details=None):
+        super().__init__(message)
+        self.context = []
+        self.path = []
+        self.ip_details = ip_details
+
+    def __str__(self):
+        parts = [super().__str__(), *reversed(self.context)]
+        if self.path:
+            parts.append("Путь в значении: $" + "".join(reversed(self.path)))
+        return "\n".join(parts)
+
+    def render(self, show_ips=False):
+        if self.ip_details is None:
+            return str(self)
+        detail = (
+            self.ip_details
+            if show_ips
+            else "Чтобы увидеть IP и подсети локально, добавьте --show-conflicting-ips."
+        )
+        return f"{self}\n{detail}"
 
 
 class Number(str):
@@ -100,6 +122,30 @@ STRUCTURAL = {
     "settings",
     "children",
 }
+# Arbitrary object keys can themselves be logins, hostnames or tokens.
+DIAGNOSTIC_FIELDS = STRUCTURAL | {
+    "address",
+    "addresses",
+    "ip",
+    "ips",
+    "host",
+    "hosts",
+    "fqdn",
+    "url",
+    "local",
+    "remote",
+    "local_address",
+    "remote_address",
+    "networks",
+    "octets",
+    "payload",
+    "data",
+    "items",
+    "entries",
+    "interfaces",
+    "from",
+    "to",
+}
 SECRET = re.compile(
     r"^(?:.*[_.])?(?:password|passwd|password_hash|api_key|api_token|access_token|refresh_token|client_secret|"
     r"robot_secret|totp_secret|secret|token|token_encrypted|private_key|session_secret|authorization)$",
@@ -113,6 +159,10 @@ def load_config(path):
         raise MaskError("Конфиг должен быть обычным JSON-файлом размером до 8 МиБ.")
     try:
         data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs)
+    except json.JSONDecodeError as error:
+        raise MaskError(
+            f"Некорректный JSON конфига, строка {error.lineno}, столбец {error.colno}."
+        ) from None
     except (ValueError, UnicodeError):
         raise MaskError("Конфиг должен содержать корректный UTF-8 JSON.") from None
     return Rules(data)
@@ -135,9 +185,11 @@ class Rules:
                 raise MaskError("replacements и networks должны быть массивами JSON.")
         self.flags = 0 if self.case_sensitive else re.IGNORECASE
         self.replacements = []
-        for row in config.get("replacements", []):
+        for index, row in enumerate(config.get("replacements", [])):
             if not isinstance(row, dict) or set(row) != {"from", "to"}:
-                raise MaskError("Каждая замена должна содержать только from и to.")
+                raise MaskError(
+                    f"В replacements[{index}] должны быть только from и to."
+                )
             a, b = row["from"], row["to"]
             if (
                 not isinstance(a, str)
@@ -147,25 +199,31 @@ class Rules:
                 or any(ord(c) < 32 for c in a + b)
             ):
                 raise MaskError(
-                    "Значения замен должны быть непустыми строками без управляющих символов."
+                    f"В replacements[{index}] нужны непустые строки без управляющих символов."
                 )
             self.replacements.append((a, b))
         fold = (lambda x: x) if self.case_sensitive else str.casefold
-        for index in (0, 1):
-            values = [fold(row[index]) for row in self.replacements]
-            if len(values) != len(set(values)):
-                raise MaskError("Исходные значения и псевдонимы должны быть уникальны.")
-        for source, _ in self.replacements:
-            if any(
-                re.search(re.escape(source), dest, self.flags)
-                for _, dest in self.replacements
-            ):
-                raise MaskError(
-                    "Псевдоним содержит исходное значение: цепочки и тождественные замены запрещены."
-                )
+        for side, field in enumerate(("from", "to")):
+            seen = {}
+            for index, pair in enumerate(self.replacements):
+                key = fold(pair[side])
+                if key in seen:
+                    raise MaskError(
+                        f"Значения replacements[{seen[key]}].{field} и replacements[{index}].{field} совпадают. "
+                        "Для каждой записи нужно уникальное значение."
+                    )
+                seen[key] = index
+        for source_index, (source, _) in enumerate(self.replacements):
+            for target_index, (_, dest) in enumerate(self.replacements):
+                if re.search(re.escape(source), dest, self.flags):
+                    raise MaskError(
+                        f"Псевдоним replacements[{target_index}].to содержит исходное значение "
+                        f"replacements[{source_index}].from. Выберите другой псевдоним."
+                    )
+        self.config_targets = [target for _, target in self.replacements]
         self.replacements.sort(key=lambda pair: len(pair[0]), reverse=True)
         self.networks = []
-        for row in config.get("networks", []):
+        for index, row in enumerate(config.get("networks", [])):
             try:
                 if not isinstance(row, dict) or set(row) != {"from", "to"}:
                     raise ValueError
@@ -181,19 +239,18 @@ class Rules:
                     raise ValueError
             except (ValueError, TypeError, KeyError):
                 raise MaskError(
-                    "Подсети from/to должны быть разными сетями одной версии и длины префикса."
+                    f"В networks[{index}] from и to должны быть разными подсетями одной версии и длины префикса."
                 ) from None
             self.networks.append((source, target))
-        for side in (0, 1):
+        for side, field in enumerate(("from", "to")):
             for i, pair in enumerate(self.networks):
-                if any(
-                    pair[side].overlaps(other[side])
-                    for other in self.networks[:i]
-                    if pair[side].version == other[side].version
-                ):
-                    raise MaskError(
-                        "Исходные подсети и целевые подсети не должны пересекаться между собой."
-                    )
+                for j, other in enumerate(self.networks[:i]):
+                    if pair[side].version == other[side].version and pair[
+                        side
+                    ].overlaps(other[side]):
+                        raise MaskError(
+                            f"Подсети networks[{j}].{field} и networks[{i}].{field} пересекаются."
+                        )
         if not self.replacements and not self.networks:
             raise MaskError("Укажите хотя бы одну замену или одну пару подсетей.")
         literals = [re.escape(a) for a, _ in self.replacements]
@@ -212,7 +269,18 @@ class Rules:
                 return target
         return None
 
-    def _interval(self, low, high):
+    def _network_error(self, message, index, observed):
+        # Numeric forms exclude arbitrary interface scope labels from diagnostics.
+        source, target = (
+            type(net)((int(net.network_address), net.prefixlen))
+            for net in self.networks[index]
+        )
+        return MaskError(
+            message,
+            ip_details=f"Значение {observed}. Правило networks[{index}]: {source} → {target}.",
+        )
+
+    def _interval(self, low, high, interface=None):
         version = low.version
         a, b = int(low), int(high)
         for source, target in self.networks:
@@ -221,7 +289,7 @@ class Rules:
             if low in source and high in source:
                 offset = int(target.network_address) - int(source.network_address)
                 return type(low)(int(low) + offset), type(high)(int(high) + offset)
-        for source, target in self.networks:
+        for index, (source, target) in enumerate(self.networks):
             if source.version != version:
                 continue
             intersects = lambda net: (
@@ -233,8 +301,14 @@ class Rules:
             if (intersects(source) or intersects(target)) and not (
                 contains(source) and contains(target)
             ):
-                raise MaskError(
-                    "Диапазон или широкая подсеть пересекает заменяемые сети неоднозначно; уточните конфиг."
+                side = "from" if intersects(source) else "to"
+                raise self._network_error(
+                    f"Диапазон или подсеть пересекает networks[{index}].{side}. "
+                    "Сверьте границы диапазона с from и to: замена изменила бы охват адресов.",
+                    index,
+                    f"{interface.ip}/{interface.network.prefixlen}"
+                    if interface is not None
+                    else f"{low}–{high}",
                 )
         return low, high
 
@@ -246,7 +320,9 @@ class Rules:
             return value
         if interface:
             low, _high = self._interval(
-                interface.network.network_address, interface.network.broadcast_address
+                interface.network.network_address,
+                interface.network.broadcast_address,
+                interface,
             )
             mapped = type(address)(
                 int(low) + int(address) - int(interface.network.network_address)
@@ -261,19 +337,27 @@ class Rules:
                         - int(source.network_address)
                     )
                 )
-        if any(
-            address.version == target.version and address in target
-            for _, target in self.networks
-        ):
-            raise MaskError(
-                "В исходных данных есть адрес из целевой подсети, не охваченный исходными сетями; возможна коллизия."
-            )
+        for index, (_, target) in enumerate(self.networks):
+            if address.version == target.version and address in target:
+                raise self._network_error(
+                    f"Адрес из исходной базы уже входит в целевую подсеть networks[{index}].to "
+                    "и не охвачен ни одной подсетью from. Выберите для to свободную подсеть "
+                    "с той же длиной префикса, чтобы два объекта не получили один адрес.",
+                    index,
+                    type(address)(int(address)),
+                )
         return value
 
     def text(self, value, addresses=True):
-        if self.destinations and self.destinations.search(value):
+        match = self.destinations.search(value) if self.destinations else None
+        if match:
+            index = next(
+                i
+                for i, target in enumerate(self.config_targets)
+                if re.fullmatch(re.escape(target), match.group(), self.flags)
+            )
             raise MaskError(
-                "Целевой псевдоним уже встречается в исходных данных; выберите уникальную замену."
+                f"Псевдоним из replacements[{index}].to уже встречается в исходных данных. Выберите уникальную замену."
             )
         if addresses:
             for item in RANGE.finditer(value):
@@ -345,7 +429,14 @@ class Rules:
                     return self.xml(value, secrets=secrets)
             return self.text(value, addresses=not TECHNICAL.search(key))
         if isinstance(value, list):
-            return [self.walk(item, key, secrets) for item in value]
+            result = []
+            for index, item in enumerate(value):
+                try:
+                    result.append(self.walk(item, key, secrets))
+                except MaskError as error:
+                    error.path.append(f"[{index}]")
+                    raise
+            return result
         if isinstance(value, dict):
             if set(value) == {"type", "value"} and value["type"] == "binary":
                 if secrets and SECRET.fullmatch(key):
@@ -360,7 +451,11 @@ class Rules:
                     )
                 except (ValueError, TypeError):
                     raise MaskError("Некорректный двоичный адрес KSC.") from None
-                mapped = ipaddress.ip_address(self.address(str(address)))
+                try:
+                    mapped = ipaddress.ip_address(self.address(str(address)))
+                except MaskError as error:
+                    error.path.append(".value")
+                    raise
                 self.changed_values += address != mapped
                 return {
                     "type": "binary",
@@ -378,20 +473,30 @@ class Rules:
                 "datetime",
                 "date",
             ):
-                return {
-                    "type": value["type"],
-                    "value": self.walk(value["value"], key, secrets),
-                }
+                try:
+                    return {
+                        "type": value["type"],
+                        "value": self.walk(value["value"], key, secrets),
+                    }
+                except MaskError as error:
+                    error.path.append(".value")
+                    raise
             result = {}
-            for field, item in value.items():
-                new_key = self.text(field)
-                if field.lower() in STRUCTURAL and field != new_key:
-                    raise MaskError(
-                        "Правило меняет структурный ключ JSON; уточните замену."
+            for number, (field, item) in enumerate(value.items(), 1):
+                try:
+                    new_key = self.text(field)
+                    if field.lower() in STRUCTURAL and field != new_key:
+                        raise MaskError(
+                            "Правило меняет структурный ключ JSON; уточните замену."
+                        )
+                    if new_key in result:
+                        raise MaskError("Замена создаёт повторяющиеся ключи JSON.")
+                    result[new_key] = self.walk(item, field, secrets)
+                except MaskError as error:
+                    error.path.append(
+                        "." + field if field in DIAGNOSTIC_FIELDS else f"[#{number}]"
                     )
-                if new_key in result:
-                    raise MaskError("Замена создаёт повторяющиеся ключи JSON.")
-                result[new_key] = self.walk(item, field, secrets)
+                    raise
             return result
         return value
 
@@ -478,7 +583,16 @@ class Rules:
             if level:
                 if not isinstance(item, list):
                     raise MaskError("Некорректная вложенность PostgreSQL ARRAY.")
-                return "{" + ",".join(encode(v, level - 1) for v in item) + "}"
+                items = []
+                for offset, child in enumerate(item):
+                    try:
+                        items.append(encode(child, level - 1))
+                    except MaskError as error:
+                        bounds = re.findall(r"\[(-?\d+):", dims)
+                        lower = int(bounds[depth - level]) if bounds else 1
+                        error.path.append(f"[{lower + offset}]")
+                        raise
+                return "{" + ",".join(items) + "}"
             if item is None:
                 return "NULL"
             transformed = self.walk(item, secrets=True)

@@ -336,6 +336,58 @@ INSERT INTO toolbox_settings VALUES(1,decode(repeat('ab',32),'hex'));
         self.assertFalse(out.exists())
         self.assertEqual(resources(), before)
 
+    def test_cli_pinpoints_existing_destination_address_and_cleans_up(self):
+        before = resources()
+        config = self.root / "network-conflict.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "format": CONFIG["format"],
+                    "networks": [{"from": "192.0.2.0/24", "to": "10.10.1.0/24"}],
+                }
+            )
+        )
+        output = self.root / "network-conflict-out"
+        command = [
+            sys.executable,
+            str(OPS / "stools_db_anonymize.py"),
+            str(self.original),
+            "--config",
+            str(config),
+            "--output",
+            str(output),
+        ]
+        for detailed in (False, True):
+            with self.subTest(detailed=detailed):
+                result = subprocess.run(
+                    command + (["--show-conflicting-ips"] if detailed else []),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('"public"."policy"', result.stdout)
+                for expected in (
+                    '"public"."policy"',
+                    '"payload"',
+                    "строка COPY 1",
+                    "id=1",
+                    "$.ip",
+                    "networks[0].to",
+                ):
+                    self.assertIn(expected, result.stderr)
+                combined = result.stdout + result.stderr
+                for ip in ("10.10.1.7", "10.10.1.0/24", "192.0.2.0/24"):
+                    self.assertEqual(ip in combined, detailed)
+                for private in (
+                    "pc.corp.example",
+                    "original-password-hash",
+                    self.source_secret,
+                ):
+                    self.assertNotIn(private, combined)
+                self.assertFalse(output.exists())
+                self.assertEqual(resources(), before)
+
     def test_sigterm_cleans_up_before_exit(self):
         import select
         import time

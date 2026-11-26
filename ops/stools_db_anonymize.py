@@ -467,6 +467,11 @@ def main():
         "--source-secret-env",
         help="имя переменной окружения с исходным ключом, если нужно сохранить зашифрованные конфигурации",
     )
+    parser.add_argument(
+        "--show-conflicting-ips",
+        action="store_true",
+        help="при конфликте вывести в stderr конкретный IP или диапазон и пару подсетей from/to",
+    )
     args = parser.parse_args()
 
     def interrupted(signum, frame):
@@ -482,7 +487,13 @@ def main():
             args.source_secret_env,
         )
         return 0
-    except (MaskError, BackupError) as error:
+    except MaskError as error:
+        print(
+            "Ошибка: " + error.render(show_ips=args.show_conflicting_ips),
+            file=sys.stderr,
+        )
+        return 1
+    except BackupError as error:
         print("Ошибка: " + str(error), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
