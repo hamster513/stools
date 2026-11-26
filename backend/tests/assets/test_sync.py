@@ -154,13 +154,16 @@ def test_pinned_name_survives_resync(loaded: Session, now: dt.datetime) -> None:
     rename("CORE01")
     sync(loaded)
     loaded.refresh(srv01)
-    assert srv01.name == "CORE01"  # без закрепления имя берётся у самого свежего источника
+    assert srv01.name == "SRV01"  # AD главнее более свежего имени KSC
+    srv01.name = "analyst alias"
     pin_field(loaded, srv01.id, "name", True)
     loaded.commit()
     rename("CORE02")
     sync(loaded)
     loaded.refresh(srv01)
-    assert srv01.name == "CORE01"
+    assert srv01.name == "analyst alias"
+    pin_field(loaded, srv01.id, "name", False)
+    assert srv01.name == "SRV01"
 
 
 def ksc_keys(db: Session) -> list[str]:

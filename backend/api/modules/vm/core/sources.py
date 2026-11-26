@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import csv
+import ipaddress
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ class HostRow:
     zone: str = ""
     cves: list[str] = field(default_factory=list)
     empty_cves_observed: bool = False
+    ips: list[str] = field(default_factory=list)
 
 
 def split_host(text: str) -> tuple[str, str]:
@@ -49,6 +51,21 @@ def split_host(text: str) -> tuple[str, str]:
     if not sep or not tail.endswith(")") or ")" in tail[:-1] or "\n" in head.rstrip():
         return s, ""
     return head.strip(), tail[:-1].strip()
+
+
+def ip_addresses(value: object, primary: str = "") -> list[str]:
+    """Normalize a CSV list or JSON array, keeping the primary address first."""
+    parts = value if isinstance(value, (list, tuple)) else [value]
+    found: dict[str, None] = {}
+    for part in (primary, *parts):
+        if not isinstance(part, str):
+            continue
+        for item in re.split(r"[\s,;\[\]\"']+", part):
+            try:
+                found.setdefault(str(ipaddress.ip_address(item)), None)
+            except ValueError:
+                continue
+    return list(found)
 
 
 def split_cves(text: str) -> list[str]:
@@ -72,6 +89,7 @@ def _row_from_csv(row: dict[str, str]) -> HostRow | None:
     return HostRow(
         hostname=hostname,
         ip=ip,
+        ips=ip_addresses(row.get("Host.@IpAddresses"), ip),
         os_name=(row.get(COL_OS) or "").strip(),
         groups=(row.get(COL_GROUPS) or "").strip(),
         criticality=_norm_crit(row.get(COL_CRIT) or ""),
@@ -125,6 +143,7 @@ def _row_from_json(item: dict[str, Any]) -> HostRow | None:
     return HostRow(
         hostname=hostname,
         ip=ip,
+        ips=ip_addresses(item.get("ips", []), ip),
         os_name=str(item.get("os_name") or "").strip(),
         groups=str(item.get("groups") or "").strip(),
         criticality=_norm_crit(str(item.get("criticality") or "")),

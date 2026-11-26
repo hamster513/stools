@@ -16,7 +16,7 @@ CONN = Connection(host="vm.corp", api_token="pat-test", os_exclude=["Windows 10"
 
 def test_build_pdql() -> None:
     pdql = build_pdql(CONN)
-    assert pdql.startswith("select(@Host, Host.OsName, Host.@Groups, Host.@Vulners.CVEs, Host.UF_Criticality, Host.UF_Zone) | filter(Host.OsName != null and Host.OsName != 'Windows 10' and Host.OsName != 'O\\'Reilly OS' and (Host.UF_Zone = 'DMZ'))")
+    assert pdql.startswith("select(@Host, Host.OsName, Host.@Groups, Host.@Vulners.CVEs, Host.UF_Criticality, Host.UF_Zone, Host.@IpAddresses) | filter(Host.OsName != null and Host.OsName != 'Windows 10' and Host.OsName != 'O\\'Reilly OS' and (Host.UF_Zone = 'DMZ'))")
     assert pdql.endswith("| limit(5)")
     assert build_pdql(Connection(host="h", limit=0)).endswith("| limit(0)")
     assert build_pdql(CONN, limit=1).endswith("| limit(1)")

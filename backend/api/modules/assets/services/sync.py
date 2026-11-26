@@ -22,7 +22,13 @@ from sqlalchemy import Engine, func, select, text
 from sqlalchemy.orm import Session
 
 from api.jobs import JobCancelled, JobHandle, active_job, run_job, start_job
-from api.modules.assets.core.matching import Observed, is_ip, normalize_fqdn, normalize_name
+from api.modules.assets.core.matching import (
+    Observed,
+    is_ip,
+    normalize_fqdn,
+    normalize_ip,
+    normalize_name,
+)
 from api.modules.assets.findings_adapter import reconcile as reconcile_findings
 from api.modules.assets.models import Asset, AssetJob, AssetObservation
 from api.modules.assets.services.assets import (
@@ -136,19 +142,23 @@ def _host_names(hostname: str) -> tuple[str, str, str]:
 
 
 def observations_from_vm(db: Session) -> Iterator[Observed]:
+    from api.modules.vm.core.sources import ip_addresses
     from api.modules.vm.docker_models import VmDockerImage
     from api.modules.vm.models import VmHost, VmHostCve, VmImport
+    from api.modules.vm.sbom_models import VmHostCoverage
     from api.modules.vm.services.host_packages import package_hosts
 
     seen_at = db.execute(select(func.max(VmImport.finished_at))).scalar() or utcnow()
     cves = dict(db.execute(select(VmHostCve.host_id, func.count()).group_by(VmHostCve.host_id)).tuples().all())
+    addresses = dict(db.execute(select(VmHostCoverage.source_key, VmHostCoverage.ips)).tuples().all())
     known = set()
     for h in db.execute(select(VmHost).order_by(VmHost.id)).scalars():
         known.add((h.hostname, h.ip))
         name, fqdn, domain = _host_names(h.hostname)
+        ips = ip_addresses(addresses.get(f"{h.hostname}|{h.ip}", []), h.ip)
         yield Observed(
-            source="vm", source_key=f"{h.hostname}|{h.ip}", name=name, fqdn=fqdn, domain=domain, ip=h.ip,
-            ips=[h.ip] if h.ip else [], os=h.os_name, seen_at=seen_at,
+            source="vm", source_key=f"{h.hostname}|{h.ip}", name=name, fqdn=fqdn, domain=domain, ip=normalize_ip(h.ip) or next(iter(ips), ""),
+            ips=ips, os=h.os_name, seen_at=seen_at,
             extra={"zone": h.zone, "groups": h.groups, "cve_count": int(cves.get(h.id, 0))},
         )
     for hostname, ip, os_name, collected_at in package_hosts(db):
@@ -156,8 +166,9 @@ def observations_from_vm(db: Session) -> Iterator[Observed]:
             continue
         known.add((hostname, ip))
         name, fqdn, domain = _host_names(hostname)
+        ips = ip_addresses(addresses.get(f"{hostname}|{ip}", []), ip)
         yield Observed(source="vm", source_key=f"{hostname}|{ip}", name=name, fqdn=fqdn, domain=domain,
-                       ip=ip, ips=[ip] if ip else [], os=os_name, seen_at=collected_at,
+                       ip=normalize_ip(ip) or next(iter(ips), ""), ips=ips, os=os_name, seen_at=collected_at,
                        extra={"package_inventory": True})
     # Docker inventory includes servers without CVEs; they still belong in Assets.
     for image in db.scalars(select(VmDockerImage)):
@@ -167,9 +178,10 @@ def observations_from_vm(db: Session) -> Iterator[Observed]:
                 continue
             known.add(key)
             name, fqdn, domain = _host_names(host["hostname"])
+            ips = ip_addresses(addresses.get(f"{host['hostname']}|{host['ip']}", []), host["ip"])
             yield Observed(
                 source="vm", source_key=f"{host['hostname']}|{host['ip']}", name=name, fqdn=fqdn,
-                domain=domain, ip=host["ip"], ips=[host["ip"]] if host["ip"] else [],
+                domain=domain, ip=normalize_ip(host["ip"]) or next(iter(ips), ""), ips=ips,
                 os=host["os_name"], seen_at=image.collected_at, extra={"docker_inventory": True},
             )
 

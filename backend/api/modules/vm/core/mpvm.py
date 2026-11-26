@@ -42,7 +42,7 @@ class MpVmLoginError(MpVmError):
 
 PDQL_SELECT = (
     "select(@Host, Host.OsName, Host.@Groups, Host.@Vulners.CVEs, "
-    "Host.UF_Criticality, Host.UF_Zone)"
+    "Host.UF_Criticality, Host.UF_Zone, Host.@IpAddresses)"
 )
 
 

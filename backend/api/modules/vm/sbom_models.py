@@ -15,6 +15,7 @@ class VmHostCoverage(Base):
     __tablename__ = "vm_host_cve_coverage"
     source_key: Mapped[str] = mapped_column(String(512), primary_key=True)
     observed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    ips: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
 
 
 class VmPackageFeed(Base):

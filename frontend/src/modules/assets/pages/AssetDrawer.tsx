@@ -189,9 +189,10 @@ function CanonicalCard({ a, write }: { a: AssetDetail; write: boolean }) {
 
 function Cell({ o, field, mono }: { o: Observation; field: 'name' | 'fqdn' | 'ip'; mono?: boolean }) {
   const mark = o.marks[field]
+  const values = field === 'ip' ? [...new Set([o.ip, ...o.ips].filter(Boolean))] : [o[field] || '—']
   return (
     <td className={cn('px-1.5 py-1 break-all', mono && 'font-mono', mark ? cn(MARK_TEXT[mark], 'font-semibold') : 'text-text')} title={mark === 'stale' ? 'устарело' : mark === 'conflict' ? 'расходится с другими источниками' : undefined}>
-      {o[field] || '—'}
+      {values.length ? values.map((value) => <div key={value}>{value}</div>) : '—'}
     </td>
   )
 }

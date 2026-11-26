@@ -131,7 +131,14 @@ def _keys(name: str, fqdn: str, domain: str, ip: str, ips: Iterable[str] = ()) -
         dom = dom or f_domain
     if short:
         names.add((short, dom))
-    return _Keys({fq} if fq else set(), names, {a for a in (normalize_ip(x) for x in (ip, *ips)) if a})
+    addresses = {a for a in (normalize_ip(x) for x in (ip, *ips)) if a}
+    # Interface-local and multicast addresses cannot identify a host across sources.
+    identity = set()
+    for value in addresses:
+        address = ipaddress.ip_address(value)
+        if not (address.is_loopback or address.is_link_local or address.is_unspecified or address.is_multicast):
+            identity.add(value)
+    return _Keys({fq} if fq else set(), names, identity)
 
 
 def _obs_keys(o: Observed) -> _Keys:

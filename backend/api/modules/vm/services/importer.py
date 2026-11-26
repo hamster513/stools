@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, cast
 
+from psycopg.types.json import Jsonb
 from sqlalchemy import Connection as SqlConnection
 from sqlalchemy import Table, delete, event, func, insert, select, text
 from sqlalchemy.orm import Session, SessionTransaction
@@ -27,7 +28,7 @@ from api.modules.vm.core.mpvm import (
     build_pdql,
     make_client,
 )
-from api.modules.vm.core.sources import HostRow, iter_csv, iter_json
+from api.modules.vm.core.sources import HostRow, ip_addresses, iter_csv, iter_json
 from api.modules.vm.findings_adapter import reconcile_after_import
 from api.modules.vm.models import (
     VmCve,
@@ -103,14 +104,14 @@ def _clear_stage(db: Session) -> None:
     db.commit()
 
 
-def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[tuple[str, str], HostRow], int, set[str]]:
+def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[tuple[str, str], HostRow], int, dict[str, list[str]]]:
     """Хосты — в словарь, пары — в staging пакетами. Хосты без CVE
     пропускаются: у них нет риска, а обзор считает хосты с уязвимостями."""
     size = path.stat().st_size
     handle.stage("parsing", total=size, message=path.name)
     hosts: dict[tuple[str, str], HostRow] = {}
     pairs_buffer: list[tuple[str, str, str]] = []
-    empty_hosts: set[str] = set()
+    empty_hosts: dict[str, list[str]] = {}
     written = 0
     rows_seen = 0
     fh, rows = _open_rows(path)
@@ -119,13 +120,15 @@ def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[
             rows_seen += 1
             if not row.cves:
                 if row.empty_cves_observed:
-                    empty_hosts.add(f"{row.hostname}|{row.ip}")
+                    key = f"{row.hostname}|{row.ip}"
+                    empty_hosts[key] = ip_addresses([*empty_hosts.get(key, []), *row.ips], row.ip)
                 continue
             key = (row.hostname, row.ip)
             known = hosts.get(key)
             if known is None:
-                hosts[key] = HostRow(row.hostname, row.ip, row.os_name, row.groups, row.criticality, row.zone)
+                hosts[key] = HostRow(row.hostname, row.ip, row.os_name, row.groups, row.criticality, row.zone, ips=ip_addresses(row.ips, row.ip))
             else:
+                known.ips = ip_addresses([*known.ips, *row.ips], row.ip)
                 # Атрибуты из первой строки; пустые поля дополняются позже.
                 for attr in ("os_name", "groups", "criticality", "zone"):
                     if not getattr(known, attr) and getattr(row, attr):
@@ -147,7 +150,7 @@ def _parse_into_stage(db: Session, handle: JobHandle, path: Path) -> tuple[dict[
 
 
 def _replace_current(
-    db: Session, hosts: dict[tuple[str, str], HostRow], staged_pairs: int, handle: JobHandle, empty_hosts: set[str],
+    db: Session, hosts: dict[tuple[str, str], HostRow], staged_pairs: int, handle: JobHandle, empty_hosts: dict[str, list[str]],
 ) -> tuple[ImportStats, list[str]]:
     """Хосты, новые CVE и пары заменяются атомарно. Шаги видны в отдельной транзакции."""
     def step(completed: int, message: str) -> None:
@@ -198,10 +201,14 @@ def _replace_current(
     )
     from api.modules.vm.sbom_models import VmHostCoverage
 
-    covered = empty_hosts.union(f"{hostname}|{ip}" for hostname, ip in hosts)
+    covered = dict(empty_hosts)
+    for (hostname, ip), host in hosts.items():
+        key = f"{hostname}|{ip}"
+        covered[key] = ip_addresses([*covered.get(key, []), *host.ips], ip)
     observed_at = dt.datetime.now(dt.UTC)
     db.execute(delete(VmHostCoverage))
-    bulk_insert(db, VmHostCoverage.__table__, ("source_key", "observed_at"), ((key, observed_at) for key in covered))
+    bulk_insert(db, VmHostCoverage.__table__, ("source_key", "observed_at", "ips"),
+                ((key, observed_at, Jsonb(ips)) for key, ips in covered.items()))
     step(5, "Очищаем промежуточные таблицы и фиксируем снимок")
     db.execute(delete(STAGE_PAIR))
     db.execute(delete(STAGE_HOST))
