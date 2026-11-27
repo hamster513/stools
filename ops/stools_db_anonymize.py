@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -37,6 +38,73 @@ from stools_db_clone import (
 from stools_db_masking import MaskError, load_config
 
 LABEL = "stools.db-anonymize.job"
+
+
+@contextmanager
+def open_debug_log(path, source, output, config=None):
+    if path is None:
+        yield None
+        return
+    path = Path(path)
+    source, output, location = (
+        Path(source).resolve(),
+        Path(output).resolve(),
+        path.resolve(),
+    )
+    if (
+        location in (source, output)
+        or source in location.parents
+        or output in location.parents
+        or location in output.parents
+        or (config is not None and location == Path(config).resolve())
+    ):
+        raise MaskError(
+            "Выберите для --debug-log отдельный файл вне исходного и выходного бэкапов и конфига."
+        )
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        raise MaskError("Файл --debug-log уже существует. Укажите новое имя.") from None
+    except OSError:
+        raise MaskError(
+            "Не удалось создать --debug-log. Проверьте каталог и права записи."
+        ) from None
+    with os.fdopen(fd, "w", encoding="utf-8", buffering=1) as log:
+        print(
+            "Диагностика PostgreSQL пишется в локальный --debug-log. Журнал может содержать данные из БД.",
+            flush=True,
+        )
+        print(
+            f"{datetime.now(timezone.utc).isoformat()} Начало обезличивания", file=log
+        )
+        try:
+            yield log
+        except (BackupError, MaskError) as error:
+            print(
+                f"{datetime.now(timezone.utc).isoformat()} Остановка. {error}", file=log
+            )
+            raise
+        except KeyboardInterrupt:
+            print(
+                f"{datetime.now(timezone.utc).isoformat()} Обработка отменена", file=log
+            )
+            raise
+        except Exception as error:
+            print(
+                f"{datetime.now(timezone.utc).isoformat()} Исключение Python {type(error).__name__}",
+                file=log,
+            )
+            for frame in traceback.extract_tb(error.__traceback__)[-25:]:
+                print(
+                    f"  {Path(frame.filename).name}:{frame.lineno} {frame.name}",
+                    file=log,
+                )
+            raise
+        else:
+            print(
+                f"{datetime.now(timezone.utc).isoformat()} Обезличивание завершено",
+                file=log,
+            )
 
 
 def docker(*args):
@@ -124,11 +192,12 @@ def cleanup(job, name, volume):
 
 
 @contextmanager
-def postgres(image):
+def postgres(image, *, debug_log=None):
     job = uuid.uuid4().hex
     name = "stools-anonymize-" + job[:16]
     volume = name + "-data"
     resources_started = False
+    pg = Postgres(name, debug_log=debug_log)
     try:
         if inspect("image", image) is None:
             raise MaskError(
@@ -198,13 +267,12 @@ def postgres(image):
             raise MaskError(
                 "Недопустимое подключение файлов хоста к временному PostgreSQL."
             )
-        print(
-            "Временный PostgreSQL запущен без сети и опубликованных портов.", flush=True
-        )
-        yield Postgres(name)
+        pg.phase("Временный PostgreSQL запущен без сети и опубликованных портов.")
+        yield pg
     finally:
         if resources_started:
             cleanup(job, name, volume)
+            pg.note("Временный контейнер PostgreSQL и его том удалены.")
 
 
 def input_backup(path):
@@ -233,7 +301,9 @@ def check_archive(pg, stream, metadata):
     stream.seek(0)
     listing = pg.run("pg_restore", "--list", source=stream)
     match = re.search(r"Dumped from database version:\s*(\d+)", listing)
-    major = pg.version() // 10000
+    version = pg.version()
+    pg.note(f"PostgreSQL server_version_num={version}")
+    major = version // 10000
     if (
         major < 15
         or (metadata and metadata["server_version_num"] // 10000 != major)
@@ -317,7 +387,13 @@ def publish(bundle, output):
 
 
 def run(
-    source_path, config_path, output_path, postgres_image=None, source_secret_env=None
+    source_path,
+    config_path,
+    output_path,
+    postgres_image=None,
+    source_secret_env=None,
+    *,
+    debug=None,
 ):
     rules = load_config(config_path)
     config_path = Path(config_path)
@@ -345,13 +421,15 @@ def run(
     os.chmod(str(stage), 0o700)
     bundle = stage / "backup"
     try:
-        with source.open("rb") as stream, postgres(image) as pg:
+        with source.open("rb") as stream, postgres(image, debug_log=debug) as pg:
+            pg.phase("Проверка исходного бэкапа и версии PostgreSQL")
             _, source_state = check_archive(pg, stream, metadata)
+            pg.phase("Создание базы для исходного бэкапа", announce=False)
             if metadata:
                 create_database(pg, SOURCE, metadata["database"])
             else:
                 create_source_from_archive(pg, stream)
-            print("Восстановление полного исходного бэкапа...", flush=True)
+            pg.phase("Восстановление полного исходного бэкапа...")
             pg.run(
                 "pg_restore",
                 "--exit-on-error",
@@ -369,12 +447,13 @@ def run(
             report, target_secret, tables, sequences = clone(
                 pg, rules, stage, source_secret
             )
-            print("Создание обезличенного бэкапа...", flush=True)
+            pg.phase("Создание обезличенного бэкапа...")
             backup(pg, bundle, TARGET)
             # Reuse the source DB's space for a genuine restore test; the input file is untouched.
+            pg.phase("Подготовка базы для проверочного восстановления", announce=False)
             pg.run("dropdb", SOURCE)
             create_database(pg, SOURCE, pg.info(TARGET))
-            print("Проверка восстановления нового бэкапа...", flush=True)
+            pg.phase("Проверка восстановления нового бэкапа...")
             with (bundle / "database.dump").open("rb") as clean:
                 pg.run(
                     "pg_restore",
@@ -472,6 +551,12 @@ def main():
         action="store_true",
         help="при конфликте вывести в stderr конкретный IP или диапазон и пару подсетей from/to",
     )
+    parser.add_argument(
+        "--debug-log",
+        type=Path,
+        metavar="ФАЙЛ",
+        help="новый приватный файл вне обоих бэкапов для этапов и диагностики PostgreSQL; может содержать исходные значения",
+    )
     args = parser.parse_args()
 
     def interrupted(signum, frame):
@@ -479,13 +564,17 @@ def main():
 
     old = signal.signal(signal.SIGTERM, interrupted)
     try:
-        run(
-            args.source,
-            args.config,
-            args.output,
-            args.postgres_image,
-            args.source_secret_env,
-        )
+        with open_debug_log(
+            args.debug_log, args.source, args.output, args.config
+        ) as debug:
+            run(
+                args.source,
+                args.config,
+                args.output,
+                args.postgres_image,
+                args.source_secret_env,
+                debug=debug,
+            )
         return 0
     except MaskError as error:
         print(

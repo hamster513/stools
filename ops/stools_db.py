@@ -7,17 +7,18 @@ See docs/database-backup.md. No application services are started or stopped.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 
 FORMAT = 'stools-postgres-backup/1'
 ENV = '''export PGUSER="${POSTGRES_USER:-postgres}"
@@ -29,7 +30,25 @@ exec "$@"
 
 
 class BackupError(Exception):
-    pass
+    def __init__(self, message, *, sql_line=None):
+        super().__init__(message)
+        self.sql_line = sql_line
+
+
+SQLSTATE_HINTS = {
+    '22001': 'значение длиннее допустимого',
+    '22003': 'число вне допустимого диапазона',
+    '23502': 'NULL в обязательном поле',
+    '23503': 'нарушен внешний ключ',
+    '23505': 'нарушена уникальность',
+    '23514': 'нарушено ограничение CHECK',
+    '23P01': 'нарушено ограничение исключения',
+    '42501': 'недостаточно прав',
+    '42P01': 'отношение не найдено',
+    '53100': 'недостаточно места на диске',
+    '53200': 'недостаточно памяти',
+    '57014': 'запрос отменён',
+}
 
 
 def database_name(value: str) -> str:
@@ -47,24 +66,76 @@ def literal(value: str) -> str:
 
 
 class Postgres:
-    def __init__(self, container: str):
+    def __init__(self, container: str, *, debug_log=None):
         if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', container):
             raise BackupError('Некорректное имя Docker-контейнера.')
         self.container = container
+        self.debug_log = debug_log
+        self.stage = ''
+
+    def note(self, message):
+        if self.debug_log is not None:
+            stamp = datetime.now(timezone.utc).isoformat(timespec='seconds')
+            print(f'{stamp} {message}', file=self.debug_log, flush=True)
+
+    def phase(self, message, *, announce=True):
+        self.stage = message
+        self.note(message)
+        if announce:
+            print(message, flush=True)
 
     def command(self, *args: str) -> list[str]:
+        if args and args[0] == 'psql':
+            verbosity = 'verbose' if self.debug_log is not None else 'sqlstate'
+            args = ('psql', '-v', 'VERBOSITY=' + verbosity, *args[1:])
         return ['docker', 'exec', '-i', self.container, 'sh', '-ec', ENV, 'stools-db', *args]
+
+    def failure(self, tool, returncode, errors):
+        # Keep the beginning and end of native diagnostics. Never inspect stdout or SQL input.
+        size = errors.seek(0, os.SEEK_END)
+        errors.seek(0)
+        limit = 64 * 1024
+        if size > limit:
+            data = errors.read(limit // 2)
+            errors.seek(-limit // 2, os.SEEK_END)
+            data += b'\n[... stderr truncated ...]\n' + errors.read(limit // 2)
+        else:
+            data = errors.read(limit)
+        text = data.decode('utf-8', errors='replace')
+        message = f'{tool} завершился с кодом {returncode}.'
+        if self.stage:
+            message = self.stage + '\n' + message
+        # Only a SQLSTATE and a numeric line can pass from native stderr to the console.
+        match = re.search(
+            r'^(?:psql:<stdin>:(\d{1,10}):[ \t]*)?(?:ERROR|FATAL|PANIC|ОШИБКА|ВАЖНО|ПАНИКА):'
+            r'[ \t]+([0-9A-Z]{5})(?=:|\r?$)', text, re.MULTILINE,
+        )
+        line = None
+        if match:
+            line = int(match[1]) if match[1] else None
+            state = match[2]
+            message += ' SQLSTATE ' + state
+            if state in SQLSTATE_HINTS:
+                message += ' (' + SQLSTATE_HINTS[state] + ')'
+            if line:
+                message += f', строка SQL {line}'
+            message += '.'
+        if self.debug_log is not None:
+            self.note(message + '\n' + (text.rstrip() or '[stderr пуст]'))
+        elif self.stage:
+            message += ' Подробности доступны при запуске с --debug-log.'
+        return BackupError(message, sql_line=line)
 
     def run(self, *args: str, source=None, output=None, text: str | None = None) -> str:
         if source is not None and text is not None:
             raise BackupError('Нельзя одновременно передать текст и поток ввода.')
         # Python 3.7 rejects input combined with even an explicit stdin=None.
         input_args = {'input': text.encode()} if text is not None else {'stdin': source}
-        result = subprocess.run(self.command(*args), **input_args,
-                                stdout=output if output is not None else subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode:
-            # PostgreSQL errors can contain a whole failing row, passwords or user SQL.
-            raise BackupError(f'{args[0]} завершился с кодом {result.returncode}; содержимое SQL-ошибки скрыто.')
+        with tempfile.TemporaryFile() as errors:
+            result = subprocess.run(self.command(*args), **input_args, check=False,
+                                    stdout=output if output is not None else subprocess.PIPE, stderr=errors)
+            if result.returncode:
+                raise self.failure(args[0], result.returncode, errors)
         return result.stdout.decode().strip() if output is None else ''
 
     def sql(self, query: str, database: str = 'postgres') -> str:

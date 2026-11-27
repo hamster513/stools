@@ -7,13 +7,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 OPS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(OPS))
 import stools_db_anonymize as app
-from stools_db import backup, verified_backup
+from stools_db import Postgres, backup, verified_backup
 from stools_db_clone import Values, _fernet
 from stools_db_masking import MaskError, Rules
 
@@ -90,6 +91,56 @@ class CliTests(unittest.TestCase):
     def test_empty_json_text_means_unavailable_not_corrupt(self):
         column = {"name": "summary_json", "type": "text", "category": "S"}
         self.assertEqual(Values(Rules(CONFIG)).cell("ad_snapshot", column, "", {}), "")
+
+    def test_debug_log_cannot_replace_files_or_enter_a_backup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            output = root / "output"
+            existing = root / "existing.log"
+            existing.write_text("keep")
+            link = root / "link.log"
+            link.symlink_to(existing)
+            for path in (existing, link, source / "log", output, output / "log"):
+                with (
+                    self.subTest(path=path),
+                    self.assertRaises(MaskError),
+                    app.open_debug_log(path, source, output),
+                ):
+                    self.fail("unsafe log path accepted")
+            self.assertEqual(existing.read_text(), "keep")
+            self.assertFalse(output.exists())
+            self.assertFalse((source / "log").exists())
+
+    def test_native_error_is_bounded_and_values_stay_in_private_log(self):
+        log = StringIO()
+        pg = Postgres("test-container", debug_log=log)
+        with tempfile.TemporaryFile() as errors:
+            errors.write(b"psql:<stdin>:12: ERROR:  53100: disk full\n")
+            errors.write(b"x" * 40000 + b"middle-sentinel" + b"x" * 40000)
+            errors.write(b"\nprivate-detail-at-end\n")
+            message = str(pg.failure("psql", 3, errors))
+        self.assertIn("SQLSTATE 53100", message)
+        self.assertIn("строка SQL 12", message)
+        self.assertNotIn("private-detail", message)
+        self.assertIn("private-detail-at-end", log.getvalue())
+        self.assertIn("stderr truncated", log.getvalue())
+        self.assertNotIn("middle-sentinel", log.getvalue())
+
+    def test_python_debug_stack_omits_exception_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "debug.log"
+            with (
+                self.assertRaises(ValueError),
+                app.open_debug_log(path, root / "input", root / "out"),
+            ):
+                raise ValueError("sensitive-exception-payload")
+            report = path.read_text()
+            self.assertIn("ValueError", report)
+            self.assertIn("test_python_debug_stack_omits_exception_values", report)
+            self.assertNotIn("sensitive-exception-payload", report)
 
     def test_ghsa_prose_preserves_external_bounds_and_masks_explicit_values(self):
         values = Values(Rules(CONFIG))
@@ -361,16 +412,131 @@ INSERT INTO toolbox_settings VALUES(1,decode(repeat('ab',32),'hex'));
     def test_raw_dump_preserves_source_locale(self):
         before = resources()
         out = self.root / "raw-locale"
-        report = app.run(
-            self.original / "database.dump",
-            self.config,
-            out,
-            source_secret_env="STOOLS_TEST_ANON_SOURCE_KEY",
-        )
+        path = self.root / "successful-run.log"
+        with app.open_debug_log(path, self.original, out, self.config) as debug:
+            report = app.run(
+                self.original / "database.dump",
+                self.config,
+                out,
+                source_secret_env="STOOLS_TEST_ANON_SOURCE_KEY",
+                debug=debug,
+            )
         self.assertTrue(report["restore_verified"])
+        journal = path.read_text()
+        for stage in (
+            "Скопировано строк",
+            "последовательност",
+            "post-data",
+            "ANALYZE",
+            "Проверка восстановления",
+            "Обезличивание завершено",
+        ):
+            self.assertIn(stage, journal)
+        for hidden in (self.source_secret, "corp.example", "original-password-hash"):
+            self.assertNotIn(hidden, journal)
+        self.assertEqual(
+            {p.name for p in out.iterdir()},
+            {"database.dump", "manifest.json", "anonymization.json", "stand.env"},
+        )
         metadata = json.loads((out / "manifest.json").read_text())["database"]
         self.assertEqual(metadata["collate"], "C")
         self.assertEqual(metadata["ctype"], "C")
+        self.assertEqual(resources(), before)
+
+    def test_cli_diagnoses_post_data_without_disclosing_values_to_console(self):
+        before = resources()
+        source = self.root / "debug-backup"
+        self.pg.run("createdb", "debug_fixture")
+        self.pg.sql(
+            "CREATE TABLE accounts(login text CONSTRAINT unique_test_login UNIQUE);"
+            "INSERT INTO accounts VALUES ('PrivateIdentity'), ('PRIVATEIDENTITY');"
+            "CREATE TABLE vm_zone(id integer)",
+            "debug_fixture",
+        )
+        backup(self.pg, source, "debug_fixture")
+        cfg = self.root / "debug-rules.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "format": CONFIG["format"],
+                    "case_sensitive": False,
+                    "replacements": [
+                        {"from": "PrivateIdentity", "to": "masked-key-value"}
+                    ],
+                }
+            )
+        )
+        out = self.root / "debug-output"
+        log = self.root / "private-debug.log"
+        command = [
+            sys.executable,
+            str(OPS / "stools_db_anonymize.py"),
+            str(source),
+            "--config",
+            str(cfg),
+            "--output",
+            str(out),
+        ]
+        for args in ([], ["--debug-log", str(log)]):
+            with self.subTest(debug=bool(args)):
+                p = subprocess.run(
+                    command + args, capture_output=True, text=True, check=False
+                )
+                self.assertEqual(p.returncode, 1)
+                self.assertIn('"vm_zone"', p.stdout)
+                for expected in ("post-data", "SQLSTATE 23505", "unique_test_login"):
+                    self.assertIn(expected, p.stderr)
+                self.assertRegex(p.stderr, r"строка SQL [0-9]+")
+                for hidden in ("PrivateIdentity", "masked-key-value", "DETAIL:"):
+                    self.assertNotIn(hidden, p.stdout + p.stderr)
+                self.assertEqual(log.exists(), bool(args))
+                self.assertFalse(out.exists())
+                self.assertEqual(resources(), before)
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        diagnostic = log.read_text()
+        for expected in (
+            "post-data",
+            "23505",
+            "unique_test_login",
+            "DETAIL:",
+            "masked-key-value",
+        ):
+            self.assertIn(expected, diagnostic)
+        self.assertNotIn("PrivateIdentity", diagnostic)
+
+    def test_debug_log_reports_copy_writer_failure(self):
+        before = resources()
+        self.pg.run("createdb", "short_fixture")
+        self.pg.sql(
+            "CREATE TABLE hosts(label varchar(5)); INSERT INTO hosts VALUES ('alice')",
+            "short_fixture",
+        )
+        source = self.root / "short-source"
+        out = self.root / "short-out"
+        backup(self.pg, source, "short_fixture")
+        log = self.root / "copy-error.log"
+        p = subprocess.run(
+            [
+                sys.executable,
+                str(OPS / "stools_db_anonymize.py"),
+                str(source),
+                "--config",
+                str(self.config),
+                "--output",
+                str(out),
+                "--debug-log",
+                str(log),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(p.returncode, 1)
+        for expected in ('"public"."hosts"', "запись COPY", "SQLSTATE 22001"):
+            self.assertIn(expected, p.stderr)
+        self.assertIn("CONTEXT:", log.read_text())
+        self.assertNotIn("person-001", p.stdout + p.stderr)
+        self.assertFalse(out.exists())
         self.assertEqual(resources(), before)
 
     def test_failure_still_removes_owned_resources_and_output(self):

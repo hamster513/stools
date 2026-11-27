@@ -8,10 +8,13 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import subprocess
+import tempfile
+from itertools import islice
 
-from stools_db import identifier, literal
+from stools_db import BackupError, identifier, literal
 from stools_db_masking import SECRET, MaskError, dumps, loads
 
 SOURCE = "stools_source"
@@ -36,6 +39,7 @@ def qualified(table):
 
 
 def catalog(pg, database):
+    pg.phase(f"Чтение каталога таблиц ({database})", announce=False)
     rows = json.loads(pg.sql(CATALOG, database))
     if any(row["kind"] != "r" for row in rows):
         raise MaskError(
@@ -53,6 +57,7 @@ def catalog(pg, database):
 
 
 def counts(pg, database, tables):
+    pg.phase(f"Сверка числа строк ({database})", announce=False)
     if not tables:
         return {}
     queries = [
@@ -73,6 +78,7 @@ def counts(pg, database, tables):
 
 
 def sequence_values(pg, database):
+    pg.phase(f"Чтение списка последовательностей ({database})", announce=False)
     names = json.loads(
         pg.sql(
             "SELECT coalesce(json_agg(json_build_array(n.nspname,c.relname) ORDER BY n.nspname,c.relname),'[]') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='S' AND n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'",
@@ -82,6 +88,7 @@ def sequence_values(pg, database):
     result = {}
     for schema, name in names:
         full = identifier(schema) + "." + identifier(name)
+        pg.phase(f"Чтение последовательности {full} ({database})", announce=False)
         result[full] = json.loads(
             pg.sql(
                 "SELECT json_build_array(last_value::text,is_called) FROM "
@@ -367,103 +374,132 @@ def copy_table(pg, table, values):
     )
     reader = writer = None
     count = 0
-    try:
-        reader = subprocess.Popen(
-            pg.command(
-                "psql",
-                "-X",
-                "-q",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "--dbname=" + SOURCE,
-                "-c",
-                read,
-            ),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        writer = subprocess.Popen(
-            pg.command(
-                "psql",
-                "-X",
-                "-q",
-                "-v",
-                "ON_ERROR_STOP=1",
-                "--dbname=" + TARGET,
-                "-c",
-                write,
-            ),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        csv.field_size_limit(1024**3)
-        with io.TextIOWrapper(reader.stdout, encoding="utf-8", newline="") as stream:
-            for cells in csv.reader(stream):
-                flags = cells.pop()
-                if (
-                    len(cells) != len(columns)
-                    or len(flags) != len(columns)
-                    or set(flags) - {"0", "1"}
-                ):
-                    raise MaskError(f"Некорректная строка COPY {count + 1}.")
-                raw = [
-                    None if flag == "1" else value for flag, value in zip(flags, cells)
-                ]
-                row = dict(zip((c["name"] for c in columns), raw))
-                values.originals.clear()
-                transformed = []
-                for col, value in zip(columns, raw):
-                    try:
-                        transformed.append(
-                            values.cell(
-                                table["name"], col, value, row, schema=table["schema"]
-                            )
-                        )
-                    except MaskError as error:
-                        position = f"Столбец {identifier(col['name'])}, строка COPY {count + 1}"
-                        if row.get("id") is not None and any(
-                            c["name"] == "id" and c["type"] in ("int2", "int4", "int8")
-                            for c in columns
-                        ):
-                            position += f", id={int(row['id'])}"
-                        error.context.append(position + ".")
-                        raise
-                writer.stdin.write(
-                    ("\t".join(copy_text(v) for v in transformed) + "\n").encode(
-                        "utf-8"
-                    )
-                )
-                count += 1
-        writer.stdin.close()
-        if reader.wait() or writer.wait():
-            raise MaskError(
-                "COPY не завершён: проверьте совместимость типов, ограничения и правила замен. Содержимое строки скрыто."
+    with (
+        tempfile.TemporaryFile() as reader_errors,
+        tempfile.TemporaryFile() as writer_errors,
+    ):
+        try:
+            reader = subprocess.Popen(
+                pg.command(
+                    "psql",
+                    "-X",
+                    "-q",
+                    "-v",
+                    "ON_ERROR_STOP=1",
+                    "--dbname=" + SOURCE,
+                    "-c",
+                    read,
+                ),
+                stdout=subprocess.PIPE,
+                stderr=reader_errors,
             )
-        return count
-    except (BrokenPipeError, UnicodeError, csv.Error):
-        raise MaskError(
-            "Перенос строки не завершён; исходные данные и SQL-ошибка скрыты."
-        ) from None
-    finally:
-        for process in (reader, writer):
-            if process is not None:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                for stream in (process.stdin, process.stdout):
-                    if stream is not None:
+            writer = subprocess.Popen(
+                pg.command(
+                    "psql",
+                    "-X",
+                    "-q",
+                    "-v",
+                    "ON_ERROR_STOP=1",
+                    "--dbname=" + TARGET,
+                    "-c",
+                    write,
+                ),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=writer_errors,
+            )
+            csv.field_size_limit(1024**3)
+            with io.TextIOWrapper(
+                reader.stdout, encoding="utf-8", newline=""
+            ) as stream:
+                for cells in csv.reader(stream):
+                    flags = cells.pop()
+                    if (
+                        len(cells) != len(columns)
+                        or len(flags) != len(columns)
+                        or set(flags) - {"0", "1"}
+                    ):
+                        raise MaskError(f"Некорректная строка COPY {count + 1}.")
+                    raw = [
+                        None if flag == "1" else value
+                        for flag, value in zip(flags, cells)
+                    ]
+                    row = dict(zip((c["name"] for c in columns), raw))
+                    values.originals.clear()
+                    transformed = []
+                    for col, value in zip(columns, raw):
                         try:
-                            stream.close()
-                        except (BrokenPipeError, OSError):
-                            pass
+                            transformed.append(
+                                values.cell(
+                                    table["name"],
+                                    col,
+                                    value,
+                                    row,
+                                    schema=table["schema"],
+                                )
+                            )
+                        except MaskError as error:
+                            position = f"Столбец {identifier(col['name'])}, строка COPY {count + 1}"
+                            if row.get("id") is not None and any(
+                                c["name"] == "id"
+                                and c["type"] in ("int2", "int4", "int8")
+                                for c in columns
+                            ):
+                                position += f", id={int(row['id'])}"
+                            error.context.append(position + ".")
+                            raise
+                    writer.stdin.write(
+                        ("\t".join(copy_text(v) for v in transformed) + "\n").encode(
+                            "utf-8"
+                        )
+                    )
+                    count += 1
+            writer.stdin.close()
+            if reader.wait():
+                raise pg.failure("psql (чтение COPY)", reader.returncode, reader_errors)
+            if writer.wait():
+                raise pg.failure("psql (запись COPY)", writer.returncode, writer_errors)
+            return count
+        except BrokenPipeError:
+            if writer is not None:
+                try:
+                    status = writer.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    status = None
+                if status:
+                    raise pg.failure(
+                        "psql (запись COPY)", status, writer_errors
+                    ) from None
+            raise MaskError(
+                "Поток записи COPY закрылся до завершения переноса."
+            ) from None
+        except (UnicodeError, csv.Error):
+            raise MaskError(
+                "Перенос строки не завершён; исходные данные и SQL-ошибка скрыты."
+            ) from None
+        finally:
+            for process in (reader, writer):
+                if process is not None:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                    for stream in (process.stdin, process.stdout):
+                        if stream is not None:
+                            try:
+                                stream.close()
+                            except (BrokenPipeError, OSError):
+                                pass
 
 
 def schema_section(pg, section, work, rules):
+    description = (
+        "таблицы и типы" if section == "pre-data" else "индексы, ограничения и триггеры"
+    )
+    pg.phase(f"Схема PostgreSQL ({section}) — {description}")
     path = work / (section + ".sql")
     with path.open("wb") as target:
         os.chmod(str(path), 0o600)
@@ -488,33 +524,58 @@ def schema_section(pg, section, work, rules):
     except MaskError as error:
         error.context.append(f"Проверка SQL-схемы PostgreSQL ({section}).")
         raise
-    with path.open("rb") as source:
-        pg.run(
-            "psql",
-            "-X",
-            "-q",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "--dbname=" + TARGET,
-            source=source,
-            output=subprocess.DEVNULL,
-        )
+    try:
+        with path.open("rb") as source:
+            pg.run(
+                "psql",
+                "-X",
+                "-q",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "--dbname=" + TARGET,
+                "-f",
+                "-",
+                source=source,
+                output=subprocess.DEVNULL,
+            )
+    except BackupError as error:
+        if not error.sql_line:
+            raise
+        # Use pg_dump's object header at the failing line; never echo the statement.
+        obj = None
+        with path.open(encoding="utf-8") as source:
+            for line in islice(source, error.sql_line):
+                if line.startswith("-- Name: "):
+                    obj = re.fullmatch(
+                        r"-- Name: ([\w.-]{1,63}(?: [\w.-]{1,63})?); Type: ([A-Z ]{1,32}); Schema: ([\w.-]{1,63}); Owner: [^\r\n]*",
+                        line.rstrip("\r\n"),
+                        re.ASCII,
+                    )
+        if not obj:
+            raise
+        name, kind, schema = obj.groups()
+        context = f'Объект {section}.sql — {kind} "{name}", схема "{schema}".'
+        pg.note(context)
+        raise BackupError(f"{error}\n{context}", sql_line=error.sql_line) from None
 
 
 def clone(pg, rules, work, source_secret=None):
+    pg.phase("Подготовка обезличенной базы")
     tables = catalog(pg, SOURCE)
     before = counts(pg, SOURCE, tables)
     sequences = sequence_values(pg, SOURCE)
+    pg.phase("Создание базы назначения", announce=False)
     create_database(pg, TARGET, pg.info(SOURCE))
     schema_section(pg, "pre-data", work, rules)
     values = Values(rules, source_secret)
     for number, table in enumerate(tables, 1):
         name = qualified(table)
-        print(f"Обезличивание: таблица {number}/{len(tables)} {name}", flush=True)
+        pg.phase(f"Обезличивание: таблица {number}/{len(tables)} {name}")
         try:
             copied = copy_table(pg, table, values) if before[name] else 0
             if copied != before[name]:
                 raise MaskError("Количество перенесённых строк не совпало с исходным.")
+            pg.note(f"Скопировано строк из {name}: {copied}")
         except MaskError as error:
             error.context.append(f"Таблица {name} ({number}/{len(tables)}).")
             raise
@@ -522,7 +583,9 @@ def clone(pg, rules, work, source_secret=None):
         raise MaskError(
             "Ни одно исходное значение из конфига не найдено: выдавать эту копию как обезличенную нельзя."
         )
+    pg.phase("Восстановление значений последовательностей")
     for name, (value, called) in sequences.items():
+        pg.phase(f"Установка значения последовательности {name}", announce=False)
         pg.sql(
             "SELECT pg_catalog.setval("
             + literal(name)
@@ -534,6 +597,7 @@ def clone(pg, rules, work, source_secret=None):
             TARGET,
         )
     schema_section(pg, "post-data", work, rules)
+    pg.phase("Сверка схемы, числа строк и последовательностей")
     after_tables = catalog(pg, TARGET)
     if (
         tables != after_tables
@@ -542,6 +606,7 @@ def clone(pg, rules, work, source_secret=None):
     ):
         raise MaskError("Схема, количество строк или последовательности изменились.")
     # Explicitly validate NOT VALID constraints too; the output must not hide broken references.
+    pg.phase("Проверка ограничений NOT VALID")
     constraints = json.loads(
         pg.sql(
             "SELECT coalesce(json_agg(json_build_array(n.nspname,c.relname,k.conname)),'[]') FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%' AND k.contype IN ('f','c') AND NOT k.convalidated",
@@ -549,6 +614,10 @@ def clone(pg, rules, work, source_secret=None):
         )
     )
     for schema, table, name in constraints:
+        pg.phase(
+            f"VALIDATE CONSTRAINT {identifier(name)} для {identifier(schema)}.{identifier(table)}",
+            announce=False,
+        )
         pg.sql(
             "ALTER TABLE "
             + identifier(schema)
@@ -558,6 +627,7 @@ def clone(pg, rules, work, source_secret=None):
             + identifier(name),
             TARGET,
         )
+    pg.phase("Сбор статистики PostgreSQL (ANALYZE)")
     pg.sql("ANALYZE", TARGET)
     return (
         {
