@@ -95,7 +95,7 @@ ADDRESS = (
     + IP6
     + r"(?:/\d{1,3})?(?![\w.:]))"
 )
-RANGE = re.compile(r"(?<![\w.])(" + IP4 + r")\s*-\s*(" + IP4 + r")(?![\w.])")
+RANGE = re.compile(r"(?<![\w.])(" + IP4 + r")\s*[-–]\s*(" + IP4 + r")(?![\w.])")
 TECHNICAL = re.compile(r"version|build|cvss|cve|cpe|package_version", re.IGNORECASE)
 CONTROL = re.compile(
     r"^(?:action|protocol|direction|mode|status|severity|operator|rule_type|package_type|version|build)$",
@@ -348,7 +348,7 @@ class Rules:
                 )
         return value
 
-    def text(self, value, addresses=True):
+    def text(self, value, addresses=True, *, advisory_prose=False):
         match = self.destinations.search(value) if self.destinations else None
         if match:
             index = next(
@@ -368,8 +368,16 @@ class Rules:
                     )
                 except ValueError:
                     continue
-                if int(lo) <= int(hi):
-                    self._interval(lo, hi)
+                if lo > hi:
+                    continue
+                # A public advisory can quote a broad range without naming a mapped address.
+                if advisory_prose and all(
+                    lo not in net and hi not in net
+                    for pair in self.networks
+                    for net in pair
+                ):
+                    continue
+                self._interval(lo, hi)
 
         def replace(match):
             original = match.group()
@@ -393,7 +401,7 @@ class Rules:
             self.changed_values += 1
         return result
 
-    def walk(self, value, key="", secrets=False):
+    def walk(self, value, key="", secrets=False, *, advisory_prose=False):
         if isinstance(value, Number):
             return value
         if isinstance(value, str):
@@ -424,10 +432,10 @@ class Rules:
                 try:
                     minidom.parseString(value)
                 except (ExpatError, ValueError):
-                    return self.text(value)
+                    pass
                 else:
                     return self.xml(value, secrets=secrets)
-            return self.text(value, addresses=not TECHNICAL.search(key))
+            return self.text(value, advisory_prose=advisory_prose)
         if isinstance(value, list):
             result = []
             for index, item in enumerate(value):

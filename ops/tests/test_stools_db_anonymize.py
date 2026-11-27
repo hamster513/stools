@@ -91,6 +91,63 @@ class CliTests(unittest.TestCase):
         column = {"name": "summary_json", "type": "text", "category": "S"}
         self.assertEqual(Values(Rules(CONFIG)).cell("ad_snapshot", column, "", {}), "")
 
+    def test_ghsa_prose_preserves_external_bounds_and_masks_explicit_values(self):
+        values = Values(Rules(CONFIG))
+        for name in ("summary", "description"):
+            column = {"name": name, "type": "text", "category": "S"}
+            for interval in ("10.0.0.1-10.99.255.254", "10.199.0.0 – 10.201.0.0"):
+                with self.subTest(name=name, interval=interval):
+                    self.assertEqual(
+                        values.cell(
+                            "vm_ref_ghsa", column, interval, {}, schema="public"
+                        ),
+                        interval,
+                    )
+                    self.assertEqual(
+                        values.cell(
+                            "vm_ref_ghsa",
+                            column,
+                            f"{interval}, pc.corp.example (10.10.1.7), 10.10.2.0/24",
+                            {},
+                            schema="public",
+                        ),
+                        f"{interval}, pc.lab.example (10.200.1.7), 10.200.2.0/24",
+                    )
+
+    def test_external_bounds_remain_strict_outside_ghsa_prose(self):
+        values = Values(Rules(CONFIG))
+        for schema, table, name in (
+            (None, "vm_ref_ghsa", "description"),
+            ("private", "vm_ref_ghsa", "description"),
+            ("public", "policy", "description"),
+            ("public", "vm_ref_ghsa", "other"),
+        ):
+            column = {"name": name, "type": "text", "category": "S"}
+            with self.subTest(schema=schema, table=table, name=name):
+                with self.assertRaises(MaskError) as caught:
+                    values.cell(
+                        table, column, "10.0.0.1-10.99.255.254", {}, schema=schema
+                    )
+                self.assertIn("networks[0].from", str(caught.exception))
+
+    def test_ghsa_prose_keeps_network_and_alias_guards(self):
+        values = Values(Rules(CONFIG))
+        column = {"name": "description", "type": "text", "category": "S"}
+        interval = "10.0.0.1-10.99.255.254"
+        for value, rule in (
+            (json.dumps({"scope": interval}), "networks[0].from"),
+            (f"<scope>{interval}</scope>", "networks[0].from"),
+            (interval + ", 10.10.1.7 – 10.99.0.1", "networks[0].from"),
+            ("10.199.0.1-10.200.1.7", "networks[0].to"),
+            (interval + ", 10.200.1.7", "networks[0].to"),
+            (interval + ", 10.0.0.0/9", "networks[0].from"),
+            (interval + ", pc.lab.example", "replacements[0].to"),
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(MaskError) as caught:
+                    values.cell("vm_ref_ghsa", column, value, {}, schema="public")
+                self.assertIn(rule, str(caught.exception))
+
     def test_credentials_stored_as_raw_settings_are_cleared(self):
         values = Values(Rules(CONFIG))
         for key in ("llm.openrouter_key", "llm.deepseek_key", "mail.password"):
@@ -151,6 +208,7 @@ CREATE TABLE toolbox_settings(id integer PRIMARY KEY, key bytea NOT NULL);
 CREATE TABLE radar_snapshot(id integer PRIMARY KEY, original_encrypted text, document jsonb, sha256 text);
 CREATE TABLE app_setting(key text PRIMARY KEY, value_json text);
 CREATE TABLE search_cache(id integer PRIMARY KEY, words tsvector);
+CREATE TABLE vm_ref_ghsa(ghsa_id text PRIMARY KEY, description text);
 INSERT INTO app_user(login,password_hash,is_active) VALUES ('alice','original-password-hash',true),('bob',NULL,true);
 INSERT INTO groups VALUES (1,'corp.example admins');
 INSERT INTO membership VALUES (1,1),(2,1);
@@ -160,6 +218,7 @@ SELECT setval('policy_id_seq',1000,false);
 INSERT INTO platform_schedule VALUES(1,true);
 INSERT INTO app_setting VALUES('siem_th','{"nightly_enabled":true,"llm_model":"example","min_score":5}'),('mail','{"enabled":true,"password":"sensitive"}');
 INSERT INTO search_cache VALUES(1,to_tsvector('simple','alice corp.example'));
+INSERT INTO vm_ref_ghsa VALUES('test-advisory','Published range 10.0.0.1-10.99.255.254, pc.corp.example (10.10.1.7)');
 INSERT INTO toolbox_settings VALUES(1,decode(repeat('ab',32),'hex'));
 """,
             "fixture",
@@ -205,7 +264,7 @@ INSERT INTO toolbox_settings VALUES(1,decode(repeat('ab',32),'hex'));
             source_secret_env="STOOLS_TEST_ANON_SOURCE_KEY",
         )
         self.assertEqual(resources(), before)
-        self.assertEqual(report["rows"], 12)
+        self.assertEqual(report["rows"], 13)
         self.assertTrue(report["restore_verified"])
         self.assertEqual(
             hashlib.sha256((self.original / "database.dump").read_bytes()).hexdigest(),
@@ -239,6 +298,13 @@ INSERT INTO toolbox_settings VALUES(1,decode(repeat('ab',32),'hex'));
         self.assertIs(row["enabled"], True)
         self.assertEqual(row["payload"]["ip"], "10.200.1.7")
         self.assertEqual(row["payload"]["version"], "10.10.1.2")
+        self.assertEqual(
+            self.pg.sql(
+                "SELECT description FROM vm_ref_ghsa WHERE ghsa_id='test-advisory' LIMIT 1",
+                "checked",
+            ),
+            "Published range 10.0.0.1-10.99.255.254, pc.lab.example (10.200.1.7)",
+        )
         self.assertEqual(row["precise"], "123.12345678912345678912")
         self.assertEqual(row["raw"], "line one\n\\.\nperson-001 on lab.example")
         self.assertEqual(row["tags"], ["person-001", None, "lab.example"])

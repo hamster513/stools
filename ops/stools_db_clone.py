@@ -225,7 +225,7 @@ class Values:
             disable(cleaned)
         return dumps(cleaned)
 
-    def cell(self, table, column, value, row):
+    def cell(self, table, column, value, row, *, schema=None):
         if value is None:
             return None
         name, kind = column["name"], column["type"]
@@ -303,7 +303,13 @@ class Values:
                 raise MaskError(
                     "Неизвестное зашифрованное поле: нельзя гарантировать отсутствие исходных данных."
                 )
-            return self.rules.walk(value, name, secrets=False)
+            advisory_prose = (
+                table == "vm_ref_ghsa"
+                and schema == "public"
+                and kind == "text"
+                and name in ("summary", "description")
+            )
+            return self.rules.walk(value, name, advisory_prose=advisory_prose)
         if column["category"] in ("B", "N", "D", "T", "E"):
             return value
         raise MaskError(
@@ -409,7 +415,11 @@ def copy_table(pg, table, values):
                 transformed = []
                 for col, value in zip(columns, raw):
                     try:
-                        transformed.append(values.cell(table["name"], col, value, row))
+                        transformed.append(
+                            values.cell(
+                                table["name"], col, value, row, schema=table["schema"]
+                            )
+                        )
                     except MaskError as error:
                         position = f"Столбец {identifier(col['name'])}, строка COPY {count + 1}"
                         if row.get("id") is not None and any(
